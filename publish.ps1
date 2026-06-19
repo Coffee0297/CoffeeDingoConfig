@@ -1,0 +1,164 @@
+# Extract version from web.csproj
+$version = Select-String -Path "web/web.csproj" -Pattern "<Version>(.*?)</Version>" |
+    ForEach-Object { $_.Matches.Groups[1].Value }
+
+if (-not $version) {
+    Write-Error "Error: Could not extract version from web/web.csproj"
+    exit 1
+}
+
+Write-Host "Publishing dingoConfig version $version" -ForegroundColor Cyan
+Write-Host "=========================================" -ForegroundColor Cyan
+
+# Build the Svelte SPA into web/wwwroot so it ships inside every published binary
+Write-Host ""
+Write-Host "Building Svelte SPA (web/clientapp -> web/wwwroot)..." -ForegroundColor Yellow
+Push-Location web/clientapp
+npm ci
+npm run build
+$spaExit = $LASTEXITCODE
+Pop-Location
+if ($spaExit -ne 0) { Write-Error "SPA build failed"; exit 1 }
+Write-Host "[OK] SPA build complete" -ForegroundColor Green
+
+# Create output directory
+$outputDir = "publish/dingoConfig-$version"
+New-Item -ItemType Directory -Force -Path $outputDir | Out-Null
+
+# Common publish arguments
+$project = "web/web.csproj"
+$config = "Release"
+# Single self-contained launcher exe per platform — the SPA + device defs are embedded, so the
+# one file runs standalone (no .NET install, no loose files needed).
+$publishArgs = "--self-contained", "true",
+    "-p:PublishSingleFile=true",
+    "-p:EnableCompressionInSingleFile=true",
+    "-p:DebugType=none"
+
+# Publish for Windows (x64)
+Write-Host ""
+Write-Host "Building for Windows (x64)..." -ForegroundColor Yellow
+dotnet publish $project -c $config -r win-x64 @publishArgs -o "$outputDir/win-x64"
+if ($LASTEXITCODE -eq 0) {
+    Write-Host "[OK] Windows (x64) build complete" -ForegroundColor Green
+} else {
+    Write-Host "[FAILED] Windows (x64) build failed" -ForegroundColor Red
+}
+
+# Publish for Windows (arm64)
+Write-Host ""
+Write-Host "Building for Windows (arm64)..." -ForegroundColor Yellow
+dotnet publish $project -c $config -r win-arm64 @publishArgs -o "$outputDir/win-arm64"
+if ($LASTEXITCODE -eq 0) {
+    Write-Host "[OK] Windows (arm64) build complete" -ForegroundColor Green
+} else {
+    Write-Host "[FAILED] Windows (arm64) build failed" -ForegroundColor Red
+}
+
+# Publish for Linux (x64)
+Write-Host ""
+Write-Host "Building for Linux (x64)..." -ForegroundColor Yellow
+dotnet publish $project -c $config -r linux-x64 @publishArgs -o "$outputDir/linux-x64"
+if ($LASTEXITCODE -eq 0) {
+    Write-Host "[OK] Linux (x64) build complete" -ForegroundColor Green
+} else {
+    Write-Host "[FAILED] Linux (x64) build failed" -ForegroundColor Red
+}
+
+# Publish for Linux (arm32)
+Write-Host ""
+Write-Host "Building for Linux (arm32)..." -ForegroundColor Yellow
+dotnet publish $project -c $config -r linux-arm @publishArgs -o "$outputDir/linux-arm32"
+if ($LASTEXITCODE -eq 0) {
+    Write-Host "[OK] Linux (arm32) build complete" -ForegroundColor Green
+} else {
+    Write-Host "[FAILED] Linux (arm32) build failed" -ForegroundColor Red
+}
+
+# Publish for Linux (arm64)
+Write-Host ""
+Write-Host "Building for Linux (arm64)..." -ForegroundColor Yellow
+dotnet publish $project -c $config -r linux-arm64 @publishArgs -o "$outputDir/linux-arm64"
+if ($LASTEXITCODE -eq 0) {
+    Write-Host "[OK] Linux (arm64) build complete" -ForegroundColor Green
+} else {
+    Write-Host "[FAILED] Linux (arm64) build failed" -ForegroundColor Red
+}
+
+# Publish for macOS (x64 - Intel)
+Write-Host ""
+Write-Host "Building for macOS (x64 - Intel)..." -ForegroundColor Yellow
+dotnet publish $project -c $config -r osx-x64 @publishArgs -o "$outputDir/osx-x64"
+if ($LASTEXITCODE -eq 0) {
+    Write-Host "[OK] macOS Intel build complete" -ForegroundColor Green
+} else {
+    Write-Host "[FAILED] macOS Intel build failed" -ForegroundColor Red
+}
+
+# Publish for macOS (arm64 - Apple Silicon)
+Write-Host ""
+Write-Host "Building for macOS (arm64 - Apple Silicon)..." -ForegroundColor Yellow
+dotnet publish $project -c $config -r osx-arm64 @publishArgs -o "$outputDir/osx-arm64"
+if ($LASTEXITCODE -eq 0) {
+    Write-Host "[OK] macOS Apple Silicon build complete" -ForegroundColor Green
+} else {
+    Write-Host "[FAILED] macOS Apple Silicon build failed" -ForegroundColor Red
+}
+
+Write-Host ""
+Write-Host "=========================================" -ForegroundColor Cyan
+Write-Host "Pruning to the single launcher exe..." -ForegroundColor Yellow
+# Everything needed is inside the exe; drop the loose byproducts (appsettings, web.config,
+# IIS shim, static-asset manifest, redundant wwwroot) so each zip is just the launcher.
+Get-ChildItem -Path $outputDir -Directory | ForEach-Object {
+    Get-ChildItem $_.FullName -Recurse -File | Where-Object { $_.Name -notmatch '^dingoConfig(\.exe)?$' } | Remove-Item -Force -ErrorAction SilentlyContinue
+    Get-ChildItem $_.FullName -Directory | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+}
+
+Write-Host ""
+Write-Host "=========================================" -ForegroundColor Cyan
+Write-Host "Creating zip archives..." -ForegroundColor Yellow
+Write-Host ""
+
+# Create zip files for each platform
+Write-Host "Zipping Windows (x64)..."
+Compress-Archive -Path "$outputDir/win-x64/*" -DestinationPath "$outputDir/dingoConfig-$version-win-x64.zip" -Force
+Write-Host "[OK] dingoConfig-$version-win-x64.zip created" -ForegroundColor Green
+
+Write-Host "Zipping Windows (arm64)..."
+Compress-Archive -Path "$outputDir/win-arm64/*" -DestinationPath "$outputDir/dingoConfig-$version-win-arm64.zip" -Force
+Write-Host "[OK] dingoConfig-$version-win-arm64.zip created" -ForegroundColor Green
+
+Write-Host "Zipping Linux (x64)..."
+Compress-Archive -Path "$outputDir/linux-x64/*" -DestinationPath "$outputDir/dingoConfig-$version-linux-x64.zip" -Force
+Write-Host "[OK] dingoConfig-$version-linux-x64.zip created" -ForegroundColor Green
+
+Write-Host "Zipping Linux (arm32)..."
+Compress-Archive -Path "$outputDir/linux-arm32/*" -DestinationPath "$outputDir/dingoConfig-$version-linux-arm32.zip" -Force
+Write-Host "[OK] dingoConfig-$version-linux-arm32.zip created" -ForegroundColor Green
+
+Write-Host "Zipping Linux (arm64)..."
+Compress-Archive -Path "$outputDir/linux-arm64/*" -DestinationPath "$outputDir/dingoConfig-$version-linux-arm64.zip" -Force
+Write-Host "[OK] dingoConfig-$version-linux-arm64.zip created" -ForegroundColor Green
+
+Write-Host "Zipping macOS (x64)..."
+Compress-Archive -Path "$outputDir/osx-x64/*" -DestinationPath "$outputDir/dingoConfig-$version-osx-x64.zip" -Force
+Write-Host "[OK] dingoConfig-$version-osx-x64.zip created" -ForegroundColor Green
+
+Write-Host "Zipping macOS (arm64)..."
+Compress-Archive -Path "$outputDir/osx-arm64/*" -DestinationPath "$outputDir/dingoConfig-$version-osx-arm64.zip" -Force
+Write-Host "[OK] dingoConfig-$version-osx-arm64.zip created" -ForegroundColor Green
+
+Write-Host ""
+Write-Host "=========================================" -ForegroundColor Cyan
+Write-Host "All builds complete!" -ForegroundColor Green
+Write-Host "Output directory: $outputDir" -ForegroundColor Cyan
+Write-Host ""
+Write-Host "Zip files:" -ForegroundColor Cyan
+Write-Host "  Windows (x64):         $outputDir/dingoConfig-$version-win-x64.zip"
+Write-Host "  Windows (arm64):       $outputDir/dingoConfig-$version-win-arm64.zip"
+Write-Host "  Linux (x32):           $outputDir/dingoConfig-$version-linux-x32.zip"
+Write-Host "  Linux (x64):           $outputDir/dingoConfig-$version-linux-x64.zip"
+Write-Host "  Linux (arm64):         $outputDir/dingoConfig-$version-linux-arm64.zip"
+Write-Host "  macOS (Intel):         $outputDir/dingoConfig-$version-osx-x64.zip"
+Write-Host "  macOS (Apple Silicon): $outputDir/dingoConfig-$version-osx-arm64.zip"

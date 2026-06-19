@@ -1,0 +1,42 @@
+# dingoConfig
+
+> Configuration tool for dingoPDM CAN power-distribution modules. This running instance exposes
+> a declarative HTTP API that lets an AI model read and write **every setting on every module**,
+> and an MCP server so AI clients can connect directly (no UI automation / Playwright).
+
+## Connect as an AI client (preferred: MCP)
+
+Launch the bundled MCP server over stdio — it proxies this API. Zero dependencies (Node 18+).
+
+- [MCP server](mcp/dingo-mcp.mjs): `node mcp/dingo-mcp.mjs` (set `DINGO_URL` to this host; default `http://localhost:5000`)
+- [Project MCP config](.mcp.json): drop-in `.mcp.json` — auto-loaded by MCP clients that support project config
+- Tools: `list_adapters`, `connect`, `disconnect`, `discover`, `list_devices`, `add_device`,
+  `read_device`, `get_schema`, `get_config`, `apply_config`, `device_action`, `sdo_read`, `sdo_write`
+- Typical flow: `connect` → `discover`/`add_device` → `read_device` → `get_schema` → `get_config` → `apply_config`
+
+## Configuration API (the contract the MCP server wraps)
+
+- `GET /api/config/schema`: every device + EVERY setting (name, type, default, enum options) + var-map
+- `GET /api/config?lua=true`: current value of every setting (snapshot); `lua=true` also reads Lua
+- `POST /api/config`: apply a full or partial target document; writes only what differs, burns, uploads Lua
+- [Design + examples](AI-CONFIG.md): the declarative config surface, request/response shapes, agent loop
+
+## Device + connection API
+
+- `GET /api/adapters`: CAN adapters, serial ports, connection state
+- `POST /api/connect` `{Adapter,Port,Bitrate}` / `POST /api/disconnect`
+- `GET /api/discover`: modules broadcasting on the bus
+- `GET /api/devices` / `POST /api/devices` `{Type,Name,BaseId}` / `POST /api/devices/{guid}/remove`
+- `POST /api/devices/{guid}/{action}`: `read`, `write`, `writeall`, `burn`, `sleep`, `wakeup`, `bootloader`
+- `POST /api/devices/{guid}/modify` `{Name,BaseId}`: change base ID / name
+- `POST /api/devices/{guid}/writeparam` `{Index,Sub,Value}`: low-level single-parameter write
+
+## Keypad (CANopen SDO)
+
+- `POST /api/sdo/read` `{Node,Index,Sub}` / `POST /api/sdo/write` `{Node,Index,Sub,Value,Size}` / `POST /api/sdo/store` `{Node}`
+
+## Notes
+
+- Setting names (e.g. `device.sleepTimeoutMs`, `output1.currentLimit`) are stable keys from `get_schema`; an AI never needs CAN indices or wire encoding.
+- Writes are live; `burn` persists to flash. Change a base ID via `/modify`, not config apply.
+- Hardware writes are destructive — confirm intent before `apply_config`/`burn`/`bootloader` on production modules.

@@ -1,0 +1,535 @@
+<script>
+  import { telemetry, hubState, reconnectHub, api, luaReadToTabs } from './lib/store.js'
+  import { toast, toasts, dismiss } from './lib/toast.js'
+  import { clickable, labelFields, dialog as dlg } from './lib/a11y.js'
+  import Sparkline from './lib/Sparkline.svelte'
+  import Dashboard from './lib/Dashboard.svelte'
+  import SystemView from './lib/SystemView.svelte'
+  import SignalsView from './lib/SignalsView.svelte'
+  import LogsView from './lib/LogsView.svelte'
+  import OutputDrawer from './lib/OutputDrawer.svelte'
+  import DeviceTypeView from './lib/DeviceTypeView.svelte'
+  import KeypadView from './lib/KeypadView.svelte'
+  import GraphView from './lib/GraphView.svelte'
+  import PlotView from './lib/PlotView.svelte'
+
+  let view = $state('outputs')
+  // Dark by default; remember the user's choice across reloads (only an explicit 'light' opts out).
+  let dark = $state((() => { try { return localStorage.getItem('dingoTheme') !== 'light' } catch { return true } })())
+  $effect(() => { try { localStorage.setItem('dingoTheme', dark ? 'dark' : 'light') } catch {} })
+  let ports = $state([])
+  let adapters = $state(['USB'])
+  let adapter = $state('USB')
+  let port = $state('COM3')
+  let bitrate = $state('500K')
+  let newBaseId = $state('0x7CE')
+  let editBaseId = $state('0x7CE')
+  let busy = $state(false)
+  let switchOpen = $state(false)
+  let readOpen = $state(false)
+  let deployOpen = $state(false)
+  let projOpen = $state(false)
+  let scopeGuid = $state(null)
+  let graphWin = $state(60)
+  let cardMode = $state({}) // output number -> 'amps' | 'trig'
+  let editNum = $state(null)
+  let dialog = $state(null) // 'add' | 'modify' | 'settings'
+  let dlgName = $state(''), dlgType = $state('pdm'), dlgBase = $state('0x7CE')
+  const deviceTypes = [
+    ['pdm', 'dingoPDM'], ['canboard', 'CANBoard'], ['dbcdevice', 'DBC Device'],
+    ['blinkkeypad-PKP-2400', 'Blink Marine Keypad'], ['grayhillkeypad', 'Grayhill Keypad'],
+  ]
+  let projFiles = $state([])
+  let projFileName = $state('project.json')
+  async function toggleProj() { projOpen = !projOpen; if (projOpen) { try { const p = await api.project(); projFiles = p.files ?? [] } catch (e) { toast('Could not load projects: ' + e.message, 'error') } } }
+  async function doSave() { try { await api.projSave(projFileName); toast(`Saved ${projFileName}`, 'ok') } catch (e) { toast(e.message, 'error') } projOpen = false }
+  async function doOpenFile(f) { try { await api.projOpen(f); scopeGuid = null; toast(`Opened ${f}`, 'ok') } catch (e) { toast(e.message, 'error') } projOpen = false }
+  async function doNewProj() {
+    projOpen = false
+    if (!confirm('Start a new project? This clears every configured device.')) return
+    try { await api.projNew(); scopeGuid = null; toast('New project started', 'ok') } catch (e) { toast('Could not clear project: ' + e.message, 'error') }
+  }
+  function openSettings() { dialog = 'settings' }
+  function openModify() { if (!current) return; dlgName = current.name; dlgBase = hex(current.baseId); dialog = 'modify' }
+  async function saveDialog() {
+    try {
+      if (dialog === 'add') await api.addDevice(dlgType, dlgName || dlgType, dlgBase)
+      else if (dialog === 'modify' && current) await api.modify(current.guid, dlgName, dlgBase)
+    } catch (e) { toast(e.message, 'error'); return }
+    dialog = null
+  }
+
+  const bitrates = ['1000K', '500K', '250K', '125K', '100K']
+  const navs = [
+    ['system', 'System'], ['dashboard', 'Dashboard'], ['outputs', 'Outputs'],
+    ['signals', 'Signals & logic'], ['wiring', 'Wiring'], ['plot', 'Plot'], ['logs', 'Logs'],
+  ]
+
+  // ---- contextual help (#40) ----
+  let helpOpen = $state(false)
+  const HELP = {
+    outputs: { title: 'Outputs', body: [
+      'Each output is a smart high-side switch with current sensing. Click a card to configure it.',
+      'Input — the signal that turns it on (a pin, CAN signal, condition, or Lua slot).',
+      'Current limit / inrush — trips the output off; inrush allows a higher current for the inrush time (bulbs, motors).',
+      'Reset mode — none / count (retry N times) / endless. Warn & open-load limits flag a soft over-current or a disconnected load without tripping.',
+      'PWM / soft-start — drive the output at a duty cycle or ramp it up.',
+      'Save writes to the device live; Burn keeps it across a reboot.' ] },
+    dashboard: { title: 'Dashboard', body: [
+      'Live state of the selected module — battery, total current, board temperature, and every output.',
+      'Read pulls the full config off the device; Write pushes the in-app config; Burn persists it.',
+      'Sleep / Wakeup request the low-power state (sleep is ignored while USB is connected — see System ▸ Settings for the timeout).' ] },
+    system: { title: 'System', body: [
+      'All modules on the bus. Click a module to open it; drag its pin on the car map to match the install.',
+      '⚙ Settings — auto-sleep enable + timeout, written and burned to the module.',
+      '⬆ Firmware — flash a new .bin over USB DFU. Keep the module powered.',
+      'Cross-module functions — define a behaviour once (a rule compiles to native CAN wiring; switch to Lua to write it yourself, needed for clock failover), then Deploy to the modules.' ] },
+    signals: { title: 'Signals & logic', body: [
+      'The module’s inputs and logic blocks: physical pins, CAN messages, and logic built from them.',
+      'CAN input — pull a value/bit out of an incoming frame. Condition — true when a signal crosses a value. Virtual input — AND/OR up to 3 signals. Flasher — a blink pattern. Counter — count events. CAN output — transmit a variable.',
+      'The mini chart on each row is that signal’s live value (last 30 s).',
+      'Lua — any output / virtual input / CAN output can be driven by a Lua slot. Upload sends the program; Burn keeps it.' ] },
+    wiring: { title: 'Wiring', body: [
+      'A node-graph of the module’s functions. Drag from a purple output ● (right) to a green input ● (left) to wire one function’s output into another’s input.',
+      'Delete a block with its ✕ or by selecting it and pressing Delete (the function is disabled on the device).',
+      '+ Add node creates a function; + Remote signal grabs a signal from another module over CAN.',
+      'Changes write live — press Burn to keep them.' ] },
+    plot: { title: 'Plot', body: [
+      'Chart any signal from any module, live. Pick a module + signal and + Add to plot — add as many as you like.',
+      'Click a legend chip to show/hide its line; ✕ removes it. Pause freezes sampling; Window sets the visible time span.',
+      '⬇ Export PNG saves the current chart as an image.' ] },
+    logs: { title: 'Logs', body: [
+      'CAN traffic and the system log. Export either to CSV for analysis.' ] },
+  }
+  const helpFor = () => HELP[view] ?? { title: navs.find((n) => n[0] === view)?.[1] ?? 'Help', body: ['No help for this view yet.'] }
+
+  let t = $derived($telemetry)
+  let devices = $derived(t.devices ?? [])
+  let current = $derived(devices.find((d) => d.guid === scopeGuid) ?? devices[0] ?? null)
+  // Keep the Base ID editor in sync with the selected device — but only when the device
+  // actually changes, so live telemetry ticks don't clobber what the user is typing.
+  let baseIdSyncedGuid = null
+  $effect(() => {
+    const g = current?.guid
+    if (g && g !== baseIdSyncedGuid) { baseIdSyncedGuid = g; editBaseId = hex(current.baseId) }
+  })
+  let isPdm = $derived(current && !/keypad|dbc|canboard|can.?board/i.test(current.type))
+  let readPct = $derived(current?.readTotal ? Math.round((current.readDone / current.readTotal) * 100) : 0)
+
+  $effect(() => { if (current && !devices.find((d) => d.guid === scopeGuid)) scopeGuid = current.guid })
+
+  async function loadPorts() {
+    try {
+      const a = await api.adapters(); ports = a.ports ?? []
+      if (a.adapters?.length) { adapters = a.adapters; if (!adapters.includes(adapter)) adapter = adapters[0] }
+      if (!ports.includes(port)) port = ports.find((p) => /COM3/i.test(p)) ?? ports[0] ?? ''
+    } catch (e) { toast('Could not list adapters: ' + e.message, 'error') }
+  }
+  loadPorts()
+  // Sim/SocketCAN don't use a serial port; only serial adapters need one picked.
+  let needsPort = $derived(/usb|slcan|socketcan|pcan/i.test(adapter))
+
+  async function connect() { busy = true; try { await api.connect(adapter, port, bitrate); toast(`Connected · ${adapter} ${bitrate}`, 'ok') } catch (e) { toast('Connect failed: ' + e.message, 'error') } finally { busy = false } }
+  async function disconnect() { busy = true; try { await api.disconnect() } catch (e) { toast('Disconnect failed: ' + e.message, 'error') } finally { busy = false } }
+  async function addPdm() { try { await api.addDevice('pdm', 'PDM', newBaseId) } catch (e) { toast(e.message, 'error') } }
+  // Scan the bus and identify each module's type from its broadcast signature.
+  let scanning = $state(false)
+  let usbOpen = $state(false)
+  let usbFound = $state([])
+  let usbSeen = $state([])
+  let manualBase = $state('0x7CE')
+  let manualType = $state('pdm')
+  const normType = (tp) => (tp === 'blinkkeypad' ? 'blinkkeypad-PKP-2400' : tp)
+  async function scanUsb() {
+    if (scanning) return                                    // in-flight guard (no double-scan)
+    if (!t.connected) { toast('Connect to an adapter first, then scan.', 'error'); return }
+    scanning = true; usbFound = []; usbSeen = []; usbOpen = true
+    try {
+      let res = await api.identify()
+      // Devices broadcast on a ~1 s cycle — give a couple of windows to accumulate frames.
+      if (!res.found.length) { await new Promise((r) => setTimeout(r, 1500)); res = await api.identify() }
+      if (!res.found.length) { await new Promise((r) => setTimeout(r, 1500)); res = await api.identify() }
+      const known = new Set(devices.map((d) => d.baseId))
+      usbFound = res.found.map((r) => ({ ...r, type: normType(r.type), already: known.has(r.baseId), add: !known.has(r.baseId) }))
+      usbSeen = res.seen ?? []
+    } catch (e) { toast(e.message, 'error') } finally { scanning = false }
+  }
+  const typeLabel = (tp) => deviceTypes.find((x) => x[0] === tp)?.[1] ?? 'Module'
+  async function addScanned() {
+    let n = 0
+    for (const d of usbFound.filter((x) => x.add && !x.already)) {
+      // Name follows the chosen type, not the (possibly wrong) auto-detected label.
+      try { await api.addDevice(d.type, typeLabel(d.type) + ' ' + d.hex, d.hex); n++ } catch (e) { toast(e.message, 'error') }
+    }
+    if (n) toast(`Added ${n} module${n === 1 ? '' : 's'}`, 'ok')
+    usbOpen = false
+  }
+  async function addManual() {
+    try { await api.addDevice(manualType, (deviceTypes.find((x) => x[0] === manualType)?.[1] ?? 'Device') + ' ' + manualBase, manualBase); toast('Module added', 'ok') }
+    catch (e) { toast(e.message, 'error') }
+    usbOpen = false
+  }
+  async function setBase() {
+    if (!current) return
+    try { await api.modify(current.guid, current.name, editBaseId); toast(`Base ID set to ${editBaseId}`, 'ok') }
+    catch (e) { toast('Set base ID failed: ' + e.message, 'error') }
+  }
+  async function removeDev() { if (current) await removeByGuid(current.guid) }
+  async function removeByGuid(g) {
+    const d = devices.find((x) => x.guid === g)
+    if (!confirm(`Remove "${d?.name ?? 'this module'}" from the project?`)) return
+    try { await api.remove(g); if (scopeGuid === g) scopeGuid = null } catch (e) { toast(e.message, 'error') }
+  }
+  // Burn permanently writes the in-app config to the module's flash — confirm + feedback.
+  let burning = $state(false)
+  async function burn() {
+    if (!current || burning) return
+    if (!confirm(`Burn the current config to "${current.name}"? This writes it permanently to the module's flash.`)) return
+    burning = true
+    try { await api.action(current.guid, 'burn'); toast(`Burned to ${current.name}`, 'ok') }
+    catch (e) { toast('Burn failed: ' + e.message, 'error') } finally { burning = false }
+  }
+  // 'read'/'write' = bulk modified-param sync (one fast burst, CRC-checked) — the proven
+  // fast path. 'readall'/'writeall' (every param) exist on the API but burst far longer.
+  // Read = bulk config sync, then pull the Lua program back onto the per-output tabs
+  // (so opening on a fresh PC restores everything with one Read). Lua read is best-effort.
+  async function readOne(g) { await api.action(g, 'read'); try { await luaReadToTabs(g) } catch (e) { toast('Lua read-back skipped: ' + e.message, 'info') } }
+  let scopeBusy = $state(false)
+  // Run an action over one/all modules, continuing past per-module failures and reporting them.
+  async function eachScope(all, fn, verb) {
+    if (scopeBusy) return
+    scopeBusy = true
+    const targets = all ? devices : (current ? [current] : [])
+    const fails = []
+    for (const d of targets) { try { await fn(d) } catch (e) { fails.push(`${d.name}: ${e.message}`) } }
+    scopeBusy = false
+    if (fails.length) toast(`${verb} failed for ${fails.length}/${targets.length}: ${fails.join('; ')}`, 'error', 8000)
+    else if (targets.length) toast(`${verb} ${targets.length} module${targets.length === 1 ? '' : 's'} ✓`, 'ok')
+  }
+  async function readScope(all) { readOpen = false; await eachScope(all, (d) => readOne(d.guid), 'Read') }
+  async function deployScope(all) { deployOpen = false; await eachScope(all, (d) => api.action(d.guid, 'write'), 'Deployed') }
+  function pickModule(g) { scopeGuid = g; switchOpen = false; if (view === 'system') view = 'dashboard' }
+  function addModule() { dlgName = ''; dlgType = 'pdm'; dlgBase = '0x7CE'; dialog = 'add' }
+  function setMode(n, m) { cardMode = { ...cardMode, [n]: m } }
+
+  const sc = (s) => (s === 'On' ? 'on' : s === 'Overcurrent' ? 'oc' : s === 'Fault' ? 'fault'
+    : s === 'Warning' || s === 'OpenLoad' ? 'oc' : 'off')
+  const stT = (s) => (s === 'On' ? 'ON' : s === 'Overcurrent' ? 'OC' : s === 'Fault' ? 'FAULT'
+    : s === 'Warning' ? 'WARN' : s === 'OpenLoad' ? 'OPEN' : 'OFF')
+  const hex = (n) => '0x' + (n ?? 0).toString(16).toUpperCase().padStart(3, '0')
+  // Input is now the friendly source name resolved from the device's VarMap.
+  function ruleText(inp) {
+    if (!inp || inp === 'None') return null
+    if (inp === 'Always On') return 'always on'
+    return inp
+  }
+  function driverTag(inp) {
+    if (!inp || inp === 'None') return 'no rule'
+    if (inp === 'Always On') return 'always on'
+    return 'driven'
+  }
+</script>
+
+<div class="rx" class:dark={dark}>
+  <header class="bar">
+    <span class="logo">dingoConfig</span>
+
+    <span class="switch" class:open={switchOpen}>
+      <span class="chip-btn" use:clickable aria-haspopup="menu" aria-expanded={switchOpen} onclick={() => (switchOpen = !switchOpen)}>
+        <span class="scope-kicker">Module</span>
+        <b class="scope-label">{current ? current.name : '—'}</b> ▾
+      </span>
+      <div class="menu" role="menu">
+        <div class="mh">{devices.length} module{devices.length === 1 ? '' : 's'}</div>
+        {#each devices as d (d.guid)}
+          <div class="mi" role="menuitem" use:clickable onclick={() => pickModule(d.guid)}>
+            <span class="dot-live" style={d.connected ? '' : 'background:var(--faint)'}></span>
+            {d.name}<span style="margin-left:auto;font-family:var(--mono);color:var(--muted)">{hex(d.baseId)}</span>
+            <button class="x" style="margin-left:8px" title="Remove module" aria-label={'Remove ' + d.name} onclick={(e) => { e.stopPropagation(); removeByGuid(d.guid) }}>✕</button>
+          </div>
+        {/each}
+        {#if devices.length === 0}<div class="mi muted">No modules yet</div>{/if}
+      </div>
+    </span>
+
+    <span class="nav-seg">
+      {#each navs as [id, label]}
+        <button class:active={view === id} aria-current={view === id ? 'page' : undefined} onclick={() => (view = id)}>{label}</button>
+      {/each}
+    </span>
+    <button class="btn ghost" title="Help for this view" aria-label="Help for this view" style="padding:6px 10px;font-weight:700" onclick={() => (helpOpen = true)}>?</button>
+
+    <span class="live" style={t.connected && !t.stale ? '' : 'color:var(--muted)'}>
+      {#if t.connected && !t.stale}<span class="pulse"></span>{t.adapter} · {bitrate}{:else}<span class="dot-live" style="background:var(--faint)"></span>{t.stale ? 'Feed lost' : 'Disconnected'}{/if}
+    </span>
+
+    <span class="spacer"></span>
+
+    {#if !t.connected}
+      <select class="in" bind:value={adapter} aria-label="CAN adapter">{#each adapters as a}<option value={a}>{a}</option>{/each}</select>
+      {#if needsPort}
+        <select class="in" bind:value={port} aria-label="Serial port">
+          {#each ports as p}<option value={p}>{p}</option>{/each}
+          {#if ports.length === 0}<option value="">(no ports)</option>{/if}
+        </select>
+      {/if}
+      <select class="in" bind:value={bitrate} aria-label="CAN bitrate">{#each bitrates as b}<option value={b}>{b}</option>{/each}</select>
+      <button class="btn primary" disabled={busy} onclick={connect}>{busy ? 'Connecting…' : 'Connect'}</button>
+    {:else}
+      <button class="btn ghost" disabled={scanning} onclick={scanUsb} title="Scan the bus and add detected modules">{scanning ? 'Scanning…' : '🔍 Add from USB'}</button>
+      <span class="switch" class:open={projOpen}>
+        <button class="btn ghost" aria-haspopup="menu" aria-expanded={projOpen} onclick={toggleProj}>📁 Project ▾</button>
+        <div class="menu" role="menu" style="min-width:250px">
+          <div class="mh">Save project</div>
+          <div style="display:flex;gap:8px;padding:8px 13px">
+            <input class="in" style="flex:1" aria-label="Project file name" bind:value={projFileName} />
+            <button class="btn primary" onclick={doSave}>Save</button>
+          </div>
+          <div class="mi" role="menuitem" use:clickable onclick={doNewProj}>＋ New (clear devices)</div>
+          <div class="mh">Open</div>
+          {#each projFiles as f}<div class="mi" role="menuitem" use:clickable onclick={() => doOpenFile(f)}>📂 {f}</div>{/each}
+          {#if projFiles.length === 0}<div class="mi muted">No saved projects</div>{/if}
+        </div>
+      </span>
+      <span class="switch" class:open={readOpen}>
+        <span style="display:inline-flex">
+          <button class="btn ghost" style="border-radius:8px 0 0 8px" disabled={!current || current?.reading || scopeBusy} onclick={() => readScope(false)}>{current?.reading ? `Reading ${readPct}%` : `Read: ${current?.name ?? '—'}`}</button>
+          <button class="btn ghost" aria-label="Read target options" style="border-radius:0 8px 8px 0;border-left:1px solid var(--line-2);padding:7px 9px" onclick={() => (readOpen = !readOpen)}>▾</button>
+        </span>
+        <div class="menu" role="menu" style="right:0;left:auto"><div class="mh">Read target</div>
+          <div class="mi" role="menuitem" class:muted={scopeBusy} use:clickable onclick={() => !scopeBusy && readScope(false)}>This module only</div>
+          <div class="mi" role="menuitem" class:muted={scopeBusy} use:clickable onclick={() => !scopeBusy && readScope(true)}>All {devices.length} modules</div>
+        </div>
+      </span>
+      <button class="btn" disabled={!current || burning} onclick={burn}>{burning ? 'Burning…' : 'Burn'}</button>
+      <span class="switch" class:open={deployOpen}>
+        <span style="display:inline-flex">
+          <button class="btn primary" style="border-radius:8px 0 0 8px" disabled={!current || scopeBusy} onclick={() => deployScope(false)}>{scopeBusy ? 'Deploying…' : `Deploy: ${current?.name ?? '—'}`}</button>
+          <button class="btn primary" aria-label="Deploy target options" style="border-radius:0 8px 8px 0;border-left:1px solid rgba(255,255,255,.35);padding:7px 9px" onclick={() => (deployOpen = !deployOpen)}>▾</button>
+        </span>
+        <div class="menu" role="menu" style="right:0;left:auto"><div class="mh">Deploy target</div>
+          <div class="mi" role="menuitem" class:muted={scopeBusy} use:clickable onclick={() => !scopeBusy && deployScope(false)}>This module only</div>
+          <div class="mi" role="menuitem" class:muted={scopeBusy} use:clickable onclick={() => !scopeBusy && deployScope(true)}>All {devices.length} modules</div>
+        </div>
+      </span>
+      <button class="btn ghost icon" title="Disconnect" aria-label="Disconnect" disabled={busy} onclick={disconnect}>⏏</button>
+    {/if}
+    <button class="btn ghost icon" title="Settings" aria-label="Settings" onclick={openSettings}>⚙</button>
+    <button class="btn ghost icon" title="Theme" aria-label="Toggle dark theme" aria-pressed={dark} onclick={() => (dark = !dark)}>{dark ? '☀' : '🌙'}</button>
+  </header>
+
+  {#if $hubState !== 'live'}
+    <div class="hub-banner">
+      {#if $hubState === 'reconnecting'}⟳ Live feed lost — reconnecting…{:else}⚠ Live feed disconnected — data is frozen.
+        <button class="btn ghost" style="padding:2px 10px;margin-left:8px" onclick={() => reconnectHub().catch((e) => toast('Reconnect failed: ' + e.message, 'error'))}>Reconnect</button>{/if}
+    </div>
+  {/if}
+
+  <main class="wrap">
+    {#if view === 'outputs'}
+      {#if !current || isPdm}
+        <div class="h-row">
+          <div>
+            <h1>{current ? current.name : '—'} · Outputs</h1>
+            <p class="sub">{current ? 'Each output is on when its rule is true — live state and current from the device.' : 'Connect and bind a device to see its outputs.'}</p>
+          </div>
+          <span class="win-tog" style="display:flex;align-items:center;gap:14px;color:var(--muted)">
+            <span>graphs:
+              <button type="button" class="linkbtn" aria-pressed={graphWin===60} onclick={()=>graphWin=60} style={graphWin===60?'color:var(--accent);font-weight:700':'color:var(--muted)'}>1 min</button> ·
+              <button type="button" class="linkbtn" aria-pressed={graphWin===600} onclick={()=>graphWin=600} style={graphWin===600?'color:var(--accent);font-weight:700':'color:var(--muted)'}>10 min</button></span>
+            <span class="live" style="color:var(--muted)"><span class="dot-live" style={t.connected && !t.stale ? '' : 'background:var(--faint)'}></span>{t.canRate} fps</span>
+          </span>
+        </div>
+      {/if}
+
+      {#if !current}
+        <div class="card flat">
+          <p class="muted">No device bound.</p>
+          <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:10px">
+            <input class="in" style="width:110px" bind:value={newBaseId} placeholder="0x7CE" />
+            <button class="btn primary" onclick={addPdm}>+ Add dingoPDM</button>
+            <button class="btn ghost" onclick={scanUsb} disabled={!t.connected || scanning}>{scanning ? 'Scanning…' : '🔍 Add from USB'}</button>
+            {#if t.ids.length}<span class="muted">IDs on bus:</span>
+              {#each t.ids as id}<span class="idchip">{hex(id)}</span>{/each}{/if}
+          </div>
+        </div>
+      {:else if /canboard|can.?board/i.test(current.type)}
+        <SignalsView {current} ids={t.ids} />
+      {:else if /keypad/i.test(current.type)}
+        <KeypadView device={current} {devices} />
+      {:else if !isPdm}
+        <DeviceTypeView device={current} />
+      {:else}
+        <div class="grid">
+          {#each current.outputs as o (o.number)}
+            {@const mode = cardMode[current.guid + ':' + o.number] ?? 'amps'}
+            {@const rule = ruleText(o.input)}
+            <div class="card" use:clickable aria-label={'Configure ' + (o.name?.trim() ? o.name : 'output ' + o.number)} onclick={() => (editNum = o.number)}>
+              <div class="num">O{o.number}</div>
+              <div class="top">
+                <span class="state {sc(o.state)}"><span class="ic"></span>{stT(o.state)}</span>
+                <span class="nm">{o.name?.trim() ? o.name : 'Output ' + o.number}</span>
+                <span class="amp">{(o.current ?? 0).toFixed(1)} A</span>
+              </div>
+              <div class="rule-txt">
+                {#if rule}<span class="kw">ON when</span> <span class="sig">{rule}</span>{:else}<span class="muted">No rule set — tap edit to drive this output</span>{/if}
+              </div>
+              {#key mode}
+                <Sparkline value={mode === 'amps' ? (o.current ?? 0) : (o.state === 'On' || o.state === 'Warning' || o.state === 'OpenLoad' ? 1 : 0)} win={graphWin}
+                  tick={t.canTotal} color={o.state === 'Fault' ? '#d23b3b' : '#594ae2'} />
+              {/key}
+              <div class="spark-tog" role="group" aria-label="Graph mode">
+                <span role="button" tabindex="0" use:clickable aria-pressed={mode === 'amps'} class:on={mode === 'amps'} onclick={(e) => { e.stopPropagation(); setMode(current.guid + ':' + o.number, 'amps') }}>Amps</span>
+                <span role="button" tabindex="0" use:clickable aria-pressed={mode === 'trig'} class:on={mode === 'trig'} onclick={(e) => { e.stopPropagation(); setMode(current.guid + ':' + o.number, 'trig') }}>Trigger</span>
+              </div>
+              <div class="ft">
+                <span class="tag">{driverTag(o.input)}</span>
+                {#if o.resetCount > 0}<span class="tag">{o.resetCount} resets</span>{/if}
+                <span class="edit-hint" use:clickable onclick={(e) => { e.stopPropagation(); editNum = o.number }}>edit →</span>
+              </div>
+            </div>
+          {/each}
+          <div class="card add-card" use:clickable onclick={() => (editNum = current.outputs[0]?.number)}>+ configure outputs</div>
+        </div>
+
+        <div style="display:flex;gap:10px;align-items:center;margin-top:20px">
+          <span class="muted">Base ID</span>
+          <input class="in" style="width:100px" aria-label="Base ID" bind:value={editBaseId} />
+          <button class="btn ghost" onclick={setBase}>Set</button>
+          <button class="btn ghost" onclick={openModify}>Modify…</button>
+          <button class="btn ghost" onclick={removeDev}>Remove</button>
+        </div>
+      {/if}
+    {:else if view === 'dashboard'}
+      <Dashboard {current} />
+    {:else if view === 'system'}
+      <SystemView {devices} pick={pickModule} {addModule} remove={removeByGuid} />
+    {:else if view === 'signals'}
+      <SignalsView {current} ids={t.ids} />
+    {:else if view === 'wiring'}
+      <GraphView device={current} {devices} />
+    {:else if view === 'plot'}
+      <PlotView {devices} />
+    {:else if view === 'logs'}
+      <LogsView />
+    {/if}
+  </main>
+
+  {#if helpOpen}
+    {@const h = helpFor()}
+    <div class="modal-scrim show" onclick={() => (helpOpen = false)}>
+      <div class="modal" use:dlg={{ onclose: () => (helpOpen = false) }} onclick={(e) => e.stopPropagation()} style="max-width:560px;padding:0 20px 16px">
+        <div class="mh2" style="margin:0 -20px">❓ {h.title}</div>
+        <div style="padding:8px 2px">
+          {#each h.body as p}<p style="margin:0 0 10px;line-height:1.5;color:var(--ink)">{p}</p>{/each}
+        </div>
+        <div style="display:flex;justify-content:flex-end"><button class="btn primary" onclick={() => (helpOpen = false)}>Got it</button></div>
+      </div>
+    </div>
+  {/if}
+
+  {#if editNum != null && current}
+    {@const eo = current.outputs.find((o) => o.number === editNum)}
+    {#if eo}<OutputDrawer output={eo} guid={current.guid} onclose={() => (editNum = null)} />{/if}
+  {/if}
+
+  {#if dialog === 'add' || dialog === 'modify'}
+    <div class="modal-scrim show" onclick={() => (dialog = null)}>
+      <div class="modal" use:dlg={{ onclose: () => (dialog = null) }} onclick={(e) => e.stopPropagation()}>
+        <div class="mh2">{dialog === 'add' ? 'Add module' : 'Modify module'}</div>
+        <div class="mb2" use:labelFields>
+          <div class="field"><label>Name</label><input bind:value={dlgName} placeholder="e.g. Rear-Left" /></div>
+          <div class="f2">
+            <div class="field"><label>Device type</label>
+              <select bind:value={dlgType} disabled={dialog === 'modify'}>
+                {#each deviceTypes as [v, l]}<option value={v}>{l}</option>{/each}
+              </select></div>
+            <div class="field"><label>Base ID</label><input bind:value={dlgBase} /></div>
+          </div>
+          <div class="hint">Each module claims 16 broadcast IDs + settings/msg from its base — keep modules from overlapping.</div>
+        </div>
+        <div class="mf2">
+          <button class="btn ghost" onclick={() => (dialog = null)}>Cancel</button>
+          <button class="btn primary" onclick={saveDialog}>{dialog === 'add' ? 'Create' : 'Save'}</button>
+        </div>
+      </div>
+    </div>
+  {:else if dialog === 'settings'}
+    <div class="modal-scrim show" onclick={() => (dialog = null)}>
+      <div class="modal" use:dlg={{ onclose: () => (dialog = null) }} onclick={(e) => e.stopPropagation()}>
+        <div class="mh2">Settings</div>
+        <div class="mb2">
+          <div class="opts" style="margin-top:0">
+            <div class="opt"><span class="sw" class:on={dark} role="switch" tabindex="0" aria-checked={dark} aria-label="Dark theme" use:clickable onclick={() => (dark = !dark)}></span> Dark theme</div>
+          </div>
+        </div>
+        <div class="mf2"><button class="btn primary" onclick={() => (dialog = null)}>Done</button></div>
+      </div>
+    </div>
+  {/if}
+
+  {#if usbOpen}
+    <div class="modal-scrim show" onclick={() => (usbOpen = false)}>
+      <div class="modal" use:dlg={{ onclose: () => (usbOpen = false) }} onclick={(e) => e.stopPropagation()} style="min-width:480px">
+        <div class="mh2">Devices on the bus</div>
+        <div class="mb2">
+          {#if scanning}
+            <p class="muted">Scanning the bus…</p>
+          {:else if usbFound.length === 0}
+            <p class="muted">No modules auto-detected.
+              {#if usbSeen.length === 0}<b>No CAN traffic seen</b> — check the adapter is connected, the bitrate matches, and the module is powered.{:else}Traffic is present but didn't match a known broadcast pattern — add the module by hand below using its base ID.{/if}</p>
+          {:else}
+            {#each usbFound as d (d.baseId)}
+              <div class="field" style="flex-direction:row;align-items:center;gap:10px;border-bottom:1px solid var(--line);padding:8px 0">
+                <input type="checkbox" bind:checked={d.add} disabled={d.already} aria-label={'Add ' + d.hex} />
+                <div style="flex:1">
+                  <div><b>{typeLabel(d.type)}</b> <span style="font-family:var(--mono);color:var(--muted)">{d.hex}</span>
+                    {#if d.already}<span class="muted"> · already added</span>{:else}<span class="muted"> · detected {d.label} ({d.confidence})</span>{/if}</div>
+                  <div class="muted" style="font-size:12px">{d.detail}</div>
+                </div>
+                <select bind:value={d.type} disabled={d.already} aria-label={'Type for ' + d.hex} style="width:160px">
+                  {#each deviceTypes as [v, l]}<option value={v}>{l}</option>{/each}
+                </select>
+              </div>
+            {/each}
+            <div class="hint" style="margin-top:8px">Type is detected from the bus signature — override it here if a module is misidentified.</div>
+          {/if}
+
+          {#if !scanning && usbSeen.length}
+            <div style="margin-top:14px">
+              <div class="mh" style="padding-left:0">IDs seen on the bus ({usbSeen.length})</div>
+              <div style="display:flex;flex-wrap:wrap;gap:5px;margin:6px 0">
+                {#each usbSeen as s}<span class="idchip" title="{s.count}× · DLC {s.len}">{s.hex}</span>{/each}
+              </div>
+            </div>
+          {/if}
+
+          {#if !scanning}
+            <div class="mh" style="padding-left:0;margin-top:10px">Add by hand</div>
+            <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+              <select bind:value={manualType} aria-label="Manual device type" style="width:150px">{#each deviceTypes as [v, l]}<option value={v}>{l}</option>{/each}</select>
+              <input class="in" style="width:100px" aria-label="Manual base ID" bind:value={manualBase} placeholder="0x7CE" />
+              <button class="btn ghost" onclick={addManual}>Add</button>
+              <span class="hint" style="margin:0">For a dingoPDM, use its <b>base ID</b> (status frames − 2).</span>
+            </div>
+          {/if}
+        </div>
+        <div class="mf2">
+          <button class="btn ghost" onclick={() => (usbOpen = false)}>Close</button>
+          <button class="btn ghost" disabled={scanning} onclick={scanUsb}>Rescan</button>
+          <button class="btn primary" disabled={scanning || !usbFound.some((d) => d.add && !d.already)} onclick={addScanned}>Add selected</button>
+        </div>
+      </div>
+    </div>
+  {/if}
+
+  <!-- Non-blocking toasts (replaces alert() for write feedback) -->
+  <div class="toaster" aria-live="polite" aria-atomic="false">
+    {#each $toasts as t (t.id)}
+      <div class="toast {t.kind}" role={t.kind === 'error' ? 'alert' : 'status'}>
+        <span>{t.msg}</span>
+        <button class="x" aria-label="Dismiss" onclick={() => dismiss(t.id)}>✕</button>
+      </div>
+    {/each}
+  </div>
+</div>

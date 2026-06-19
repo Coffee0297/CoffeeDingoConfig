@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "dingopdm": {
+      "command": "node",
+      "args": ["mcp/dingo-mcp.mjs"],
+      "env": { "DINGO_URL": "http://localhost:5000" }
+    }
+  }
+}
