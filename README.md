@@ -4,6 +4,11 @@ Configuration and live-monitoring tool for **dingoPDM** CAN power-distribution m
 **CANBoard** I/O modules. A single self-contained app (lean ASP.NET .NET 10 backend + Svelte/Vite
 SPA) that owns the CAN link — runs on **Windows, macOS, and Linux**.
 
+> **Firmware:** the advanced features — Lua scripting, the on-device overload/trip log, warning &
+> open-load detection, and configurable/input-driven sleep — require the matching **dingoPDM
+> firmware** ([CoffeeDingoFW](https://github.com/Coffee0297/CoffeeDingoFW), ≥ **v0.5.1000**).
+> Basic read/write/configure works on stock firmware.
+
 ![System view — a 5-PDM + 3-CANBoard vehicle](docs/img/system.png)
 
 > The screenshots below are a sample **5×dingoPDM + 3×CANBoard** vehicle. One module ("Front Left")
