@@ -5,7 +5,7 @@ Configuration and live-monitoring tool for **dingoPDM** CAN power-distribution m
 SPA) that owns the CAN link — runs on **Windows, macOS, and Linux**.
 
 > **Firmware:** built for the matching **dingoPDM firmware**
-> ([CoffeeDingoFW v0.5.1000](https://github.com/Coffee0297/CoffeeDingoFW/releases)). The advanced
+> ([CoffeeDingoFW v5.5.100](https://github.com/Coffee0297/CoffeeDingoFW/releases)). The advanced
 > features — Lua scripting, the on-device overload/trip log, warning & open-load detection, and
 > input-driven sleep — only work on that build. The tool expects firmware **≥ 0.5.1** and shows a
 > "firmware needs updating" notice below that.
