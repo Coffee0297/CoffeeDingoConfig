@@ -12,9 +12,9 @@
     "numCounters": 4,
     "numConditions": 32,
     "numKeypads": 2,
-    "minMajorVersion": 0,
+    "minMajorVersion": 5,
     "minMinorVersion": 5,
-    "minBuildVersion": 0
+    "minBuildVersion": 100
   },
   {
     "pdmType": 1,
@@ -29,9 +29,9 @@
     "numCounters": 4,
     "numConditions": 32,
     "numKeypads": 2,
-    "minMajorVersion": 0,
+    "minMajorVersion": 5,
     "minMinorVersion": 5,
-    "minBuildVersion": 0
+    "minBuildVersion": 100
   },
   {
     "pdmType": 2,
@@ -46,8 +46,8 @@
     "numCounters": 4,
     "numConditions": 32,
     "numKeypads": 2,
-    "minMajorVersion": 0,
+    "minMajorVersion": 5,
     "minMinorVersion": 5,
-    "minBuildVersion": 0
+    "minBuildVersion": 100
   }
 ]

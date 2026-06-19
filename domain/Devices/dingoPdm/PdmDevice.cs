@@ -17,9 +17,9 @@ public class PdmDevice : IDeviceConfigurable
 {
     [JsonIgnore] protected ILogger<PdmDevice> Logger = null!;
 
-    [JsonIgnore] protected int MinMajorVersion { get; private set; } = 0;
+    [JsonIgnore] protected int MinMajorVersion { get; private set; } = 5;
     [JsonIgnore] protected int MinMinorVersion { get; private set; } = 5;
-    [JsonIgnore] protected int MinBuildVersion { get; private set; } = 1;
+    [JsonIgnore] protected int MinBuildVersion { get; private set; } = 100;
 
     [JsonIgnore] protected int NumDigitalInputs { get; private set; } = 2;
     [JsonIgnore] protected int NumOutputs { get; private set; } = 8;

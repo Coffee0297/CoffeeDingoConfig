@@ -20,9 +20,9 @@ public class DeviceDefinitionManager
         NumCounters: 4, 
         NumConditions: 32,
         NumKeypads: 2, 
-        MinMajorVersion: 0, 
+        MinMajorVersion: 5, 
         MinMinorVersion: 5, 
-        MinBuildVersion: 0);
+        MinBuildVersion: 100);
 
     private readonly IReadOnlyList<PdmDeviceDefinition> _pdmDefinitions;
 
