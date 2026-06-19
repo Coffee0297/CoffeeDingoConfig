@@ -1,0 +1,68 @@
+name: Release
+
+# Cuts a GitHub release whenever the <Version> in web/web.csproj changes (a "version bump"),
+# or on manual dispatch. Builds the self-contained per-platform launchers via publish.ps1.
+on:
+  push:
+    branches: [ main, master ]
+    paths:
+      - "web/web.csproj"
+      - ".github/workflows/release.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Extract version
+        id: ver
+        shell: bash
+        run: |
+          V=$(sed -n 's:.*<Version>\(.*\)</Version>.*:\1:p' web/web.csproj | head -1)
+          if [ -z "$V" ]; then echo "No <Version> in web/web.csproj"; exit 1; fi
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+          echo "Version: $V"
+
+      - name: Check if release already exists
+        id: check
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if gh release view "v${{ steps.ver.outputs.version }}" -R "${{ github.repository }}" >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "Release v${{ steps.ver.outputs.version }} already exists — skipping."
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/setup-node@v4
+        if: steps.check.outputs.exists == 'false'
+        with:
+          node-version: '20'
+
+      - uses: actions/setup-dotnet@v4
+        if: steps.check.outputs.exists == 'false'
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Build platform launchers (SPA + 7 self-contained zips)
+        if: steps.check.outputs.exists == 'false'
+        shell: pwsh
+        run: ./publish.ps1
+
+      - name: Create GitHub Release
+        if: steps.check.outputs.exists == 'false'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.ver.outputs.version }}
+          name: dingoConfig v${{ steps.ver.outputs.version }}
+          generate_release_notes: true
+          files: publish/dingoConfig-${{ steps.ver.outputs.version }}/*.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
