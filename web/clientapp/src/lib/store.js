@@ -55,7 +55,9 @@ async function j(method, url, body, timeoutMs = 15000) {
     throw new Error(e.name === 'AbortError' ? `Request timed out after ${timeoutMs / 1000}s — is the device responding?` : `Network error: ${e.message}`)
   } finally { clearTimeout(to) }
   if (!r.ok) throw new Error(await r.text())
-  return r.json().catch(() => ({}))
+  // An empty / non-JSON 200 body resolves to null (not a synthesized {}), so a caller can never
+  // mistake "no body" for a populated, confirmed result. Write endpoints return explicit JSON.
+  return r.json().catch(() => null)
 }
 
 export const api = {
@@ -65,6 +67,7 @@ export const api = {
   identify: () => j('GET', '/api/identify'),
   addDevice: (Type, Name, BaseId) => j('POST', '/api/devices', { Type, Name, BaseId }),
   modify: (guid, Name, BaseId) => j('POST', `/api/devices/${guid}/modify`, { Name, BaseId }),
+  rename: (guid, Name) => j('POST', `/api/devices/${guid}/rename`, { Name }),
   remove: (guid) => j('POST', `/api/devices/${guid}/remove`),
   action: (guid, act) => j('POST', `/api/devices/${guid}/${act}`),
   outputConfig: (guid, body) => j('POST', `/api/devices/${guid}/outputconfig`, body),
@@ -211,13 +214,20 @@ export async function enableFunction(guid, kind) {
 // CAN output (source) + CAN input (target). CAN IDs from a reserved block, tracked so a
 // given remote signal reuses one ID across deploys. ----
 const GFX_ID_BASE = 0x580
+const GFX_ID_MAX = 0x5FF   // bounded reserved window for auto-assigned bridge IDs
 function loadBridges() { try { return JSON.parse(localStorage.getItem('dingoGfxBridges') || '{}') } catch { return {} } }
 function saveBridges(b) { try { localStorage.setItem('dingoGfxBridges', JSON.stringify(b)) } catch {} }
 function bridgeCanId(srcGuid, srcVar) {
   const b = loadBridges(); const key = srcGuid + '|' + srcVar
   if (b[key]) return b[key]
-  const used = new Set(Object.values(b)); let id = GFX_ID_BASE
-  while (used.has(id)) id++
+  // Avoid colliding with another bridge OR an ID already live on the bus (a keypad / CANopen node
+  // / another module's frames). Stay inside a bounded window so we never wander into CANopen
+  // address space, and fail loudly rather than hand back a colliding ID.
+  const used = new Set(Object.values(b))
+  let liveIds = new Set(); try { liveIds = new Set(get(telemetry).ids ?? []) } catch {}
+  let id = GFX_ID_BASE
+  while ((used.has(id) || liveIds.has(id)) && id <= GFX_ID_MAX) id++
+  if (id > GFX_ID_MAX) throw new Error('No free bridge CAN ID available in 0x580–0x5FF — free one up or wire it manually.')
   b[key] = id; saveBridges(b); return id
 }
 
@@ -526,14 +536,26 @@ export async function deployCrossModule(devices) {
   const involved = new Set()
   fns.forEach((f) => { if (f?.trigger?.guid) involved.add(f.trigger.guid); if (f?.clockMaster) involved.add(f.clockMaster); (f?.targets ?? []).forEach((t) => involved.add(t.guid)) })
 
-  // 1. Clean slate for native slots so re-deploys/deletes don't leak.
-  for (const g of involved) { try { await cmfNativeCleanup(g) } catch {} }
+  // 1. Clean slate for native slots so re-deploys/deletes don't leak. If cleanup fails the old
+  // enabled slots are still live — building fresh rules on top would leak slots / duplicate CAN
+  // IDs on the bus, so record the failure and skip that module instead of silently corrupting it.
+  const cleanupFailed = new Set()
+  for (const g of involved) {
+    try { await cmfNativeCleanup(g) }
+    catch (e) {
+      cleanupFailed.add(g)
+      const nm = (devices ?? []).find((d) => d.guid === g)?.name ?? (g ?? '').slice(0, 6)
+      results.push({ name: nm, ok: false, error: 'slot cleanup failed — skipped to avoid duplicate CAN IDs: ' + e.message })
+    }
+  }
 
   // 2. Native rules.
   const used = {}
   for (let i = 0; i < fns.length; i++) {
     const f = fns[i]
     if (!f || f.disabled || cmfIsLua(f)) continue
+    const inv = [f.trigger?.guid, f.clockMaster, ...(f.targets ?? []).map((t) => t.guid)].filter(Boolean)
+    if (inv.some((g) => cleanupFailed.has(g))) { results.push({ name: f.name, ok: false, error: 'skipped — a target module’s slot cleanup failed' }); continue }
     try { await deployNativeRule(f, cmfSlotOf(f, i), devices, used); results.push({ name: f.name, ok: true, kind: 'native' }) }
     catch (e) { results.push({ name: f.name, ok: false, error: e.message }) }
   }
@@ -542,6 +564,7 @@ export async function deployCrossModule(devices) {
   // override for this module (previously only the first was kept, silently dropping the rest).
   const compiled = compileCrossModule()
   for (const d of devices ?? []) {
+    if (cleanupFailed.has(d.guid)) continue   // already reported; don't deploy onto an unclean slate
     const c = compiled[d.guid]
     const overrides = fns.filter((f) => cmfIsLua(f)).map((f) => f.luaByModule?.[d.guid]).filter((s) => s && s.trim())
     const userLua = overrides.length ? overrides.join('\n\n') : undefined

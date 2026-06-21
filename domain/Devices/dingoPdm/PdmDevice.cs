@@ -944,7 +944,13 @@ public class PdmDevice : IDeviceConfigurable
             }
         }
 
-        LastRxTime = DateTime.Now;
+        // A frame at BaseId+ConfigTxOffset is our OWN config request echoed back by the bus
+        // (self-reception), NOT proof the module is present. Only frames the device actually
+        // originates — its config reply (ConfigRxOffset) and cyclic status (offset >= CyclicRxOffset)
+        // — count toward the liveness heartbeat, so writing to an absent module can't make it
+        // momentarily look connected and defeat the live-write guards.
+        if (offset != ConfigTxOffset)
+            LastRxTime = DateTime.Now;
     }
 
     public IEnumerable<(int MessageId, DbcSignal Signal)> GetStatusSigs()

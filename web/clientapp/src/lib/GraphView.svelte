@@ -6,6 +6,9 @@
   import { api, varMapSources, applyGraphConnection, enableFunction, bridgeRemoteSignal, NODE_INPUTS, SYS_VARS } from './store.js'
 
   let { device, devices = [] } = $props()
+  // Wiring edits persist to the project record even offline; they only reach the module over CAN
+  // when it's live. Keep wiring enabled (offline authoring) but tell the truth about what landed.
+  let live = $derived(!!device?.connected)
   const nodeTypes = { fn: FnNode }
 
   const META = {
@@ -122,7 +125,8 @@
       edges = [...edges.filter((e) => !(e.target === conn.target && e.targetHandle === field)),
         { id: conn.target + ':' + field, source: conn.source, sourceHandle: conn.sourceHandle, target: conn.target, targetHandle: field, animated: true, style: 'stroke:#594ae2;stroke-width:1.5' }]
       await applyGraphConnection(device.guid, conn.target, field, srcIdx, devices)
-      msg = `wired → ${conn.target}.${field} (Burn to keep)`
+      msg = live ? `wired → ${conn.target}.${field} (Burn to keep)`
+                 : `wired → ${conn.target}.${field} — saved to the project; connect + Deploy to apply`
       if (conn.source.startsWith('remote:')) await load()   // refresh to show the new CAN-in node
     } catch (e) { msg = 'write failed: ' + e.message }
   }
@@ -163,7 +167,7 @@
 
 <div class="h-row">
   <div><h1>{device?.name ?? '—'} · Wiring</h1>
-    <p class="sub">Drag from a <b style="color:#594ae2">purple output ●</b> (right) to a <b style="color:#2a9d8f">green input ●</b> (left) to wire it · hover a block and click <b>✕</b> or select + press <b>Delete</b> to remove · then <b>Burn</b> to keep. {#if msg}— <b>{msg}</b>{/if}</p></div>
+    <p class="sub">Drag from a <b style="color:#594ae2">purple output ●</b> (right) to a <b style="color:#2a9d8f">green input ●</b> (left) to wire it · hover a block and click <b>✕</b> or select + press <b>Delete</b> to remove · then <b>Burn</b> to keep. {#if msg}— <b>{msg}</b>{/if}{#if !live}<br><span class="muted">Module offline — wiring saves to the project; connect + Deploy to apply it.</span>{/if}</p></div>
   <div style="margin-left:auto;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
     <select onchange={(e) => { if (e.target.value) { addNode(e.target.value); e.target.value = '' } }} style="font-size:13px">
       <option value="">+ Add node…</option>

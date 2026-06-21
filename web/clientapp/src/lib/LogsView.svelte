@@ -11,6 +11,8 @@
   let ovlSel = $state(null)
   let sel = $derived(evts.find((e) => e.id === ovlSel) ?? evts[0] ?? null)
   let ovlBusy = $state(false), ovlMsg = $state('')
+  // Trip read/clear talk to the live module; gate on the selected module actually being on the bus.
+  let ovlLive = $derived(!!ovlDevices.find((d) => d.guid === ovlDev)?.connected)
 
   async function readOverloads() {
     if (!ovlDev) return
@@ -49,14 +51,15 @@
   let fmt = $state('hex')
 
   const LOG_CAP = 1000   // cap rendered rows so a long session can't grow the DOM unbounded
+  let logStale = $state(false)
   $effect(() => {
     tab   // re-subscribe per tab so switching reloads immediately and tears down cleanly
     let alive = true
     const load = async () => {
       try {
-        if (tab === 'can') { const r = await api.canlog(); if (alive) canlog = r.slice(-LOG_CAP) }
-        else { const r = await api.syslog(); if (alive) syslog = r.slice(-LOG_CAP) }
-      } catch {}
+        if (tab === 'can') { const r = await api.canlog(); if (alive) { canlog = r.slice(-LOG_CAP); logStale = false } }
+        else { const r = await api.syslog(); if (alive) { syslog = r.slice(-LOG_CAP); logStale = false } }
+      } catch { if (alive) logStale = true }   // surface a stale badge instead of silently freezing rows
     }
     load(); const id = setInterval(load, 500)
     return () => { alive = false; clearInterval(id) }
@@ -81,6 +84,7 @@
   <div class="logbar">
     Format <select bind:value={fmt} aria-label="CAN data format"><option value="hex">Hex</option><option value="dec">Decimal</option></select>
     <a class="btn ghost" href="/api/canlog/export" download style="margin-left:auto">⭳ Export CSV</a>
+    {#if logStale}<span style="color:var(--err)">⚠ feed stale — reconnecting…</span>{/if}
     <span style="color:var(--muted)">{canlog.length} IDs</span>
   </div>
   <div class="tscroll"><table class="logtable">
@@ -95,7 +99,7 @@
     </tbody>
   </table></div>
 {:else if tab === 'sys'}
-  <div class="logbar"><a class="btn ghost" href="/api/syslog/export" download style="margin-left:auto">⭳ Export CSV</a><span style="color:var(--muted)">{syslog.length} entries</span></div>
+  <div class="logbar"><a class="btn ghost" href="/api/syslog/export" download style="margin-left:auto">⭳ Export CSV</a>{#if logStale}<span style="color:var(--err)">⚠ feed stale — reconnecting…</span>{/if}<span style="color:var(--muted)">{syslog.length} entries</span></div>
   <div class="tscroll"><table class="logtable">
     <thead><tr><th>Time</th><th>Level</th><th>Source</th><th>Message</th></tr></thead>
     <tbody>
@@ -113,9 +117,9 @@
       {#each ovlDevices as d}<option value={d.guid}>{d.name}</option>{/each}
       {#if ovlDevices.length === 0}<option value="">no PDM connected</option>{/if}
     </select>
-    <button class="btn primary" disabled={ovlBusy || !ovlDev} onclick={readOverloads}>{ovlBusy ? 'Reading…' : 'Read trip log from device'}</button>
-    <button class="btn ghost" disabled={ovlBusy || !ovlDev} onclick={clearOverloads}>Clear</button>
-    {#if ovlMsg}<span style="margin-left:auto;color:var(--muted)">{ovlMsg}</span>{/if}
+    <button class="btn primary" disabled={ovlBusy || !ovlDev || !ovlLive} title={ovlLive ? '' : 'Connect this module to read its trip log'} onclick={readOverloads}>{ovlBusy ? 'Reading…' : 'Read trip log from device'}</button>
+    <button class="btn ghost" disabled={ovlBusy || !ovlDev || !ovlLive} title={ovlLive ? '' : 'Connect this module to clear its trip log'} onclick={clearOverloads}>Clear</button>
+    {#if ovlMsg}<span style="margin-left:auto;color:var(--muted)">{ovlMsg}</span>{:else if ovlDev && !ovlLive}<span style="margin-left:auto;color:var(--muted)">Module offline — connect to read trips.</span>{/if}
   </div>
   {#if evts.length === 0}
     <div class="card flat"><p class="muted">The device records the last few output trips (over-current / fault)

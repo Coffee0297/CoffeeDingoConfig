@@ -3,7 +3,7 @@
   import { toast } from './toast.js'
   import { dialog, labelFields, clickable } from './a11y.js'
   import LuaEditor from './LuaEditor.svelte'
-  let { output, guid, onclose } = $props()
+  let { output, guid, connected = false, onclose } = $props()
   let tab = $state('rule')
 
   // Per-output Lua snippet (tick-body code). Stored client-side; assembled with
@@ -82,11 +82,11 @@
     }
   })
 
-  let saving = $state(false), saved = $state(false)
+  let saving = $state(false), saved = $state(false), savedToDevice = $state(false)
   async function save() {
     saving = true; saved = false
     try {
-      await api.outputConfig(guid, {
+      const r = await api.outputConfig(guid, {
         Number: output.number,
         Name: f.name,
         WireColor: f.wireSet ? f.wireColor : '',
@@ -111,9 +111,14 @@
         OpenLoadLimit: Number(f.openLoadLimit),
         OpenLoadTime: Number(f.openLoadTime),
       })
-      saved = true
-      toast(`Saved output ${output.number} to device`, 'ok')
-    } catch (e) { toast('Write failed: ' + e.message, 'error') }
+      // The backend always saves the config to the project, but only writes it to the module
+      // over CAN when it's live (r.written). Report which actually happened — don't claim a
+      // device write that never left the host.
+      saved = true; savedToDevice = !!r?.written
+      toast(r?.written
+        ? `Saved output ${output.number} to device`
+        : `Saved output ${output.number} to the project — module offline; Deploy when it's on the bus`, r?.written ? 'ok' : 'info')
+    } catch (e) { toast('Save failed: ' + e.message, 'error') }
     finally { saving = false }
   }
 </script>
@@ -190,7 +195,7 @@
       </div>
       <label class="opt"><input type="checkbox" bind:checked={f.softStart} /> Soft start <span class="desc">ramp up on turn-on</span></label>
       <div class="field" style="max-width:230px"><label>Soft-start ramp (ms)</label><input type="number" bind:value={f.softStartRamp} /></div>
-      <p class="hint">Live current now: <b>{output.current.toFixed(1)} A</b>. Save writes to the device; click <b>Burn</b> to persist to flash.</p>
+      <p class="hint">Live current now: <b>{(output.current ?? 0).toFixed(1)} A</b>. Save writes to the device; click <b>Burn</b> to persist to flash.</p>
     </div>
   {:else if tab === 'wiring'}
     {@const wire = awgFor(f.currentLimit)}
@@ -221,7 +226,7 @@
           </div></div>
         <div class="field"><label>Stripe</label>
           <div style="display:flex;align-items:center;gap:8px">
-            <input type="color" style="width:42px;height:34px;padding:2px;border:1px solid var(--line-2);border-radius:8px;background:none" bind:value={f.wireStripe} oninput={() => (f.stripeSet = true)} disabled={!f.wireSet} />
+            <input type="color" style="width:42px;height:34px;padding:2px;border:1px solid var(--line-2);border-radius:8px;background:none" bind:value={f.wireStripe} oninput={() => (f.stripeSet = true)} disabled={!f.wireSet} title={f.wireSet ? '' : 'Set a base colour first'} />
             <span class="muted" style="font-family:var(--mono);font-size:12px">{f.stripeSet ? f.wireStripe : 'none'}</span>
             {#if f.stripeSet}<button type="button" class="linkbtn" onclick={() => (f.stripeSet = false)}>clear</button>{/if}
           </div></div>
@@ -253,17 +258,18 @@
         output's snippet and the global section under <b>Signals &amp; logic ▸ Lua program</b>). To
         drive this output, write its Lua slot with <code>setLuaOut({output.number - 1}, v)</code> and
         set this output's <b>Rule</b> input to that Lua slot.</p>
+      {#if !connected}<p class="hint" style="color:var(--muted)">Module offline — this snippet is saved locally; connect the module to upload it.</p>{/if}
       {#if luaMsg}<p class="hint"><b>{luaMsg}</b></p>{/if}
     </div>
   {/if}
 
   <div class="dfoot">
-    <span class="res">{saved ? 'written ✓' : 'output ' + output.number}</span><span style="margin-left:auto"></span>
+    <span class="res">{saved ? (savedToDevice ? 'written ✓' : 'saved to project ✓') : 'output ' + output.number}</span><span style="margin-left:auto"></span>
     <button class="btn ghost" onclick={onclose}>Close</button>
     {#if tab === 'lua'}
-      <button class="btn primary" disabled={luaBusy} onclick={luaUpload}>{luaBusy ? 'Uploading…' : 'Upload program'}</button>
+      <button class="btn primary" disabled={luaBusy || !connected} title={connected ? '' : 'Connect the module to upload Lua'} onclick={luaUpload}>{luaBusy ? 'Uploading…' : 'Upload program'}</button>
     {:else}
-      <button class="btn primary" disabled={saving} onclick={save}>{saving ? 'Writing…' : 'Save to device'}</button>
+      <button class="btn primary" disabled={saving} onclick={save}>{saving ? 'Saving…' : (connected ? 'Save to device' : 'Save to project')}</button>
     {/if}
   </div>
 </aside>

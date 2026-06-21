@@ -16,10 +16,12 @@
   let pickGuid = $state('')
   let pickSignals = $state([])
   let pickName = $state('')
+  let pickErr = $state('')
+  let sampleErr = $state(false)   // last sampling round hit a fetch error → lines are stale, not idle
 
   async function loadPickSignals(g) {
     pickGuid = g; pickName = ''
-    try { pickSignals = (await api.signals(g)).map((s) => s.name) } catch { pickSignals = [] }
+    try { pickSignals = (await api.signals(g)).map((s) => s.name); pickErr = '' } catch (e) { pickSignals = []; pickErr = 'Couldn’t read signals — is the adapter connected?' }
   }
   $effect(() => { if (!pickGuid && devices.length) loadPickSignals(devices[0].guid) })
 
@@ -43,6 +45,7 @@
       if (paused || !alive) return
       const guids = [...new Set(series.map((s) => s.guid))]
       const now = (typeof performance !== 'undefined' ? performance.now() : Date.now())
+      let err = false
       for (const g of guids) {
         try {
           const sigs = await api.signals(g)
@@ -55,8 +58,9 @@
             const w = win * 1000 * 1.3
             while (s.pts.length > 2 && now - s.pts[0].t > w) s.pts.shift()
           }
-        } catch {}
+        } catch { err = true }   // a dropped sample means the line is stale, not flat-lining at idle
       }
+      if (alive) sampleErr = err
       draw()
     }
     tick(); const iv = setInterval(tick, 300)
@@ -114,6 +118,7 @@
     <button class="btn ghost" onclick={() => (paused = !paused)}>{paused ? '▶ Resume' : '⏸ Pause'}</button>
     <button class="btn ghost" onclick={clearAll}>Clear</button>
     <button class="btn ghost" onclick={exportPng} disabled={!series.length}>⬇ Export PNG</button>
+    {#if sampleErr}<span class="muted" style="color:var(--err);font-size:13px">⚠ feed stale — adapter connected?</span>{/if}
   </div>
 </div>
 
@@ -128,7 +133,7 @@
       {#each pickSignals as n}<option value={n}>{n}</option>{/each}
     </select></div>
   <button class="btn primary" disabled={!pickName} onclick={addSeries}>+ Add to plot</button>
-  {#if !devices.length}<span class="muted">No modules — add one in System.</span>{/if}
+  {#if !devices.length}<span class="muted">No modules — add one in System.</span>{:else if pickErr}<span class="muted" style="color:var(--err)">{pickErr}</span>{/if}
 </div>
 
 <div style="background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:10px;box-shadow:var(--sh)">

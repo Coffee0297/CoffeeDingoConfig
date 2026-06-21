@@ -715,10 +715,24 @@ public class DeviceManager(ILogger<DeviceManager> logger, ILoggerFactory loggerF
     /// <summary>
     /// Commission a connected module by writing a saved profile's whole config onto it and
     /// re-addressing it to the profile's base ID — the module ends up *being* the profile.
-    /// Steps mirror the proven manual flow: copy values → write all params (at the current ID)
-    /// → burn → modify ID → burn. Per-device Lua lives client-side, so the caller uploads it
-    /// after this returns (the device is then at its new ID). Returns (ok, error).
+    ///
+    /// The entire hardware sequence is issued at the module's CURRENT id and is FIFO-ordered:
+    ///   write every param (-> RAM) → modify base id (writes base id, then burns).
+    /// The single burn inside the modify persists EVERYTHING in RAM (config + new base id) and
+    /// triggers the firmware's CAN re-init, so the module comes up at its new id with no power
+    /// cycle. Crucially there is NO write/burn addressed to the *new* id here — that used to
+    /// race the re-address and fail. Lua lives client-side; the caller uploads it after.
+    /// Returns (ok, error).
     /// </summary>
+    /// <summary>Rename a device (project label only — no CAN traffic).</summary>
+    public bool RenameDevice(Guid deviceId, string name)
+    {
+        var device = GetDevice(deviceId);
+        if (device == null) return false;
+        device.Name = name;
+        return true;
+    }
+
     public (bool ok, string error) ApplyProfile(Guid targetId, Guid sourceId)
     {
         var target = GetDevice(targetId);
@@ -729,6 +743,8 @@ public class DeviceManager(ILogger<DeviceManager> logger, ILoggerFactory loggerF
         target.UpdateIsConnected();
         if (!target.Connected)
             return (false, $"Target module 0x{target.BaseId:X} isn't responding — connect it over USB first.");
+        if (source.BaseId < 1 || source.BaseId > 0x7FF)
+            return (false, $"Profile '{source.Name}' has an invalid base ID 0x{source.BaseId:X} — must be 0x001–0x7FF.");
 
         // 1. Copy every setting value from the profile onto the target (base ID is Index 0/Sub 0,
         //    handled by the re-address step below; everything else — outputs, limits, flashers,
@@ -740,15 +756,12 @@ public class DeviceManager(ILogger<DeviceManager> logger, ILoggerFactory loggerF
             if (byName.TryGetValue(sp.Name, out var tp)) { try { tp.SetValue(sp.GetValue()); } catch { /* skip incompatible */ } }
         }
 
-        // 2. Push all params to the module at its CURRENT id (WriteParamObjects skips LocalOnly
-        //    labels and is FIFO, so the burn that follows lands after them), then persist.
+        // 2. Push all params to the module's RAM at its CURRENT id (skips LocalOnly labels, FIFO).
         WriteParamObjects(targetId, tc.Params.Where(p => p is not { Index: 0x0000, SubIndex: 0 }).ToList());
-        BurnSettings(targetId);
 
-        // 3. Re-address to the profile's base ID (the modify command is sent to the current id),
-        //    then persist the new id.
+        // 3. Re-address: ModifyDeviceConfig writes the new base id then burns — both at the OLD
+        //    id. That burn persists the config written above AND the new id, then re-inits CAN.
         ModifyDeviceConfig(targetId, source.Name, source.BaseId);
-        BurnSettings(targetId);
 
         logger.LogInformation("ApplyProfile: wrote '{Src}' onto module, now 0x{Id:X} ({Name})", source.Name, target.BaseId, target.Name);
         return (true, "");

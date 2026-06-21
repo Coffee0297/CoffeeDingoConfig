@@ -41,6 +41,7 @@ public record OutputConfigReq(int Number, bool Enabled, int Input, double Curren
     double WarnLimit = 0, double OpenLoadLimit = 0, int OpenLoadTime = 1000, string? Name = null,
     string? WireColor = null, string? WireStripe = null, double? WireLength = null, double? WireGaugeMm2 = null);
 public record ApplyProfileReq(string Source);
+public record RenameReq(string Name);
 public record ReadParamReq(int Index, int Sub);
 public record WriteParamReq(int Index, int Sub, uint Value);
 public record SdoReadReq(int Node, int Index, int Sub);
@@ -403,6 +404,17 @@ public static class LiveApi
             return Results.Ok(new { ok = true });
         });
 
+        // Rename only — sets the project label, no CAN traffic / no base-ID change. (The name
+        // is a project-side label; the firmware doesn't store it.)
+        api.MapPost("/devices/{guid}/rename", (string guid, RenameReq r, DeviceManager dm) =>
+        {
+            if (!Guid.TryParse(guid, out var g)) return Results.BadRequest();
+            var name = (r.Name ?? "").Trim();
+            if (name.Length == 0) return Results.Text("Name can't be empty.", "text/plain", null, 400);
+            if (!dm.RenameDevice(g, name)) return Results.NotFound();
+            return Results.Ok(new { ok = true });
+        });
+
         api.MapPost("/devices/{guid}/modify", (string guid, ModifyReq r, DeviceManager dm) =>
         {
             if (!Guid.TryParse(guid, out var g)) return Results.BadRequest();
@@ -430,7 +442,7 @@ public static class LiveApi
 
         // Apply an output's config from the editor, then write that output's params to the
         // device (paced). Burn separately to persist to flash.
-        api.MapPost("/devices/{guid}/outputconfig", (string guid, OutputConfigReq r, DeviceManager dm) =>
+        api.MapPost("/devices/{guid}/outputconfig", (string guid, OutputConfigReq r, DeviceManager dm, ICommsAdapterManager adapters) =>
         {
             if (!Guid.TryParse(guid, out var g)) return Results.BadRequest();
             var d = dm.GetDevice<PdmDevice>(g);
@@ -458,18 +470,28 @@ public static class LiveApi
             o.WarnLimit = r.WarnLimit;
             o.OpenLoadLimit = r.OpenLoadLimit;
             o.OpenLoadTime = r.OpenLoadTime;
-            dm.WriteOutputParams(g, r.Number);
-            return Results.Ok(new { ok = true });
+            // The record edit above always persists (offline config authoring). Only push to the
+            // module over CAN when it is actually live; report which happened so the UI can say
+            // "written to device" vs "saved to project".
+            var live = IsLiveModule(g, dm, adapters);
+            if (live) dm.WriteOutputParams(g, r.Number);
+            return Results.Ok(new { ok = true, written = live });
         });
 
         // Single-param read/write (paced, no bulk burst) — reliable on the USB-direct link.
-        api.MapPost("/devices/{guid}/readparam", (string guid, ReadParamReq r, DeviceManager dm) =>
-            Guid.TryParse(guid, out var g) && dm.ReadParam(g, r.Index, r.Sub)
-                ? Results.Ok(new { ok = true }) : Results.BadRequest());
+        api.MapPost("/devices/{guid}/readparam", (string guid, ReadParamReq r, DeviceManager dm, ICommsAdapterManager adapters) =>
+        {
+            if (!Guid.TryParse(guid, out var g)) return Results.BadRequest();
+            if (RequireLiveModule(g, dm, adapters, "read") is { } bad) return bad;
+            return dm.ReadParam(g, r.Index, r.Sub) ? Results.Ok(new { ok = true }) : Results.BadRequest();
+        });
 
-        api.MapPost("/devices/{guid}/writeparam", (string guid, WriteParamReq r, DeviceManager dm) =>
-            Guid.TryParse(guid, out var g) && dm.WriteParam(g, r.Index, r.Sub, r.Value)
-                ? Results.Ok(new { ok = true }) : Results.BadRequest());
+        api.MapPost("/devices/{guid}/writeparam", (string guid, WriteParamReq r, DeviceManager dm, ICommsAdapterManager adapters) =>
+        {
+            if (!Guid.TryParse(guid, out var g)) return Results.BadRequest();
+            if (RequireLiveModule(g, dm, adapters, "write") is { } bad) return bad;
+            return dm.WriteParam(g, r.Index, r.Sub, r.Value) ? Results.Ok(new { ok = true }) : Results.BadRequest();
+        });
 
         api.MapPost("/devices/{guid}/remove", (string guid, DeviceManager dm) =>
         {
@@ -509,21 +531,24 @@ public static class LiveApi
         });
 
         // Apply one function's fields from the editor, then write its params to the device.
-        api.MapPost("/devices/{guid}/function/{kind}/{number:int}", async (string guid, string kind, int number, HttpRequest req, DeviceManager dm) =>
+        api.MapPost("/devices/{guid}/function/{kind}/{number:int}", async (string guid, string kind, int number, HttpRequest req, DeviceManager dm, ICommsAdapterManager adapters) =>
         {
             if (!Guid.TryParse(guid, out var g) || dm.GetDevice(g) is not IDeviceConfigurable dev) return Results.BadRequest();
             var (fn, paramIndex) = FunctionMap.Resolve(dev, kind, number);
             if (fn == null || paramIndex < 0) return Results.NotFound(new { error = $"unknown function {kind} #{number}" });
             using var doc = await JsonDocument.ParseAsync(req.Body);
             FunctionMap.ApplyJson(fn, doc.RootElement);
-            dm.WriteFunctionParams(g, paramIndex);
-            return Results.Ok(new { ok = true });
+            // Record edit persists offline; CAN write only when live (see /outputconfig).
+            var live = IsLiveModule(g, dm, adapters);
+            if (live) dm.WriteFunctionParams(g, paramIndex);
+            return Results.Ok(new { ok = true, written = live });
         });
 
         // Upload one assembled Lua program to the device (chunked, paced on the backend).
-        api.MapPost("/devices/{guid}/lua", (string guid, LuaReq r, DeviceManager dm) =>
+        api.MapPost("/devices/{guid}/lua", (string guid, LuaReq r, DeviceManager dm, ICommsAdapterManager adapters) =>
         {
             if (!Guid.TryParse(guid, out var g)) return Results.BadRequest();
+            if (RequireLiveModule(g, dm, adapters, "upload Lua to") is { } bad) return bad;
             var ok = dm.UploadLua(g, r.Source ?? "");
             return ok ? Results.Ok(new { ok = true }) : Results.BadRequest(new { ok = false, error = "upload rejected (too big or no device)" });
         });
@@ -537,25 +562,28 @@ public static class LiveApi
         });
 
         // Read the device's last Lua runtime error (empty if none).
-        api.MapGet("/devices/{guid}/luaerror", async (string guid, DeviceManager dm) =>
+        api.MapGet("/devices/{guid}/luaerror", async (string guid, DeviceManager dm, ICommsAdapterManager adapters) =>
         {
             if (!Guid.TryParse(guid, out var g)) return Results.BadRequest();
+            if (RequireLiveModule(g, dm, adapters, "read the error state from") is { } bad) return bad;
             var error = await dm.ReadLuaError(g);
             return Results.Ok(new { error });
         });
 
         // Read the on-device overload (trip) log: events with ±window current waveforms.
-        api.MapGet("/devices/{guid}/overloads", async (string guid, DeviceManager dm) =>
+        api.MapGet("/devices/{guid}/overloads", async (string guid, DeviceManager dm, ICommsAdapterManager adapters) =>
         {
             if (!Guid.TryParse(guid, out var g)) return Results.BadRequest();
+            if (RequireLiveModule(g, dm, adapters, "read trips from") is { } bad) return bad;
             var events = await dm.ReadOverloadLog(g);
             return Results.Ok(new { events });
         });
 
         // Clear the on-device overload log.
-        api.MapPost("/devices/{guid}/overloads/clear", (string guid, DeviceManager dm) =>
+        api.MapPost("/devices/{guid}/overloads/clear", (string guid, DeviceManager dm, ICommsAdapterManager adapters) =>
         {
             if (!Guid.TryParse(guid, out var g)) return Results.BadRequest();
+            if (RequireLiveModule(g, dm, adapters, "clear trips on") is { } bad) return bad;
             dm.ClearOverloadLog(g);
             return Results.Ok(new { ok = true });
         });
@@ -781,5 +809,34 @@ public static class LiveApi
             }
             return Results.Ok(new { ok = true });
         });
+    }
+
+    // Shared precondition for endpoints that talk to LIVE hardware over CAN: the adapter must be
+    // open AND the target module must actually be answering on the bus. Returns an IResult to
+    // short-circuit with, or null when it's safe to proceed. Mirrors the /{action} guard so every
+    // CAN-commit path fails loud and consistent instead of "succeeding" against an empty bus.
+    // (Base-ID/rename are offline-safe and firmware/DFU runs over USB — neither uses this.)
+    private static IResult? RequireLiveModule(Guid g, DeviceManager dm, ICommsAdapterManager adapters, string verb)
+    {
+        if (!adapters.GetStatus().isConnected)
+            return Results.Text("Not connected to a CAN adapter — connect first.", "text/plain", null, 400);
+        var dev = dm.GetDevice(g);
+        if (dev == null) return Results.NotFound();
+        dev.UpdateIsConnected();
+        if (!dev.Connected)
+            return Results.Text($"Module 0x{dev.BaseId:X} ({dev.Name}) is not responding on the bus — nothing to {verb}. Check power, wiring, base ID and bitrate.", "text/plain", null, 400);
+        return null;
+    }
+
+    // True when the adapter is open and the module is answering. Used by endpoints that ALSO
+    // persist an offline project-record edit (outputconfig/function): the record edit always
+    // applies; only the CAN write is conditioned on this so offline config authoring still works.
+    private static bool IsLiveModule(Guid g, DeviceManager dm, ICommsAdapterManager adapters)
+    {
+        if (!adapters.GetStatus().isConnected) return false;
+        var dev = dm.GetDevice(g);
+        if (dev == null) return false;
+        dev.UpdateIsConnected();
+        return dev.Connected;
     }
 }

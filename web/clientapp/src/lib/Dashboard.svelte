@@ -1,7 +1,11 @@
 <script>
-  import { api } from './store.js'
+  import { api, telemetry, hubState } from './store.js'
   import { toast } from './toast.js'
   let { current } = $props()
+  // A module is writable only when it's actually answering on the bus; the feed is "stale" when
+  // the hub dropped or telemetry froze, so the tiles below are showing last-known, not live, data.
+  let live = $derived(!!current?.connected)
+  let stale = $derived($telemetry?.stale || $hubState !== 'live')
 
   let signals = $state([])
   $effect(() => {
@@ -25,6 +29,7 @@
   let acting = $state(false)
   async function act(a) {
     if (!current || acting) return
+    if (!live) { toast(`${current.name} isn't on the bus — connect it before read/write/burn.`, 'error'); return }
     // Confirm the genuinely disruptive ones (persistent / stops the running program).
     if (a === 'burn' && !confirm(`Burn the config to "${current.name}"? This writes permanently to flash.`)) return
     if (a === 'bootloader' && !confirm(`Put "${current.name}" into its bootloader? It stops running until reflashed/rebooted.`)) return
@@ -44,18 +49,22 @@
   <div class="card flat"><p class="muted">No device bound — go to Outputs to add one.</p></div>
 {:else}
   <div class="devbar">
-    <button class="btn" onclick={() => act('read')}>Read</button>
-    <button class="btn" onclick={() => act('write')}>Write</button>
-    <button class="btn primary" onclick={() => act('burn')}>Burn</button>
+    <button class="btn" disabled={!live} onclick={() => act('read')}>Read</button>
+    <button class="btn" disabled={!live} onclick={() => act('write')}>Write</button>
+    <button class="btn primary" disabled={!live} onclick={() => act('burn')}>Burn</button>
     <span class="sep"></span>
-    <button class="btn ghost" onclick={() => act('sleep')}>Sleep</button>
-    <button class="btn ghost" onclick={() => act('wakeup')}>Wakeup</button>
-    <button class="btn ghost" onclick={() => act('bootloader')}>Bootloader</button>
-    <button class="btn ghost" onclick={() => act('version')}>Version</button>
-    {#if current.version === 'v0.0.0'}<span class="mismatch">⚠ not read yet — press Read</span>{/if}
+    <button class="btn ghost" disabled={!live} onclick={() => act('sleep')}>Sleep</button>
+    <button class="btn ghost" disabled={!live} onclick={() => act('wakeup')}>Wakeup</button>
+    <button class="btn ghost" disabled={!live} onclick={() => act('bootloader')}>Bootloader</button>
+    <button class="btn ghost" disabled={!live} onclick={() => act('version')}>Version</button>
+    {#if !live}<span class="mismatch">⚠ {current.name} not on the bus — read / write / burn need a live module</span>
+    {:else if current.version === 'v0.0.0'}<span class="mismatch">⚠ not read yet — press Read</span>{/if}
   </div>
 
-  <div class="tiles-stat">
+  {#if !live || stale}
+    <div class="sys-alert">{!live ? `${current.name} is not on the bus — these are last-known values, not live.` : 'Live feed frozen — values below may be stale.'}</div>
+  {/if}
+  <div class="tiles-stat" style={(!live || stale) ? 'opacity:.5' : ''}>
     <div class="stat"><div class="v">{current.battery.toFixed(1)} V</div><div class="k">Battery voltage</div></div>
     <div class="stat"><div class="v">{current.current.toFixed(1)} A</div><div class="k">Total current</div></div>
     <div class="stat"><div class="v">{Math.round(current.temp)} °C</div><div class="k">Board temp</div></div>
