@@ -1,5 +1,5 @@
 <script>
-  import { crossFns, deployCrossModule, cmfTrigId, cmfClkId, cmfIsLua, cmfSlotOf, nextCmfSlot, api } from './store.js'
+  import { crossFns, deployCrossModule, cmfTrigId, cmfClkId, cmfIsLua, cmfSlotOf, nextCmfSlot, api, luaCopy, luaAssemble } from './store.js'
   import { toast } from './toast.js'
   import { dialog, labelFields, clickable } from './a11y.js'
   import LuaEditor from './LuaEditor.svelte'
@@ -130,12 +130,49 @@
   let setSleepEnabled = $state(false), setSleepTimeoutS = $state(30)
   let setInputEnabled = $state(false), setInput = $state(1), setInputSleepHigh = $state(false), setIgnoreAlwaysOn = $state(true)
   let setBusy = $state(false), setMsg = $state('')
+  let setBaseId = $state(''), baseBusy = $state(false), baseMsg = $state('')
+  let profSrc = $state(''), profBusy = $state(false), profMsg = $state('')
   function openSettings(g) {
     const d = devices.find((x) => x.guid === g)
     setGuid = g; setSleepEnabled = !!d?.sleepEnabled; setSleepTimeoutS = Math.round((d?.sleepTimeoutMs ?? 30000) / 1000)
     setInputEnabled = !!d?.sleepInputEnabled; setInput = d?.sleepInput || 1
     setInputSleepHigh = !!d?.sleepInputActiveHigh; setIgnoreAlwaysOn = d?.sleepIgnoreAlwaysOn !== false
+    setBaseId = hex(d?.baseId ?? 0); baseMsg = ''
+    profSrc = ''; profMsg = ''
     setMsg = ''; setDrawer = true
+  }
+  // Other configurable modules whose profile could be flashed onto this one.
+  let profProfiles = $derived(devices.filter((d) => d.guid !== setGuid && /pdm/i.test(d.type)))
+  // Write a saved profile onto the connected module: all settings + base ID + Lua follow,
+  // and the module becomes that profile (the placeholder entry is then removed).
+  async function flashProfile() {
+    if (!setGuid || !profSrc || profBusy) return
+    const src = devices.find((d) => d.guid === profSrc), tgt = devices.find((d) => d.guid === setGuid)
+    if (!confirm(`Flash "${src?.name}" onto the connected module (now ${hex(tgt?.baseId)})?\n\n`
+      + `It will be re-addressed to ${hex(src?.baseId)} and every setting + Lua written, then burned.`)) return
+    profBusy = true; profMsg = ''
+    try {
+      const r = await api.applyProfile(setGuid, profSrc)   // params + re-address + burn
+      luaCopy(profSrc, setGuid)                            // bring the profile's Lua across
+      await api.luaUpload(setGuid, luaAssemble(setGuid))   // upload it to the (now re-addressed) module
+      await api.action(setGuid, 'burn')
+      await api.remove(profSrc)                            // placeholder is now the physical module
+      profMsg = `Done — module is now ${src?.name} at ${hex(r.baseId ?? src?.baseId)}.`
+      setDrawer = false; pick(setGuid)
+    } catch (e) { profMsg = 'Failed: ' + e.message }
+    finally { profBusy = false }
+  }
+  // Change the module's CAN base ID. On a connected module this re-addresses it over CAN
+  // (and every function bound to a fixed ID must be re-pointed); offline it just updates
+  // the project record. Accepts hex (0xDE00) or decimal.
+  async function changeBaseId() {
+    if (!setGuid || baseBusy) return
+    const d = devices.find((x) => x.guid === setGuid)
+    if (!confirm(`Change ${d?.name ?? 'this module'}'s CAN base ID to ${setBaseId}?` + (d?.connected ? '\n\nThe connected module will be re-addressed on the bus.' : ''))) return
+    baseBusy = true; baseMsg = ''
+    try { await api.modify(setGuid, d?.name ?? '', setBaseId); baseMsg = `Base ID set to ${setBaseId}.` }
+    catch (e) { baseMsg = 'Failed: ' + e.message }
+    finally { baseBusy = false }
   }
   async function saveSettings() {
     if (!setGuid || setBusy) return
@@ -179,6 +216,23 @@
   // Worst-case load per module: every enabled output at its current limit.
   const maxA = (d) => (d.outputs ?? []).filter((o) => o.enabled).reduce((a, o) => a + (o.currentLimit ?? 0), 0)
   let sysMaxA = $derived(devices.reduce((a, d) => a + maxA(d), 0))
+
+  // A dingoPDM/CANboard occupies a CAN-ID span of baseId-1 (settings) .. baseId+23 (cyclic
+  // status). Two modules clash if those spans overlap — i.e. their base IDs are within 24 of
+  // each other. Space them >= 0x20 apart to be safe. Flag any overlapping pairs.
+  const ID_SPAN_BEFORE = 1, ID_SPAN_AFTER = 23
+  let idConflicts = $derived.by(() => {
+    const m = devices.filter((d) => /pdm|canboard/i.test(d.type))
+    const out = []
+    for (let i = 0; i < m.length; i++)
+      for (let j = i + 1; j < m.length; j++) {
+        const a = m[i], b = m[j]
+        if (a.baseId - ID_SPAN_BEFORE <= b.baseId + ID_SPAN_AFTER &&
+            b.baseId - ID_SPAN_BEFORE <= a.baseId + ID_SPAN_AFTER)
+          out.push([a, b])
+      }
+    return out
+  })
 </script>
 
 <svelte:window onpointermove={move} onpointerup={up} />
@@ -193,6 +247,11 @@
 
 {#if devices.some((d) => !d.connected)}
   <div class="sys-alert">⚠ {devices.filter((d) => !d.connected).length} module(s) in the project not seen on the bus — check power/wiring/base ID.</div>
+{/if}
+
+{#if idConflicts.length}
+  <div class="sys-alert">⚠ {idConflicts.length} CAN ID overlap{idConflicts.length === 1 ? '' : 's'} — each module needs its own span (baseId−1 … baseId+23). Re-space these ≥ 0x20 apart:
+    {#each idConflicts as [a, b]}<b>{a.name} ({hex(a.baseId)}) ↔ {b.name} ({hex(b.baseId)})</b>{' '}{/each}</div>
 {/if}
 
 <div class="cat-grp">Modules <span class="ct"></span></div>
@@ -223,9 +282,19 @@
   <div class="scrim show" onclick={() => { if (!setBusy) setDrawer = false }}></div>
   <aside class="drawer show" use:dialog={{ onclose: closeDrawer }}>
     <div class="dh"><div><div class="nm">Device settings</div>
-      <div class="meta">{dName(setGuid)} — sleep behaviour (written to the module + burned)</div></div>
+      <div class="meta">{dName(setGuid)} — CAN base ID &amp; sleep (written to the module + burned)</div></div>
       <button class="x" aria-label="Close" onclick={() => { if (!setBusy) setDrawer = false }}>✕</button></div>
     <div class="dbody" use:labelFields>
+      <p class="lbl" style="margin-top:0">CAN base ID</p>
+      <div style="display:flex;gap:8px;align-items:flex-end">
+        <div class="field" style="max-width:160px;margin:0"><label>Base ID (hex or dec)</label>
+          <input type="text" bind:value={setBaseId} placeholder="0xDE00" /></div>
+        <button class="btn" disabled={baseBusy} onclick={changeBaseId}>{baseBusy ? 'Setting…' : 'Change base ID'}</button>
+      </div>
+      <p class="hint" style="margin-top:6px">The module's address on the CAN bus. Changing it on a <b>connected</b> module re-addresses
+        it live; any CAN input/output bound to a fixed ID must be re-pointed. {#if baseMsg}<b>{baseMsg}</b>{/if}</p>
+
+      <p class="lbl" style="margin-top:18px">Sleep</p>
       <label class="chk"><input type="checkbox" bind:checked={setSleepEnabled} /> Auto-sleep enabled</label>
       <div class="field" style="max-width:240px;margin-top:12px"><label>Sleep timeout (seconds)</label>
         <input type="number" min="1" max="60" bind:value={setSleepTimeoutS} disabled={!setSleepEnabled} /></div>
@@ -246,6 +315,20 @@
           checks) and only this input wakes it — no waking on other inputs or CAN. USB still wakes it for config.</p>
       {/if}
       {#if setMsg}<p class="lbl" style="margin-top:10px">{setMsg}</p>{/if}
+
+      <p class="lbl" style="margin-top:18px">Flash a profile onto this module</p>
+      <p class="hint" style="margin-top:0">Commission a connected blank module: write another configured module's full settings
+        <b>and adopt its CAN base ID</b>, then burn. The module becomes that profile; the placeholder entry is removed.</p>
+      <div style="display:flex;gap:8px;align-items:flex-end;margin-top:6px">
+        <div class="field" style="flex:1;max-width:240px;margin:0"><label>Profile to write</label>
+          <select bind:value={profSrc}>
+            <option value="">— pick a module —</option>
+            {#each profProfiles as p}<option value={p.guid}>{p.name} ({hex(p.baseId)})</option>{/each}
+          </select></div>
+        <button class="btn" disabled={profBusy || !profSrc} onclick={flashProfile}>{profBusy ? 'Flashing…' : 'Flash to module'}</button>
+      </div>
+      {#if profProfiles.length === 0}<p class="hint">Add the modules you want as profiles first (offline is fine).</p>{/if}
+      {#if profMsg}<p class="lbl" style="margin-top:8px">{profMsg}</p>{/if}
     </div>
     <div class="dfoot"><span style="margin-left:auto"></span>
       <button class="btn ghost" disabled={setBusy} onclick={() => (setDrawer = false)}>Close</button>

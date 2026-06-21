@@ -101,6 +101,7 @@ export const api = {
   projOpen: (FileName) => j('POST', '/api/project/open', { FileName }),
   projNew: () => j('POST', '/api/project/new'),
   applyConfig: (doc) => j('POST', '/api/config', doc),
+  applyProfile: (targetGuid, source) => j('POST', `/api/devices/${targetGuid}/apply-profile`, { Source: source }),
   configTemplate: () => j('GET', '/api/config/template'),
   configSnapshot: (lua) => j('GET', '/api/config' + (lua ? '?lua=true' : '')),
 }
@@ -255,6 +256,11 @@ export const luaSnippets = writable(loadLua())
 luaSnippets.subscribe((v) => { try { localStorage.setItem('dingoLua', JSON.stringify(v)) } catch {} })
 
 export const luaGet = (guid, key) => (get(luaSnippets)[guid]?.[key] ?? '')
+// Copy a device's whole Lua snippet set onto another guid (used when flashing a profile
+// onto a freshly-commissioned module so its Lua follows).
+export function luaCopy(srcGuid, dstGuid) {
+  luaSnippets.update((v) => ({ ...v, [dstGuid]: { ...(v[srcGuid] || {}) } }))
+}
 export function luaSet(guid, key, text) {
   luaSnippets.update((v) => { v[guid] = { ...(v[guid] || {}) }; v[guid][key] = text; return { ...v } })
 }

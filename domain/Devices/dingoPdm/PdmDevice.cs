@@ -1062,28 +1062,34 @@ public class PdmDevice : IDeviceConfigurable
 
     public List<DeviceCanFrame> GetModifyMsgs(int newId)
     {
-        List<DeviceParameter> modifyParams = [];
-        
-        //Copy params:
-        //ID: 0x0000, Subindex: 0, Base ID
-        var baseIdParam = Params.First(p => p is { Index: 0x0000, SubIndex: 0});
+        // Capture the CURRENT id BEFORE we touch the param: baseIdParam.SetValue runs the
+        // setter (BaseId = newId), so after this the local record already reads newId. The
+        // command must still be addressed to the module's CURRENT command channel
+        // (oldId + ConfigTxOffset) — addressing newId meant the old-id module never heard it.
+        // We also burn so the new id survives; the dingoPDM only *adopts* a stored base id on
+        // the next power cycle (it reads base id at boot). (All confirmed on hardware.)
+        int oldId = BaseId;
+        var baseIdParam = Params.First(p => p is { Index: 0x0000, SubIndex: 0 });
         baseIdParam.SetValue(newId);
-        modifyParams.Add(baseIdParam);
-        
-        List<DeviceCanFrame> msgs = [];
 
-        foreach (var parameter in modifyParams)
-        {
-            msgs.Add(new DeviceCanFrame
+        return
+        [
+            new DeviceCanFrame
             {
                 SendOnly = true,
-                DeviceBaseId = newId,
-                Frame = ParamCodec.ToFrame(MessageCommand.Write, parameter, BaseId),
-                Name = $"Modify {parameter.Index}:{parameter.SubIndex}"
-            });
-        }
-        
-        return msgs;
+                DeviceBaseId = oldId,
+                Frame = ParamCodec.ToFrame(MessageCommand.Write, baseIdParam, oldId + ConfigTxOffset),
+                Name = "Modify baseId"
+            },
+            new DeviceCanFrame
+            {
+                SendOnly = true,
+                DeviceBaseId = oldId,
+                Frame = new CanFrame(oldId + ConfigTxOffset, 8,
+                    [Convert.ToByte(MessageCommand.BurnParams), 1, 3, 8, 0, 0, 0, 0]),
+                Name = "Modify burn"
+            }
+        ];
     }
 
     public DeviceCanFrame GetBurnMsg()

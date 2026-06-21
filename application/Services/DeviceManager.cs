@@ -713,6 +713,48 @@ public class DeviceManager(ILogger<DeviceManager> logger, ILoggerFactory loggerF
     }
 
     /// <summary>
+    /// Commission a connected module by writing a saved profile's whole config onto it and
+    /// re-addressing it to the profile's base ID — the module ends up *being* the profile.
+    /// Steps mirror the proven manual flow: copy values → write all params (at the current ID)
+    /// → burn → modify ID → burn. Per-device Lua lives client-side, so the caller uploads it
+    /// after this returns (the device is then at its new ID). Returns (ok, error).
+    /// </summary>
+    public (bool ok, string error) ApplyProfile(Guid targetId, Guid sourceId)
+    {
+        var target = GetDevice(targetId);
+        var source = GetDevice(sourceId);
+        if (target is not IDeviceConfigurable tc || source is not IDeviceConfigurable sc)
+            return (false, "Both the target and the profile must be configurable modules.");
+        if (targetId == sourceId) return (false, "Pick a different profile to flash.");
+        target.UpdateIsConnected();
+        if (!target.Connected)
+            return (false, $"Target module 0x{target.BaseId:X} isn't responding — connect it over USB first.");
+
+        // 1. Copy every setting value from the profile onto the target (base ID is Index 0/Sub 0,
+        //    handled by the re-address step below; everything else — outputs, limits, flashers,
+        //    CAN in/out, conditions, labels, wire data — comes across).
+        var byName = tc.Params.ToDictionary(p => p.Name, StringComparer.OrdinalIgnoreCase);
+        foreach (var sp in sc.Params)
+        {
+            if (sp is { Index: 0x0000, SubIndex: 0 }) continue;
+            if (byName.TryGetValue(sp.Name, out var tp)) { try { tp.SetValue(sp.GetValue()); } catch { /* skip incompatible */ } }
+        }
+
+        // 2. Push all params to the module at its CURRENT id (WriteParamObjects skips LocalOnly
+        //    labels and is FIFO, so the burn that follows lands after them), then persist.
+        WriteParamObjects(targetId, tc.Params.Where(p => p is not { Index: 0x0000, SubIndex: 0 }).ToList());
+        BurnSettings(targetId);
+
+        // 3. Re-address to the profile's base ID (the modify command is sent to the current id),
+        //    then persist the new id.
+        ModifyDeviceConfig(targetId, source.Name, source.BaseId);
+        BurnSettings(targetId);
+
+        logger.LogInformation("ApplyProfile: wrote '{Src}' onto module, now 0x{Id:X} ({Name})", source.Name, target.BaseId, target.Name);
+        return (true, "");
+    }
+
+    /// <summary>
     /// Burn settings to device flash memory
     /// </summary>
     /// <returns>
