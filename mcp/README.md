@@ -1,41 +1,97 @@
 # dingoPDM MCP server
 
-Lets any MCP-capable AI client configure an entire dingoPDM system over the dingoConfig HTTP
-API — **no Playwright / UI scraping**. Zero dependencies; needs Node 18+ (for global `fetch`).
-Start the dingoConfig app first (default `http://localhost:5000`).
+Lets any MCP-capable AI client drive an entire dingoPDM system over the dingoConfig API —
+**no Playwright / UI scraping**. Every capability in the UI is exposed as an MCP tool, plus
+seven guided **skills** (playbooks). Start the dingoConfig app first (default
+`http://localhost:5000`).
 
-## Auto-connect
+## Where the server lives
 
-- **Clients with project config:** the project [`.mcp.json`](../.mcp.json) registers the
-  `dingopdm` server automatically (approve it once if prompted). The tools then appear.
-- **Any AI client at runtime:** fetch [`/llms.txt`](http://localhost:5000/llms.txt) from the
-  running app — it advertises the API and this server.
+The MCP server is **hosted inside the dingoConfig .NET app** (single source of truth — tools
+and skills are defined once in `web/Api/McpServer.cs`). It speaks **Streamable-HTTP JSON-RPC
+2.0** at:
 
-## Manual register
+```
+POST http://localhost:5000/mcp
+```
 
-Add this server to your MCP client's config (JSON):
+`mcp/dingo-mcp.mjs` is now a thin **stdio↔HTTP bridge** for clients that only speak stdio — it
+forwards each JSON-RPC line to `/mcp`. There is nothing tool-specific to maintain in the Node
+script anymore.
+
+## Connect
+
+Pick whichever your client supports:
+
+**A. HTTP (clients that speak Streamable-HTTP):**
+```json
+{ "mcpServers": { "dingopdm": { "url": "http://localhost:5000/mcp" } } }
+```
+
+**B. stdio bridge (Claude Desktop, etc.):** the project [`.mcp.json`](../.mcp.json) already
+registers this (approve once if prompted). Manual form:
 ```json
 { "mcpServers": { "dingopdm": {
   "command": "node",
-  "args": ["/abs/path/to/mcp/dingo-mcp.mjs"],
+  "args": ["mcp/dingo-mcp.mjs"],
   "env": { "DINGO_URL": "http://localhost:5000" }
 } } }
 ```
+Point `DINGO_URL` at the host running dingoConfig if it isn't local. Node 18+ (global `fetch`).
 
-Point `DINGO_URL` at the host running dingoConfig if it isn't local.
+**In-app setup:** open the **MCP** tab in the dingoConfig UI — it shows the endpoint, a
+"Test connection" button, copy-paste configs, and the live tool + skill catalog. The same data
+is available at `GET /mcp/info`.
 
-## Tools
+## Discovery endpoints
 
-`list_adapters` · `connect` · `disconnect` · `discover` · `list_devices` · `add_device` ·
-`remove_device` · `read_device` · `get_schema` · `get_config` · `apply_config` ·
-`device_action` (read/write/burn/sleep/wakeup/bootloader) · `sdo_read` · `sdo_write`
+- `GET /mcp` — health/handshake summary (tool + skill counts)
+- `GET /mcp/info` — full catalog + copy-paste client configs (what the UI tab renders)
+- `GET /mcp/skills` and `GET /mcp/skills/{id}` — the guided playbooks as markdown
 
-**Flow:** `connect` → `discover`/`add_device` → `read_device` → `get_schema` → `get_config` →
-`apply_config`. Every setting is reachable by name (e.g. `device.sleepTimeoutMs`,
-`output1.currentLimit`) — see [AI-CONFIG.md](../AI-CONFIG.md).
+## Tools (48)
+
+Every UI capability is a tool. Highlights, grouped:
+
+- **Connection:** `list_adapters` · `connect` · `disconnect` · `discover` · `identify` ·
+  `probe` · `raw_log`
+- **Devices:** `list_devices` · `add_device` · `remove_device` · `rename_device` ·
+  `modify_device` · `read_device` · `device_action` (read/write/burn/sleep/wakeup/bootloader) ·
+  `apply_profile`
+- **Config:** `get_schema` · `get_template` · `get_config` · `apply_config`
+- **Outputs:** `set_output` · `set_output_config` · `get_overloads` · `clear_overloads`
+- **Params:** `read_param` · `write_param`
+- **Signals & logic:** `get_inputs` · `get_functions` · `set_function` · `get_signals` ·
+  `get_dbc_signals` · `open_dbc` · `set_dbc_signal` · `get_lua` · `set_lua` · `get_lua_error`
+- **Firmware:** `flash_firmware` · `flash_status`
+- **Keypad (CANopen SDO):** `sdo_read` · `sdo_write` · `sdo_store`
+- **Project:** `get_project` · `project_new` · `project_open` · `project_save`
+- **Logs:** `get_canlog` · `get_syslog` · `export_canlog` · `export_syslog`
+
+The full list with input schemas is returned by `tools/list`.
+
+## Skills (7)
+
+Guided playbooks served as MCP **prompts** (`prompts/list`, `prompts/get`) and at
+`/mcp/skills`:
+
+`connect-and-discover` · `configure-a-module` · `wire-outputs-safely` · `signals-and-logic` ·
+`flash-firmware` · `keypad-sdo` · `logs-and-troubleshooting`
+
+## Honest writes
+
+Writes are queued and acknowledged by the device. A tool result with **`isError: true`** means
+the operation did **not** complete (e.g. the module never acknowledged). Never report success
+on an `isError` result.
 
 ## Smoke test (no AI client)
+
+HTTP:
 ```
-echo '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' | node mcp/dingo-mcp.mjs
+curl -s http://localhost:5000/mcp -H "Content-Type: application/json" ^
+  -d "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/list\"}"
 ```
-Prints the tool catalog as JSON.
+Through the stdio bridge:
+```
+echo {"jsonrpc":"2.0","id":1,"method":"tools/list"} | node mcp/dingo-mcp.mjs
+```

@@ -214,6 +214,7 @@
             {#each WIRE_GAUGES as g}<option value={g.mm2}>{g.mm2} mm² ({g.awg} AWG){g.mm2 < wire.mm2 ? ' — under recommended ⚠' : ''}</option>{/each}
           </select></div>
         <p class="hint" style="margin-top:6px">Recommendation is sized to the current limit so the wire is never the weak link. Override to the gauge you actually run — voltage drop below uses it.</p>
+        <p class="hint muted" style="margin-top:2px;font-size:11px">Sizing is a lookup table mapping trip current → gauge, not a thermal model. It ignores ambient temperature, bundling, run length and insulation rating — verify against your wiring standard for long runs or hot environments.</p>
       {:else}<p class="muted">Set a current limit on the Protection tab first.</p>{/if}
 
       <p class="lbl" style="margin-top:18px">Wire colour</p>
@@ -247,6 +248,7 @@
         </div>
         <p class="hint" style="margin-top:6px">Rule of thumb: keep drop under <b>3%</b> (~0.4 V) for lighting/sensitive loads, under 10% for motors/heaters.
           {#if vd.pct > 3}<b style="color:var(--err)"> Over 3% — consider a heavier gauge or shorter run.</b>{/if}</p>
+        <p class="hint muted" style="margin-top:2px;font-size:11px">Estimate only: assumes copper (ρ≈0.0175 Ω·mm²/m) at a 13.8 V system, feed + return (2× the one-way length), and ignores connector/terminal resistance and temperature.</p>
       {:else}<p class="hint">Enter a length to estimate voltage drop at the current limit.</p>{/if}
     </div>
   {:else}

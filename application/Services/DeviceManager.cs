@@ -371,6 +371,14 @@ public class DeviceManager(ILogger<DeviceManager> logger, ILoggerFactory loggerF
             var device = GetDeviceByBaseId(key.BaseId);
             logger.LogError("Message failed after {MaxRetries} retries: {Index:X}:{SubIndex} on {DeviceName} (ID: {BaseId}) - {Name}",
                 MaxRetries, index, subIndex, device?.Name ?? "Unknown", key.BaseId, frame.Name);
+
+            // Surface the failed ack to the UI as a red toast. Without this, a queued write that the
+            // device never acknowledges only ever lands as an Error line in the Logs tab — the action
+            // button has already flashed green ("sent"), so the user is told a write succeeded when it
+            // physically did not. This closes that false-success gap for write/burn/sleep/wake/etc.
+            systemLogger.Notify(device?.Name ?? "CAN",
+                $"No reply from {device?.Name ?? "module"} — {frame.Name} ({index:X4}:{subIndex}) failed after {MaxRetries} tries. The module did not acknowledge — the operation did NOT complete.",
+                application.Models.LogLevel.Error);
         }
         else
         {

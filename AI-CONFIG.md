@@ -92,7 +92,12 @@ applies). `device.baseId` is intentionally skipped here — change a base ID via
 - **Lua** program per module (read via `?lua=true`, write via the `lua` field).
 - Base ID / name via `/modify`; keypad CANopen device settings via `/api/sdo/*`.
 
-## Optional: expose as an MCP server
-These three endpoints are the whole contract, so an MCP server for "any AI model" is a thin
-wrapper — three tools `get_schema`, `get_config`, `apply_config` that proxy to them. No
-re-implementation; the HTTP API stays the single source of truth.
+## MCP server (shipped)
+
+A full MCP server is **hosted inside this app** at `POST /mcp` (Streamable-HTTP JSON-RPC 2.0).
+It exposes **every UI capability as a tool (48)** — not just these three config endpoints — plus
+seven guided **skills** (playbooks). `get_schema` / `get_config` / `apply_config` are the
+config-surface tools; the rest cover connection, devices, outputs, signals/logic, firmware,
+keypad SDO, project, and logs. The HTTP API stays the single source of truth — the MCP server
+loops back to `/api/*`, so all validation and honest-write behaviour is reused. See
+[mcp/README.md](mcp/README.md) and the in-app **MCP** tab (or `GET /mcp/info`).

@@ -66,12 +66,12 @@ public class SystemLogger : IDisposable
     /// Fire a snackbar notification without adding a duplicate log entry.
     /// The message should already be in the log buffer via ILogger.
     /// </summary>
-    public void Notify(string source, string message)
+    public void Notify(string source, string message, LogLevel level = LogLevel.Info)
     {
         var entry = new LogEntry
         {
             Timestamp = DateTime.Now,
-            Level = LogLevel.Info,
+            Level = level,
             Source = source,
             Message = message
         };

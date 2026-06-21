@@ -274,7 +274,7 @@
           </div>
         </div>
         {#if liveByName[s.name]}
-          <div class="minichart" onclick={(e) => e.stopPropagation()} title="live ({liveByName[s.name].value})">
+          <div class="minichart" style={live ? '' : 'opacity:.4'} onclick={(e) => e.stopPropagation()} title={live ? `live (${liveByName[s.name].value})` : `module offline — last value (${liveByName[s.name].value}), not live`}>
             <Sparkline value={liveByName[s.name].value} tick={liveTick} win={30} color={['caninput', 'condition', 'counter'].includes(k.key) ? '#594ae2' : '#2a9d8f'} />
           </div>
         {/if}
