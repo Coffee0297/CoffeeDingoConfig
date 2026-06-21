@@ -132,6 +132,11 @@ public class SystemConfigService(DeviceManager devices, ILogger<SystemConfigServ
                 errors.Add($"no device matched {devEl.GetRawText()}");
                 continue;
             }
+            // Record edits below always persist to the project; CAN writes/burn/Lua only happen
+            // when the module is actually on the bus. Report the difference instead of claiming a
+            // write that never left the host (the old code reported burned/changed against a dark bus).
+            dev.UpdateIsConnected();
+            bool live = dev.Connected;
             int changed = 0;
 
             if (devEl.TryGetProperty("params", out var pEl) && pEl.ValueKind == JsonValueKind.Object)
@@ -154,12 +159,17 @@ public class SystemConfigService(DeviceManager devices, ILogger<SystemConfigServ
                     }
                     catch (Exception ex) { errors.Add($"{dev.Name}.{kv.Name}: {ex.Message}"); }
                 }
-                if (toWrite.Count > 0) devices.WriteParamObjects(dev.Guid, toWrite);
+                if (toWrite.Count > 0)
+                {
+                    if (live) devices.WriteParamObjects(dev.Guid, toWrite);
+                    else notes.Add($"{dev.Name}: {toWrite.Count} setting(s) saved to the project — module offline, not written to the device");
+                }
             }
 
             if (devEl.TryGetProperty("lua", out var luaEl) && luaEl.ValueKind == JsonValueKind.String)
             {
                 if (!HasLua(dev)) errors.Add($"{dev.Name}: device has no Lua support");
+                else if (!live) errors.Add($"{dev.Name}: module offline — Lua not uploaded");
                 else { devices.UploadLua(dev.Guid, luaEl.GetString() ?? ""); notes.Add($"{dev.Name}: Lua uploaded"); changed++; }
             }
 
@@ -167,7 +177,11 @@ public class SystemConfigService(DeviceManager devices, ILogger<SystemConfigServ
             {
                 devTouched++; totalChanged += changed;
                 bool burnThis = devEl.TryGetProperty("burn", out var bl) ? bl.ValueKind != JsonValueKind.False : burnGlobal;
-                if (burnThis) { devices.BurnSettings(dev.Guid); notes.Add($"{dev.Name}: burned"); }
+                if (burnThis)
+                {
+                    if (live) { devices.BurnSettings(dev.Guid); notes.Add($"{dev.Name}: burned"); }
+                    else notes.Add($"{dev.Name}: not burned — module offline");
+                }
             }
         }
         logger.LogInformation("Config apply: {Dev} device(s), {N} change(s), {E} error(s)", devTouched, totalChanged, errors.Count);

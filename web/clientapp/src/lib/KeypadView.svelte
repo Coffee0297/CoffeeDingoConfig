@@ -16,6 +16,8 @@
   let ctrl = $state(null)   // { guid, name, masterIndex, master }
   let inputsBool = $state([])
   let msg = $state('')
+  // The button map lives on the controlling PDM; writes reach hardware only when that PDM is live.
+  let live = $derived(!!devices.find((d) => d.guid === ctrl?.guid)?.connected)
 
   async function resolve() {
     if (!pdms.length) { ctrl = null; msg = 'No dingoPDM in the project. Add the PDM that controls this keypad, then enable a keypad on it.'; return }
@@ -51,10 +53,13 @@
     saving = true
     try {
       const number = ctrl.masterIndex * 32 + editing.number
-      await api.setFunction(ctrl.guid, 'keypadbutton', number, { ...f, enabled: true })
+      const r = await api.setFunction(ctrl.guid, 'keypadbutton', number, { ...f, enabled: true })
       await resolve()
+      toast(r?.written
+        ? `Saved button ${editing.number} to ${ctrl.name}`
+        : `Saved button ${editing.number} to the project — ${ctrl.name} offline; Deploy when connected`, r?.written ? 'ok' : 'info')
       editing = null
-    } catch (e) { toast('Write failed: ' + e.message, 'error') } finally { saving = false }
+    } catch (e) { toast('Save failed: ' + e.message, 'error') } finally { saving = false }
   }
 
   // ---- CANopen SDO: the keypad's own persistent settings (separate from the PDM-driven
@@ -201,6 +206,6 @@
     </div>
     <div class="dfoot"><span class="res">button {editing.number}</span><span style="margin-left:auto"></span>
       <button class="btn ghost" onclick={() => (editing = null)}>Cancel</button>
-      <button class="btn primary" disabled={saving} onclick={save}>{saving ? 'Writing…' : 'Save to device'}</button></div>
+      <button class="btn primary" disabled={saving} onclick={save}>{saving ? 'Saving…' : (live ? 'Save to device' : 'Save to project')}</button></div>
   </aside>
 {/if}

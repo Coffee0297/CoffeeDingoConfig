@@ -13,7 +13,7 @@
   let f = $state(blank())
   let triggerInputs = $state([])  // var-map of the selected trigger module
   let luaMod = $state('')         // which module's Lua is being edited
-  let deploying = $state(false), deployMsg = $state('')
+  let deploying = $state(false), deployMsg = $state(''), deployErr = $state(false)
 
   function blank() {
     return { name: '', mode: 'rule', blink: true, blinkRateMs: 350,
@@ -81,12 +81,17 @@
     crossFns.update((list) => list.filter((_, k) => k !== idx))
   }
   async function deploy() {
-    deploying = true; deployMsg = ''
+    deploying = true; deployMsg = ''; deployErr = false
     try {
       const res = await deployCrossModule(devices)
+      if (!res.length) { deployMsg = 'Nothing to deploy — no reachable target modules.'; deployErr = true; return }
       const ok = res.filter((r) => r.ok), bad = res.filter((r) => !r.ok)
-      deployMsg = `Deployed to ${ok.length} module(s)${bad.length ? `, ${bad.length} failed` : ''}. Burn each to keep.`
-    } catch (e) { deployMsg = 'Deploy failed: ' + e.message }
+      deployErr = bad.length > 0
+      const detail = bad.length ? ' — ' + bad.map((b) => `${b.name}: ${b.error}`).join('; ') : ''
+      deployMsg = bad.length
+        ? `Deployed to ${ok.length} module(s), ${bad.length} failed${detail}`
+        : `Deployed to ${ok.length} module(s). Burn each to keep.`
+    } catch (e) { deployMsg = 'Deploy failed: ' + e.message; deployErr = true }
     finally { deploying = false }
   }
   const dName = (g) => devices.find((d) => d.guid === g)?.name ?? '—'
@@ -152,14 +157,19 @@
       + `It will be re-addressed to ${hex(src?.baseId)} and every setting + Lua written, then burned.`)) return
     profBusy = true; profMsg = ''
     try {
-      const r = await api.applyProfile(setGuid, profSrc)   // params + re-address + burn
-      luaCopy(profSrc, setGuid)                            // bring the profile's Lua across
-      await api.luaUpload(setGuid, luaAssemble(setGuid))   // upload it to the (now re-addressed) module
-      await api.action(setGuid, 'burn')
-      await api.remove(profSrc)                            // placeholder is now the physical module
+      // applyProfile is the whole hardware sequence (config + re-address + burn), all at the
+      // OLD id — atomic. Once it returns ok the module IS the profile, so remove the source
+      // placeholder. Lua follows best-effort: it isn't allowed to fail the flash (and must
+      // never block the source removal that prevents a duplicate).
+      const r = await api.applyProfile(setGuid, profSrc)
+      luaCopy(profSrc, setGuid)
+      let luaOk = true
+      try { await api.luaUpload(setGuid, luaAssemble(setGuid)) } catch { luaOk = false }
+      await api.remove(profSrc)
       profMsg = `Done — module is now ${src?.name} at ${hex(r.baseId ?? src?.baseId)}.`
+        + (luaOk ? '' : ' But the Lua upload failed — re-upload it from the Lua tab.')
       setDrawer = false; pick(setGuid)
-    } catch (e) { profMsg = 'Failed: ' + e.message }
+    } catch (e) { profMsg = 'Failed (module unchanged or partially): ' + e.message }
     finally { profBusy = false }
   }
   // Change the module's CAN base ID. On a connected module this re-addresses it over CAN
@@ -211,6 +221,19 @@
   }
   function up() { if (drag) { save(); drag = null } }
 
+  // Inline rename: click a module's name on its card to edit it (project label only, no CAN).
+  let renamingGuid = $state(null), renameVal = $state('')
+  function startRename(d) { renamingGuid = d.guid; renameVal = d.name }
+  async function commitRename(guid) {
+    const name = renameVal.trim()
+    renamingGuid = null
+    const cur = devices.find((d) => d.guid === guid)
+    if (!name || name === cur?.name) return
+    try { await api.rename(guid, name); toast(`Renamed to ${name}`, 'ok') }
+    catch (e) { toast('Rename failed: ' + e.message, 'error') }
+  }
+  function focusSelect(node) { node.focus(); node.select?.() }
+
   const onCount = (d) => (d.outputs ?? []).filter((o) => o.state === 'On').length
   const totalA = (d) => (d.outputs ?? []).reduce((a, o) => a + o.current, 0)
   // Worst-case load per module: every enabled output at its current limit.
@@ -256,10 +279,17 @@
 
 <div class="cat-grp">Modules <span class="ct"></span></div>
 <div class="fleet">
-  {#each devices as d}
+  {#each devices as d (d.guid)}
     <div class="pdm" class:err={!d.connected} use:clickable aria-label={"Open " + d.name} onclick={() => pick(d.guid)} style="position:relative">
       <button class="x" style="position:absolute;top:8px;right:8px" title="Remove module" aria-label={"Remove " + d.name} onclick={(e) => { e.stopPropagation(); remove?.(d.guid) }}>✕</button>
-      <div class="pt">{d.name}</div>
+      {#if renamingGuid === d.guid}
+        <input class="in" style="font-weight:700;max-width:150px" bind:value={renameVal} use:focusSelect
+          onclick={(e) => e.stopPropagation()}
+          onkeydown={(e) => { if (e.key === 'Enter') commitRename(d.guid); else if (e.key === 'Escape') renamingGuid = null }}
+          onblur={() => commitRename(d.guid)} />
+      {:else}
+        <div class="pt" title="Click to rename" use:clickable onclick={(e) => { e.stopPropagation(); startRename(d) }}>{d.name} <span style="opacity:.45;font-size:12px">✎</span></div>
+      {/if}
       <div class="role">{d.type} · {hex(d.baseId)}</div>
       <div class="st"><span class="dot-live" style={d.connected ? '' : 'background:var(--err)'}></span>
         {d.connected ? `live · ${onCount(d)} on · ${totalA(d).toFixed(1)} A` : 'not found'}</div>
@@ -268,7 +298,7 @@
         <div style="display:flex;gap:6px;margin-top:8px">
           <button class="btn ghost" style="flex:1;font-size:12px"
             onclick={(e) => { e.stopPropagation(); openSettings(d.guid) }}>⚙ Settings</button>
-          <button class="btn ghost" style="flex:1;font-size:12px" disabled={flashBusy}
+          <button class="btn ghost" style="flex:1;font-size:12px" disabled={flashBusy} title={flashBusy ? 'A firmware flash is already in progress' : 'Flash firmware over USB DFU (works even if the module is dark on the CAN bus)'}
             onclick={(e) => { e.stopPropagation(); openFlash(d.guid) }}>⬆ Firmware</button>
         </div>
       {/if}
@@ -396,7 +426,7 @@
 
 <div style="display:flex;gap:10px;align-items:center;margin-top:12px">
   {#if $crossFns.length}<button class="btn primary" disabled={deploying} onclick={deploy}>{deploying ? 'Deploying…' : 'Deploy to modules'}</button>{/if}
-  {#if deployMsg}<span style="color:var(--muted)">{deployMsg}</span>{/if}
+  {#if deployMsg}<span style={deployErr ? 'color:var(--err)' : 'color:var(--muted)'}>{deployMsg}</span>{/if}
 </div>
 {#if devices.length < 2}
   <p class="hint">Tip: cross-module functions shine with 2+ modules. A <b>rule</b> compiles to native CAN-input/flasher/output

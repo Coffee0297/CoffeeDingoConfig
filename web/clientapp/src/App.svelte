@@ -166,7 +166,16 @@
   // Sim/SocketCAN don't use a serial port; only serial adapters need one picked.
   let needsPort = $derived(/usb|slcan|socketcan|pcan/i.test(adapter))
 
-  async function connect() { busy = true; try { await api.connect(adapter, port, bitrate); toast(`Connected · ${adapter} ${bitrate}`, 'ok') } catch (e) { toast('Connect failed: ' + e.message, 'error') } finally { busy = false } }
+  async function connect() {
+    busy = true
+    try {
+      // The backend returns HTTP 200 {ok:false} when the adapter can't actually open (port busy,
+      // wrong/missing COM, init failure) — so a bare resolve is NOT proof of a link. Inspect ok.
+      const r = await api.connect(adapter, port, bitrate)
+      if (!r?.ok) { toast(`Connect failed — ${adapter}${needsPort ? ' ' + port : ''} didn't open. Check the port isn't already in use and the bitrate matches the bus.`, 'error'); return }
+      toast(`Connected · ${adapter} ${bitrate}`, 'ok')
+    } catch (e) { toast('Connect failed: ' + e.message, 'error') } finally { busy = false }
+  }
   async function disconnect() { busy = true; try { await api.disconnect() } catch (e) { toast('Disconnect failed: ' + e.message, 'error') } finally { busy = false } }
   async function addPdm() { try { await api.addDevice('pdm', 'PDM', newBaseId) } catch (e) { toast(e.message, 'error') } }
   // Scan the bus and identify each module's type from its broadcast signature.
@@ -393,7 +402,7 @@
           <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:10px">
             <input class="in" style="width:110px" bind:value={newBaseId} placeholder="0x7CE" />
             <button class="btn primary" onclick={addPdm}>+ Add dingoPDM</button>
-            <button class="btn ghost" onclick={scanUsb} disabled={!t.connected || scanning}>{scanning ? 'Scanning…' : '🔍 Add from USB'}</button>
+            <button class="btn ghost" onclick={scanUsb} disabled={!t.connected || scanning} title={t.connected ? 'Scan the bus and add detected modules' : 'Connect to an adapter first to scan the bus'}>{scanning ? 'Scanning…' : '🔍 Add from USB'}</button>
             {#if t.ids.length}<span class="muted">IDs on bus:</span>
               {#each t.ids as id}<span class="idchip">{hex(id)}</span>{/each}{/if}
           </div>
@@ -480,7 +489,7 @@
 
   {#if editNum != null && current}
     {@const eo = current.outputs.find((o) => o.number === editNum)}
-    {#if eo}<OutputDrawer output={eo} guid={current.guid} onclose={() => (editNum = null)} />{/if}
+    {#if eo}<OutputDrawer output={eo} guid={current.guid} connected={current.connected} onclose={() => (editNum = null)} />{/if}
   {/if}
 
   {#if dialog === 'add' || dialog === 'modify'}

@@ -5,6 +5,9 @@
   import LuaEditor from './LuaEditor.svelte'
   import Sparkline from './Sparkline.svelte'
   let { current, ids = [] } = $props()
+  // Writes/uploads only reach hardware when the module is live on the bus; config edits still
+  // persist to the project offline. Read-backs (Lua read, error check) need a live module.
+  let live = $derived(!!current?.connected)
 
   // ---- Live values for per-function mini charts (#17) ----
   let liveByName = $state({})   // name -> { value:number, on:bool }
@@ -31,6 +34,7 @@
   let inputsBool = $state([])   // bool-typed VarMap entries (edges, on/off sources)
   let inputsAll = $state([])    // every VarMap entry (values to compare / send)
 
+  let loadErr = $state('')
   async function reload() {
     const g = current?.guid
     if (!g) { funcs = null; return }
@@ -38,7 +42,8 @@
       funcs = await api.functions(g)
       inputsBool = await api.inputs(g, 'bool')
       inputsAll = await api.inputs(g)
-    } catch {}
+      loadErr = ''
+    } catch (e) { loadErr = 'Could not load this module’s signals — ' + e.message }
   }
   $effect(() => { current?.guid; reload() })
 
@@ -102,11 +107,13 @@
     }
     saving = true
     try {
-      await api.setFunction(current.guid, editing.kind, editing.number, body)
+      const r = await api.setFunction(current.guid, editing.kind, editing.number, body)
       await reload()
-      toast(`Saved ${labelFor(editing.kind)} ${editing.number}`, 'ok')
+      toast(r?.written
+        ? `Saved ${labelFor(editing.kind)} ${editing.number} to device`
+        : `Saved ${labelFor(editing.kind)} ${editing.number} to the project — module offline; Deploy when connected`, r?.written ? 'ok' : 'info')
       close()
-    } catch (e) { toast('Write failed: ' + e.message, 'error') }
+    } catch (e) { toast('Save failed: ' + e.message, 'error') }
     finally { saving = false }
   }
   async function remove(kind, row) {
@@ -173,7 +180,7 @@
   async function checkLuaError() {
     if (!current) return
     try { const r = await api.luaError(current.guid); luaDevErr = (r.error || '').trim() }
-    catch (e) { luaDevErr = '' }
+    catch (e) { luaDevErr = ''; luaMsg = 'Could not read the device error state (no response) — a failed read is not proof the Lua is healthy.' }
   }
 
   // ---- keypad config (PDM keypad masters: buttons → LED colour / drives) ----
@@ -211,6 +218,7 @@
 {:else if !funcs}
   <div class="card flat"><p class="muted">Loading…</p></div>
 {:else}
+  {#if loadErr}<div class="sys-alert">⚠ {loadErr}</div>{/if}
   <div class="cat-grp">⚡ Lua program
     <span style="text-transform:none;letter-spacing:0;font-weight:500;color:var(--muted)">— global/shared section · per-output logic is in each output’s Lua tab</span>
     <span class="ct"></span>
@@ -230,10 +238,10 @@
           uploaded. Edit the pieces in the Global tab and each function's Lua tab — not here.</p>
       {/if}
       <div style="display:flex;gap:10px;align-items:center;margin-top:10px">
-        <button class="btn primary" disabled={luaBusy} onclick={uploadLua}>{luaBusy ? 'Uploading…' : 'Upload to device'}</button>
-        <button class="btn ghost" disabled={luaBusy} onclick={readLua}>Read from device</button>
-        <button class="btn ghost" disabled={luaBusy} onclick={checkLuaError}>Check error</button>
-        {#if luaMsg}<span class="muted">{luaMsg}</span>{/if}
+        <button class="btn primary" disabled={luaBusy || !live} title={live ? '' : 'Connect the module to upload Lua'} onclick={uploadLua}>{luaBusy ? 'Uploading…' : 'Upload to device'}</button>
+        <button class="btn ghost" disabled={luaBusy || !live} title={live ? '' : 'Connect the module to read its Lua'} onclick={readLua}>Read from device</button>
+        <button class="btn ghost" disabled={luaBusy || !live} title={live ? '' : 'Connect the module to read its error state'} onclick={checkLuaError}>Check error</button>
+        {#if luaMsg}<span class="muted">{luaMsg}</span>{:else if !live}<span class="muted" style="font-size:12px">Module offline — Lua is saved locally; connect to upload.</span>{/if}
       </div>
       {#if luaDevErr}
         <div class="sys-alert" style="margin-top:8px">⚠ Device Lua error: <span style="font-family:var(--mono)">{luaDevErr}</span></div>
@@ -454,7 +462,7 @@
         <LuaEditor bind:value={fnLua} minHeight={120}
           placeholder={`-- custom logic for this ${labelFor(editing.kind)} ${editing.number}\n-- e.g. setLuaOut(0, readVar(1))`} />
         <div style="display:flex;gap:10px;align-items:center;margin-top:8px">
-          <button class="btn ghost" disabled={luaBusy} onclick={uploadLua}>{luaBusy ? 'Uploading…' : 'Upload Lua program'}</button>
+          <button class="btn ghost" disabled={luaBusy || !live} title={live ? '' : 'Connect the module to upload Lua'} onclick={uploadLua}>{luaBusy ? 'Uploading…' : 'Upload Lua program'}</button>
           {#if luaMsg}<span class="muted" style="font-size:12px">{luaMsg}</span>{/if}
         </div>
       {/if}
@@ -462,7 +470,7 @@
     {#if editing}
       <div class="dfoot"><span class="res">slot {editing.number}</span><span style="margin-left:auto"></span>
         <button class="btn ghost" onclick={close}>Cancel</button>
-        <button class="btn primary" disabled={saving} onclick={save}>{saving ? 'Writing…' : 'Save to device'}</button></div>
+        <button class="btn primary" disabled={saving} onclick={save}>{saving ? 'Saving…' : (live ? 'Save to device' : 'Save to project')}</button></div>
     {/if}
   </aside>
 {/if}
