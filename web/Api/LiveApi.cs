@@ -40,6 +40,7 @@ public record OutputConfigReq(int Number, bool Enabled, int Input, double Curren
     bool PwmEnabled, int Freq, int FixedDuty, int MinDuty, bool SoftStart, int SoftStartRamp,
     double WarnLimit = 0, double OpenLoadLimit = 0, int OpenLoadTime = 1000, string? Name = null,
     string? WireColor = null, string? WireStripe = null, double? WireLength = null, double? WireGaugeMm2 = null);
+public record ApplyProfileReq(string Source);
 public record ReadParamReq(int Index, int Sub);
 public record WriteParamReq(int Index, int Sub, uint Value);
 public record SdoReadReq(int Node, int Index, int Sub);
@@ -405,7 +406,14 @@ public static class LiveApi
         api.MapPost("/devices/{guid}/modify", (string guid, ModifyReq r, DeviceManager dm) =>
         {
             if (!Guid.TryParse(guid, out var g)) return Results.BadRequest();
-            dm.ModifyDeviceConfig(g, r.Name, DingoMap.ParseId(r.BaseId));
+            var newId = DingoMap.ParseId(r.BaseId);
+            // A standard CAN ID is 11-bit. The module also uses baseId-1 (settings) and
+            // baseId+1/+2 (config/status), so it must sit in [1, 0x7FF]. Out-of-range IDs
+            // are silently rejected by the firmware's param range check (max 0x7FF) — the
+            // module just never moves. Reject up front with a clear message instead.
+            if (newId < 1 || newId > 0x7FF)
+                return Results.Text($"Base ID {r.BaseId} is out of range — must be 0x001–0x7FF (1–2047). A standard CAN ID is 11-bit.", "text/plain", null, 400);
+            dm.ModifyDeviceConfig(g, r.Name, newId);
             return Results.Ok(new { ok = true });
         });
 
@@ -725,9 +733,36 @@ public static class LiveApi
             return Results.File(System.Text.Encoding.UTF8.GetBytes(sb.ToString()), "text/csv", "syslog.csv");
         });
 
-        api.MapPost("/devices/{guid}/{action}", (string guid, string action, DeviceManager dm) =>
+        // Commission a connected module: write a saved profile (another project device) onto it,
+        // including re-addressing it to the profile's base ID. Lua follows from the client side.
+        api.MapPost("/devices/{guid}/apply-profile", (string guid, ApplyProfileReq r, DeviceManager dm, ICommsAdapterManager adapters) =>
+        {
+            if (!Guid.TryParse(guid, out var t)) return Results.BadRequest();
+            if (!adapters.GetStatus().isConnected) return Results.Text("Not connected to a CAN adapter — connect first.", "text/plain", null, 400);
+            if (!Guid.TryParse(r.Source, out var s)) return Results.Text("Invalid source profile.", "text/plain", null, 400);
+            var (ok, err) = dm.ApplyProfile(t, s);
+            return ok ? Results.Ok(new { ok = true, baseId = dm.GetDevice(t)?.BaseId }) : Results.Text(err, "text/plain", null, 400);
+        });
+
+        api.MapPost("/devices/{guid}/{action}", (string guid, string action, DeviceManager dm, ICommsAdapterManager adapters) =>
         {
             if (!Guid.TryParse(guid, out var g)) return Results.BadRequest();
+
+            // These talk to live hardware over CAN. The writes are fire-and-forget, so without
+            // a guard they "succeed" silently against an empty bus. Refuse unless the adapter is
+            // connected AND the target module is actually broadcasting (seen within ~500 ms).
+            string[] liveActions = ["read", "readall", "write", "writeall", "burn", "sleep", "wakeup", "bootloader", "version"];
+            if (liveActions.Contains(action))
+            {
+                if (!adapters.GetStatus().isConnected)
+                    return Results.Text("Not connected to a CAN adapter — connect first.", "text/plain", null, 400);
+                var dev = dm.GetDevice(g);
+                if (dev == null) return Results.NotFound();
+                dev.UpdateIsConnected();
+                if (!dev.Connected)
+                    return Results.Text($"Module 0x{dev.BaseId:X} ({dev.Name}) is not responding on the bus — nothing to {action}. Check power, wiring, base ID and bitrate.", "text/plain", null, 400);
+            }
+
             switch (action)
             {
                 // Bulk read/write: the firmware streams the whole config back in one burst
