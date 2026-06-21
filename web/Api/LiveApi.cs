@@ -443,14 +443,19 @@ public static class LiveApi
         });
 
         // Set an output's current limit (used by the output editor; also the write-path test hook)
-        api.MapPost("/devices/{guid}/output", (string guid, SetOutputReq r, DeviceManager dm) =>
+        api.MapPost("/devices/{guid}/output", (string guid, SetOutputReq r, DeviceManager dm, ICommsAdapterManager adapters) =>
         {
             if (!Guid.TryParse(guid, out var g)) return Results.BadRequest();
             var d = dm.GetDevice<PdmDevice>(g);
             var o = d?.Outputs.FirstOrDefault(x => x.Number == r.Number);
             if (o == null) return Results.NotFound();
-            o.CurrentLimit = r.CurrentLimit;
-            return Results.Ok(new { ok = true, o.Number, o.CurrentLimit });
+            o.CurrentLimit = r.CurrentLimit;                 // project-record edit (always)
+            // Push it to the module over CAN only when it's live, and report which happened so a
+            // caller (e.g. the MCP set_output tool, described as "live") never reads the in-memory
+            // change as a confirmed device write.
+            var live = IsLiveModule(g, dm, adapters);
+            if (live) dm.WriteOutputParams(g, r.Number);
+            return Results.Ok(new { ok = true, o.Number, o.CurrentLimit, written = live });
         });
 
         // Apply an output's config from the editor, then write that output's params to the
@@ -570,10 +575,11 @@ public static class LiveApi
             return ok ? Results.Ok(new { ok = true }) : Results.BadRequest(new { ok = false, error = "upload rejected (too big or no device)" });
         });
 
-        // Read the stored Lua program back from the device.
-        api.MapGet("/devices/{guid}/lua", async (string guid, DeviceManager dm) =>
+        // Read the stored Lua program back from the device (a live CAN read).
+        api.MapGet("/devices/{guid}/lua", async (string guid, DeviceManager dm, ICommsAdapterManager adapters) =>
         {
             if (!Guid.TryParse(guid, out var g)) return Results.BadRequest();
+            if (RequireLiveModule(g, dm, adapters, "read Lua from") is { } bad) return bad;
             var source = await dm.ReadLua(g);
             return Results.Ok(new { source });
         });
@@ -753,10 +759,21 @@ public static class LiveApi
 
         api.MapPost("/project/open", async (ProjReq r, ConfigFileManager cfg, DeviceManager dm) =>
         {
-            var devs = await cfg.LoadDevices(r.FileName);
-            dm.ClearDevices();
-            if (devs != null) dm.AddDevices(devs);
-            return Results.Ok(new { ok = true, count = devs?.Count ?? 0 });
+            // Load FIRST; only clear the current project once we have a valid replacement. The old
+            // order cleared then checked for null, silently wiping every device on a bad/missing file.
+            try
+            {
+                var devs = await cfg.LoadDevices(r.FileName);
+                if (devs == null)
+                    return Results.Text($"Could not open '{r.FileName}' — not found or not a valid project file.", "text/plain", null, 400);
+                dm.ClearDevices();
+                dm.AddDevices(devs);
+                return Results.Ok(new { ok = true, count = devs.Count });
+            }
+            catch (Exception e)
+            {
+                return Results.Text($"Could not open '{r.FileName}': {e.Message}", "text/plain", null, 400);
+            }
         });
 
         api.MapPost("/project/new", (ConfigFileManager cfg, DeviceManager dm) =>

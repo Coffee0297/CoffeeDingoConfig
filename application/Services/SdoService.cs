@@ -62,9 +62,17 @@ public class SdoService(ICommsAdapterManager comms, ILogger<SdoService> logger)
 
             var p = tcs.Task.Result.Payload;
             if (p[0] == 0x80) return SdoResult.Abort(BitConverter.ToUInt32(p, 4));
-            // Write ack = 0x60; read response carries the value in bytes 4..7 (expedited).
-            uint val = BitConverter.ToUInt32(p, 4);
-            return SdoResult.Success(isWrite ? 0u : val, p);
+            if (isWrite)
+            {
+                // A successful expedited download is acknowledged with SCS=3 (0x60). Anything else
+                // that isn't an abort is an unexpected/garbled reply — do NOT report it as written
+                // (otherwise a node id / baud-rate write could be reported as stored when it wasn't).
+                if (p[0] != 0x60) return SdoResult.Fail($"unexpected SDO write response 0x{p[0]:X2} (expected ack 0x60)");
+                return SdoResult.Success(0u, p);
+            }
+            // A successful expedited upload reply has SCS=2 (top three bits 010 -> 0x40..0x4F).
+            if ((p[0] & 0xE0) != 0x40) return SdoResult.Fail($"unexpected SDO read response 0x{p[0]:X2} (expected upload 0x4n)");
+            return SdoResult.Success(BitConverter.ToUInt32(p, 4), p);
         }
         catch (Exception ex)
         {

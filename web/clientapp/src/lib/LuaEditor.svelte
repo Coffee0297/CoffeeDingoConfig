@@ -151,7 +151,7 @@
     const code = TEMPLATES[+i][1]
     ta.focus()
     if (value && value.trim()) { ta.setSelectionRange(value.length, value.length); insertText('\n\n' + code) }
-    else { ta.setSelectionRange(0, value.length); document.execCommand('insertText', false, code) }
+    else { ta.setSelectionRange(0, value.length); insertText(code) }   // insertText has an execCommand fallback
   }
 </script>
 

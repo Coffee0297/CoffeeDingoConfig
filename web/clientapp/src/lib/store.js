@@ -576,7 +576,17 @@ export async function deployCrossModule(devices) {
     if (!f || f.disabled || cmfIsLua(f)) continue
     const inv = [f.trigger?.guid, f.clockMaster, ...(f.targets ?? []).map((t) => t.guid)].filter(Boolean)
     if (inv.some((g) => cleanupFailed.has(g))) { results.push({ name: f.name, ok: false, error: 'skipped — a target module’s slot cleanup failed' }); continue }
-    try { await deployNativeRule(f, cmfSlotOf(f, i), devices, used); results.push({ name: f.name, ok: true, kind: 'native' }) }
+    // A native rule writes CAN params to its owner/master/targets. If any involved module isn't
+    // live, those writes persist to the project record but never reach hardware — report that as
+    // "saved to project", not "deployed", so the summary can't claim a write that didn't land.
+    const offline = [...new Set(inv.filter((g) => !(devices ?? []).find((d) => d.guid === g)?.connected)
+      .map((g) => (devices ?? []).find((d) => d.guid === g)?.name ?? 'a module'))]
+    try {
+      await deployNativeRule(f, cmfSlotOf(f, i), devices, used)
+      results.push(offline.length
+        ? { name: f.name, ok: true, written: false, kind: 'native', note: `${offline.join(', ')} offline` }
+        : { name: f.name, ok: true, written: true, kind: 'native' })
+    }
     catch (e) { results.push({ name: f.name, ok: false, error: e.message }) }
   }
 

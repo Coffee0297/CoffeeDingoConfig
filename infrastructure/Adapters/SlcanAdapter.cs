@@ -27,7 +27,9 @@ public class SlcanAdapter : ICommsAdapter
     // interleave bytes on the wire and corrupt CAN frames.
     private readonly object _writeLock = new();
 
-    public bool IsConnected => RxTimeDelta < TimeSpan.FromMilliseconds(500);
+    // The port must actually be open to be "connected" — without this, a failed Init (Serial
+    // closed, RxTimeDelta still at its default Zero) reported IsConnected=true with no link.
+    public bool IsConnected => (Serial?.IsOpen ?? false) && RxTimeDelta < TimeSpan.FromMilliseconds(500);
 
     public event DataReceivedHandler? DataReceived;
     public event EventHandler? Disconnected;
@@ -170,7 +172,10 @@ public class SlcanAdapter : ICommsAdapter
 
     public Task<bool> WriteAsync(CanFrame frame, CancellationToken ct)
     {
-        if (Serial is { IsOpen: false } || frame.Payload.Length != 8)
+        // `is not { IsOpen: true }` is true when Serial is null OR closed — so a write to a dropped
+        // port returns failure instead of falling through to a no-op `Serial?.Write` that would
+        // falsely report the frame as transmitted.
+        if (Serial is not { IsOpen: true } || frame.Payload.Length != 8)
             return Task.FromResult(false);
 
         try
@@ -205,7 +210,7 @@ public class SlcanAdapter : ICommsAdapter
 
     public Task<bool> WriteBatchAsync(IReadOnlyList<CanFrame> frames, CancellationToken ct)
     {
-        if (Serial is { IsOpen: false }) return Task.FromResult(false);
+        if (Serial is not { IsOpen: true }) return Task.FromResult(false);   // null or closed → not written
 
         var frameBuffer = new byte[22];
         try

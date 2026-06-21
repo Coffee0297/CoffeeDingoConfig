@@ -77,7 +77,10 @@ public class CommsAdapterManager(IServiceProvider serviceProvider, ILogger<Comms
     
     public async Task<bool> ConnectAsync(ICommsAdapter commsAdapter, string port, CanBitRate bitRate, CancellationToken ct = default)
     {
-        if (_activeAdapter is { IsConnected: true })
+        // Stop ANY existing adapter before replacing it — not only one still reporting IsConnected.
+        // A stale adapter (serial handle still held, IsConnected false) would otherwise leak its
+        // port handle + read thread and block the next open with "Access denied".
+        if (_activeAdapter is not null)
         {
             await DisconnectAsync();
         }

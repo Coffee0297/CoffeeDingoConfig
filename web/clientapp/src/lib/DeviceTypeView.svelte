@@ -103,6 +103,7 @@
         startBit: +cs.startBit, length: +cs.length, byteOrder: +cs.byteOrder, isSigned: cs.isSigned,
         factor: +cs.factor, offset: +cs.offset, unit: cs.unit, min: +cs.min, max: +cs.max,
       })
+      msg = `Added signal "${cs.name || 'signal'}" — it appears in the table below once it decodes.`
       cs = { ...cs, name: '' }
     } catch (err) { msg = 'Add failed: ' + err.message }
     finally { busy = false }
