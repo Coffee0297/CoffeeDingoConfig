@@ -17,7 +17,7 @@ jobs:
   build-and-release:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Extract version
         id: ver
@@ -41,12 +41,12 @@ jobs:
             echo "exists=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         if: steps.check.outputs.exists == 'false'
         with:
           node-version: '20'
 
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/setup-dotnet@v5
         if: steps.check.outputs.exists == 'false'
         with:
           dotnet-version: '10.0.x'
@@ -58,7 +58,7 @@ jobs:
 
       - name: Create GitHub Release
         if: steps.check.outputs.exists == 'false'
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: v${{ steps.ver.outputs.version }}
           name: dingoConfig v${{ steps.ver.outputs.version }}
