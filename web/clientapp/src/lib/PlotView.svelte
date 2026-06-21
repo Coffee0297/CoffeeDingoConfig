@@ -136,8 +136,8 @@
   {#if !devices.length}<span class="muted">No modules — add one in System.</span>{:else if pickErr}<span class="muted" style="color:var(--err)">{pickErr}</span>{/if}
 </div>
 
-<div style="background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:10px;box-shadow:var(--sh)">
-  <canvas bind:this={canvas} width="1100" height="380" style="width:100%;height:380px;display:block"></canvas>
+<div style="background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:10px;box-shadow:var(--sh);overflow-x:auto">
+  <canvas bind:this={canvas} width="1100" height="380" style="width:100%;min-width:520px;height:380px;display:block"></canvas>
 </div>
 
 {#if series.length}

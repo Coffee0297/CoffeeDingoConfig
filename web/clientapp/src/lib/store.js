@@ -1,5 +1,6 @@
 import { writable, get } from 'svelte/store'
 import * as signalR from '@microsoft/signalr'
+import { toast } from './toast.js'
 
 // Live telemetry pushed from the .NET backend (devices + CAN stats), 10 Hz
 export const telemetry = writable({
@@ -19,6 +20,15 @@ const conn = new signalR.HubConnectionBuilder()
   .withAutomaticReconnect({ nextRetryDelayInMilliseconds: (c) => [0, 2000, 5000, 10000][c.previousRetryCount] ?? 30000 })
   .build()
 conn.on('telemetry', (d) => telemetry.set(d))
+// Backend "notify" channel (device success messages + ack-timeout write failures). An Error-level
+// notify means a queued write/burn was never acknowledged by the device — surface it as a red toast
+// so the user is never left thinking a write succeeded when it physically did not.
+conn.on('notify', (e) => {
+  const lvl = (e?.level ?? e?.Level ?? '').toString()
+  const kind = lvl === 'Error' || lvl === 'Warning' ? 'error' : 'info'
+  const msg = (e?.source ? e.source + ': ' : '') + (e?.message ?? e?.Message ?? '')
+  if (msg.trim()) toast(msg, kind, kind === 'error' ? 8000 : 4000)
+})
 conn.onreconnecting(() => { hubState.set('reconnecting'); telemetry.update((t) => ({ ...t, stale: true })) })
 conn.onreconnected(() => hubState.set('live'))
 conn.onclose(() => { hubState.set('down'); telemetry.update((t) => ({ ...t, stale: true })) })
@@ -31,7 +41,8 @@ export async function reconnectHub() {
 
 // ponytail: test seam — lets a harness stop the live feed and inject synthetic
 // telemetry (e.g. to exercise the overload recorder without real over-current).
-if (typeof window !== 'undefined') { window.__telemetry = telemetry; window.__conn = conn }
+// Gated to dev builds so it is stripped from the production bundle (npm run build).
+if (import.meta.env?.DEV && typeof window !== 'undefined') { window.__telemetry = telemetry; window.__conn = conn }
 
 // Overload (trip) events now live ON THE DEVICE — the firmware records each trip with a
 // current waveform around it (−10 s / +3 s). The tool reads them back on demand via
@@ -294,7 +305,9 @@ export function luaParse(text) {
 
 // Read the program off the device and populate the per-function snippet store.
 export async function luaReadToTabs(guid) {
-  const { source } = await api.luaRead(guid)
+  // api.luaRead can return null (j() yields null on an empty 200 body); never destructure it blind.
+  const res = await api.luaRead(guid)
+  const source = res?.source ?? ''
   const { global, outs } = luaParse(source)
   luaSnippets.update((v) => {
     const dev = {}
@@ -466,14 +479,21 @@ export function compileCrossModule() {
 // Build an outputconfig body that binds `input` but PRESERVES every other field from the
 // live output object. The backend overwrites the whole output, so any field we don't carry
 // through here is silently reset — that previously wiped reset/retry, PWM and soft-start.
-const _binBody = (o, input) => ({
-  Number: o.number, Enabled: true, Input: input,
-  CurrentLimit: o.currentLimit ?? 20, InrushLimit: o.inrushLimit ?? 50, InrushTime: o.inrushTime ?? 1000,
-  ResetMode: o.resetMode ?? 0, ResetTime: o.resetTime ?? 1000, ResetCountLimit: o.resetCountLimit ?? 3,
-  PwmEnabled: o.pwmEnabled ?? false, Freq: o.freq ?? 100, FixedDuty: o.fixedDuty ?? 100, MinDuty: o.minDuty ?? 0,
-  SoftStart: o.softStart ?? false, SoftStartRamp: o.softStartRamp ?? 0,
-  WarnLimit: o.warnLimit ?? 0, OpenLoadLimit: o.openLoadLimit ?? 0, OpenLoadTime: o.openLoadTime ?? 1000,
-})
+// CurrentLimit is the hardware over-current trip: we refuse to invent it. If the source output
+// was never read/configured (no currentLimit), writing a guessed value could under- or
+// over-protect the circuit, so we throw and make the caller Read the module first.
+const _binBody = (o, input) => {
+  if (o == null || o.currentLimit == null)
+    throw new Error(`Output ${o?.number ?? '?'} has no current limit yet — Read the module before writing/deploying so its trip point isn't guessed.`)
+  return {
+    Number: o.number, Enabled: true, Input: input,
+    CurrentLimit: o.currentLimit, InrushLimit: o.inrushLimit ?? 50, InrushTime: o.inrushTime ?? 1000,
+    ResetMode: o.resetMode ?? 0, ResetTime: o.resetTime ?? 1000, ResetCountLimit: o.resetCountLimit ?? 3,
+    PwmEnabled: o.pwmEnabled ?? false, Freq: o.freq ?? 100, FixedDuty: o.fixedDuty ?? 100, MinDuty: o.minDuty ?? 0,
+    SoftStart: o.softStart ?? false, SoftStartRamp: o.softStartRamp ?? 0,
+    WarnLimit: o.warnLimit ?? 0, OpenLoadLimit: o.openLoadLimit ?? 0, OpenLoadTime: o.openLoadTime ?? 1000,
+  }
+}
 
 // Disable every cross-module-owned native function (name starts "cmf") on a module, so each
 // deploy is a clean rebuild — handles edits/deletes without leaking slots (auto-pick scheme).

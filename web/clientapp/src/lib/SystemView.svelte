@@ -46,7 +46,8 @@
   function openLuaTab() { luaMod = involvedOf(f)[0] ?? ''; luaBuf = f.luaByModule?.[luaMod] ?? ''; fnTab = 'lua' }
   function pickLuaMod(g) { flushLua(); luaMod = g; luaBuf = f.luaByModule?.[g] ?? '' }
   async function loadTriggerInputs(guid) {
-    try { triggerInputs = await api.inputs(guid) } catch { triggerInputs = [] }
+    try { triggerInputs = await api.inputs(guid) }
+    catch (e) { triggerInputs = []; toast('Could not read inputs from that module — it may be offline. Input list is empty, not confirmed.', 'error') }
   }
   function onTriggerModule(guid) {
     f.trigger = { guid, varIndex: null, varName: '' }

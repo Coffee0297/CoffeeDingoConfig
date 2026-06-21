@@ -6,13 +6,18 @@
 
 ## Connect as an AI client (preferred: MCP)
 
-Launch the bundled MCP server over stdio — it proxies this API. Zero dependencies (Node 18+).
+The MCP server is **hosted inside this app** (Streamable-HTTP JSON-RPC 2.0). Every UI capability
+is a tool (48), plus seven guided **skills** (playbooks). See [mcp/README.md](mcp/README.md).
 
-- [MCP server](mcp/dingo-mcp.mjs): `node mcp/dingo-mcp.mjs` (set `DINGO_URL` to this host; default `http://localhost:5000`)
-- [Project MCP config](.mcp.json): drop-in `.mcp.json` — auto-loaded by MCP clients that support project config
-- Tools: `list_adapters`, `connect`, `disconnect`, `discover`, `list_devices`, `add_device`,
-  `read_device`, `get_schema`, `get_config`, `apply_config`, `device_action`, `sdo_read`, `sdo_write`
+- **HTTP transport (preferred):** `POST /mcp` — config `{ "mcpServers": { "dingopdm": { "url": "http://localhost:5000/mcp" } } }`
+- **stdio bridge:** [`mcp/dingo-mcp.mjs`](mcp/dingo-mcp.mjs) forwards stdio→`/mcp`; `node mcp/dingo-mcp.mjs` (set `DINGO_URL`; default `http://localhost:5000`). Node 18+.
+- [Project MCP config](.mcp.json): drop-in `.mcp.json` (registers the stdio bridge) — auto-loaded by MCP clients that support project config
+- Discovery: `GET /mcp` (health) · `GET /mcp/info` (full catalog + copy-paste configs) · `GET /mcp/skills` + `GET /mcp/skills/{id}` (playbooks)
+- In-app setup: the **MCP** tab in the UI (endpoint, Test connection, configs, skills, tool catalog)
+- 48 tools cover the whole UI: connection (`list_adapters`/`connect`/`discover`/`identify`/`probe`), devices (`add_device`/`read_device`/`device_action`/`apply_profile`), config (`get_schema`/`get_config`/`apply_config`), outputs, params, signals & logic (`get_signals`/`set_function`/`get_lua`/`set_lua`), firmware (`flash_firmware`/`flash_status`), keypad SDO, project, logs
+- 7 skills: `connect-and-discover`, `configure-a-module`, `wire-outputs-safely`, `signals-and-logic`, `flash-firmware`, `keypad-sdo`, `logs-and-troubleshooting`
 - Typical flow: `connect` → `discover`/`add_device` → `read_device` → `get_schema` → `get_config` → `apply_config`
+- **Honest writes:** a tool result with `isError: true` means the operation did NOT complete (no device ack) — never report success on it.
 
 ## Configuration API (the contract the MCP server wraps)
 

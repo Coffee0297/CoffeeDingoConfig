@@ -1,0 +1,47 @@
+name: CI
+
+# Build + test on every push and pull request. Complements release.yml
+# (which only runs on a version bump). Keeps the bus-facing codec/service
+# logic and the Svelte client honest before anything is merged.
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: web/clientapp/package-lock.json
+
+      - name: Build client (Svelte)
+        working-directory: web/clientapp
+        run: |
+          npm ci
+          npm run build
+
+      - name: Restore .NET solution
+        run: dotnet restore dingoConfig-redesign.sln
+
+      - name: Build .NET solution
+        run: dotnet build dingoConfig-redesign.sln --configuration Release --no-restore
+
+      - name: Run tests
+        run: dotnet test dingoConfig-redesign.sln --configuration Release --no-build --verbosity normal

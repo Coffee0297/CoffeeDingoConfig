@@ -202,6 +202,7 @@ public class TelemetryBroadcaster(
     IHubContext<LiveHub> hub,
     DeviceManager deviceManager,
     ICommsAdapterManager adapterManager,
+    SystemLogger systemLogger,
     ILogger<TelemetryBroadcaster> logger) : BackgroundService
 {
     private long _total, _rate, _rateBase;
@@ -212,6 +213,16 @@ public class TelemetryBroadcaster(
     protected override async Task ExecuteAsync(CancellationToken ct)
     {
         adapterManager.DataReceived += OnFrame;
+
+        // Bridge the (previously dead) backend "Notify" channel to the SignalR clients as a "notify"
+        // event. SystemLogger.Notify fires on device success messages AND on the new ack-timeout
+        // failures raised in DeviceManager.HandleMessageTimeout — so the UI can finally show a real
+        // red toast when a queued write is never acknowledged, instead of a silent Logs-tab line.
+        void PushNotify(application.Models.LogEntry e) =>
+            _ = hub.Clients.All.SendAsync("notify",
+                new { level = e.Level.ToString(), source = e.Source, message = e.Message, ts = e.Timestamp }, ct);
+        systemLogger.OnNotify += PushNotify;
+
         logger.LogInformation("Telemetry broadcaster started");
         try
         {
@@ -234,13 +245,15 @@ public class TelemetryBroadcaster(
             }
         }
         catch (OperationCanceledException) { }
-        finally { adapterManager.DataReceived -= OnFrame; }
+        finally { adapterManager.DataReceived -= OnFrame; systemLogger.OnNotify -= PushNotify; }
     }
 
     private void OnFrame(object? sender, CanFrameEventArgs e)
     {
         Interlocked.Increment(ref _total);
-        lock (_lock) _ids.Add(e.Frame.Id);
+        // Bound the distinct-ID set: a 29-bit bus (or noise) could otherwise grow it without
+        // limit. Only the 48 lowest IDs are ever surfaced, so a few thousand is ample headroom.
+        lock (_lock) { if (_ids.Count < 4096) _ids.Add(e.Frame.Id); }
     }
 }
 
@@ -482,6 +495,8 @@ public static class LiveApi
         api.MapPost("/devices/{guid}/readparam", (string guid, ReadParamReq r, DeviceManager dm, ICommsAdapterManager adapters) =>
         {
             if (!Guid.TryParse(guid, out var g)) return Results.BadRequest();
+            if (r.Index is < 0 or > 0xFFFF || r.Sub is < 0 or > 0xFF)
+                return Results.BadRequest(new { ok = false, error = "Index must be 0–65535 (0xFFFF) and Sub 0–255 (0xFF)." });
             if (RequireLiveModule(g, dm, adapters, "read") is { } bad) return bad;
             return dm.ReadParam(g, r.Index, r.Sub) ? Results.Ok(new { ok = true }) : Results.BadRequest();
         });
@@ -489,6 +504,8 @@ public static class LiveApi
         api.MapPost("/devices/{guid}/writeparam", (string guid, WriteParamReq r, DeviceManager dm, ICommsAdapterManager adapters) =>
         {
             if (!Guid.TryParse(guid, out var g)) return Results.BadRequest();
+            if (r.Index is < 0 or > 0xFFFF || r.Sub is < 0 or > 0xFF)
+                return Results.BadRequest(new { ok = false, error = "Index must be 0–65535 (0xFFFF) and Sub 0–255 (0xFF)." });
             if (RequireLiveModule(g, dm, adapters, "write") is { } bad) return bad;
             return dm.WriteParam(g, r.Index, r.Sub, r.Value) ? Results.Ok(new { ok = true }) : Results.BadRequest();
         });
@@ -618,23 +635,37 @@ public static class LiveApi
         {
             using var doc = await JsonDocument.ParseAsync(req.Body);
             var r = cfg.Apply(doc.RootElement);
-            return Results.Ok(new { ok = r.Errors.Count == 0, devicesTouched = r.DevicesTouched, paramsChanged = r.ParamsChanged, notes = r.Notes, errors = r.Errors });
+            var ok = r.Errors.Count == 0;
+            var payload = new { ok, devicesTouched = r.DevicesTouched, paramsChanged = r.ParamsChanged, notes = r.Notes, errors = r.Errors };
+            // Validation failures now surface as HTTP 400 (was 200 + ok:false) so the frontend's
+            // !r.ok / fetch-error path fires on the transport layer too, not just the body flag.
+            return ok ? Results.Ok(payload) : Results.Json(payload, statusCode: 400);
         });
 
         // ---- CANopen SDO: read/write a keypad's object dictionary (persistent device settings) ----
+        // Bounds: Node 1–127 (CANopen node-id range), Index 0–0xFFFF, Sub 0–0xFF, Size 1/2/4 bytes.
+        static IResult? SdoBounds(int node, int index, int sub)
+            => node is < 1 or > 127 || index is < 0 or > 0xFFFF || sub is < 0 or > 0xFF
+                ? Results.BadRequest(new { ok = false, error = "Node must be 1–127, Index 0–65535 (0xFFFF), Sub 0–255 (0xFF)." })
+                : null;
         api.MapPost("/sdo/read", async (SdoReadReq r, SdoService sdo) =>
         {
+            if (SdoBounds(r.Node, r.Index, r.Sub) is { } bad) return bad;
             var res = await sdo.ReadAsync(r.Node, (ushort)r.Index, (byte)r.Sub);
             return Results.Ok(new { ok = res.Ok, value = res.Value, abort = res.AbortCode, error = res.Error });
         });
         api.MapPost("/sdo/write", async (SdoWriteReq r, SdoService sdo) =>
         {
+            if (SdoBounds(r.Node, r.Index, r.Sub) is { } bad) return bad;
+            if (r.Size is not (<= 0 or 1 or 2 or 4))
+                return Results.BadRequest(new { ok = false, error = "Size must be 1, 2 or 4 bytes." });
             var res = await sdo.WriteAsync(r.Node, (ushort)r.Index, (byte)r.Sub, r.Value, r.Size <= 0 ? 4 : r.Size);
             return Results.Ok(new { ok = res.Ok, abort = res.AbortCode, error = res.Error });
         });
         // Store (save) the node's parameters to NV memory — OD 0x1010 sub1 = "save".
         api.MapPost("/sdo/store", async (SdoNodeReq r, SdoService sdo) =>
         {
+            if (r.Node is < 1 or > 127) return Results.BadRequest(new { ok = false, error = "Node must be 1–127." });
             var res = await sdo.WriteAsync(r.Node, 0x1010, 1, SdoService.SaveSignature, 4, 1500);
             return Results.Ok(new { ok = res.Ok, abort = res.AbortCode, error = res.Error });
         });

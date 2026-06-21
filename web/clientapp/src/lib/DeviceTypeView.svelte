@@ -28,7 +28,7 @@
     if (kind !== 'dbc') return
     let alive = true
     const load = async () => { try { if (alive) canRows = await api.canlog() } catch {} }
-    load(); const id = setInterval(load, 250)
+    load(); const id = setInterval(load, 400)
     return () => { alive = false; clearInterval(id) }
   })
   let sniffId = $state(null)          // CAN id currently inspected in the grid

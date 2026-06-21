@@ -21,6 +21,11 @@ public class SlcanAdapter : ICommsAdapter
 
     private CancellationTokenSource? _readCts;
     private Thread? _readThread;
+    // Serializes every write to the single serial port. SerialPort.Write is not safe to call
+    // from multiple threads at once; without this, an overlapping single-frame write and a
+    // batch write (or two queued writes from concurrent Read/Write/Flash requests) could
+    // interleave bytes on the wire and corrupt CAN frames.
+    private readonly object _writeLock = new();
 
     public bool IsConnected => RxTimeDelta < TimeSpan.FromMilliseconds(500);
 
@@ -81,15 +86,18 @@ public class SlcanAdapter : ICommsAdapter
             var sData = "C\r";
             if (Serial != null)
             {
-                Serial.Write(Encoding.ASCII.GetBytes(sData), 0, Encoding.ASCII.GetByteCount(sData));
+                lock (_writeLock)
+                {
+                    Serial.Write(Encoding.ASCII.GetBytes(sData), 0, Encoding.ASCII.GetByteCount(sData));
 
-                //Set bitrate
-                sData = "S" + _bitrate + "\r";
-                Serial.Write(Encoding.ASCII.GetBytes(sData), 0, Encoding.ASCII.GetByteCount(sData));
+                    //Set bitrate
+                    sData = "S" + _bitrate + "\r";
+                    Serial.Write(Encoding.ASCII.GetBytes(sData), 0, Encoding.ASCII.GetByteCount(sData));
 
-                //Open slcan
-                sData = "O\r";
-                Serial.Write(Encoding.ASCII.GetBytes(sData), 0, Encoding.ASCII.GetByteCount(sData));
+                    //Open slcan
+                    sData = "O\r";
+                    Serial.Write(Encoding.ASCII.GetBytes(sData), 0, Encoding.ASCII.GetByteCount(sData));
+                }
             }
 
             StartConnectionMonitor();
@@ -115,7 +123,7 @@ public class SlcanAdapter : ICommsAdapter
         // Best-effort: tell the SLCAN device to close its channel before we drop the port.
         if (serial != null)
         {
-            try { if (serial.IsOpen) serial.Write(Encoding.ASCII.GetBytes("C\r"), 0, 2); } catch { /* shutting down */ }
+            try { if (serial.IsOpen) lock (_writeLock) serial.Write(Encoding.ASCII.GetBytes("C\r"), 0, 2); } catch { /* shutting down */ }
         }
 
         StopReadLoop();   // cancel + join the reader (it was reading serial.BaseStream)
@@ -169,21 +177,21 @@ public class SlcanAdapter : ICommsAdapter
         {
             var buffer = new byte[22];
             var len = EncodeFrame(frame, buffer, 0);
-            Serial?.Write(buffer, 0, len);
+            lock (_writeLock) Serial?.Write(buffer, 0, len);
         }
-        catch (InvalidOperationException)
+        catch (InvalidOperationException ex)
         {
-            HandleDisconnection();
+            HandleDisconnection($"WriteAsync: {ex.Message}");
             return Task.FromResult(false);
         }
-        catch (IOException)
+        catch (IOException ex)
         {
-            HandleDisconnection();
+            HandleDisconnection($"WriteAsync: {ex.Message}");
             return Task.FromResult(false);
         }
-        catch (UnauthorizedAccessException)
+        catch (UnauthorizedAccessException ex)
         {
-            HandleDisconnection();
+            HandleDisconnection($"WriteAsync: {ex.Message}");
             return Task.FromResult(false);
         }
         catch (Exception e)
@@ -202,26 +210,31 @@ public class SlcanAdapter : ICommsAdapter
         var frameBuffer = new byte[22];
         try
         {
-            foreach (var frame in frames)
+            // Hold the lock for the whole batch so it is transmitted as one contiguous burst
+            // and can't be split by a concurrent single-frame WriteAsync.
+            lock (_writeLock)
             {
-                if (frame.Payload.Length != 8) continue;
-                var len = EncodeFrame(frame, frameBuffer, 0);
-                Serial!.Write(frameBuffer, 0, len);
+                foreach (var frame in frames)
+                {
+                    if (frame.Payload.Length != 8) continue;
+                    var len = EncodeFrame(frame, frameBuffer, 0);
+                    Serial!.Write(frameBuffer, 0, len);
+                }
             }
         }
-        catch (InvalidOperationException)
+        catch (InvalidOperationException ex)
         {
-            HandleDisconnection();
+            HandleDisconnection($"WriteBatchAsync: {ex.Message}");
             return Task.FromResult(false);
         }
-        catch (IOException)
+        catch (IOException ex)
         {
-            HandleDisconnection();
+            HandleDisconnection($"WriteBatchAsync: {ex.Message}");
             return Task.FromResult(false);
         }
-        catch (UnauthorizedAccessException)
+        catch (UnauthorizedAccessException ex)
         {
-            HandleDisconnection();
+            HandleDisconnection($"WriteBatchAsync: {ex.Message}");
             return Task.FromResult(false);
         }
         catch (Exception e)
@@ -281,9 +294,9 @@ public class SlcanAdapter : ICommsAdapter
             }
             catch (TimeoutException) { continue; }
             catch (OperationCanceledException) { return; }
-            catch (InvalidOperationException) { HandleDisconnection(); return; }
-            catch (IOException) { HandleDisconnection(); return; }
-            catch (ArgumentException) { HandleDisconnection(); return; }
+            catch (InvalidOperationException ex) { HandleDisconnection($"ReadLoop: {ex.Message}"); return; }
+            catch (IOException ex) { HandleDisconnection($"ReadLoop: {ex.Message}"); return; }
+            catch (ArgumentException ex) { HandleDisconnection($"ReadLoop: {ex.Message}"); return; }
             if (n <= 0) continue;
 
             for (var i = 0; i < n; i++)
@@ -353,7 +366,7 @@ public class SlcanAdapter : ICommsAdapter
 
     private void _serial_ErrorReceived(object sender, SerialErrorReceivedEventArgs e)
     {
-        HandleDisconnection();
+        HandleDisconnection($"serial error: {e.EventType}");
     }
 
     protected void StartConnectionMonitor()
@@ -398,9 +411,11 @@ public class SlcanAdapter : ICommsAdapter
         }
     }
 
-    protected void HandleDisconnection()
+    protected void HandleDisconnection(string? reason = null)
     {
         //Note: Disconnecting is handled by the CommsAdapterManager
+        // Preserve the failure context (previously swallowed) so a drop can be diagnosed.
+        if (reason != null) Console.WriteLine($"[{Name}] disconnect: {reason}");
         Disconnected?.Invoke(this, EventArgs.Empty);
     }
 

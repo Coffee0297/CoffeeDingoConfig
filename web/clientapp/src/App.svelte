@@ -12,6 +12,7 @@
   import KeypadView from './lib/KeypadView.svelte'
   import GraphView from './lib/GraphView.svelte'
   import PlotView from './lib/PlotView.svelte'
+  import McpView from './lib/McpView.svelte'
 
   let view = $state('outputs')
   // Dark by default; remember the user's choice across reloads (only an explicit 'light' opts out).
@@ -98,6 +99,7 @@
   const navs = [
     ['system', 'System'], ['dashboard', 'Dashboard'], ['outputs', 'Outputs'],
     ['signals', 'Signals & logic'], ['wiring', 'Wiring'], ['plot', 'Plot'], ['logs', 'Logs'],
+    ['mcp', 'MCP'],
   ]
 
   // ---- contextual help (#40) ----
@@ -471,6 +473,8 @@
       <PlotView {devices} />
     {:else if view === 'logs'}
       <LogsView />
+    {:else if view === 'mcp'}
+      <McpView />
     {/if}
   </main>
 
