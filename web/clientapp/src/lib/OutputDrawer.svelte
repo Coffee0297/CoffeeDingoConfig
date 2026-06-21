@@ -1,5 +1,5 @@
 <script>
-  import { api, luaGet, luaSet, luaAssemble } from './store.js'
+  import { api, luaGet, luaSet, luaAssemble, awgFor, vDrop, WIRE_GAUGES, awgForMm2 } from './store.js'
   import { toast } from './toast.js'
   import { dialog, labelFields, clickable } from './a11y.js'
   import LuaEditor from './LuaEditor.svelte'
@@ -53,6 +53,13 @@
   $effect(() => {
     if (output && output.number !== seededFor) {
       f = {
+        name: output.name ?? '',
+        wireColor: output.wireColor || '#e0413a',
+        wireSet: !!output.wireColor,
+        wireStripe: output.wireStripe || '#ffffff',
+        stripeSet: !!output.wireStripe,
+        wireLength: output.wireLength ?? 0,
+        wireGaugeMm2: output.wireGaugeMm2 ?? 0,
         input: output.inputVal,
         enabled: output.enabled,
         currentLimit: output.currentLimit,
@@ -81,6 +88,11 @@
     try {
       await api.outputConfig(guid, {
         Number: output.number,
+        Name: f.name,
+        WireColor: f.wireSet ? f.wireColor : '',
+        WireStripe: f.stripeSet ? f.wireStripe : '',
+        WireLength: Number(f.wireLength) || 0,
+        WireGaugeMm2: Number(f.wireGaugeMm2) || 0,
         Enabled: f.enabled,
         Input: Number(f.input),
         CurrentLimit: Number(f.currentLimit),
@@ -120,11 +132,13 @@
   <div class="tabs" role="tablist">
     <span class="t" role="tab" tabindex="0" aria-selected={tab === 'rule'} use:clickable class:active={tab === 'rule'} onclick={() => (tab = 'rule')}>Rule</span>
     <span class="t" role="tab" tabindex="0" aria-selected={tab === 'prot'} use:clickable class:active={tab === 'prot'} onclick={() => (tab = 'prot')}>Protection</span>
+    <span class="t" role="tab" tabindex="0" aria-selected={tab === 'wiring'} use:clickable class:active={tab === 'wiring'} onclick={() => (tab = 'wiring')}>Wiring</span>
     <span class="t" role="tab" tabindex="0" aria-selected={tab === 'lua'} use:clickable class:active={tab === 'lua'} onclick={() => (tab = 'lua')}>Lua</span>
   </div>
 
   {#if tab === 'rule'}
     <div class="dbody" use:labelFields>
+      <div class="field"><label>Name</label><input type="text" maxlength="32" placeholder={'Output ' + output.number} bind:value={f.name} /></div>
       <label class="opt" style="border:0;padding-top:0"><input type="checkbox" bind:checked={f.enabled} /> Output enabled <span class="desc">master on/off for this channel</span></label>
       <p class="lbl">Turn ON when this source is true</p>
       <div class="field"><label>Driving input</label>
@@ -177,6 +191,55 @@
       <label class="opt"><input type="checkbox" bind:checked={f.softStart} /> Soft start <span class="desc">ramp up on turn-on</span></label>
       <div class="field" style="max-width:230px"><label>Soft-start ramp (ms)</label><input type="number" bind:value={f.softStartRamp} /></div>
       <p class="hint">Live current now: <b>{output.current.toFixed(1)} A</b>. Save writes to the device; click <b>Burn</b> to persist to flash.</p>
+    </div>
+  {:else if tab === 'wiring'}
+    {@const wire = awgFor(f.currentLimit)}
+    {@const effMm2 = Number(f.wireGaugeMm2) > 0 ? Number(f.wireGaugeMm2) : wire?.mm2}
+    {@const effAwg = Number(f.wireGaugeMm2) > 0 ? awgForMm2(f.wireGaugeMm2) : wire?.awg}
+    {@const vd = vDrop(f.wireLength, f.currentLimit, effMm2)}
+    <div class="dbody" use:labelFields>
+      <p class="lbl">Gauge</p>
+      {#if wire}
+        <div class="preview">Recommended for the <b>{f.currentLimit} A</b> trip point: <b class="big">≥ {wire.awg} AWG</b> · <b class="big">{wire.mm2} mm²</b> copper</div>
+        <div class="field" style="max-width:300px;margin-top:10px"><label>Gauge used (override)</label>
+          <select bind:value={f.wireGaugeMm2}>
+            <option value={0}>Auto — use recommended ({wire.mm2} mm²)</option>
+            {#each WIRE_GAUGES as g}<option value={g.mm2}>{g.mm2} mm² ({g.awg} AWG){g.mm2 < wire.mm2 ? ' — under recommended ⚠' : ''}</option>{/each}
+          </select></div>
+        <p class="hint" style="margin-top:6px">Recommendation is sized to the current limit so the wire is never the weak link. Override to the gauge you actually run — voltage drop below uses it.</p>
+      {:else}<p class="muted">Set a current limit on the Protection tab first.</p>{/if}
+
+      <p class="lbl" style="margin-top:18px">Wire colour</p>
+      <div class="f2">
+        <div class="field"><label>Base</label>
+          <div style="display:flex;align-items:center;gap:8px">
+            <input type="color" style="width:42px;height:34px;padding:2px;border:1px solid var(--line-2);border-radius:8px;background:none" bind:value={f.wireColor} oninput={() => (f.wireSet = true)} />
+            <span class="muted" style="font-family:var(--mono);font-size:12px">{f.wireSet ? f.wireColor : 'none'}</span>
+            {#if f.wireSet}<button type="button" class="linkbtn" onclick={() => (f.wireSet = false)}>clear</button>{/if}
+          </div></div>
+        <div class="field"><label>Stripe</label>
+          <div style="display:flex;align-items:center;gap:8px">
+            <input type="color" style="width:42px;height:34px;padding:2px;border:1px solid var(--line-2);border-radius:8px;background:none" bind:value={f.wireStripe} oninput={() => (f.stripeSet = true)} disabled={!f.wireSet} />
+            <span class="muted" style="font-family:var(--mono);font-size:12px">{f.stripeSet ? f.wireStripe : 'none'}</span>
+            {#if f.stripeSet}<button type="button" class="linkbtn" onclick={() => (f.stripeSet = false)}>clear</button>{/if}
+          </div></div>
+      </div>
+      {#if f.wireSet}
+        <div style="display:flex;align-items:center;gap:10px;margin-top:10px">
+          <span class="swatch-lg" style="background:{f.stripeSet ? `repeating-linear-gradient(135deg, ${f.wireColor} 0 8px, ${f.wireStripe} 8px 12px)` : f.wireColor}"></span>
+          <span class="muted">preview</span>
+        </div>
+      {/if}
+
+      <p class="lbl" style="margin-top:18px">Run length &amp; voltage drop</p>
+      <div class="field" style="max-width:230px"><label>Wire length one-way (m)</label><input type="number" step="0.1" min="0" bind:value={f.wireLength} /></div>
+      {#if vd}
+        <div class="preview">At <b>{f.currentLimit} A</b> over <b>{f.wireLength} m</b> ({effMm2} mm² / {effAwg} AWG, feed + return):
+          <b class="big" style={vd.pct > 3 ? 'color:var(--err)' : ''}>{vd.volts.toFixed(2)} V</b>
+          <span class="muted">({vd.pct.toFixed(1)}% of 13.8 V)</span></div>
+        <p class="hint" style="margin-top:6px">Rule of thumb: keep drop under <b>3%</b> (~0.4 V) for lighting/sensitive loads, under 10% for motors/heaters.
+          {#if vd.pct > 3}<b style="color:var(--err)"> Over 3% — consider a heavier gauge or shorter run.</b>{/if}</p>
+      {:else}<p class="hint">Enter a length to estimate voltage drop at the current limit.</p>{/if}
     </div>
   {:else}
     <div class="dbody" use:labelFields>

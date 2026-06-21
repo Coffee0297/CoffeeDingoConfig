@@ -1,5 +1,5 @@
 <script>
-  import { telemetry, hubState, reconnectHub, api, luaReadToTabs } from './lib/store.js'
+  import { telemetry, hubState, reconnectHub, api, luaReadToTabs, awgFor, awgForMm2 } from './lib/store.js'
   import { toast, toasts, dismiss } from './lib/toast.js'
   import { clickable, labelFields, dialog as dlg } from './lib/a11y.js'
   import Sparkline from './lib/Sparkline.svelte'
@@ -48,6 +48,41 @@
     projOpen = false
     if (!confirm('Start a new project? This clears every configured device.')) return
     try { await api.projNew(); scopeGuid = null; toast('New project started', 'ok') } catch (e) { toast('Could not clear project: ' + e.message, 'error') }
+  }
+  // Import a config JSON (apply-doc format, same as MCP apply_config / the downloadable
+  // template). Reads the file, POSTs it, reports the per-device result.
+  let importEl = $state(null)
+  async function doImportFile(ev) {
+    const file = ev.target.files?.[0]; ev.target.value = ''
+    if (!file) return
+    projOpen = false
+    try {
+      const doc = JSON.parse(await file.text())
+      const r = await api.applyConfig(doc)
+      if (r.ok) toast(`Imported ${file.name}: ${r.devicesTouched} device(s), ${r.paramsChanged} setting(s)`, 'ok')
+      else toast(`Imported with ${r.errors.length} issue(s): ${r.errors[0] ?? ''}`, 'error')
+    } catch (e) { toast('Import failed: ' + e.message, 'error') }
+  }
+  async function doDownloadTemplate() {
+    projOpen = false
+    try {
+      const doc = await api.configTemplate()
+      const url = URL.createObjectURL(new Blob([JSON.stringify(doc, null, 2)], { type: 'application/json' }))
+      const a = document.createElement('a'); a.href = url; a.download = 'dingopdm-template.json'; a.click()
+      URL.revokeObjectURL(url)
+    } catch (e) { toast('Could not build template: ' + e.message, 'error') }
+  }
+  // Export the whole current config (every device + every setting + Lua) as a JSON file,
+  // in the same apply-doc shape that Import and the template use — so it round-trips.
+  async function doExportJson() {
+    projOpen = false
+    try {
+      const doc = await api.configSnapshot(true)
+      const url = URL.createObjectURL(new Blob([JSON.stringify(doc, null, 2)], { type: 'application/json' }))
+      const a = document.createElement('a'); a.href = url; a.download = (projFileName.replace(/\.json$/i, '') || 'dingopdm-config') + '-export.json'; a.click()
+      URL.revokeObjectURL(url)
+      toast(`Exported ${doc.devices?.length ?? 0} device(s)`, 'ok')
+    } catch (e) { toast('Export failed: ' + e.message, 'error') }
   }
   function openSettings() { dialog = 'settings' }
   function openModify() { if (!current) return; dlgName = current.name; dlgBase = hex(current.baseId); dialog = 'modify' }
@@ -114,6 +149,8 @@
     if (g && g !== baseIdSyncedGuid) { baseIdSyncedGuid = g; editBaseId = hex(current.baseId) }
   })
   let isPdm = $derived(current && !/keypad|dbc|canboard|can.?board/i.test(current.type))
+  // Worst-case load: every enabled output drawing its full current limit at once.
+  let maxAmps = $derived((current?.outputs ?? []).filter((o) => o.enabled).reduce((s, o) => s + (o.currentLimit ?? 0), 0))
   let readPct = $derived(current?.readTotal ? Math.round((current.readDone / current.readTotal) * 100) : 0)
 
   $effect(() => { if (current && !devices.find((d) => d.guid === scopeGuid)) scopeGuid = current.guid })
@@ -265,6 +302,27 @@
 
     <span class="spacer"></span>
 
+    <!-- Project (save/open/import/export/template) works offline too — not gated on a CAN connection. -->
+    <span class="switch" class:open={projOpen}>
+      <button class="btn ghost" aria-haspopup="menu" aria-expanded={projOpen} onclick={toggleProj}>📁 Project ▾</button>
+      <div class="menu" role="menu" style="min-width:250px">
+        <div class="mh">Save project</div>
+        <div style="display:flex;gap:8px;padding:8px 13px">
+          <input class="in" style="flex:1" aria-label="Project file name" bind:value={projFileName} />
+          <button class="btn primary" onclick={doSave}>Save</button>
+        </div>
+        <div class="mi" role="menuitem" use:clickable onclick={doNewProj}>＋ New (clear devices)</div>
+        <div class="mh">Import / template</div>
+        <div class="mi" role="menuitem" use:clickable onclick={() => importEl?.click()}>⬆ Import JSON…</div>
+        <div class="mi" role="menuitem" use:clickable onclick={doExportJson}>⬇ Export config JSON</div>
+        <div class="mi" role="menuitem" use:clickable onclick={doDownloadTemplate}>⬇ Download template</div>
+        <input bind:this={importEl} type="file" accept="application/json,.json" style="display:none" onchange={doImportFile} />
+        <div class="mh">Open</div>
+        {#each projFiles as f}<div class="mi" role="menuitem" use:clickable onclick={() => doOpenFile(f)}>📂 {f}</div>{/each}
+        {#if projFiles.length === 0}<div class="mi muted">No saved projects</div>{/if}
+      </div>
+    </span>
+
     {#if !t.connected}
       <select class="in" bind:value={adapter} aria-label="CAN adapter">{#each adapters as a}<option value={a}>{a}</option>{/each}</select>
       {#if needsPort}
@@ -277,20 +335,6 @@
       <button class="btn primary" disabled={busy} onclick={connect}>{busy ? 'Connecting…' : 'Connect'}</button>
     {:else}
       <button class="btn ghost" disabled={scanning} onclick={scanUsb} title="Scan the bus and add detected modules">{scanning ? 'Scanning…' : '🔍 Add from USB'}</button>
-      <span class="switch" class:open={projOpen}>
-        <button class="btn ghost" aria-haspopup="menu" aria-expanded={projOpen} onclick={toggleProj}>📁 Project ▾</button>
-        <div class="menu" role="menu" style="min-width:250px">
-          <div class="mh">Save project</div>
-          <div style="display:flex;gap:8px;padding:8px 13px">
-            <input class="in" style="flex:1" aria-label="Project file name" bind:value={projFileName} />
-            <button class="btn primary" onclick={doSave}>Save</button>
-          </div>
-          <div class="mi" role="menuitem" use:clickable onclick={doNewProj}>＋ New (clear devices)</div>
-          <div class="mh">Open</div>
-          {#each projFiles as f}<div class="mi" role="menuitem" use:clickable onclick={() => doOpenFile(f)}>📂 {f}</div>{/each}
-          {#if projFiles.length === 0}<div class="mi muted">No saved projects</div>{/if}
-        </div>
-      </span>
       <span class="switch" class:open={readOpen}>
         <span style="display:inline-flex">
           <button class="btn ghost" style="border-radius:8px 0 0 8px" disabled={!current || current?.reading || scopeBusy} onclick={() => readScope(false)}>{current?.reading ? `Reading ${readPct}%` : `Read: ${current?.name ?? '—'}`}</button>
@@ -334,6 +378,7 @@
             <p class="sub">{current ? 'Each output is on when its rule is true — live state and current from the device.' : 'Connect and bind a device to see its outputs.'}</p>
           </div>
           <span class="win-tog" style="display:flex;align-items:center;gap:14px;color:var(--muted)">
+            {#if isPdm}<span title="Sum of the current limit of every enabled output — worst case if all switch on at their trip point">max load: <b style="color:var(--text)">{maxAmps} A</b></span>{/if}
             <span>graphs:
               <button type="button" class="linkbtn" aria-pressed={graphWin===60} onclick={()=>graphWin=60} style={graphWin===60?'color:var(--accent);font-weight:700':'color:var(--muted)'}>1 min</button> ·
               <button type="button" class="linkbtn" aria-pressed={graphWin===600} onclick={()=>graphWin=600} style={graphWin===600?'color:var(--accent);font-weight:700':'color:var(--muted)'}>10 min</button></span>
@@ -364,12 +409,14 @@
           {#each current.outputs as o (o.number)}
             {@const mode = cardMode[current.guid + ':' + o.number] ?? 'amps'}
             {@const rule = ruleText(o.input)}
+            {@const wire = awgFor(o.currentLimit)}
+            {@const ovr = o.wireGaugeMm2 > 0}
             <div class="card" use:clickable aria-label={'Configure ' + (o.name?.trim() ? o.name : 'output ' + o.number)} onclick={() => (editNum = o.number)}>
               <div class="num">O{o.number}</div>
               <div class="top">
                 <span class="state {sc(o.state)}"><span class="ic"></span>{stT(o.state)}</span>
                 <span class="nm">{o.name?.trim() ? o.name : 'Output ' + o.number}</span>
-                <span class="amp">{(o.current ?? 0).toFixed(1)} A</span>
+                <span class="amp">{(o.current ?? 0).toFixed(1)} <span class="amp-lim">/ {o.currentLimit} A</span></span>
               </div>
               <div class="rule-txt">
                 {#if rule}<span class="kw">ON when</span> <span class="sig">{rule}</span>{:else}<span class="muted">No rule set — tap edit to drive this output</span>{/if}
@@ -384,6 +431,9 @@
               </div>
               <div class="ft">
                 <span class="tag">{driverTag(o.input)}</span>
+                {#if o.enabled && ovr}<span class="tag" title={`Gauge set for this output (recommended ≥ ${wire?.mm2} mm²)`}>{awgForMm2(o.wireGaugeMm2)} AWG · {o.wireGaugeMm2} mm²</span>
+                {:else if o.enabled && wire}<span class="tag" title={`Min wire for a ${o.currentLimit} A trip (short automotive run; step up for long runs)`}>≥ {wire.awg} AWG · {wire.mm2} mm²</span>{/if}
+                {#if o.wireColor}<span class="tag" title={'Wire colour: ' + o.wireColor + (o.wireStripe ? ' / ' + o.wireStripe + ' stripe' : '')} style="display:inline-flex;align-items:center;gap:5px"><span style="width:11px;height:11px;border-radius:50%;border:1px solid var(--line-2);display:inline-block;background:{o.wireStripe ? `repeating-linear-gradient(135deg, ${o.wireColor} 0 3px, ${o.wireStripe} 3px 5px)` : o.wireColor}"></span>wire</span>{/if}
                 {#if o.resetCount > 0}<span class="tag">{o.resetCount} resets</span>{/if}
                 <span class="edit-hint" use:clickable onclick={(e) => { e.stopPropagation(); editNum = o.number }}>edit →</span>
               </div>
