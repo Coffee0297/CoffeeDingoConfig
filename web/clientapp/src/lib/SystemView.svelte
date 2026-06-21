@@ -176,6 +176,9 @@
 
   const onCount = (d) => (d.outputs ?? []).filter((o) => o.state === 'On').length
   const totalA = (d) => (d.outputs ?? []).reduce((a, o) => a + o.current, 0)
+  // Worst-case load per module: every enabled output at its current limit.
+  const maxA = (d) => (d.outputs ?? []).filter((o) => o.enabled).reduce((a, o) => a + (o.currentLimit ?? 0), 0)
+  let sysMaxA = $derived(devices.reduce((a, d) => a + maxA(d), 0))
 </script>
 
 <svelte:window onpointermove={move} onpointerup={up} />
@@ -183,6 +186,9 @@
 <div class="h-row">
   <div><h1>System — {devices.length} module{devices.length === 1 ? '' : 's'}</h1>
     <p class="sub">All modules on the CAN bus. Click a module to open it; drag a pin to match your install.</p></div>
+  <div class="stat" style="text-align:right" title="Sum across every module of every enabled output's current limit — worst case if the whole vehicle's loads switch on at their trip point at once">
+    <div class="v">{sysMaxA} A</div><div class="k">System max load</div>
+  </div>
 </div>
 
 {#if devices.some((d) => !d.connected)}
@@ -198,6 +204,7 @@
       <div class="role">{d.type} · {hex(d.baseId)}</div>
       <div class="st"><span class="dot-live" style={d.connected ? '' : 'background:var(--err)'}></span>
         {d.connected ? `live · ${onCount(d)} on · ${totalA(d).toFixed(1)} A` : 'not found'}</div>
+      {#if /pdm/i.test(d.type)}<div class="role" style="margin-top:2px">max load {maxA(d)} A</div>{/if}
       {#if /pdm|canboard/i.test(d.type)}
         <div style="display:flex;gap:6px;margin-top:8px">
           <button class="btn ghost" style="flex:1;font-size:12px"

@@ -51,6 +51,50 @@ public class SystemConfigService(DeviceManager devices, ILogger<SystemConfigServ
         return new { devices = list };
     }
 
+    // ---- TEMPLATE: a ready-to-edit apply doc with every setting at its default ----------
+    public object BuildTemplate()
+    {
+        // Use a real PDM from the project if there is one (so enum options/var-map match the
+        // user's firmware), otherwise synthesise a stock module just to enumerate its params.
+        var pdm = devices.GetDevicesByType<domain.Devices.dingoPdm.PdmDevice>().FirstOrDefault()
+                  ?? new domain.Devices.dingoPdm.PdmDevice("PDM-template", 0xDE00);
+
+        var pars = new Dictionary<string, object?>();
+        foreach (var p in pdm.Params) pars[p.Name] = Jsonable(p.DefaultValue);
+
+        const string sampleLua =
+            "-- Lua runs every tick on the module. Drive an output from Lua by writing its\n" +
+            "-- Lua slot with setLuaOut(slot, value), then set that output's Rule input to\n" +
+            "-- \"Lua Out <slot+1>\". Read any var-map signal with readVar(index).\n" +
+            "function onTick()\n" +
+            "  local trig = readVar(1) ~= 0   -- 1 = first digital input; see varMap in /api/config/schema\n" +
+            "  setLuaOut(0, trig and 1 or 0)  -- drives the output whose Rule = \"Lua Out 1\"\n" +
+            "end\n" +
+            "setTickRate(50)\n";
+
+        return new
+        {
+            _readme = new[]
+            {
+                "dingoPDM config template — every PDM setting at its default value.",
+                "Import in the UI (Project ▸ Import JSON…) or via MCP apply_config.",
+                "Match each device by 'name', 'baseId' (decimal) or 'guid'. Edit name/baseId to target a real module.",
+                "Keep only the params you want to change and delete the rest — apply writes only what differs.",
+                "'burn': false stages to RAM without writing flash; set true (or omit) to persist.",
+                "Labels: output[N].name (and similar) are stored in the project file only, not on the device.",
+                "Cross-module: a module broadcasts its var-map signals on CAN; another module reads them via " +
+                "canInput[N] (set canInput[N].sid to the SOURCE module's base id), then uses that signal in a " +
+                "condition[N] or virtualInput[N], which can drive output[N].input. See varMap names in /api/config/schema.",
+                "Lua: put the program in the device-level 'lua' field (see the example below)."
+            },
+            burn = false,
+            devices = new[]
+            {
+                new { name = pdm.Name, baseId = pdm.BaseId, @params = pars, lua = sampleLua }
+            }
+        };
+    }
+
     // ---- SNAPSHOT: current values -------------------------------------------------------
     public async Task<object> BuildSnapshotAsync(bool includeLua)
     {
@@ -151,6 +195,7 @@ public class SystemConfigService(DeviceManager devices, ILogger<SystemConfigServ
         t == typeof(bool) ? "bool" :
         t.IsEnum ? "enum" :
         t == typeof(double) || t == typeof(float) ? "float" :
+        t == typeof(string) ? "string" :
         "int";
 
     // Box the EXACT type each DeviceParameter.SetValue hard-casts to.

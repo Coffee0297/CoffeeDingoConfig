@@ -20,7 +20,7 @@ namespace web.Api;
 public record OutputDto(int Number, string Name, string State, double Current, int ResetCount, double Duty, string Input, double CurrentLimit,
     bool Enabled, int InputVal, double InrushLimit, int InrushTime, int ResetMode, int ResetTime, int ResetCountLimit,
     bool PwmEnabled, int Freq, int FixedDuty, int MinDuty, bool SoftStart, int SoftStartRamp,
-    double WarnLimit, double OpenLoadLimit, int OpenLoadTime);
+    double WarnLimit, double OpenLoadLimit, int OpenLoadTime, string WireColor, string WireStripe, double WireLength, double WireGaugeMm2);
 public record DeviceDto(string Guid, string Name, string Type, int BaseId, bool Connected,
     double Battery, double Current, double Temp, string State, string Version, string Bitrate, OutputDto[] Outputs,
     bool Reading, int ReadDone, int ReadTotal, bool SleepEnabled, int SleepTimeoutMs,
@@ -38,7 +38,8 @@ public record SetOutputReq(int Number, double CurrentLimit);
 public record OutputConfigReq(int Number, bool Enabled, int Input, double CurrentLimit, double InrushLimit,
     int InrushTime, int ResetMode, int ResetTime, int ResetCountLimit,
     bool PwmEnabled, int Freq, int FixedDuty, int MinDuty, bool SoftStart, int SoftStartRamp,
-    double WarnLimit = 0, double OpenLoadLimit = 0, int OpenLoadTime = 1000);
+    double WarnLimit = 0, double OpenLoadLimit = 0, int OpenLoadTime = 1000, string? Name = null,
+    string? WireColor = null, string? WireStripe = null, double? WireLength = null, double? WireGaugeMm2 = null);
 public record ReadParamReq(int Index, int Sub);
 public record WriteParamReq(int Index, int Sub, uint Value);
 public record SdoReadReq(int Node, int Index, int Sub);
@@ -179,7 +180,7 @@ public static class DingoMap
                 o.Number, o.Name, o.State.ToString(), o.Current, o.ResetCount, o.CurrentDutyCycle, InputLabel(p, o.Input), o.CurrentLimit,
                 o.Enabled, o.Input, o.InrushCurrentLimit, o.InrushTime, (int)o.ResetMode, o.ResetTime, o.ResetCountLimit,
                 o.PwmEnabled, o.Frequency, o.FixedDutyCycle, o.MinDutyCycle, o.SoftStartEnabled, o.SoftStartRampTime,
-                o.WarnLimit, o.OpenLoadLimit, o.OpenLoadTime)).ToArray();
+                o.WarnLimit, o.OpenLoadLimit, o.OpenLoadTime, o.WireColor, o.WireStripe, o.WireLength, o.WireGaugeMm2)).ToArray();
             return new DeviceDto(p.Guid.ToString(), p.Name, p.Type, p.BaseId, p.Connected,
                 p.BatteryVoltage, p.TotalCurrent, p.BoardTempC, p.DeviceState.ToString(),
                 p.Version, BitrateLabel(p.BitRate), outs, reading, readDone, readTotal,
@@ -427,6 +428,11 @@ public static class LiveApi
             var d = dm.GetDevice<PdmDevice>(g);
             var o = d?.Outputs.FirstOrDefault(x => x.Number == r.Number);
             if (o == null) return Results.NotFound();
+            if (r.Name != null) o.Name = r.Name;          // label only — not written over CAN
+            if (r.WireColor != null) o.WireColor = r.WireColor;    // documentation labels only
+            if (r.WireStripe != null) o.WireStripe = r.WireStripe;
+            if (r.WireLength != null) o.WireLength = r.WireLength.Value;
+            if (r.WireGaugeMm2 != null) o.WireGaugeMm2 = r.WireGaugeMm2.Value;
             o.Enabled = r.Enabled;
             o.Input = r.Input;
             o.CurrentLimit = r.CurrentLimit;
@@ -566,6 +572,9 @@ public static class LiveApi
         // ---- Declarative whole-system config (AI-friendly): schema + snapshot + apply ----
         // GET schema  -> every device + every setting (name/type/default/enum options) + var-map
         api.MapGet("/config/schema", (SystemConfigService cfg) => Results.Ok(cfg.BuildSchema()));
+        // GET template -> a ready-to-edit apply document with EVERY setting at its default,
+        // plus a sample Lua program and cross-module guidance. Download, edit, re-import.
+        api.MapGet("/config/template", (SystemConfigService cfg) => Results.Ok(cfg.BuildTemplate()));
         // GET snapshot -> current value of every setting (Read the device(s) first). ?lua=true also reads Lua.
         api.MapGet("/config", async (bool? lua, SystemConfigService cfg) => Results.Ok(await cfg.BuildSnapshotAsync(lua ?? false)));
         // POST apply  -> a (full or partial) target document; writes only what differs, burns, uploads Lua.

@@ -461,6 +461,7 @@ public class DeviceManager(ILogger<DeviceManager> logger, ILoggerFactory loggerF
         int n = 0;
         foreach (var p in ps)
         {
+            if (p.LocalOnly) continue;   // label-only setting, nothing to send over CAN
             QueueMessage(new DeviceCanFrame
             {
                 DeviceBaseId = device.BaseId,
@@ -505,7 +506,7 @@ public class DeviceManager(ILogger<DeviceManager> logger, ILoggerFactory loggerF
         var device = GetDevice(deviceId);
         if (device is not IDeviceConfigurable cfg) return;
 
-        var paramList = cfg.Params.ToList();
+        var paramList = cfg.Params.Where(p => !p.LocalOnly).ToList();
         var ui = GetDeviceUiState(deviceId);
         ui.NeedsRead = false;
         ui.Reading = true;
@@ -553,7 +554,7 @@ public class DeviceManager(ILogger<DeviceManager> logger, ILoggerFactory loggerF
         var device = GetDevice(deviceId);
         if (device is not IDeviceConfigurable cfg) return;
 
-        var ps = cfg.Params.Where(p => p.Index == index).ToList();
+        var ps = cfg.Params.Where(p => p.Index == index && !p.LocalOnly).ToList();
         if (ps.Count == 0) return;
 
         Task.Run(() =>
@@ -584,7 +585,7 @@ public class DeviceManager(ILogger<DeviceManager> logger, ILoggerFactory loggerF
         if (device is not IDeviceConfigurable cfg) return;
 
         var paramList = cfg.Params
-            .Where(p => !modifiedOnly || p.IsModified)
+            .Where(p => !p.LocalOnly && (!modifiedOnly || p.IsModified))
             .ToList();
 
         Task.Run(() =>

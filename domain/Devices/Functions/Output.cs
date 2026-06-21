@@ -12,6 +12,10 @@ public class Output : IDeviceFunction
     [JsonIgnore] public const int BaseIndex = 0x1000;
     [JsonPropertyName("enabled")] public bool Enabled { get; set; }
     [JsonPropertyName("name")] public string Name { get; set; }
+    [JsonPropertyName("wireColor")] public string WireColor { get; set; } = "";
+    [JsonPropertyName("wireStripe")] public string WireStripe { get; set; } = "";
+    [JsonPropertyName("wireLength")] public double WireLength { get; set; } = 0.0;   // metres, one-way
+    [JsonPropertyName("wireGaugeMm2")] public double WireGaugeMm2 { get; set; } = 0.0; // 0 = auto/recommended
     [JsonPropertyName("number")] public int Number { get; }
     [JsonPropertyName("currentLimit")] public double CurrentLimit { get; set; } = 20.0;
     [JsonPropertyName("resetCountLimit")] public int ResetCountLimit { get; set; } = 3;
@@ -70,6 +74,46 @@ public class Output : IDeviceFunction
         var subIndex = 0;
         return
         [
+            new DeviceParameter
+            {
+                ParentName = Name, Name = $"output[{Number}].name", Index = BaseIndex + (Number - 1), SubIndex = 0x40,
+                GetValue = () => Name, SetValue = val => Name = (string)val,
+                ValueType = typeof(string),
+                DefaultValue = Name,
+                LocalOnly = true   // label only — no CAN storage on the device
+            },
+            new DeviceParameter
+            {
+                ParentName = Name, Name = $"output[{Number}].wireColor", Index = BaseIndex + (Number - 1), SubIndex = 0x41,
+                GetValue = () => WireColor, SetValue = val => WireColor = (string)val,
+                ValueType = typeof(string),
+                DefaultValue = "",
+                LocalOnly = true   // documentation label only — no CAN storage
+            },
+            new DeviceParameter
+            {
+                ParentName = Name, Name = $"output[{Number}].wireStripe", Index = BaseIndex + (Number - 1), SubIndex = 0x42,
+                GetValue = () => WireStripe, SetValue = val => WireStripe = (string)val,
+                ValueType = typeof(string),
+                DefaultValue = "",
+                LocalOnly = true   // documentation label only — no CAN storage
+            },
+            new DeviceParameter
+            {
+                ParentName = Name, Name = $"output[{Number}].wireLength", Index = BaseIndex + (Number - 1), SubIndex = 0x43,
+                GetValue = () => WireLength, SetValue = val => WireLength = (double)val,
+                ValueType = typeof(double),
+                DefaultValue = 0.0,
+                LocalOnly = true   // documentation label only — no CAN storage
+            },
+            new DeviceParameter
+            {
+                ParentName = Name, Name = $"output[{Number}].wireGaugeMm2", Index = BaseIndex + (Number - 1), SubIndex = 0x44,
+                GetValue = () => WireGaugeMm2, SetValue = val => WireGaugeMm2 = (double)val,
+                ValueType = typeof(double),
+                DefaultValue = 0.0,
+                LocalOnly = true   // documentation label only — no CAN storage
+            },
             new DeviceParameter
             {
                 ParentName = Name, Name = $"output[{Number}].enabled", Index = BaseIndex + (Number - 1), SubIndex = subIndex++,
