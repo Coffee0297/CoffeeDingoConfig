@@ -200,7 +200,9 @@
     <div class="dbody" use:labelFields>
       <p class="lbl">Gauge</p>
       {#if wire}
-        <div class="preview">Recommended for the <b>{f.currentLimit} A</b> trip point: <b class="big">≥ {wire.awg} AWG</b> · <b class="big">{wire.mm2} mm²</b> copper</div>
+        <div class="wire-box">
+          <div class="wire-row"><span class="wk">Recommended ({f.currentLimit} A trip)</span><span class="wv">≥ {wire.awg} AWG · {wire.mm2} mm²</span></div>
+        </div>
         <div class="field" style="max-width:300px;margin-top:10px"><label>Gauge used (override)</label>
           <select bind:value={f.wireGaugeMm2}>
             <option value={0}>Auto — use recommended ({wire.mm2} mm²)</option>
@@ -234,9 +236,10 @@
       <p class="lbl" style="margin-top:18px">Run length &amp; voltage drop</p>
       <div class="field" style="max-width:230px"><label>Wire length one-way (m)</label><input type="number" step="0.1" min="0" bind:value={f.wireLength} /></div>
       {#if vd}
-        <div class="preview">At <b>{f.currentLimit} A</b> over <b>{f.wireLength} m</b> ({effMm2} mm² / {effAwg} AWG, feed + return):
-          <b class="big" style={vd.pct > 3 ? 'color:var(--err)' : ''}>{vd.volts.toFixed(2)} V</b>
-          <span class="muted">({vd.pct.toFixed(1)}% of 13.8 V)</span></div>
+        <div class="wire-box">
+          <div class="wire-row"><span class="wk">Voltage drop at {f.currentLimit} A</span><span class="wv {vd.pct > 3 ? 'warn' : ''}">{vd.volts.toFixed(2)} V · {vd.pct.toFixed(1)}%</span></div>
+          <div class="wire-row sub"><span class="wk">{f.wireLength} m run · {effMm2} mm² / {effAwg} AWG · feed + return</span><span class="wv">of 13.8 V</span></div>
+        </div>
         <p class="hint" style="margin-top:6px">Rule of thumb: keep drop under <b>3%</b> (~0.4 V) for lighting/sensitive loads, under 10% for motors/heaters.
           {#if vd.pct > 3}<b style="color:var(--err)"> Over 3% — consider a heavier gauge or shorter run.</b>{/if}</p>
       {:else}<p class="hint">Enter a length to estimate voltage drop at the current limit.</p>{/if}

@@ -64,6 +64,13 @@ html{background:#14141b}
 .rx .card .amp{margin-left:auto;margin-right:26px;font-family:var(--mono);font-size:12px;color:var(--text)}
 .rx .card .amp .amp-lim{color:var(--muted);opacity:.8}
 .swatch-lg{width:46px;height:20px;border-radius:5px;border:1px solid var(--line-2);display:inline-block}
+.rx .wire-box{margin-top:10px;background:var(--accent-bg);border:1px solid var(--line-2);border-radius:var(--r-sm);padding:10px 14px}
+.rx .wire-row{display:flex;align-items:baseline;justify-content:space-between;gap:14px}
+.rx .wire-row.sub{margin-top:4px}
+.rx .wire-row .wk{font-size:12.5px;color:var(--muted)}
+.rx .wire-row .wv{font-family:var(--mono);font-weight:700;font-size:15px;color:var(--text);white-space:nowrap;text-align:right}
+.rx .wire-row.sub .wv{font-weight:500;font-size:12px;color:var(--muted)}
+.rx .wire-row .wv.warn{color:var(--err)}
 .rx .card .num{position:absolute;top:14px;right:16px;font-family:var(--mono);font-size:11px;color:var(--faint)}
 .rx .rule-txt{font-size:13.5px;color:var(--ink);background:var(--bg);border-radius:var(--r-sm);padding:10px 12px;line-height:1.5}
 .rx .rule-txt .kw{color:var(--accent-d);font-weight:600}
