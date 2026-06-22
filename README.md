@@ -12,25 +12,45 @@ SPA) that owns the CAN link — runs on **Windows, macOS, and Linux**.
 
 ## Added in this fork — options not in the upstream dingoConfig `testing` branch
 
-UI options/features this fork adds on top of the original dingoConfig (`testing` branch):
+Features/options this fork adds on top of the original dingoConfig. (The analog input as a simple
+**on/off threshold switch** was already in the original — that's *not* listed here.)
 
-1. **Analog input as an on/off switch** — single voltage threshold, momentary/latched, invertible.
-2. **Analog input as a multi-position / rotary switch** (up to 10) — a **resistor-ladder designer**
-   (E12/E24, auto pull-up, even spread, noise-margin readout) **and** a **calibrate-from-switch** guide
-   that captures the live voltage at each detent; uneven steps decode via per-position windows.
-3. **Analog input as a linear-scaled sensor** — two-point (mV → value) scaling; the input reads out in
-   engineering units (bar, °C, psi…) and the scaled value is usable in Conditions, outputs and CAN.
-4. **CANBoard live readouts** — analog millivolts, decoded position, digital I/O and logic stream to the
-   UI (mini-charts, per-switch live position, dashboard tiles).
-5. **CANBoard-focused UI** — Outputs is a digital-output card grid; Signals leads with the physical I/O;
-   the Dashboard shows only what the board measures (no PDM-only battery/total-current tiles).
-6. **Reload resumes** the last view + selected module (System overview on first run).
-7. **Lua hidden on boards without a Lua engine** (CANBoard); a cross-module function can't push Lua to one.
-8. **Project save/open to a local PC file** (browser download + picker, cross-platform); per-output
-   hardware current rating shown by module model; `pdm-definitions.json` as the single source of truth.
+**Whole-vehicle / multi-module**
+1. **System overview + map of the car** — a single view of every module in the vehicle, laid out as a map.
+2. **Cross-module / shared components** — define a behaviour once that spans modules; pull a **remote
+   signal** from another module over CAN to drive a function locally.
+3. **Wiring node-graph (wiring modules)** — drag from an output ● to an input ● to wire functions within
+   or across modules; visual block layout.
+4. **System summary** — per-module live current total + "N on", and a **vehicle-wide worst-case load**
+   (sum of every enabled output's trip point).
 
-> ⚠️ The CANBoard analog features pair with **CoffeeDingoFW ≥ v5.5.101**, which **has not been flashed/
-> tested on a CanBoard yet** — verify on hardware before relying on it.
+**Per-module / per-output**
+5. **Wiring suggestions & colours** — per output: recommended **wire gauge (AWG/mm²)** from the current
+   rating, **voltage-drop** estimate, and a recordable wire **colour + stripe + length**.
+6. **Per-output / per-PDM summary + live mini-graphs** — each output card graphs its **current (A)** or
+   its trigger live; per-module status at a glance.
+7. **Plotting tool** — a global live plot: chart **any signal from any module**, show/hide lines,
+   export PNG.
+8. **Full Lua editor (Lua 5.5)** — a global/shared section plus per-function snippets, assembled into one
+   program and uploaded; runtime errors read back from the device.
+
+**Analog input (CANBoard) — new options** *(need CoffeeDingoFW ≥ v5.5.101)*
+9. **Multi-position / rotary switch** (up to 10) — a **resistor-ladder designer** (E12/E24, auto pull-up,
+   even spread, noise-margin readout) **and** a **calibrate-from-switch** guide that captures the live
+   voltage at each detent; uneven steps decode via per-position windows.
+10. **Linear-scaled sensor** — two-point (mV → value) scaling; the input reads out in engineering units
+    (bar, °C, psi…) and the scaled value is usable in Conditions, outputs and CAN.
+11. **CANBoard live readouts + CANBoard-focused UI** — mV / decoded position / digital I/O / logic stream
+    live; Outputs is a digital-output card grid; Signals leads with the physical I/O; the Dashboard shows
+    only what the board measures.
+
+**Other**
+12. **MCP server** — drive the whole tool from an AI agent (read/configure modules, outputs, signals, Lua).
+13. **Quality of life** — reload resumes the last view + module; Lua hidden on boards without a Lua engine;
+    **project save/open to a local PC file** (cross-platform); per-output hardware current rating by model.
+
+> ⚠️ The CANBoard analog features (9–11) pair with **CoffeeDingoFW ≥ v5.5.101**, which **has not been
+> flashed/tested on a CanBoard yet** — verify on hardware before relying on it.
 
 ![System view — a 5-PDM + 3-CANBoard vehicle](docs/img/system.png)
 
