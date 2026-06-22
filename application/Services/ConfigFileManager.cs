@@ -75,6 +75,43 @@ public class ConfigFileManager(ILogger<ConfigFileManager> logger, DeviceDefiniti
         logger.LogInformation("New file started");
     }
 
+    /// <summary>Serialize devices to the project (ConfigFile) JSON. Pure — no disk I/O — so it can
+    /// back a browser download (the user saves anywhere on their PC, cross-platform).</summary>
+    public string SerializeDevices(IEnumerable<IDevice> devices)
+    {
+        var list = devices.ToList();
+        var config = new ConfigFile
+        {
+            PdmDevices = list.OfType<PdmDevice>().ToList(),
+            CanboardDevices = list.Where(d => d.GetType() == typeof(CanboardDevice)).Cast<CanboardDevice>().ToList(),
+            DbcDevices = list.Where(d => d.GetType() == typeof(DbcDevice)).Cast<DbcDevice>().ToList(),
+            BlinkMarineKeypads = list.OfType<BlinkMarineKeypadDevice>().ToList(),
+            GrayhillKeypads = list.OfType<GrayhillKeypadDevice>().ToList()
+        };
+        return JsonSerializer.Serialize(config, _options);
+    }
+
+    /// <summary>Parse a project (ConfigFile) JSON string into devices, applying definitions. Pure —
+    /// no disk I/O — so it can load a file the user picked from their PC.</summary>
+    public List<IDevice>? LoadDevicesFromJson(string jsonString)
+    {
+        var config = JsonSerializer.Deserialize<ConfigFile>(jsonString, _options);
+        if (config == null) return null;
+
+        foreach (var device in config.PdmDevices)
+            device.ApplyDefinition(deviceDefinitionManager.GetByPdmType(device.PdmType) ?? DeviceDefinitionManager.DefaultPdm);
+        foreach (var device in config.CanboardDevices)
+            device.ApplyDefinition(deviceDefinitionManager.GetByCanboardType(device.CanboardType) ?? DeviceDefinitionManager.DefaultCanboard);
+
+        var allDevices = new List<IDevice>();
+        allDevices.AddRange(config.PdmDevices);
+        allDevices.AddRange(config.CanboardDevices);
+        allDevices.AddRange(config.DbcDevices);
+        allDevices.AddRange(config.BlinkMarineKeypads);
+        allDevices.AddRange(config.GrayhillKeypads);
+        return allDevices;
+    }
+
     /// <summary>
     /// Save devices to file, preserving all properties by grouping by concrete type
     /// </summary>
@@ -91,16 +128,7 @@ public class ConfigFileManager(ILogger<ConfigFileManager> logger, DeviceDefiniti
 
         try
         {
-            var config = new ConfigFile()
-            {
-                PdmDevices = devices.OfType<PdmDevice>().ToList(),
-                CanboardDevices = devices.Where(d => d.GetType() == typeof(CanboardDevice)).Cast<CanboardDevice>().ToList(),
-                DbcDevices = devices.Where(d => d.GetType() == typeof(DbcDevice)).Cast<DbcDevice>().ToList(),
-                BlinkMarineKeypads = devices.OfType<BlinkMarineKeypadDevice>().ToList(),
-                GrayhillKeypads = devices.OfType<GrayhillKeypadDevice>().ToList()
-            };
-
-            var jsonString = JsonSerializer.Serialize(config, _options);
+            var jsonString = SerializeDevices(devices);
             await File.WriteAllTextAsync(fullPath, jsonString);
 
             CurrentFileName = targetFileName;
@@ -130,29 +158,10 @@ public class ConfigFileManager(ILogger<ConfigFileManager> logger, DeviceDefiniti
         try
         {
             var jsonString = await File.ReadAllTextAsync(fullPath);
-            var config = JsonSerializer.Deserialize<ConfigFile>(jsonString, _options);
-
-            if (config == null)
-            {
-                return null;
-            }
+            var allDevices = LoadDevicesFromJson(jsonString);
+            if (allDevices == null) return null;
 
             CurrentFileName = Path.GetFileName(fileName);
-
-            // Apply definitions to PDM devices (restores Type, PdmType, counts, rebuilds VarMap/Params)
-            foreach (var device in config.PdmDevices)
-            {
-                var def = deviceDefinitionManager.GetByPdmType(device.PdmType) ?? DeviceDefinitionManager.DefaultPdm;
-                device.ApplyDefinition(def);
-            }
-
-            var allDevices = new List<IDevice>();
-            allDevices.AddRange(config.PdmDevices);
-            allDevices.AddRange(config.CanboardDevices);
-            allDevices.AddRange(config.DbcDevices);
-            allDevices.AddRange(config.BlinkMarineKeypads);
-            allDevices.AddRange(config.GrayhillKeypads);
-
             logger.LogInformation($"Loaded {allDevices.Count} devices from {fileName}");
             return allDevices;
         }

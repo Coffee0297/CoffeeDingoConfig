@@ -33,6 +33,39 @@ public static class McpServer
 
     static readonly HttpClient Http = new() { Timeout = TimeSpan.FromMinutes(5) };
 
+    // Absolute path to the stdio bridge, resolved once at startup. Clients launched
+    // outside the repo (e.g. a user-global config) run `node` from their own cwd, so a
+    // relative path breaks ("Connection closed"). We emit the resolved absolute path.
+    static string _bridgeScript = @"C:\path\to\CoffeeDingoConfig\mcp\dingo-mcp.mjs";
+
+    static string ResolveBridgeScript(string contentRoot)
+    {
+        try
+        {
+            for (var dir = new DirectoryInfo(contentRoot); dir is not null; dir = dir.Parent)
+            {
+                var candidate = Path.Combine(dir.FullName, "mcp", "dingo-mcp.mjs");
+                if (File.Exists(candidate)) return candidate;
+            }
+        }
+        catch { /* fall through to placeholder */ }
+        return _bridgeScript;
+    }
+
+    // Collapse the user's home directory to a portable token so the DISPLAYED path never shows a
+    // username (screenshot/share safe). The real absolute path is emitted separately for copy.
+    static string MaskHome(string p)
+    {
+        try
+        {
+            var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+            if (!string.IsNullOrEmpty(home) && p.StartsWith(home, StringComparison.OrdinalIgnoreCase))
+                return (OperatingSystem.IsWindows() ? "%USERPROFILE%" : "$HOME") + p.Substring(home.Length);
+        }
+        catch { /* show the raw path if home can't be resolved */ }
+        return p;
+    }
+
     const string Instructions =
         "dingoPDM controls Coffee Dingo CAN-bus power-distribution modules over a serial CAN link. " +
         "Typical flow: list_adapters -> connect -> discover/list_devices -> read_device -> inspect/change " +
@@ -44,6 +77,8 @@ public static class McpServer
     // ----------------------------------------------------------------- routing
     public static void MapMcp(this WebApplication app)
     {
+        _bridgeScript = ResolveBridgeScript(app.Environment.ContentRootPath);
+
         app.MapPost("/mcp", HandlePost);
 
         app.MapGet("/mcp", () => Results.Json(new
@@ -75,6 +110,22 @@ public static class McpServer
     static object BuildInfo(HttpRequest req)
     {
         var origin = $"{req.Scheme}://{req.Host}";
+        // Build the stdio client config for a given bridge path. We emit two: the real absolute
+        // path (used by the UI's Copy button so it works when pasted on this machine) and a
+        // home-masked one for on-screen display, so a screenshot never leaks the operator's username.
+        object StdioCfg(string path) => new
+        {
+            mcpServers = new
+            {
+                dingopdm = new
+                {
+                    type = "stdio",
+                    command = "node",
+                    args = new[] { path },
+                    env = new Dictionary<string, string> { ["DINGO_URL"] = origin }
+                }
+            }
+        };
         return new
         {
             name = ServerName,
@@ -83,20 +134,12 @@ public static class McpServer
             transport = "streamable-http",
             httpEndpoint = $"{origin}/mcp",
             instructions = Instructions,
-            // Copy-paste client configs (HTTP + stdio bridge).
-            httpConfig = new { mcpServers = new { dingopdm = new { url = $"{origin}/mcp" } } },
-            stdioConfig = new
-            {
-                mcpServers = new
-                {
-                    dingopdm = new
-                    {
-                        command = "node",
-                        args = new[] { "mcp/dingo-mcp.mjs" },
-                        env = new { DINGO_URL = origin }
-                    }
-                }
-            },
+            // Copy-paste client configs. HTTP is preferred (no script, no path);
+            // the stdio bridge is a fallback for stdio-only clients and needs an
+            // absolute path because the client launches `node` from its own cwd.
+            httpConfig = new { mcpServers = new { dingopdm = new { type = "http", url = $"{origin}/mcp" } } },
+            stdioConfig = StdioCfg(_bridgeScript),                  // real absolute path — used by Copy
+            stdioConfigDisplay = StdioCfg(MaskHome(_bridgeScript)), // home-masked — shown on screen
             tools = Tools.Select(t => new { name = t.Name, description = t.Description }),
             skills = Skills.Select(s => new { id = s.Id, title = s.Title, summary = s.Summary })
         };
@@ -290,7 +333,7 @@ public static class McpServer
 
         new("probe", "Probe a single module at a given base ID.",
             Schema("""{"type":"object","properties":{"base":{"type":"integer","description":"module base CAN id"}},"required":["base"]}"""),
-            a => new(POST, "/api/probe", Json(new { Base = Num(a, "base") }))),
+            a => new(POST, "/api/probe", Json(new { Base = Str(a, "base") }))),
 
         new("raw_log", "Read recent raw CAN frames, optionally filtered by id.",
             Schema("""{"type":"object","properties":{"id":{"type":"integer"},"count":{"type":"integer"}}}"""),
@@ -302,8 +345,8 @@ public static class McpServer
             _ => new(GET, "/api/devices", null)),
 
         new("add_device", "Add/bind a device by type, name and base ID.",
-            Schema("""{"type":"object","properties":{"type":{"type":"string","description":"e.g. dingoPDM"},"name":{"type":"string"},"baseId":{"type":"integer"}},"required":["type","baseId"]}"""),
-            a => new(POST, "/api/devices", Json(new { Type = Str(a, "type"), Name = StrOpt(a, "name"), BaseId = Num(a, "baseId") }))),
+            Schema("""{"type":"object","properties":{"type":{"type":"string","description":"Device type string sent to the backend. One of: pdm (a dingoPDM module), canboard, dbcdevice, blinkkeypad-PKP-2400, grayhillkeypad. Use pdm for a Coffee Dingo PDM."},"name":{"type":"string"},"baseId":{"type":"integer","description":"Base CAN id, decimal (e.g. 222) or 0x-hex string (e.g. 0x0DE)."}},"required":["type","baseId"]}"""),
+            a => new(POST, "/api/devices", Json(new { Type = Str(a, "type"), Name = StrOpt(a, "name"), BaseId = Str(a, "baseId") }))),
 
         new("remove_device", "Remove a bound device.",
             Schema("""{"type":"object","properties":{"guid":{"type":"string"}},"required":["guid"]}"""),
@@ -315,7 +358,7 @@ public static class McpServer
 
         new("modify_device", "Change a device's name and/or base ID.",
             Schema("""{"type":"object","properties":{"guid":{"type":"string"},"name":{"type":"string"},"baseId":{"type":"integer"}},"required":["guid","name","baseId"]}"""),
-            a => new(POST, $"/api/devices/{Str(a, "guid")}/modify", Json(new { Name = Str(a, "name"), BaseId = Num(a, "baseId") }))),
+            a => new(POST, $"/api/devices/{Str(a, "guid")}/modify", Json(new { Name = Str(a, "name"), BaseId = Str(a, "baseId") }))),
 
         new("read_device", "Read the full live config from a device (CRC-verified).",
             Schema("""{"type":"object","properties":{"guid":{"type":"string"}},"required":["guid"]}"""),

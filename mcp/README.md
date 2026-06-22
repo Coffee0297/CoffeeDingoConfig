@@ -23,21 +23,27 @@ script anymore.
 
 Pick whichever your client supports:
 
-**A. HTTP (clients that speak Streamable-HTTP):**
+**A. HTTP — recommended (GitHub Copilot CLI, Claude Code, any Streamable-HTTP client):**
 ```json
-{ "mcpServers": { "dingopdm": { "url": "http://localhost:5000/mcp" } } }
+{ "mcpServers": { "dingopdm": { "type": "http", "url": "http://localhost:5000/mcp" } } }
 ```
+The project [`.mcp.json`](../.mcp.json) already registers this (approve once if prompted). Both
+Copilot CLI (`~/.copilot/mcp-config.json`) and Claude Code (`claude mcp add --transport http` or a
+project `.mcp.json`) accept this form. No script, no file path — the app just has to be running.
 
-**B. stdio bridge (Claude Desktop, etc.):** the project [`.mcp.json`](../.mcp.json) already
-registers this (approve once if prompted). Manual form:
+**B. stdio bridge — fallback for stdio-only clients:**
 ```json
 { "mcpServers": { "dingopdm": {
+  "type": "stdio",
   "command": "node",
-  "args": ["mcp/dingo-mcp.mjs"],
+  "args": ["C:/path/to/CoffeeDingoConfig/mcp/dingo-mcp.mjs"],
   "env": { "DINGO_URL": "http://localhost:5000" }
 } } }
 ```
-Point `DINGO_URL` at the host running dingoConfig if it isn't local. Node 18+ (global `fetch`).
+Use an **absolute** path for `args` — stdio clients launch `node` from their own working directory,
+so a relative path fails to load ("Connection closed"). The MCP tab in the UI emits the correct
+absolute path for this machine. Point `DINGO_URL` at the host running dingoConfig if it isn't local.
+Node 18+ (global `fetch`).
 
 **In-app setup:** open the **MCP** tab in the dingoConfig UI — it shows the endpoint, a
 "Test connection" button, copy-paste configs, and the live tool + skill catalog. The same data

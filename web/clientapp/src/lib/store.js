@@ -114,10 +114,21 @@ export const api = {
   projSave: (FileName) => j('POST', '/api/project/save', { FileName }),
   projOpen: (FileName) => j('POST', '/api/project/open', { FileName }),
   projNew: () => j('POST', '/api/project/new'),
+  projDownload: () => j('GET', '/api/project/download'),   // full project JSON for a browser save
+  async projUpload(text) {                                  // load a project file picked on the PC
+    const r = await fetch('/api/project/upload', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: text })
+    if (!r.ok) throw new Error(await r.text())
+    return r.json()
+  },
   applyConfig: (doc) => j('POST', '/api/config', doc),
-  applyProfile: (targetGuid, source) => j('POST', `/api/devices/${targetGuid}/apply-profile`, { Source: source }),
+  // Commissioning a module writes its ENTIRE param set (thousands of paced CAN frames) then
+  // re-addresses + burns — far longer than the default 15s. Use a long timeout so the client
+  // waits for the whole sequence and still runs its cleanup (remove the opened entry); aborting
+  // early left the re-addressed module AND the source as a duplicate.
+  applyProfile: (targetGuid, source) => j('POST', `/api/devices/${targetGuid}/apply-profile`, { Source: source }, 120000),
   configTemplate: () => j('GET', '/api/config/template'),
   configSnapshot: (lua) => j('GET', '/api/config' + (lua ? '?lua=true' : '')),
+  definitions: () => j('GET', '/api/definitions'),
 }
 
 // Minimum recommended copper wire gauge to carry an output's current LIMIT (the trip
@@ -144,6 +155,23 @@ export const WIRE_GAUGES = [
   { mm2: 16, awg: '6' }, { mm2: 25, awg: '4' }, { mm2: 35, awg: '2' },
 ]
 export const awgForMm2 = (mm2) => WIRE_GAUGES.find((g) => g.mm2 === Number(mm2))?.awg ?? '?'
+
+// Device hardware specs (per-model counts + per-output current ratings, icons, min firmware, …)
+// are NOT hardcoded here — they come from the backend, whose single source of truth is
+// pdm-definitions.json. Fetched once at startup into this store.
+export const deviceDefs = writable({ pdms: [], canboards: [] })
+api.definitions().then((d) => { if (d) deviceDefs.set(d) }).catch((e) => console.warn('definitions load failed', e))
+
+// Rated channel current (A) for an output, looked up from the loaded definitions by the device's
+// type name and output NUMBER (OUT1 = index 0). null when unknown (the UI then shows no rating).
+// Setting a trip above the rating is allowed — advisory only; callers just flag it.
+export function outputRatingA(defs, deviceType, outputNumber) {
+  const t = (deviceType || '').toLowerCase()
+  const all = [...(defs?.pdms ?? []), ...(defs?.canboards ?? [])]
+  const def = all.find((d) => (d.typeName || '').toLowerCase() === t)
+  const r = def?.outputCurrentRatings
+  return Array.isArray(r) ? (r[(Number(outputNumber) | 0) - 1] ?? null) : null
+}
 
 // Voltage drop over a copper wire run at a given current. lengthM is one-way; the feed +
 // return path is 2·L. ρ ≈ 0.0175 Ω·mm²/m (copper, slightly warm). Returns volts + % of
@@ -365,6 +393,41 @@ function loadCross() {
 export const crossFns = writable(loadCross())
 crossFns.subscribe((v) => { try { localStorage.setItem('dingoCrossFns', JSON.stringify(v)) } catch {} })
 
+// ---- Whole-project client state: everything kept in the browser (NOT on the device) — cross-module
+// functions, per-function Lua snippets, CAN-bridge IDs, and layout (car-map pins + wiring-graph
+// positions). Bundled into the saved project file so a Save/Open round-trips EVERYTHING. Device
+// guids are preserved across save/load, so this state (keyed by / referencing device guids) stays
+// valid on reload. ----
+export function gatherClientState() {
+  const ls = (k, def) => { try { return JSON.parse(localStorage.getItem(k) ?? def) } catch { return JSON.parse(def) } }
+  const graph = {}
+  try {
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i)
+      if (k && (k.startsWith('dingoGraphPos:') || k.startsWith('dingoGraphRemotes:'))) graph[k] = localStorage.getItem(k)
+    }
+  } catch {}
+  return {
+    version: 1,
+    crossFns: ls('dingoCrossFns', '[]'),
+    lua: ls('dingoLua', '{}'),
+    bridges: ls('dingoGfxBridges', '{}'),
+    pinpos: ls('pinpos', '{}'),
+    graph,
+  }
+}
+export function restoreClientState(c) {
+  // Opening a project replaces the whole project — including this state. A file with no client
+  // section (e.g. saved before this existed) clears it, matching "the opened project has none".
+  try {
+    crossFns.set(Array.isArray(c?.crossFns) ? c.crossFns : [])              // store subscriptions persist these
+    luaSnippets.set(c?.lua && typeof c.lua === 'object' ? c.lua : {})
+    localStorage.setItem('dingoGfxBridges', JSON.stringify(c?.bridges ?? {}))
+    localStorage.setItem('pinpos', JSON.stringify(c?.pinpos ?? {}))
+    for (const [k, v] of Object.entries(c?.graph ?? {})) if (typeof v === 'string') localStorage.setItem(k, v)
+  } catch (e) { console.warn('restore client state failed', e) }
+}
+
 // Next free stable slot for a NEW cross-module function (call when creating one).
 export function nextCmfSlot(list) { let n = 0; for (const f of (list ?? [])) if (f && typeof f.slot === 'number') n = Math.max(n, f.slot + 1); return n }
 // A function's stable slot (falls back to array index for any un-migrated entry).
@@ -576,7 +639,17 @@ export async function deployCrossModule(devices) {
     if (!f || f.disabled || cmfIsLua(f)) continue
     const inv = [f.trigger?.guid, f.clockMaster, ...(f.targets ?? []).map((t) => t.guid)].filter(Boolean)
     if (inv.some((g) => cleanupFailed.has(g))) { results.push({ name: f.name, ok: false, error: 'skipped — a target module’s slot cleanup failed' }); continue }
-    try { await deployNativeRule(f, cmfSlotOf(f, i), devices, used); results.push({ name: f.name, ok: true, kind: 'native' }) }
+    // A native rule writes CAN params to its owner/master/targets. If any involved module isn't
+    // live, those writes persist to the project record but never reach hardware — report that as
+    // "saved to project", not "deployed", so the summary can't claim a write that didn't land.
+    const offline = [...new Set(inv.filter((g) => !(devices ?? []).find((d) => d.guid === g)?.connected)
+      .map((g) => (devices ?? []).find((d) => d.guid === g)?.name ?? 'a module'))]
+    try {
+      await deployNativeRule(f, cmfSlotOf(f, i), devices, used)
+      results.push(offline.length
+        ? { name: f.name, ok: true, written: false, kind: 'native', note: `${offline.join(', ')} offline` }
+        : { name: f.name, ok: true, written: true, kind: 'native' })
+    }
     catch (e) { results.push({ name: f.name, ok: false, error: e.message }) }
   }
 

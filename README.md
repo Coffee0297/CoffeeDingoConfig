@@ -230,13 +230,17 @@ directly — no UI automation. **Every UI capability is exposed as a tool (48)**
 **skills** (playbooks). There's an in-app **MCP** tab (endpoint, *Test connection*, copy-paste
 client configs, and the live tool + skill catalog).
 
-- **Transport — HTTP (preferred):** `POST /mcp` (Streamable-HTTP JSON-RPC 2.0). Config:
+- **Transport — HTTP (preferred):** `POST /mcp` (Streamable-HTTP JSON-RPC 2.0). Works with
+  **GitHub Copilot CLI and Claude Code** out of the box — no script, no file path, app just has to
+  be running. Config:
   ```json
-  { "mcpServers": { "dingopdm": { "url": "http://localhost:5000/mcp" } } }
+  { "mcpServers": { "dingopdm": { "type": "http", "url": "http://localhost:5000/mcp" } } }
   ```
-- **Transport — stdio bridge:** [`mcp/dingo-mcp.mjs`](mcp/dingo-mcp.mjs) is a thin stdio→`/mcp`
-  forwarder (zero-dependency, Node 18+). Clients with project config auto-load
-  [`.mcp.json`](.mcp.json); otherwise register it manually — see [`mcp/README.md`](mcp/README.md).
+  The project [`.mcp.json`](.mcp.json) registers this for project-scoped clients (e.g. Claude Code).
+- **Transport — stdio bridge (fallback):** [`mcp/dingo-mcp.mjs`](mcp/dingo-mcp.mjs) is a thin
+  stdio→`/mcp` forwarder (zero-dependency, Node 18+) for stdio-only clients. Use an **absolute**
+  path in `args` — stdio clients launch `node` from their own cwd, so a relative path fails
+  ("Connection closed"). The MCP tab emits the correct absolute path; see [`mcp/README.md`](mcp/README.md).
 - **Tools (48):** full UI coverage — connection (`list_adapters`/`connect`/`discover`/`identify`),
   devices (`add_device`/`read_device`/`device_action`/`apply_profile`), config
   (`get_schema`/`get_config`/`apply_config`), outputs, params, signals & logic

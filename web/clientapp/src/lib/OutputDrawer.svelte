@@ -1,9 +1,9 @@
 <script>
-  import { api, luaGet, luaSet, luaAssemble, awgFor, vDrop, WIRE_GAUGES, awgForMm2 } from './store.js'
+  import { api, luaGet, luaSet, luaAssemble, awgFor, vDrop, WIRE_GAUGES, awgForMm2, outputRatingA, deviceDefs } from './store.js'
   import { toast } from './toast.js'
   import { dialog, labelFields, clickable } from './a11y.js'
   import LuaEditor from './LuaEditor.svelte'
-  let { output, guid, connected = false, onclose } = $props()
+  let { output, guid, connected = false, deviceType = '', onclose } = $props()
   let tab = $state('rule')
 
   // Per-output Lua snippet (tick-body code). Stored client-side; assembled with
@@ -157,12 +157,15 @@
         build those in <b>Signals &amp; logic</b>. Save writes to the device; <b>Burn</b> persists to flash.</p>
     </div>
   {:else if tab === 'prot'}
+    {@const rating = outputRatingA($deviceDefs, deviceType, output.number)}
     <div class="dbody" use:labelFields>
       <p class="lbl">Current protection</p>
       <div class="f2">
         <div class="field"><label>Current limit (A)</label><input type="number" step="0.1" bind:value={f.currentLimit} /></div>
         <div class="field"><label>Inrush allow (A)</label><input type="number" step="0.1" bind:value={f.inrushLimit} /></div>
       </div>
+      {#if rating}<p class="hint" style="margin-top:6px">OUT{output.number} hardware channel rating: <b>{rating} A</b> max continuous.
+        {#if Number(f.currentLimit) > rating}<b style="color:var(--err)"> Your {f.currentLimit} A trip is above the channel rating — allowed, but size the wiring and load to suit.</b>{/if}</p>{/if}
       <div class="field" style="max-width:230px"><label>Inrush time (ms)</label><input type="number" bind:value={f.inrushTime} /></div>
 
       <p class="lbl" style="margin-top:18px">Warning &amp; open-load (report only — output keeps running)</p>

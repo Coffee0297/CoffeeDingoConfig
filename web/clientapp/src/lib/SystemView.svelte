@@ -1,5 +1,5 @@
 <script>
-  import { crossFns, deployCrossModule, cmfTrigId, cmfClkId, cmfIsLua, cmfSlotOf, nextCmfSlot, api, luaCopy, luaAssemble } from './store.js'
+  import { crossFns, deployCrossModule, cmfTrigId, cmfClkId, cmfIsLua, cmfSlotOf, nextCmfSlot, api, luaAssemble } from './store.js'
   import { toast } from './toast.js'
   import { dialog, labelFields, clickable } from './a11y.js'
   import LuaEditor from './LuaEditor.svelte'
@@ -85,13 +85,16 @@
     deploying = true; deployMsg = ''; deployErr = false
     try {
       const res = await deployCrossModule(devices)
-      if (!res.length) { deployMsg = 'Nothing to deploy — no reachable target modules.'; deployErr = true; return }
-      const ok = res.filter((r) => r.ok), bad = res.filter((r) => !r.ok)
+      if (!res.length) { deployMsg = 'Nothing to deploy — no cross-module functions reference a target module.'; deployErr = true; return }
+      const bad = res.filter((r) => !r.ok)
+      const recordOnly = res.filter((r) => r.ok && r.written === false)
+      const deployed = res.filter((r) => r.ok && r.written !== false)
       deployErr = bad.length > 0
-      const detail = bad.length ? ' — ' + bad.map((b) => `${b.name}: ${b.error}`).join('; ') : ''
-      deployMsg = bad.length
-        ? `Deployed to ${ok.length} module(s), ${bad.length} failed${detail}`
-        : `Deployed to ${ok.length} module(s). Burn each to keep.`
+      const parts = []
+      if (deployed.length) parts.push(`Deployed ${deployed.length} function(s) — burn each live module to keep`)
+      if (recordOnly.length) parts.push(`${recordOnly.length} saved to project only (${recordOnly.map((r) => r.note ?? r.name).join('; ')})`)
+      if (bad.length) parts.push(`${bad.length} failed — ${bad.map((b) => `${b.name}: ${b.error}`).join('; ')}`)
+      deployMsg = parts.join('. ') + '.'
     } catch (e) { deployMsg = 'Deploy failed: ' + e.message; deployErr = true }
     finally { deploying = false }
   }
@@ -138,6 +141,9 @@
   let setBusy = $state(false), setMsg = $state('')
   let setBaseId = $state(''), baseBusy = $state(false), baseMsg = $state('')
   let profSrc = $state(''), profBusy = $state(false), profMsg = $state('')
+  // The opened module must be answering on the bus to write sleep settings or flash a profile
+  // onto it. Base-ID editing stays allowed offline (it's a project-record edit / address planning).
+  let setLive = $derived(!!devices.find((d) => d.guid === setGuid)?.connected)
   function openSettings(g) {
     const d = devices.find((x) => x.guid === g)
     setGuid = g; setSleepEnabled = !!d?.sleepEnabled; setSleepTimeoutS = Math.round((d?.sleepTimeoutMs ?? 30000) / 1000)
@@ -149,28 +155,38 @@
   }
   // Other configurable modules whose profile could be flashed onto this one.
   let profProfiles = $derived(devices.filter((d) => d.guid !== setGuid && /pdm/i.test(d.type)))
-  // Write a saved profile onto the connected module: all settings + base ID + Lua follow,
-  // and the module becomes that profile (the placeholder entry is then removed).
+  // "Become the selected": the opened (target) module is flashed with the selected module's full
+  // config, re-addressed to the selected's base ID + name, then burned — and the selected's
+  // project entry is consumed so there's exactly one module afterward. The target MUST be live
+  // (you can't flash a dark module — that produced the old CfgWrite-no-reply duplicates), and no
+  // OTHER module may already occupy the selected's CAN span (that just relocates the collision).
   async function flashProfile() {
     if (!setGuid || !profSrc || profBusy) return
     const src = devices.find((d) => d.guid === profSrc), tgt = devices.find((d) => d.guid === setGuid)
-    if (!confirm(`Flash "${src?.name}" onto the connected module (now ${hex(tgt?.baseId)})?\n\n`
-      + `It will be re-addressed to ${hex(src?.baseId)} and every setting + Lua written, then burned.`)) return
+    if (!tgt?.connected) { profMsg = 'Connect the module you opened before flashing a profile onto it.'; return }
+    const clash = devices.find((d) => d.guid !== setGuid && d.guid !== profSrc
+      && /pdm|canboard/i.test(d.type) && Math.abs((d.baseId ?? 0) - (src?.baseId ?? 0)) <= ID_SPAN_AFTER)
+    if (clash) { profMsg = `Can't — ${clash.name} (${hex(clash.baseId)}) already occupies ${hex(src.baseId)}'s CAN span. Re-space it first.`; return }
+    if (!confirm(`Flash "${src.name}" (${hex(src.baseId)}) onto the connected "${tgt.name}" (${hex(tgt.baseId)})?\n\n`
+      + `The connected module is written with ${src.name}'s full config + Lua, re-addressed to ${hex(src.baseId)}, and burned — it becomes "${src.name}". `
+      + `The "${tgt.name}" entry is then removed; "${src.name}" remains as the live module.`
+      + (src.connected ? `\n\n⚠ "${src.name}" is also live on the bus right now — power that module down first, or two modules will fight over ${hex(src.baseId)}.` : ''))) return
     profBusy = true; profMsg = ''
     try {
-      // applyProfile is the whole hardware sequence (config + re-address + burn), all at the
-      // OLD id — atomic. Once it returns ok the module IS the profile, so remove the source
-      // placeholder. Lua follows best-effort: it isn't allowed to fail the flash (and must
-      // never block the source removal that prevents a duplicate).
-      const r = await api.applyProfile(setGuid, profSrc)
-      luaCopy(profSrc, setGuid)
+      // Atomic hardware sequence (config + re-address + burn) on the PHYSICAL connected module
+      // (setGuid). It is what physically becomes the profile.
+      await api.applyProfile(setGuid, profSrc)
+      // Put the profile's Lua on that physical module — still reachable via setGuid, now at src's id.
       let luaOk = true
-      try { await api.luaUpload(setGuid, luaAssemble(setGuid)) } catch { luaOk = false }
-      await api.remove(profSrc)
-      profMsg = `Done — module is now ${src?.name} at ${hex(r.baseId ?? src?.baseId)}.`
-        + (luaOk ? '' : ' But the Lua upload failed — re-upload it from the Lua tab.')
-      setDrawer = false; pick(setGuid)
-    } catch (e) { profMsg = 'Failed (module unchanged or partially): ' + e.message }
+      try { await api.luaUpload(setGuid, luaAssemble(profSrc)) } catch { luaOk = false }
+      // The physical module now IS the profile at src's base ID, so the profile entry (profSrc)
+      // already matches it. Keep that one and remove the entry we opened — its identity is gone
+      // (the module the user pressed Settings on has been turned into the profile).
+      await api.remove(setGuid)
+      toast(`"${tgt.name}" is now "${src.name}" at ${hex(src.baseId)}`
+        + (luaOk ? '' : ' — but the Lua upload failed; re-upload it from the Lua tab.'), luaOk ? 'ok' : 'error', luaOk ? 4000 : 8000)
+      setDrawer = false; pick(profSrc)
+    } catch (e) { profMsg = 'Failed (module unchanged or only partially written): ' + e.message }
     finally { profBusy = false }
   }
   // Change the module's CAN base ID. On a connected module this re-addresses it over CAN
@@ -187,6 +203,7 @@
   }
   async function saveSettings() {
     if (!setGuid || setBusy) return
+    if (!setLive) { setMsg = 'Module not on the bus — connect it to write + burn sleep settings.'; return }
     setBusy = true; setMsg = ''
     try {
       const ms = Math.min(60000, Math.max(1000, Math.round(setSleepTimeoutS * 1000)))
@@ -313,7 +330,7 @@
   <div class="scrim show" onclick={() => { if (!setBusy) setDrawer = false }}></div>
   <aside class="drawer show" use:dialog={{ onclose: closeDrawer }}>
     <div class="dh"><div><div class="nm">Device settings</div>
-      <div class="meta">{dName(setGuid)} — CAN base ID &amp; sleep (written to the module + burned)</div></div>
+      <div class="meta">{dName(setGuid)} — base ID is offline-safe; sleep &amp; profile write to the live module</div></div>
       <button class="x" aria-label="Close" onclick={() => { if (!setBusy) setDrawer = false }}>✕</button></div>
     <div class="dbody" use:labelFields>
       <p class="lbl" style="margin-top:0">CAN base ID</p>
@@ -348,22 +365,23 @@
       {#if setMsg}<p class="lbl" style="margin-top:10px">{setMsg}</p>{/if}
 
       <p class="lbl" style="margin-top:18px">Flash a profile onto this module</p>
-      <p class="hint" style="margin-top:0">Commission a connected blank module: write another configured module's full settings
-        <b>and adopt its CAN base ID</b>, then burn. The module becomes that profile; the placeholder entry is removed.</p>
+      <p class="hint" style="margin-top:0">Commission the <b>connected</b> module you opened: it takes the selected module's full
+        config <b>and its base ID + name</b>, then burns — <b>becoming</b> that module. The entry you opened is then removed and
+        the <b>selected</b> profile becomes the live module (power the selected module down first if it's also live). The target must be on the bus.</p>
       <div style="display:flex;gap:8px;align-items:flex-end;margin-top:6px">
         <div class="field" style="flex:1;max-width:240px;margin:0"><label>Profile to write</label>
           <select bind:value={profSrc}>
             <option value="">— pick a module —</option>
             {#each profProfiles as p}<option value={p.guid}>{p.name} ({hex(p.baseId)})</option>{/each}
           </select></div>
-        <button class="btn" disabled={profBusy || !profSrc} onclick={flashProfile}>{profBusy ? 'Flashing…' : 'Flash to module'}</button>
+        <button class="btn" disabled={profBusy || !profSrc || !setLive} title={setLive ? '' : 'Connect this module to flash a profile onto it'} onclick={flashProfile}>{profBusy ? 'Flashing…' : 'Flash to module'}</button>
       </div>
       {#if profProfiles.length === 0}<p class="hint">Add the modules you want as profiles first (offline is fine).</p>{/if}
       {#if profMsg}<p class="lbl" style="margin-top:8px">{profMsg}</p>{/if}
     </div>
     <div class="dfoot"><span style="margin-left:auto"></span>
       <button class="btn ghost" disabled={setBusy} onclick={() => (setDrawer = false)}>Close</button>
-      <button class="btn primary" disabled={setBusy} onclick={saveSettings}>{setBusy ? 'Saving…' : 'Save + burn'}</button></div>
+      <button class="btn primary" disabled={setBusy || !setLive} title={setLive ? '' : 'Connect this module to write + burn its sleep settings'} onclick={saveSettings}>{setBusy ? 'Saving…' : 'Save + burn'}</button></div>
   </aside>
 {/if}
 

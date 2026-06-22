@@ -409,6 +409,11 @@ public static class LiveApi
         api.MapGet("/devices", (DeviceManager dm) =>
             Results.Ok(dm.GetAllDevices().Select(d => DingoMap.ToDto(d, dm.GetDeviceUiState(d.Guid))).ToArray()));
 
+        // Device hardware specs (counts + per-output current ratings, per model). The single source
+        // of truth is pdm-definitions.json; the UI reads ratings (etc.) from here, not hardcoded.
+        api.MapGet("/definitions", (DeviceDefinitionManager defs) =>
+            Results.Ok(new { pdms = defs.GetAllPdms(), canboards = defs.GetAllCanboards() }));
+
         api.MapPost("/devices", (AddDeviceReq r, DeviceManager dm) =>
         {
             var id = DingoMap.ParseId(r.BaseId);
@@ -443,14 +448,19 @@ public static class LiveApi
         });
 
         // Set an output's current limit (used by the output editor; also the write-path test hook)
-        api.MapPost("/devices/{guid}/output", (string guid, SetOutputReq r, DeviceManager dm) =>
+        api.MapPost("/devices/{guid}/output", (string guid, SetOutputReq r, DeviceManager dm, ICommsAdapterManager adapters) =>
         {
             if (!Guid.TryParse(guid, out var g)) return Results.BadRequest();
             var d = dm.GetDevice<PdmDevice>(g);
             var o = d?.Outputs.FirstOrDefault(x => x.Number == r.Number);
             if (o == null) return Results.NotFound();
-            o.CurrentLimit = r.CurrentLimit;
-            return Results.Ok(new { ok = true, o.Number, o.CurrentLimit });
+            o.CurrentLimit = r.CurrentLimit;                 // project-record edit (always)
+            // Push it to the module over CAN only when it's live, and report which happened so a
+            // caller (e.g. the MCP set_output tool, described as "live") never reads the in-memory
+            // change as a confirmed device write.
+            var live = IsLiveModule(g, dm, adapters);
+            if (live) dm.WriteOutputParams(g, r.Number);
+            return Results.Ok(new { ok = true, o.Number, o.CurrentLimit, written = live });
         });
 
         // Apply an output's config from the editor, then write that output's params to the
@@ -570,10 +580,11 @@ public static class LiveApi
             return ok ? Results.Ok(new { ok = true }) : Results.BadRequest(new { ok = false, error = "upload rejected (too big or no device)" });
         });
 
-        // Read the stored Lua program back from the device.
-        api.MapGet("/devices/{guid}/lua", async (string guid, DeviceManager dm) =>
+        // Read the stored Lua program back from the device (a live CAN read).
+        api.MapGet("/devices/{guid}/lua", async (string guid, DeviceManager dm, ICommsAdapterManager adapters) =>
         {
             if (!Guid.TryParse(guid, out var g)) return Results.BadRequest();
+            if (RequireLiveModule(g, dm, adapters, "read Lua from") is { } bad) return bad;
             var source = await dm.ReadLua(g);
             return Results.Ok(new { source });
         });
@@ -753,15 +764,52 @@ public static class LiveApi
 
         api.MapPost("/project/open", async (ProjReq r, ConfigFileManager cfg, DeviceManager dm) =>
         {
-            var devs = await cfg.LoadDevices(r.FileName);
-            dm.ClearDevices();
-            if (devs != null) dm.AddDevices(devs);
-            return Results.Ok(new { ok = true, count = devs?.Count ?? 0 });
+            // Load FIRST; only clear the current project once we have a valid replacement. The old
+            // order cleared then checked for null, silently wiping every device on a bad/missing file.
+            try
+            {
+                var devs = await cfg.LoadDevices(r.FileName);
+                if (devs == null)
+                    return Results.Text($"Could not open '{r.FileName}' — not found or not a valid project file.", "text/plain", null, 400);
+                dm.ClearDevices();
+                dm.AddDevices(devs);
+                return Results.Ok(new { ok = true, count = devs.Count });
+            }
+            catch (Exception e)
+            {
+                return Results.Text($"Could not open '{r.FileName}': {e.Message}", "text/plain", null, 400);
+            }
         });
 
         api.MapPost("/project/new", (ConfigFileManager cfg, DeviceManager dm) =>
         {
             dm.ClearDevices(); cfg.NewFile(); return Results.Ok(new { ok = true });
+        });
+
+        // Local-PC project SAVE: stream the whole project (ConfigFile JSON) back so the browser
+        // saves it wherever the user chooses. No server-side folder — works on Windows/Mac/Linux.
+        api.MapGet("/project/download", (ConfigFileManager cfg, DeviceManager dm) =>
+            Results.Text(cfg.SerializeDevices(dm.GetDevices()), "application/json"));
+
+        // Local-PC project OPEN: load a project file the user picked on their PC (raw ConfigFile
+        // JSON in the body). The current project is replaced only on a successful parse.
+        api.MapPost("/project/upload", async (HttpRequest req, ConfigFileManager cfg, DeviceManager dm) =>
+        {
+            using var reader = new StreamReader(req.Body);
+            var json = await reader.ReadToEndAsync();
+            try
+            {
+                var devs = cfg.LoadDevicesFromJson(json);
+                if (devs == null) return Results.Text("Not a valid project file.", "text/plain", null, 400);
+                dm.ClearDevices();
+                dm.AddDevices(devs);
+                cfg.NewFile();   // opened from an external file, not one of our working-dir files
+                return Results.Ok(new { ok = true, count = devs.Count });
+            }
+            catch (Exception e)
+            {
+                return Results.Text("Couldn't open project: " + e.Message, "text/plain", null, 400);
+            }
         });
 
         api.MapGet("/canlog", (CanMsgLogger log) => Results.Ok(

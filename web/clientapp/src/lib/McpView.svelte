@@ -111,20 +111,25 @@
 
       <section class="card">
         <h3>Client config</h3>
-        <p class="sub">Add one of these to your MCP client (project <code>.mcp.json</code> or the client's config).</p>
+        <p class="sub">Add one of these to your MCP client. <strong>HTTP is preferred</strong> — no
+          script, no file path, and it works with GitHub Copilot CLI and Claude Code. The app must
+          be running for either to connect.</p>
         <div class="cfg">
           <div class="cfg-h">
-            <span>HTTP (clients that speak Streamable-HTTP)</span>
+            <span>HTTP — recommended (Copilot CLI, Claude Code, any Streamable-HTTP client)</span>
             <button class="btn ghost sm" use:clickable={() => copy(pretty(info.httpConfig), 'HTTP config')}>Copy</button>
           </div>
           <pre class="mono">{pretty(info.httpConfig)}</pre>
         </div>
         <div class="cfg">
           <div class="cfg-h">
-            <span>stdio bridge (Claude Desktop, etc.)</span>
+            <span>stdio bridge — fallback for stdio-only clients (needs Node 18+)</span>
             <button class="btn ghost sm" use:clickable={() => copy(pretty(info.stdioConfig), 'stdio config')}>Copy</button>
           </div>
-          <pre class="mono">{pretty(info.stdioConfig)}</pre>
+          <pre class="mono">{pretty(info.stdioConfigDisplay ?? info.stdioConfig)}</pre>
+          <p class="sub note">The <code>args</code> path is absolute on purpose: stdio clients launch
+            <code>node</code> from their own working directory, so a relative path fails to load.
+            Shown relative to your home folder; <b>Copy</b> puts the full path on your clipboard.</p>
         </div>
       </section>
     </div>
@@ -174,6 +179,7 @@
   .head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 12px; }
   h2 { margin: 0 0 4px; }
   .sub { color: var(--muted, #8a93a6); margin: 0 0 8px; font-size: 13px; }
+  .sub.note { margin: 6px 0 0; font-size: 12px; }
   .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 12px; }
   .card { background: var(--panel, #161b27); border: 1px solid var(--line, #283042); border-radius: 10px; padding: 14px; margin-bottom: 12px; }
   .card.err { border-color: var(--err, #d65a5a); color: var(--err, #d65a5a); }
