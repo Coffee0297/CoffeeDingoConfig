@@ -3,6 +3,21 @@
 All notable changes to **dingoConfig** are recorded here. Versions follow [SemVer](https://semver.org/);
 `-rc.N` tags are prereleases (feature-complete but not field-validated).
 
+## [0.6.0-rc.2] — 2026-06-22 (prerelease)
+
+Built-in firmware flasher improvements.
+
+### Added
+- **Flash a brand-new / blank module over USB DFU** from the System view (**⬆ Flash new module**) — no CAN
+  bus needed; put the board in DFU (BOOT0 + reset, USB) and dfu-util writes it.
+- **🔍 Scan for DFU device** in the flash drawer — shows how many boards are in DFU (plus the raw
+  `dfu-util -l` listing) so a failed flash isn't blind.
+
+### Fixed
+- DFU scan counts **distinct boards** (by devnum), not the per-alt-setting lines — one STM32 in DFU
+  exposes 4 interfaces (Internal Flash, Option Bytes, OTP, Device Feature), which previously read as
+  "4 devices".
+
 ## [0.6.0-rc.1] — 2026-06-22 (prerelease)
 
 Adds **linear sensor scaling** on a CANBoard analog input, and reworks the multi-position switch to

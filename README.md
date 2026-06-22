@@ -48,7 +48,9 @@ Features/options this fork adds on top of the original dingoConfig. (The analog 
 12. **Built-in firmware flasher (USB DFU)** — update a module's firmware from inside the app: it commands
     the module into its DFU bootloader and writes the `.bin` with **dfu-util**. Also flashes a **brand-new /
     blank module** (no firmware, not on the bus): put it in DFU (BOOT0 + reset) and use **⬆ Flash new
-    module** on the System view — no CAN connection needed.
+    module** on the System view — no CAN connection needed. A **🔍 Scan for DFU device** button shows how
+    many **boards** are in DFU (one STM32 exposes several DFU interfaces — that's normal; only Internal
+    Flash is written) plus the raw `dfu-util -l` listing, so a failed flash is never blind.
 13. **MCP server** — drive the whole tool from an AI agent (read/configure modules, outputs, signals, Lua).
 14. **Quality of life** — reload resumes the last view + module; Lua hidden on boards without a Lua engine;
     **project save/open to a local PC file** (cross-platform); per-output hardware current rating by model.
