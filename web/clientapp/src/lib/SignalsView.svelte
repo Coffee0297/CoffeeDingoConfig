@@ -1,13 +1,16 @@
 <script>
-  import { api, luaGet, luaSet, luaAssemble, luaReadToTabs, luaSnippets } from './store.js'
+  import { api, luaGet, luaSet, luaAssemble, luaReadToTabs, luaSnippets, deviceHasLua } from './store.js'
+  import { recommendResistors, deriveBands, nodeVoltageMv, resistorForMv, nearestStandard, recommendPullup, supplyCurrentMa, ocVoltageMv, autoTolerance, decodePoints, R_IN } from './ladder.js'
   import { toast } from './toast.js'
   import { dialog, labelFields, clickable } from './a11y.js'
   import LuaEditor from './LuaEditor.svelte'
   import Sparkline from './Sparkline.svelte'
-  let { current, ids = [] } = $props()
+  let { current, ids = [], mode = 'all' } = $props()  // 'all' = full signals list; 'outputs' = digital-output cards only
   // Writes/uploads only reach hardware when the module is live on the bus; config edits still
   // persist to the project offline. Read-backs (Lua read, error check) need a live module.
   let live = $derived(!!current?.connected)
+  // Only PDMs run Lua — the CANBoard has no engine. Hide every Lua affordance on boards without it.
+  let hasLua = $derived(deviceHasLua(current?.type))
 
   // ---- Live values for per-function mini charts (#17) ----
   let liveByName = $state({})   // name -> { value:number, on:bool }
@@ -53,20 +56,27 @@
 
   // Every editable kind. `arr` is its key on /functions; only kinds whose array is present
   // for the current device render. `physical` kinds are fixed channels (show all, no wizard).
+  // Ordered so a board's PHYSICAL I/O leads (its reason to exist), then the logic built on top.
+  // `group` drives the section headers; the Outputs group renders as cards on the Outputs tab.
   const ALLKINDS = [
-    { key: 'caninput', arr: 'canInputs', icon: '📡', label: 'CAN input', tile: 'CAN message', desc: 'value or bit from an incoming frame', addable: true },
-    { key: 'input', arr: 'inputs', icon: '🔌', label: 'Digital pin', tile: 'Digital pin', desc: 'a physical input pin', addable: true },
-    { key: 'condition', arr: 'conditions', icon: '🔢', label: 'Condition', tile: 'Comparison', desc: 'true when a signal crosses a value', addable: true },
-    { key: 'virtualinput', arr: 'virtualInputs', icon: '🧩', label: 'Virtual input', tile: 'Combination', desc: 'AND/OR up to 3 signals', addable: true },
-    { key: 'flasher', arr: 'flashers', icon: '💡', label: 'Flasher', tile: 'Flasher', desc: 'a blink pattern', addable: true },
-    { key: 'counter', arr: 'counters', icon: '⏱', label: 'Counter', tile: 'Counter', desc: 'count events', addable: true },
-    { key: 'canoutput', arr: 'canOutputs', icon: '📤', label: 'CAN output', tile: 'CAN output', desc: 'transmit a variable on CAN', addable: true },
-    // CANBoard physical I/O — fixed channels, configured in place
-    { key: 'analoginput', arr: 'analogIn', icon: '🎚', label: 'Analog input', physical: true },
-    { key: 'input', arr: 'digitalIn', icon: '🔌', label: 'Digital input', physical: true },
-    { key: 'digitaloutput', arr: 'digitalOut', icon: '⭘', label: 'Digital output', physical: true },
+    // physical inputs — fixed hardware channels (CANBoard) + the PDM's digital pins
+    { key: 'analoginput', arr: 'analogIn', icon: '🎚', label: 'Analog input', physical: true, group: 'Inputs' },
+    { key: 'input', arr: 'digitalIn', icon: '🔌', label: 'Digital input', physical: true, group: 'Inputs' },
+    { key: 'input', arr: 'inputs', icon: '🔌', label: 'Digital pin', tile: 'Digital pin', desc: 'a physical input pin', addable: true, group: 'Inputs' },
+    // logic & messaging — built from the inputs above
+    { key: 'caninput', arr: 'canInputs', icon: '📡', label: 'CAN input', tile: 'CAN message', desc: 'value or bit from an incoming frame', addable: true, group: 'Logic & messaging' },
+    { key: 'condition', arr: 'conditions', icon: '🔢', label: 'Condition', tile: 'Comparison', desc: 'true when a signal crosses a value', addable: true, group: 'Logic & messaging' },
+    { key: 'virtualinput', arr: 'virtualInputs', icon: '🧩', label: 'Virtual input', tile: 'Combination', desc: 'AND/OR up to 3 signals', addable: true, group: 'Logic & messaging' },
+    { key: 'flasher', arr: 'flashers', icon: '💡', label: 'Flasher', tile: 'Flasher', desc: 'a blink pattern', addable: true, group: 'Logic & messaging' },
+    { key: 'counter', arr: 'counters', icon: '⏱', label: 'Counter', tile: 'Counter', desc: 'count events', addable: true, group: 'Logic & messaging' },
+    { key: 'canoutput', arr: 'canOutputs', icon: '📤', label: 'CAN output', tile: 'CAN output', desc: 'transmit a variable on CAN', addable: true, group: 'Logic & messaging' },
+    // physical outputs (CANBoard) — shown as cards on the Outputs tab, not in this list
+    { key: 'digitaloutput', arr: 'digitalOut', icon: '⭘', label: 'Digital output', physical: true, group: 'Outputs' },
   ]
   let KINDS = $derived(funcs ? ALLKINDS.filter((k) => funcs[k.arr] !== undefined) : [])
+  // The full-signals list shows everything except the physical outputs (those live on the Outputs tab).
+  let visibleKinds = $derived(KINDS.filter((k) => k.group !== 'Outputs'))
+  let outRows = $derived(funcs?.digitalOut ?? [])
   const meta = (k) => ALLKINDS.find((x) => x.key === k)
   const labelFor = (k) => meta(k)?.label ?? (k === 'keypad' ? 'Keypad' : k === 'keypadbutton' ? 'Button' : k)
   const list = (kd) => funcs?.[kd.arr] ?? []
@@ -80,6 +90,87 @@
   let idHex = $state('0x100')
   let saving = $state(false)
 
+  // ---- multi-position switch designer (analog input → firmware RotarySwitch) ----
+  // FW decodes pos = clamp(floor((mV-offset)/step), 0, maxPos). This panel picks resistor
+  // values for an even voltage spread, then derives offset/step/maxPos to burn.
+  let mp = $state({ on: false, positions: 5, autoRpu: true, autoR: true, tolerance: 200, autoTol: true, vsup: 5, rpu: 4700, series: 'E24', invert: false, burn: false, rows: [] })
+  const mpOpts = () => ({ vsupMv: (+mp.vsup || 0) * 1000, rpu: +mp.rpu || 1, rin: R_IN })
+  let bands = $derived(deriveBands(mp.rows.map((r) => r.mv)))
+  // Worst-case standing current the pull-up + ladder pulls from V+ (highest at the lowest position).
+  let peakMa = $derived(mp.rows.length ? Math.max(...mp.rows.map((r) => supplyCurrentMa(r.r, mpOpts()))) : 0)
+  // The sensing window auto-follows the position spacing unless the user overrode it.
+  $effect(() => { if (mp.autoTol && mp.rows.length) mp.tolerance = autoTolerance(mp.rows.map((r) => r.mv)) })
+  // Calibrated-points decode sanity: voltages must rise with position, and each must land in its window.
+  let ptsInfo = $derived.by(() => {
+    const pts = mp.rows.map((r) => Math.round(r.mv))
+    let minGap = Infinity, mono = true
+    for (let i = 1; i < pts.length; i++) { minGap = Math.min(minGap, pts[i] - pts[i - 1]); if (pts[i] <= pts[i - 1]) mono = false }
+    const ok = mono && pts.every((mv, k) => decodePoints(mv, pts, +mp.tolerance || 1) === k)
+    return { minGap: isFinite(minGap) ? minGap : 0, mono, ok }
+  })
+
+  function initMp(rot) {
+    // A saved calibrated config carries usePoints + numPos + points[]; older/uniform ones carry fMaxPos.
+    const usePoints = !!rot.enabled && rot.usePoints && rot.numPos >= 2 && Array.isArray(rot.points)
+    const n = usePoints ? rot.numPos
+            : (!!rot.enabled && rot.fMaxPos >= 1 ? Math.round(rot.fMaxPos) + 1 : 5)
+    mp = { on: !!rot.enabled, positions: n, autoRpu: true, autoR: !usePoints,
+           tolerance: usePoints && rot.tolerance > 0 ? rot.tolerance : 200, autoTol: !usePoints,
+           vsup: 5, rpu: 4700, series: 'E24', invert: !!rot.invert, burn: false, rows: [] }
+    mp.rpu = recommendPullup({ vsupMv: (+mp.vsup || 0) * 1000, n, rin: R_IN, series: mp.series })
+    if (usePoints) {
+      // calibrated points: the stored voltages are the source of truth; suggest a resistor for each
+      for (let k = 0; k < n; k++) {
+        const mv = rot.points[k] ?? 0
+        mp.rows.push({ mv, r: nearestStandard(resistorForMv(mv, mpOpts()), mp.series) })
+      }
+    } else if (mp.on && rot.fStep > 0) {
+      // legacy uniform reconstruct from offset/step; top detent is the open switch
+      for (let k = 0; k < n; k++) {
+        if (k === n - 1) { mp.rows.push({ r: Infinity, mv: ocVoltageMv(mpOpts()) }); continue }
+        const mv = rot.fOffset + rot.fStep * (k + 0.5)
+        mp.rows.push({ mv, r: nearestStandard(resistorForMv(mv, mpOpts()), mp.series) })
+      }
+    } else { recommend() }
+  }
+  // Recompute the ladder from the live-bound Positions field (mp.positions). Because it reads
+  // bound state — not the rendered row count — a button press right after editing Positions (or
+  // on a freshly opened input) always uses the current value; no stale first press.
+  function recommend() {
+    const n = Math.max(2, Math.min(10, (+mp.positions | 0) || 2))
+    if (n !== mp.positions) mp.positions = n
+    // when the pull-up is on Auto, re-size it for this position count; a manual pull-up stays put
+    if (mp.autoRpu) mp.rpu = recommendPullup({ vsupMv: (+mp.vsup || 0) * 1000, n, rin: R_IN, series: mp.series })
+    mp.rows = recommendResistors(n, { ...mpOpts(), series: mp.series }).map((x) => ({ r: x.r, mv: x.mv }))
+    mp.autoR = true   // fresh recommendation → resistors are auto again
+  }
+  // Pull-up value changed (manual edit or Auto button). Re-solve the switch resistors for the new
+  // pull-up — unless they were hand-entered, in which case keep them and just recompute voltages.
+  function onRpuChanged() {
+    if (mp.autoR) {
+      const n = Math.max(2, Math.min(10, (+mp.positions | 0) || 2))
+      mp.rows = recommendResistors(n, { ...mpOpts(), series: mp.series }).map((x) => ({ r: x.r, mv: x.mv }))
+    } else { rescale() }
+  }
+  // rescale = keep chosen resistors, recompute their voltages (after V+ / pull-up change)
+  function rescale() { mp.rows = mp.rows.map((x) => ({ r: x.r, mv: nodeVoltageMv(isFinite(x.r) ? x.r : Infinity, mpOpts()) })) }
+  function setR(i, v) { const r = +v; mp.rows[i] = { r, mv: nodeVoltageMv(r > 0 ? r : Infinity, mpOpts()) }; mp.rows = [...mp.rows]; mp.autoR = false }
+  function setV(i, volts) { const mv = (+volts || 0) * 1000; mp.rows[i] = { mv, r: nearestStandard(resistorForMv(mv, mpOpts()), mp.series) }; mp.rows = [...mp.rows]; mp.autoR = false }
+  // Pick the pull-up that fills the readable range (biggest margins), then re-solve the ladder.
+  function autoPullup() {
+    mp.autoRpu = true
+    mp.rpu = recommendPullup({ vsupMv: (+mp.vsup || 0) * 1000, n: mp.positions, rin: R_IN, series: mp.series })
+    onRpuChanged()
+  }
+
+  // ---- Calibrate: capture the live voltage into a position's field (complements manual entry).
+  // It just writes into the existing voltage column via setV — same path as typing it by hand. ----
+  let calibrating = $state(false)
+  let calStep = $state(0)
+  const liveMv = () => (live && f?.name ? liveByName[f.name]?.value : 0) ?? 0
+  function capturePos(i) { setV(i, liveMv() / 1000) }                                   // live mV → this row's voltage
+  function captureStep() { capturePos(calStep); if (calStep < mp.rows.length - 1) calStep++ }
+
   function openNew(kd) {
     const slot = list(kd).find((x) => !x.enabled)
     if (!slot) { toast(`All ${kd.label.toLowerCase()} slots are in use.`, 'error'); return }
@@ -90,6 +181,8 @@
     editing = { kind, number: row.number ?? 1, isNew }
     f = { ...row, enabled: isNew ? true : row.enabled }
     idHex = hex(row.id ?? 0x100)
+    // deep-copy the nested objects so editing the drawer doesn't mutate the shared list
+    if (kind === 'analoginput') { f.rotary = { ...(row.rotary ?? {}) }; f.switch = { ...(row.switch ?? {}) }; initMp(f.rotary); if (mp.on) f.switch.enabled = false }   // an input is on/off OR multi-position, never both
     drawer = true
   }
   function close() { drawer = false; editing = null }
@@ -97,6 +190,14 @@
   async function save() {
     if (!current || !editing) return
     const body = { ...f }
+    // Multi-position switch: write the derived bands onto the analog input's RotarySwitch.
+    if (editing.kind === 'analoginput') {
+      body.rotary = { ...f.rotary, enabled: mp.on, invert: mp.invert,
+        fOffset: bands.offsetMv, fStep: bands.stepMv, fMaxPos: bands.maxPos,        // legacy uniform fallback
+        usePoints: mp.on, numPos: mp.rows.length, tolerance: Math.round(+mp.tolerance || 200),
+        points: Array.from({ length: 12 }, (_, k) => (k < mp.rows.length ? Math.round(mp.rows[k].mv) : 0)) }
+      if (mp.on) body.enabled = true   // firmware reads nothing on this channel unless it's enabled
+    }
     // Only CAN kinds carry a hex frame id; keypad master's id is a plain decimal node id.
     if (editing.kind === 'caninput' || editing.kind === 'canoutput') {
       const id = parseInt(String(idHex).replace(/^0x/i, ''), 16)
@@ -112,6 +213,10 @@
       toast(r?.written
         ? `Saved ${labelFor(editing.kind)} ${editing.number} to device`
         : `Saved ${labelFor(editing.kind)} ${editing.number} to the project — module offline; Deploy when connected`, r?.written ? 'ok' : 'info')
+      if (editing.kind === 'analoginput' && mp.on && mp.burn && r?.written) {
+        try { await api.action(current.guid, 'burn'); toast('Burned to flash — persists across reboot', 'ok') }
+        catch (e) { toast('Saved, but burn failed: ' + e.message, 'error') }
+      }
       close()
     } catch (e) { toast('Save failed: ' + e.message, 'error') }
     finally { saving = false }
@@ -208,9 +313,11 @@
 </script>
 
 <div class="h-row">
-  <div><h1>{current ? current.name : '—'} · Signals &amp; logic</h1>
-    <p class="sub">The device's inputs and logic blocks — physical pins, CAN messages, and logic built from them. Edit a row or define a new one; Save writes to the device, Burn persists.</p></div>
-  <button class="btn primary" disabled={!current} onclick={() => { editing = null; drawer = true }}>+ Define new signal</button>
+  <div><h1>{current ? current.name : '—'} · {mode === 'outputs' ? 'Outputs' : 'Signals & logic'}</h1>
+    <p class="sub">{mode === 'outputs'
+      ? "The board's digital outputs — each switches on when the signal driving it is true. Click one to choose its driver."
+      : "The device's inputs and logic blocks — physical pins, CAN messages, and logic built from them. Edit a row or define a new one; Save writes to the device, Burn persists."}</p></div>
+  {#if mode !== 'outputs'}<button class="btn primary" disabled={!current} onclick={() => { editing = null; drawer = true }}>+ Define new signal</button>{/if}
 </div>
 
 {#if !current}
@@ -219,6 +326,35 @@
   <div class="card flat"><p class="muted">Loading…</p></div>
 {:else}
   {#if loadErr}<div class="sys-alert">⚠ {loadErr}</div>{/if}
+
+  {#if mode === 'outputs'}
+    <div class="grid">
+      {#each outRows as o (o.number)}
+        {@const lv = liveByName[o.name]}
+        {@const on = !!lv?.on}
+        {@const drv = o.enabled ? varName(o.input) : null}
+        <div class="card" use:clickable aria-label={'Configure ' + o.name} onclick={() => openEdit(meta('digitaloutput'), o)}>
+          <div class="num">DO{o.number}</div>
+          <div class="top">
+            <span class="state {on ? 'on' : 'off'}" style={live ? '' : 'opacity:.65'}><span class="ic"></span>{on ? 'ON' : 'OFF'}</span>
+            <span class="nm">{o.name}{#if !o.enabled} <span class="muted" style="font-weight:400">· off</span>{/if}</span>
+          </div>
+          <div class="rule-txt">
+            {#if drv && drv !== '—' && drv !== 'None'}<span class="kw">ON when</span> <span class="sig">{drv}</span>{:else}<span class="muted">No driver set — tap to choose what switches it</span>{/if}
+          </div>
+          <Sparkline value={lv?.value ?? 0} win={30} tick={liveTick} color="#2a9d8f" />
+          <div class="ft">
+            <span class="tag" title="Low-side (ground) switch: wire the load between +12 V and this terminal — the board switches its ground. On/off only — no PWM, soft-start, or current sensing (those are PDM smart-output features).">low-side · on/off</span>
+            <span class="edit-hint">edit →</span>
+          </div>
+        </div>
+      {/each}
+      {#if outRows.length === 0}<p class="muted">This board has no digital outputs.</p>{/if}
+    </div>
+  {/if}
+
+  {#if mode !== 'outputs'}
+  {#if hasLua}
   <div class="cat-grp">⚡ Lua program
     <span style="text-transform:none;letter-spacing:0;font-weight:500;color:var(--muted)">— global/shared section · per-output logic is in each output’s Lua tab</span>
     <span class="ct"></span>
@@ -251,10 +387,12 @@
         now; press <b>Burn</b> to keep it across reboot.</p>
     </div>
   {/if}
+  {/if}
 
-  {#each KINDS as k}
+  {#each visibleKinds as k, ki}
     {@const rows = rowsFor(k)}
     {@const used = list(k).filter((x) => x.enabled).length}
+    {#if ki === 0 || visibleKinds[ki - 1].group !== k.group}<div class="grp-hd">{k.group}</div>{/if}
     <div class="cat-grp">{k.icon} {k.label}s <span style="text-transform:none;letter-spacing:0;font-weight:500;color:var(--muted)">— {used} / {list(k).length} {k.physical ? 'enabled' : 'used'}</span><span class="ct"></span></div>
     {#each rows as s (k.key + ":" + s.number)}
       <div class="sig-row" style="cursor:pointer" use:clickable onclick={() => openEdit(k, s)}>
@@ -301,6 +439,7 @@
       <button class="addbtn" onclick={() => addButton(ki)}>+ configure a button</button>
     {/if}
   {/each}
+  {/if}
 {/if}
 
 {#if drawer}
@@ -415,10 +554,88 @@
         <div class="field"><label>Name</label><input bind:value={f.name} /></div>
         <div class="field"><label>Driven by</label>
           <select bind:value={f.input}><option value={0}>—</option>{#each inputsBool as v}<option value={v.index}>{v.name}</option>{/each}</select></div>
+        <p class="hint"><b>Low-side (ground) switch.</b> Wire the load between +12&nbsp;V and this output terminal — the board switches its ground when the driving signal is true. On/off only: no PWM, soft-start, or current sensing (those are PDM smart-output features).</p>
       {:else if editing.kind === 'analoginput'}
         <label class="opt" style="border:0;padding-top:0"><input type="checkbox" bind:checked={f.enabled} /> Input enabled</label>
         <div class="field"><label>Name</label><input bind:value={f.name} /></div>
-        <p class="hint">Analog channel. Use a Condition to turn its value into an on/off signal, or read it on CAN via a CAN output.</p>
+
+        <p class="lbl" style="margin-top:14px">🔘 On/off switch (single threshold)</p>
+        <label class="chk"><input type="checkbox" bind:checked={f.switch.enabled} onchange={() => { if (f.switch.enabled) mp.on = false }} /> Use this input as an on/off switch at a voltage threshold</label>
+        {#if f.switch.enabled}
+          <div class="f3" style="margin-top:6px">
+            <div class="field"><label>Threshold (mV)</label><input type="number" bind:value={f.switch.threshold} /></div>
+            <div class="field"><label>Mode</label><select bind:value={f.switch.mode}><option value={0}>Momentary</option><option value={1}>Latched</option></select></div>
+            <label class="chk" style="align-self:end"><input type="checkbox" bind:checked={f.switch.invert} /> Invert</label>
+          </div>
+          <p class="hint">On when the voltage is {f.switch.invert ? 'below' : 'above'} {f.switch.threshold || 0} mV{#if live} · live {Math.round(liveByName[f.name]?.value ?? 0)} mV → <b>{liveByName[f.name + ' Switch']?.on ? 'ON' : 'OFF'}</b>{/if}. Use it anywhere as “{f.name} Switch”.</p>
+        {/if}
+
+        <p class="lbl" style="margin-top:14px">🎚 Multi-position switch</p>
+        <label class="chk"><input type="checkbox" bind:checked={mp.on} onchange={() => { if (mp.on) { f.switch.enabled = false; if (mp.rows.length === 0) recommend() } }} /> Decode this input as a rotary / multi-position switch</label>
+
+        {#if mp.on}
+          {@const livePos = live ? liveByName[f.name + ' Pos']?.value : undefined}
+          <div class="f2" style="margin-top:8px">
+            <div class="field"><label>Positions</label><input type="number" min="2" max="10" bind:value={mp.positions} onchange={() => recommend()} /></div>
+            <div class="field"><label>Pull-up to 5&nbsp;V (Ω)</label>
+              <div style="display:flex;gap:6px">
+                <input type="number" style="flex:1;min-width:0" bind:value={mp.rpu} onchange={() => { mp.autoRpu = false; onRpuChanged() }} />
+                <button class="btn ghost" type="button" class:active={mp.autoRpu} style="padding:6px 10px" title="Auto-size the pull-up so the open (top) detent reads the 4.85 V max" onclick={autoPullup}>Auto{mp.autoRpu ? ' ✓' : ''}</button>
+              </div></div>
+          </div>
+          <div class="f2">
+            <div class="field"><label>Resistor series</label><select value={mp.series} onchange={(e) => { mp.series = e.target.value; recommend() }}><option value="E24">E24 (5%)</option><option value="E12">E12 (10%)</option></select></div>
+            <div class="field" style="align-self:end"><button class="btn ghost" type="button" onclick={() => recommend()}>↻ Recommend resistors</button></div>
+          </div>
+          <div class="f2">
+            <div class="field"><label>Sensing ± (mV)</label>
+              <div style="display:flex;gap:6px">
+                <input type="number" style="flex:1;min-width:0" bind:value={mp.tolerance} onchange={() => (mp.autoTol = false)} />
+                <button class="btn ghost" type="button" class:active={mp.autoTol} style="padding:6px 10px" title="Auto-size the sensing window from the position spacing (capped)" onclick={() => { mp.autoTol = true; mp.tolerance = autoTolerance(mp.rows.map((r) => r.mv)) }}>Auto{mp.autoTol ? ' ✓' : ''}</button>
+              </div></div>
+            <div class="field"></div>
+          </div>
+
+          <table class="ladder">
+            <thead><tr><th>Pos</th><th>Resistor to GND (Ω)</th><th>Voltage</th></tr></thead>
+            <tbody>
+              {#each mp.rows as row, i}
+                <tr class:activepos={livePos != null && livePos === (mp.invert ? mp.rows.length - 1 - i : i)} class:calrow={calibrating && calStep === i}>
+                  <td>{mp.invert ? mp.rows.length - 1 - i : i}</td>
+                  <td>{#if isFinite(row.r)}<input type="number" value={Math.round(row.r)} onchange={(e) => setR(i, e.target.value)} />{:else}<span class="muted" title="Switch open — no resistor; this detent reads the pull-up (max) voltage">open</span>{/if}</td>
+                  <td><input type="number" step="0.01" value={(row.mv / 1000).toFixed(2)} onchange={(e) => setV(i, e.target.value)} /> V{#if calibrating}<button class="btn ghost" type="button" style="padding:2px 7px;font-size:11px;margin-left:6px" disabled={!live} title={live ? 'Capture the live voltage into this position' : 'Connect the module to capture'} onclick={() => capturePos(i)}>⦿</button>{/if}</td>
+                </tr>
+              {/each}
+            </tbody>
+          </table>
+
+          <label class="chk"><input type="checkbox" bind:checked={calibrating} onchange={() => (calStep = 0)} /> 🎯 Calibrate from a connected switch — capture the live voltage into each position</label>
+          {#if calibrating}
+            {#if live}
+              <div class="livepos on"><span class="pulse"></span> live <b>{Math.round(liveMv())} mV</b> — set the switch to <b>position {calStep}</b>, then capture (or use ⦿ on any row).</div>
+              <button class="btn primary" type="button" onclick={captureStep}>📍 Capture position {calStep} → {(liveMv() / 1000).toFixed(2)} V{calStep < mp.rows.length - 1 ? ' · then next' : ' · last'}</button>
+            {:else}
+              <p class="hint">Connect the module to capture live voltages, then step through each switch position. You can still type voltages by hand.</p>
+            {/if}
+          {/if}
+
+          <div class="livepos" class:on={livePos != null}>
+            {#if live}<span class="pulse"></span> live: <b>position {livePos ?? '—'}</b> · {Math.round(liveByName[f.name]?.value ?? 0)} mV — turn the switch to watch it land
+            {:else}Connect the module to watch the live position as you turn the switch.{/if}
+          </div>
+
+          <p class="hint" class:warn={!ptsInfo.ok}>
+            {#if !ptsInfo.mono}⚠ Position voltages must increase with the position number — recapture or reorder.
+            {:else if !ptsInfo.ok}⚠ Some positions are too close to tell apart at ±{mp.tolerance} mV. Lower the sensing window or spread the positions.
+            {:else}Decodes {mp.rows.length} calibrated positions · sensing ±{mp.tolerance} mV · tightest gap {ptsInfo.minGap} mV. A reading outside every window reports “no position”.{/if}
+          </p>
+          <p class="hint">Pull-up {mp.rpu}Ω{#if mp.autoRpu} (auto — open top detent reads the 4.85&nbsp;V max){/if} draws up to <b>{peakMa.toFixed(1)} mA</b> from the 5&nbsp;V supply (worst case, lowest position){#if peakMa > 25} — high{/if}.{#if !mp.autoRpu} <button type="button" class="linkbtn" onclick={autoPullup}>Auto-size pull-up</button> to put the open detent at 4.85&nbsp;V.{/if}</p>
+          <label class="chk"><input type="checkbox" bind:checked={mp.invert} /> Invert (reverse position order)</label>
+          <label class="chk"><input type="checkbox" bind:checked={mp.burn} /> Burn to flash on save (persist across reboot)</label>
+          <p class="hint">Wire the 5&nbsp;V supply —[pull-up {mp.rpu}Ω]— input pin; the switch grounds the pin through the listed resistor at each position — the top detent leaves it open (reads the pull-up max). The board's own {(R_IN / 1000)}kΩ to GND is already included. Read the position anywhere as “{f.name}” — a Condition, an output's driver, or a CAN output.</p>
+        {:else}
+          <p class="hint">Analog channel. Turn on the multi-position switch above, or use a Condition to make an on/off signal, or read the raw value on CAN.</p>
+        {/if}
       {:else if editing.kind === 'keypad'}
         <label class="opt" style="border:0;padding-top:0"><input type="checkbox" bind:checked={f.enabled} /> Keypad enabled <span class="desc">this PDM drives the keypad's LEDs</span></label>
         <div class="field"><label>Name</label><input bind:value={f.name} /></div>
@@ -457,7 +674,7 @@
         <p class="hint">The button is usable as an input anywhere (Outputs, Conditions) under its name. The LED mirrors the "LED shows" signal in the chosen colour.</p>
       {/if}
 
-      {#if editing && editing.kind !== 'keypad' && editing.kind !== 'keypadbutton'}
+      {#if editing && hasLua && editing.kind !== 'keypad' && editing.kind !== 'keypadbutton'}
         <p class="lbl" style="margin-top:16px">⚡ Lua (optional) — runs every tick, merged into the one program</p>
         <LuaEditor bind:value={fnLua} minHeight={120}
           placeholder={`-- custom logic for this ${labelFor(editing.kind)} ${editing.number}\n-- e.g. setLuaOut(0, readVar(1))`} />
@@ -478,4 +695,19 @@
 <style>
   .minichart { width: 132px; flex: 0 0 auto; margin-right: 6px; opacity: .92; }
   .minichart :global(.spark) { width: 132px; height: 30px; display: block; }
+  table.ladder { width: 100%; border-collapse: collapse; margin: 10px 0; font-size: 13px; }
+  table.ladder th, table.ladder td { text-align: left; padding: 4px 6px; border-bottom: 1px solid var(--line-2, #e0e0e8); }
+  table.ladder th { color: var(--muted); font-weight: 600; }
+  table.ladder input { width: 90px; }
+  .hint.warn { color: var(--err, #d32f2f); font-weight: 500; }
+  tr.activepos td { background: color-mix(in srgb, var(--ok, #2a9d8f) 18%, transparent); font-weight: 600; }
+  tr.calrow td { background: color-mix(in srgb, var(--accent, #594ae2) 16%, transparent); }
+  .livepos { margin: 10px 0; padding: 8px 11px; border-radius: 8px; font-size: 13px; color: var(--muted); background: var(--surface-2, #f6f6fa); display: flex; align-items: center; gap: 7px; }
+  .livepos.on { color: var(--ink, #222); }
+  .livepos .pulse { width: 8px; height: 8px; border-radius: 50%; background: var(--ok, #2a9d8f); flex: 0 0 auto; animation: lp 1.4s ease-in-out infinite; }
+  @keyframes lp { 0%, 100% { opacity: 1 } 50% { opacity: .35 } }
+
+  /* Section group headers in the signals list */
+  .grp-hd { font: 700 12px/1 var(--font, inherit); text-transform: uppercase; letter-spacing: .08em; color: var(--muted); margin: 24px 0 4px; padding-bottom: 6px; border-bottom: 1px solid var(--line-2, #e0e0e8); }
+  .grp-hd:first-child { margin-top: 4px; }
 </style>

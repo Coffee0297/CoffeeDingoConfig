@@ -1,5 +1,5 @@
 <script>
-  import { crossFns, deployCrossModule, cmfTrigId, cmfClkId, cmfIsLua, cmfSlotOf, nextCmfSlot, api, luaAssemble } from './store.js'
+  import { crossFns, deployCrossModule, cmfTrigId, cmfClkId, cmfIsLua, cmfSlotOf, nextCmfSlot, api, luaAssemble, deviceHasLua } from './store.js'
   import { toast } from './toast.js'
   import { dialog, labelFields, clickable } from './a11y.js'
   import LuaEditor from './LuaEditor.svelte'
@@ -39,11 +39,13 @@
     fnDrawer = true
   }
   const dName2 = (g) => devices.find((d) => d.guid === g)?.name ?? g?.slice(0, 6)
+  // Only Lua-capable modules (PDMs) can host a per-module Lua block — a CANBoard has no engine.
+  const luaModsOf = (fn) => involvedOf(fn).filter((g) => deviceHasLua(devices.find((d) => d.guid === g)?.type))
   // Lua editing uses a local buffer bound to the editor (no reactive feedback loop), flushed
   // into f.luaByModule when switching module sub-tabs or saving.
   let luaBuf = $state('')
   function flushLua() { if (luaMod) f.luaByModule = { ...(f.luaByModule || {}), [luaMod]: luaBuf } }
-  function openLuaTab() { luaMod = involvedOf(f)[0] ?? ''; luaBuf = f.luaByModule?.[luaMod] ?? ''; fnTab = 'lua' }
+  function openLuaTab() { luaMod = luaModsOf(f)[0] ?? ''; luaBuf = f.luaByModule?.[luaMod] ?? ''; fnTab = 'lua' }
   function pickLuaMod(g) { flushLua(); luaMod = g; luaBuf = f.luaByModule?.[g] ?? '' }
   async function loadTriggerInputs(guid) {
     try { triggerInputs = await api.inputs(guid) }
@@ -520,10 +522,13 @@
       <p class="lbl">Write this function in Lua (per module)</p>
       {#if involvedOf(f).length === 0}
         <p class="muted">Add a trigger + targets on the Rule tab first, so there are modules to write Lua for.</p>
+      {:else if luaModsOf(f).length === 0}
+        <p class="muted">None of this function's modules can run Lua — CANBoards have no Lua engine. Use the <b>Rule</b> tab (native wiring), or add a PDM and bridge the signal over CAN.</p>
       {:else}
         <div class="tabs" style="margin-bottom:10px">
-          {#each involvedOf(f) as g}<span class="t" role="tab" tabindex="0" aria-selected={luaMod === g} use:clickable class:active={luaMod === g} onclick={() => pickLuaMod(g)}>{dName2(g)}</span>{/each}
+          {#each luaModsOf(f) as g}<span class="t" role="tab" tabindex="0" aria-selected={luaMod === g} use:clickable class:active={luaMod === g} onclick={() => pickLuaMod(g)}>{dName2(g)}</span>{/each}
         </div>
+        {#if luaModsOf(f).length < involvedOf(f).length}<p class="hint">CANBoard modules in this function can't run Lua and are omitted here — drive them with a native rule instead.</p>{/if}
         {#key luaMod}
           <LuaEditor bind:value={luaBuf} minHeight={220}
             placeholder={`-- Lua for ${dName2(luaMod)} (this module).\n-- Use txCan(1, id, false, {data}) / canRxAdd(id) / onCanRx / readVar / setLuaOut.\n-- See the templates: "Blinker synced to a master clock (CAN)".`} />

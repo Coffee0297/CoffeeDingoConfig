@@ -444,6 +444,12 @@ export const cmfClkId = (slot) => CMF_ID_BASE + slot * 2 + 1
 // compiles to native CAN-input/flasher/output wiring.
 export const cmfIsLua = (f) => f?.mode === 'lua' || !!f?.clockBackup
 
+// Which devices have an embedded Lua engine. Only the PDMs (dingoPDM / PDM-MAX) do — the
+// CANBoard firmware is built HAS_LUA=FALSE (no room on its STM32F303K8: 62 KB flash / 16 KB RAM
+// vs the PDM's 384 KB / 128 KB + 48 KB Lua heap). Keypads/DBC devices aren't programmable either.
+// Used to hide Lua UI and to refuse pushing Lua to a non-Lua module.
+export const deviceHasLua = (type) => !/keypad|dbc|canboard|can.?board/i.test(type || '')
+
 // Compile all cross-module functions into per-module Lua + output bindings.
 // Returns { [guid]: { lua, bindings: [{ output, input }] } } for every module with a role.
 export function compileCrossModule() {
@@ -662,6 +668,12 @@ export async function deployCrossModule(devices) {
     const overrides = fns.filter((f) => cmfIsLua(f)).map((f) => f.luaByModule?.[d.guid]).filter((s) => s && s.trim())
     const userLua = overrides.length ? overrides.join('\n\n') : undefined
     const lua = userLua ?? c?.lua ?? ''
+    // A CANBoard (or any non-PDM) has no Lua engine — never push Lua to it. If a Lua-mode
+    // cross-module function landed on one, report it instead of silently uploading dead code.
+    if ((lua || c) && !deviceHasLua(d.type)) {
+      results.push({ name: d.name, ok: false, error: `${d.name} has no Lua engine (a CANBoard doesn't run Lua) — switch this function to a native rule, or run the Lua on a PDM and bridge the signal over CAN.` })
+      continue
+    }
     luaSnippets.update((v) => { v[d.guid] = { ...(v[d.guid] || {}) }; v[d.guid].cmf = lua; return { ...v } })
     if (!lua && !c) continue
     try {

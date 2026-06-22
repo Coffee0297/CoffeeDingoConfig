@@ -19,7 +19,13 @@
   })
 
   const sc = (s) => (s === 'On' ? 'on' : s === 'Overcurrent' ? 'oc' : s === 'Fault' ? 'fault' : 'off')
+  // A CANBoard has no battery / total-current sensing and no PDM-style outputs — its dashboard
+  // shows board temp + its own I/O instead. Drive that off the device type.
+  let isCb = $derived(/canboard|can.?board/i.test(current?.type ?? ''))
   let outs = $derived((current?.outputs) ?? [])
+  let digOuts = $derived(signals.filter((s) => s.kind === 'Digital output'))
+  let analogs = $derived(signals.filter((s) => s.kind === 'Analog input'))
+  let rotaries = $derived(signals.filter((s) => s.kind === 'Rotary position'))
   let digIns = $derived(signals.filter((s) => s.kind === 'Digital input'))
   let flashers = $derived(signals.filter((s) => s.kind === 'Flasher'))
   let canActive = $derived(signals.filter((s) => s.kind === 'CAN input' && s.on))
@@ -65,21 +71,41 @@
     <div class="sys-alert">{!live ? `${current.name} is not on the bus — these are last-known values, not live.` : 'Live feed frozen — values below may be stale.'}</div>
   {/if}
   <div class="tiles-stat" style={(!live || stale) ? 'opacity:.5' : ''}>
-    <div class="stat"><div class="v">{current.battery.toFixed(1)} V</div><div class="k">Battery voltage</div></div>
-    <div class="stat"><div class="v">{current.current.toFixed(1)} A</div><div class="k">Total current</div></div>
+    {#if !isCb}
+      <div class="stat"><div class="v">{current.battery.toFixed(1)} V</div><div class="k">Battery voltage</div></div>
+      <div class="stat"><div class="v">{current.current.toFixed(1)} A</div><div class="k">Total current</div></div>
+    {/if}
     <div class="stat"><div class="v">{Math.round(current.temp)} °C</div><div class="k">Board temp</div></div>
-    <div class="stat"><div class="v">{current.state}</div><div class="k">Device state</div></div>
+    {#if !isCb}<div class="stat"><div class="v">{current.state}</div><div class="k">Device state</div></div>{/if}
     <div class="stat"><div class="v">{current.version}</div><div class="k">FW version</div></div>
     <div class="stat"><div class="v">{current.bitrate}</div><div class="k">CAN bitrate</div></div>
   </div>
 
-  <div class="cat-grp">Live status — Outputs <span class="ct"></span></div>
-  <div class="statusgrid">
-    {#each outs as o}
-      <div class="sc"><span class="scn">O{o.number} {o.name?.trim() ? o.name : ''}</span>
-        <span class="state {sc(o.state)}" style="padding:1px 7px"><span class="ic"></span>{o.state === 'On' ? `ON · ${o.current.toFixed(1)}A` : o.state.toUpperCase()}</span></div>
-    {/each}
-  </div>
+  {#if isCb}
+    <div class="cat-grp">Live status — Digital outputs <span class="ct"></span></div>
+    <div class="statusgrid">
+      {#each digOuts as s}
+        <div class="sc"><span class="scn">{s.name}</span>
+          <span class="state {s.on ? 'on' : 'off'}" style="padding:1px 7px"><span class="ic"></span>{s.on ? 'ON' : 'OFF'}</span></div>
+      {/each}
+      {#if digOuts.length === 0}<span class="muted" style="font-size:13px">No digital outputs.</span>{/if}
+    </div>
+    <div class="cat-grp">Analog inputs <span class="ct"></span></div>
+    <div class="statusgrid">
+      {#each analogs as s}
+        {@const pos = rotaries.find((r) => r.name === s.name + ' Pos')}
+        <div class="sc"><span class="scn">{s.name}</span><span class="scv">{s.value} mV{#if pos} · pos {pos.value}{/if}</span></div>
+      {/each}
+    </div>
+  {:else}
+    <div class="cat-grp">Live status — Outputs <span class="ct"></span></div>
+    <div class="statusgrid">
+      {#each outs as o}
+        <div class="sc"><span class="scn">O{o.number} {o.name?.trim() ? o.name : ''}</span>
+          <span class="state {sc(o.state)}" style="padding:1px 7px"><span class="ic"></span>{o.state === 'On' ? `ON · ${o.current.toFixed(1)}A` : o.state.toUpperCase()}</span></div>
+      {/each}
+    </div>
+  {/if}
 
   <div class="cat-grp">Digital inputs · Flashers <span class="ct"></span></div>
   <div class="statusgrid">

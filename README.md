@@ -5,7 +5,7 @@ Configuration and live-monitoring tool for **dingoPDM** CAN power-distribution m
 SPA) that owns the CAN link — runs on **Windows, macOS, and Linux**.
 
 > **Firmware:** built for the matching **dingoPDM firmware**
-> ([CoffeeDingoFW v5.5.100](https://github.com/Coffee0297/CoffeeDingoFW/releases)). The advanced
+> ([CoffeeDingoFW v5.5.101](https://github.com/Coffee0297/CoffeeDingoFW/releases)). The advanced
 > features — Lua scripting, the on-device overload/trip log, warning & open-load detection, and
 > input-driven sleep — only work on that build. The tool expects firmware **≥ 5.5.100** and shows a
 > "firmware needs updating" notice below that.
@@ -60,6 +60,11 @@ Build logic from physical pins and CAN messages. Each block type has a guided ed
 - **Flasher** — blink pattern (on/off times, single-shot)
 - **Counter** — count up/down/reset events
 - **CAN output** — transmit any variable on the bus
+- **Analog input (CANBoard)** *(new in v0.5.0-rc.1)* — use one analog input as an **on/off switch**
+  (single threshold) **or** a **multi-position / rotary switch**. Design a standard-resistor ladder
+  (auto pull-up + even spread) or **calibrate an existing switch** by capturing the live voltage at
+  each detent — uneven steps decode via per-position tolerance windows (a reading outside every
+  window reads "no position"). Needs CoffeeDingoFW ≥ v5.5.101. See [CHANGELOG](CHANGELOG.md).
 
 Every row carries a **live mini-chart** (last 30 s) — the flasher rows above show their square-wave
 output in real time.

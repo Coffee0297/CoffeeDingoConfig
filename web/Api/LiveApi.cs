@@ -112,6 +112,14 @@ public static class FunctionMap
         foreach (var jp in body.EnumerateObject())
         {
             if (!props.TryGetValue(jp.Name, out var pi)) continue;
+            // Nested function objects (AnalogInput.switch / .rotary) — recurse so their fields
+            // persist. Without this, an analog input's rotary-switch config was silently dropped.
+            if (jp.Value.ValueKind == JsonValueKind.Object)
+            {
+                var nested = pi.GetValue(target);
+                if (nested != null) ApplyJson(nested, jp.Value);
+                continue;
+            }
             var t = Nullable.GetUnderlyingType(pi.PropertyType) ?? pi.PropertyType;
             try
             {
@@ -189,8 +197,10 @@ public static class DingoMap
                 p.SleepEnabled, p.SleepTimeoutMs, p.SleepInputEnabled, p.SleepInput, p.SleepInputActiveHigh, p.SleepIgnoreAlwaysOn);
         }
         if (d is domain.Devices.Canboard.CanboardDevice cb)
+            // CANBoard has no battery/total-current sensing (those are PDM smart-output features) — leave
+            // them 0; it DOES measure board temperature and reports a FW version, so surface those.
             return new DeviceDto(cb.Guid.ToString(), cb.Name, cb.Type, cb.BaseId, cb.Connected,
-                0, 0, 0, "", "", BitrateLabel(cb.BitRate), Array.Empty<OutputDto>(), reading, readDone, readTotal,
+                0, 0, cb.BoardTempC, "", cb.Version, BitrateLabel(cb.BitRate), Array.Empty<OutputDto>(), reading, readDone, readTotal,
                 cb.SleepEnabled, cb.SleepTimeoutMs, cb.SleepInputEnabled, cb.SleepInput, cb.SleepInputActiveHigh, cb.SleepIgnoreAlwaysOn);
         return new DeviceDto(d.Guid.ToString(), d.Name, d.Type, d.BaseId, d.Connected,
             0, 0, 0, "", "", "", Array.Empty<OutputDto>(), reading, readDone, readTotal, false, 30000, false, 0, false, true);
@@ -715,15 +725,36 @@ public static class LiveApi
 
         api.MapGet("/devices/{guid}/signals", (string guid, DeviceManager dm) =>
         {
-            if (!Guid.TryParse(guid, out var g) || dm.GetDevice(g) is not PdmDevice p) return Results.Ok(Array.Empty<SignalDto>());
+            if (!Guid.TryParse(guid, out var g)) return Results.Ok(Array.Empty<SignalDto>());
             var s = new List<SignalDto>();
-            foreach (var i in p.Inputs) s.Add(new("Digital input", i.Name, i.State ? "on" : "off", i.State));
-            foreach (var c in p.CanInputs) s.Add(new("CAN input", c.Name, c.Value.ToString(), c.Value != 0));
-            foreach (var v in p.VirtualInputs) s.Add(new("Virtual input", v.Name, v.Value ? "on" : "off", v.Value));
-            foreach (var c in p.Conditions) s.Add(new("Condition", c.Name, c.Value.ToString(), c.Value != 0));
-            foreach (var c in p.Counters) s.Add(new("Counter", c.Name, c.Value.ToString(), c.Value != 0));
-            foreach (var f in p.Flashers) s.Add(new("Flasher", f.Name, f.Value ? "on" : "off", f.Value));
-            foreach (var o in p.Outputs) s.Add(new("Output", o.Name, o.State.ToString(), o.State.ToString() == "On"));
+            if (dm.GetDevice(g) is PdmDevice p)
+            {
+                foreach (var i in p.Inputs) s.Add(new("Digital input", i.Name, i.State ? "on" : "off", i.State));
+                foreach (var c in p.CanInputs) s.Add(new("CAN input", c.Name, c.Value.ToString(), c.Value != 0));
+                foreach (var v in p.VirtualInputs) s.Add(new("Virtual input", v.Name, v.Value ? "on" : "off", v.Value));
+                foreach (var c in p.Conditions) s.Add(new("Condition", c.Name, c.Value.ToString(), c.Value != 0));
+                foreach (var c in p.Counters) s.Add(new("Counter", c.Name, c.Value.ToString(), c.Value != 0));
+                foreach (var f in p.Flashers) s.Add(new("Flasher", f.Name, f.Value ? "on" : "off", f.Value));
+                foreach (var o in p.Outputs) s.Add(new("Output", o.Name, o.State.ToString(), o.State.ToString() == "On"));
+            }
+            else if (dm.GetDevice(g) is CanboardDevice cb)
+            {
+                // A CANBoard analog input exposes three live signals: raw mV, rotary position
+                // ("<name> Pos" — drives the multi-position switch readout), and switch state.
+                foreach (var a in cb.AnalogInputs)
+                {
+                    s.Add(new("Analog input", a.Name, ((int)a.Millivolts).ToString(), a.Millivolts > 0));
+                    s.Add(new("Rotary position", a.Name + " Pos", a.Rotary.Pos.ToString(), a.Rotary.Pos != 0));
+                    s.Add(new("Analog switch", a.Name + " Switch", a.Switch.State ? "on" : "off", a.Switch.State));
+                }
+                foreach (var i in cb.DigitalInputs) s.Add(new("Digital input", i.Name, i.State ? "on" : "off", i.State));
+                foreach (var o in cb.DigitalOutputs) s.Add(new("Digital output", o.Name, o.State ? "on" : "off", o.State));
+                foreach (var c in cb.CanInputs) s.Add(new("CAN input", c.Name, c.Value.ToString(), c.Value != 0));
+                foreach (var v in cb.VirtualInputs) s.Add(new("Virtual input", v.Name, v.Value ? "on" : "off", v.Value));
+                foreach (var c in cb.Conditions) s.Add(new("Condition", c.Name, c.Value.ToString(), c.Value != 0));
+                foreach (var c in cb.Counters) s.Add(new("Counter", c.Name, c.Value.ToString(), c.Value != 0));
+                foreach (var f in cb.Flashers) s.Add(new("Flasher", f.Name, f.Value ? "on" : "off", f.Value));
+            }
             return Results.Ok(s.ToArray());
         });
 

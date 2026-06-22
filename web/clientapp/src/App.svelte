@@ -14,7 +14,9 @@
   import PlotView from './lib/PlotView.svelte'
   import McpView from './lib/McpView.svelte'
 
-  let view = $state('outputs')
+  // Reload resumes where you left off — last view + selected module (System overview on first run).
+  let view = $state((() => { try { return localStorage.getItem('dingoView') || 'system' } catch { return 'system' } })())
+  $effect(() => { try { localStorage.setItem('dingoView', view) } catch {} })
   // Dark by default; remember the user's choice across reloads (only an explicit 'light' opts out).
   let dark = $state((() => { try { return localStorage.getItem('dingoTheme') !== 'light' } catch { return true } })())
   $effect(() => { try { localStorage.setItem('dingoTheme', dark ? 'dark' : 'light') } catch {} })
@@ -30,7 +32,8 @@
   let readOpen = $state(false)
   let deployOpen = $state(false)
   let projOpen = $state(false)
-  let scopeGuid = $state(null)
+  let scopeGuid = $state((() => { try { return localStorage.getItem('dingoScope') || null } catch { return null } })())
+  $effect(() => { try { scopeGuid ? localStorage.setItem('dingoScope', scopeGuid) : localStorage.removeItem('dingoScope') } catch {} })
   let graphWin = $state(60)
   let cardMode = $state({}) // output number -> 'amps' | 'trig'
   let editNum = $state(null)
@@ -434,7 +437,7 @@
           </div>
         </div>
       {:else if /canboard|can.?board/i.test(current.type)}
-        <SignalsView {current} ids={t.ids} />
+        <SignalsView {current} ids={t.ids} mode="outputs" />
       {:else if /keypad/i.test(current.type)}
         <KeypadView device={current} {devices} />
       {:else if !isPdm}

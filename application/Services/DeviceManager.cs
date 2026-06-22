@@ -826,6 +826,15 @@ public class DeviceManager(ILogger<DeviceManager> logger, ILoggerFactory loggerF
         var device = GetDevice(deviceId);
         if (device is null) return false;
 
+        // Only the PDMs run an embedded Lua engine (firmware HAS_LUA). A CANBoard / DBC / keypad
+        // has none — refuse here so no path (cross-module deploy, drawer, MCP) can ever push Lua
+        // frames to a device that would silently ignore or mis-parse them.
+        if (device is not PdmDevice)
+        {
+            logger.LogWarning("UploadLua refused: {Name} ({Type}) has no Lua engine", device.Name, device.Type);
+            return false;
+        }
+
         var bytes = System.Text.Encoding.ASCII.GetBytes(source ?? string.Empty);
         if (bytes.Length > 4096) return false;   // matches firmware LUA_SCRIPT_MAX
         int txId = device.BaseId + 1;             // ConfigTxOffset — device RX channel
