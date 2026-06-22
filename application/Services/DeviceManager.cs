@@ -467,16 +467,25 @@ public class DeviceManager(ILogger<DeviceManager> logger, ILoggerFactory loggerF
         var device = GetDevice(deviceId);
         if (device == null) return 0;
         int n = 0;
+        // Windowed back-pressure: never let more than `window` writes go un-acked. A flat 2ms
+        // blast overran the module on a full-config write (a profile flash writes the WHOLE param
+        // set), so its config-write acks couldn't keep up and many CfgWrites failed after retries.
+        // This matches the proven pacing of WriteFunctionParams/ReadAllParamsChunked. The 400×5ms
+        // cap means a genuinely stuck param can't stall the whole write (it ages out via retry).
+        const int window = 8;
         foreach (var p in ps)
         {
             if (p.LocalOnly) continue;   // label-only setting, nothing to send over CAN
+            if (GetDevice(deviceId) == null) return n;   // device removed mid-write
+            var waits = 0;
+            while (_requestQueue.Count >= window && waits++ < 400)
+                Thread.Sleep(5);
             QueueMessage(new DeviceCanFrame
             {
                 DeviceBaseId = device.BaseId,
                 Frame = domain.Common.ParamCodec.ToFrame(domain.Enums.MessageCommand.Write, p, device.BaseId + 1),
                 Name = $"CfgWrite {p.Index:X}:{p.SubIndex}"
             });
-            Thread.Sleep(2);
             n++;
         }
         return n;
@@ -766,6 +775,16 @@ public class DeviceManager(ILogger<DeviceManager> logger, ILoggerFactory loggerF
 
         // 2. Push all params to the module's RAM at its CURRENT id (skips LocalOnly labels, FIFO).
         WriteParamObjects(targetId, tc.Params.Where(p => p is not { Index: 0x0000, SubIndex: 0 }).ToList());
+
+        // 2b. WAIT for every config write to be ACKNOWLEDGED before re-addressing. The base-id
+        //     change burns and re-inits the module's CAN; any param still in flight at that instant
+        //     is addressed to the OLD id the module just left, so it never acks (the tail CfgWrites
+        //     that failed in testing were exactly the last few params racing the re-address).
+        //     Draining the request queue first guarantees the full config is confirmed on the module
+        //     before it moves. Capped (~8s) so a genuinely unanswerable param ages out via the normal
+        //     retry/fail path rather than hanging the commission.
+        var drainWaits = 0;
+        while (_requestQueue.Count > 0 && drainWaits++ < 800) Thread.Sleep(10);
 
         // 3. Re-address: ModifyDeviceConfig writes the new base id then burns — both at the OLD
         //    id. That burn persists the config written above AND the new id, then re-inits CAN.
