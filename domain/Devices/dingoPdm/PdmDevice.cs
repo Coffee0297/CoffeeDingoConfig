@@ -204,6 +204,13 @@ public class PdmDevice : IDeviceConfigurable
         NumKeypads = definition.NumKeypads;
         InitFunctions();
         ApplyDefinition(definition);
+
+        // Fresh module: default each output's trip to its hardware channel rating (from the
+        // definition) rather than a flat 20A. This runs ONLY for a newly-added device — loaded
+        // projects use the JsonConstructor and keep their saved limits, so configs aren't clobbered.
+        if (definition.OutputCurrentRatings is { Length: > 0 } ratings)
+            for (var i = 0; i < Outputs.Count && i < ratings.Length; i++)
+                if (ratings[i] > 0) Outputs[i].CurrentLimit = ratings[i];
     }
 
     public void ApplyDefinition(PdmDeviceDefinition definition)
