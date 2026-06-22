@@ -426,11 +426,12 @@
       <div style="display:flex;align-items:center;gap:10px;margin-top:10px">
         <button class="btn ghost" disabled={flashBusy || dfuScanning} onclick={scanDfu}>{dfuScanning ? 'Scanning…' : '🔍 Scan for DFU device'}</button>
         {#if dfuScan}
-          {#if dfuScan.devices > 0}<span style="color:var(--ok,#3aa)">✓ {dfuScan.devices} DFU interface{dfuScan.devices === 1 ? '' : 's'} detected</span>
+          {#if dfuScan.devices > 0}<span style="color:var(--ok,#3aa)">✓ {dfuScan.devices} board{dfuScan.devices === 1 ? '' : 's'} in DFU, ready to flash</span>
           {:else if !dfuScan.utilOk}<span style="color:var(--err)">✗ dfu-util not found/runnable</span>
-          {:else}<span style="color:var(--err)">✗ no DFU device — put the board in DFU (BOOT0 + reset) and/or install the WinUSB driver (Zadig)</span>{/if}
+          {:else}<span style="color:var(--err)">✗ no board in DFU — put it in DFU (BOOT0 + reset) and/or install the WinUSB driver (Zadig)</span>{/if}
         {/if}
       </div>
+      {#if dfuScan?.devices > 0}<p class="hint" style="margin-top:4px">One board shows several DFU interfaces below (Internal Flash, Option Bytes, …) — that's normal; only Internal Flash is written.</p>{/if}
       {#if dfuScan?.raw}
         <pre style="background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:8px;font-size:11px;max-height:140px;overflow:auto;white-space:pre-wrap;margin-top:6px">{dfuScan.raw}</pre>
       {/if}

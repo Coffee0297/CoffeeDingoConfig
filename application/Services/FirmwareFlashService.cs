@@ -116,8 +116,13 @@ public partial class FirmwareFlashService(
         try
         {
             var (_, outp) = await RunAsync(dfu, "-l", 8_000);
-            var n = DfuFoundRegex().Matches(outp).Count;
-            return new(true, dfu, n, outp.Trim());
+            // A single STM32 in DFU shows up as several "Found DFU:" lines — one per alt setting
+            // (Internal Flash, Option Bytes, OTP, Device Feature). Count DISTINCT physical devices by
+            // devnum so "4 interfaces" doesn't read as "4 boards". ("Found Runtime:" lines are apps
+            // advertising DFU, not in the bootloader — ignored.)
+            var devs = new HashSet<string>();
+            foreach (Match m in DfuDevnumRegex().Matches(outp)) devs.Add(m.Groups[1].Value);
+            return new(true, dfu, devs.Count, outp.Trim());
         }
         catch (Exception ex)
         {
@@ -125,7 +130,7 @@ public partial class FirmwareFlashService(
         }
     }
 
-    [GeneratedRegex(@"Found DFU:")] private static partial Regex DfuFoundRegex();
+    [GeneratedRegex(@"Found DFU:[^\n]*?devnum=(\d+)")] private static partial Regex DfuDevnumRegex();
 
     [GeneratedRegex(@"(\d{1,3})%")] private static partial Regex PercentRegex();
 
