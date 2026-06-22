@@ -95,6 +95,12 @@ export const api = {
     if (!r.ok) throw new Error(await r.text())
     return r.json()
   },
+  // Flash a blank / new module already in DFU (BOOT0 + reset) — no bus device needed.
+  async flashBlank(bytes) {
+    const r = await fetch('/api/flash/blank', { method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: bytes })
+    if (!r.ok) throw new Error(await r.text())
+    return r.json()
+  },
   flashStatus: () => j('GET', '/api/flash/status'),
   setFunction: (guid, kind, number, body) => j('POST', `/api/devices/${guid}/function/${kind}/${number}`, body),
   writeParam: (guid, Index, Sub, Value) => j('POST', `/api/devices/${guid}/writeparam`, { Index, Sub, Value }),

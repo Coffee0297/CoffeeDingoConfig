@@ -45,8 +45,12 @@ Features/options this fork adds on top of the original dingoConfig. (The analog 
     only what the board measures.
 
 **Other**
-12. **MCP server** — drive the whole tool from an AI agent (read/configure modules, outputs, signals, Lua).
-13. **Quality of life** — reload resumes the last view + module; Lua hidden on boards without a Lua engine;
+12. **Built-in firmware flasher (USB DFU)** — update a module's firmware from inside the app: it commands
+    the module into its DFU bootloader and writes the `.bin` with **dfu-util**. Also flashes a **brand-new /
+    blank module** (no firmware, not on the bus): put it in DFU (BOOT0 + reset) and use **⬆ Flash new
+    module** on the System view — no CAN connection needed.
+13. **MCP server** — drive the whole tool from an AI agent (read/configure modules, outputs, signals, Lua).
+14. **Quality of life** — reload resumes the last view + module; Lua hidden on boards without a Lua engine;
     **project save/open to a local PC file** (cross-platform); per-output hardware current rating by model.
 
 > ⚠️ The CANBoard analog features (9–11) pair with **CoffeeDingoFW ≥ v5.5.101**, which **has not been

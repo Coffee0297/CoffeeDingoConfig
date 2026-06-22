@@ -116,22 +116,26 @@
   let flashBusy = $state(false), flashLog = $state(''), flashOk = $state(null)
   let flashPct = $state(0), flashPhase = $state('')
   function openFlash(guid) { flashGuid = guid; fwFile = null; flashLog = ''; flashOk = null; flashPct = 0; flashPhase = ''; flashDrawer = true }
+  function openFlashBlank() { openFlash('blank') }   // flash a new module not on the bus, via DFU
   function pickFile() { fwInput?.click() }
   function onFwFile(e) { fwFile = e.target.files?.[0] ?? null; e.target.value = '' }
   async function doFlash() {
     if (!fwFile || !flashGuid || flashBusy) return
+    const blank = flashGuid === 'blank'
+    const label = blank ? 'a blank module (DFU)' : dName(flashGuid)
     flashBusy = true; flashOk = null; flashPct = 0; flashPhase = 'Starting…'
-    flashLog = `Flashing ${fwFile.name} (${(fwFile.size / 1024).toFixed(0)} KB) to ${dName(flashGuid)}… keep the module powered.`
+    flashLog = `Flashing ${fwFile.name} (${(fwFile.size / 1024).toFixed(0)} KB) to ${label}… keep the module powered.`
     // poll live progress from the backend while the flash POST is in flight
     const poll = setInterval(async () => {
       try { const s = await api.flashStatus(); if (flashBusy && (s.busy || s.percent)) { flashPct = s.percent; flashPhase = s.phase } } catch {}
     }, 300)
     try {
-      const r = await api.flash(flashGuid, await fwFile.arrayBuffer())
+      const buf = await fwFile.arrayBuffer()
+      const r = blank ? await api.flashBlank(buf) : await api.flash(flashGuid, buf)
       flashBusy = false                                  // stop late poll callbacks clobbering the final state
       flashOk = r.ok; flashPct = r.ok ? 100 : flashPct; flashPhase = r.ok ? 'Done' : 'Failed'
       flashLog = (r.log || (r.ok ? 'Done.' : 'Failed.')).trimEnd()
-      toast(r.ok ? `Firmware flashed to ${dName(flashGuid)}` : 'Firmware flash failed', r.ok ? 'ok' : 'error')
+      toast(r.ok ? `Firmware flashed to ${label}` : 'Firmware flash failed', r.ok ? 'ok' : 'error')
     } catch (err) { flashOk = false; flashPhase = 'Failed'; flashLog += '\nFlash failed: ' + err.message; toast('Flash failed: ' + err.message, 'error') }
     finally { clearInterval(poll); flashBusy = false }
   }
@@ -283,8 +287,11 @@
 <div class="h-row">
   <div><h1>System — {devices.length} module{devices.length === 1 ? '' : 's'}</h1>
     <p class="sub">All modules on the CAN bus. Click a module to open it; drag a pin to match your install.</p></div>
-  <div class="stat" style="text-align:right" title="Sum across every module of every enabled output's current limit — worst case if the whole vehicle's loads switch on at their trip point at once">
-    <div class="v">{sysMaxA} A</div><div class="k">System max load</div>
+  <div style="display:flex;align-items:center;gap:14px">
+    <button class="btn ghost" disabled={flashBusy} title="Flash a brand-new / blank module over USB DFU (no CAN bus needed — put it in DFU with BOOT0 + reset)" onclick={openFlashBlank}>⬆ Flash new module</button>
+    <div class="stat" style="text-align:right" title="Sum across every module of every enabled output's current limit — worst case if the whole vehicle's loads switch on at their trip point at once">
+      <div class="v">{sysMaxA} A</div><div class="k">System max load</div>
+    </div>
   </div>
 </div>
 
@@ -390,8 +397,8 @@
 {#if flashDrawer}
   <div class="scrim show" onclick={() => { if (!flashBusy) flashDrawer = false }}></div>
   <aside class="drawer show" use:dialog={{ onclose: closeDrawer }}>
-    <div class="dh"><div><div class="nm">Update firmware</div>
-      <div class="meta">{dName(flashGuid)} — flashes over USB DFU</div></div>
+    <div class="dh"><div><div class="nm">{flashGuid === 'blank' ? 'Flash a new / blank module' : 'Update firmware'}</div>
+      <div class="meta">{flashGuid === 'blank' ? 'blank module in DFU' : dName(flashGuid)} — flashes over USB DFU</div></div>
       <button class="x" aria-label="Close" onclick={() => { if (!flashBusy) flashDrawer = false }}>✕</button></div>
     <div class="dbody" use:labelFields>
       <p class="lbl">Firmware file (.bin)</p>
@@ -399,9 +406,15 @@
         <button class="btn ghost" disabled={flashBusy} onclick={pickFile}>📂 Choose .bin…</button>
         {#if fwFile}<span class="muted">{fwFile.name} · {(fwFile.size / 1024).toFixed(0)} KB</span>{/if}
       </div>
-      <p class="hint" style="margin-top:10px">The module is commanded into its DFU bootloader, the binary is written with
-        dfu-util, then it reboots into the new firmware. <b>Keep it powered</b> (~20 s). If it can't enter DFU, hold
-        <b>BOOT0</b> and reset, then flash. The ROM bootloader is always recoverable via BOOT0.</p>
+      {#if flashGuid === 'blank'}
+        <p class="hint" style="margin-top:10px">For a <b>brand-new / blank module</b> (no firmware yet, not on the CAN bus):
+          connect it by <b>USB</b>, put it in DFU — hold <b>BOOT0</b> while powering on / resetting — then Flash.
+          dfu-util writes the binary and the module reboots into it. No CAN connection needed.</p>
+      {:else}
+        <p class="hint" style="margin-top:10px">The module is commanded into its DFU bootloader, the binary is written with
+          dfu-util, then it reboots into the new firmware. <b>Keep it powered</b> (~20 s). If it can't enter DFU, hold
+          <b>BOOT0</b> and reset, then flash. The ROM bootloader is always recoverable via BOOT0.</p>
+      {/if}
       {#if flashLog}
         <p class="lbl" style="margin-top:14px">Progress
           {#if flashBusy}<span class="muted">— {flashPhase || 'working'}… {flashPct}%</span>

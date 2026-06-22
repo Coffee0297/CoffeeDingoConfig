@@ -636,6 +636,17 @@ public static class LiveApi
             return Results.Ok(new { ok = res.Ok, log = res.Log });
         });
 
+        // Flash a BLANK / new module (no firmware on the bus yet). The operator puts it in DFU by hand
+        // (BOOT0 + reset, USB connected); we skip the CAN bootloader command (Guid.Empty = no bus device)
+        // and let dfu-util flash whatever STM32 ROM-DFU device is present.
+        api.MapPost("/flash/blank", async (HttpRequest req, FirmwareFlashService flasher) =>
+        {
+            using var ms = new MemoryStream();
+            await req.Body.CopyToAsync(ms);
+            var res = await flasher.FlashAsync(Guid.Empty, ms.ToArray());
+            return Results.Ok(new { ok = res.Ok, log = res.Log });
+        });
+
         // Live flash progress (polled by the UI while a flash is in flight).
         api.MapGet("/flash/status", (FirmwareFlashService flasher) =>
         {
