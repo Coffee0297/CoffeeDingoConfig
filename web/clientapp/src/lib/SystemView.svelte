@@ -1,5 +1,5 @@
 <script>
-  import { crossFns, deployCrossModule, cmfTrigId, cmfClkId, cmfIsLua, cmfSlotOf, nextCmfSlot, api, luaCopy, luaAssemble } from './store.js'
+  import { crossFns, deployCrossModule, cmfTrigId, cmfClkId, cmfIsLua, cmfSlotOf, nextCmfSlot, api, luaAssemble } from './store.js'
   import { toast } from './toast.js'
   import { dialog, labelFields, clickable } from './a11y.js'
   import LuaEditor from './LuaEditor.svelte'
@@ -167,23 +167,25 @@
     const clash = devices.find((d) => d.guid !== setGuid && d.guid !== profSrc
       && /pdm|canboard/i.test(d.type) && Math.abs((d.baseId ?? 0) - (src?.baseId ?? 0)) <= ID_SPAN_AFTER)
     if (clash) { profMsg = `Can't — ${clash.name} (${hex(clash.baseId)}) already occupies ${hex(src.baseId)}'s CAN span. Re-space it first.`; return }
-    if (!confirm(`Make "${tgt.name}" (${hex(tgt.baseId)}) become "${src.name}" (${hex(src.baseId)})?\n\n`
-      + `Every setting + Lua is written to the connected module, it's re-addressed to ${hex(src.baseId)}, then burned. `
-      + `The "${src.name}" entry is removed afterward.`
-      + (src.connected ? `\n\n⚠ "${src.name}" is live on the bus right now — power that module down first, or two modules will fight over ${hex(src.baseId)}.` : ''))) return
+    if (!confirm(`Flash "${src.name}" (${hex(src.baseId)}) onto the connected "${tgt.name}" (${hex(tgt.baseId)})?\n\n`
+      + `The connected module is written with ${src.name}'s full config + Lua, re-addressed to ${hex(src.baseId)}, and burned — it becomes "${src.name}". `
+      + `The "${tgt.name}" entry is then removed; "${src.name}" remains as the live module.`
+      + (src.connected ? `\n\n⚠ "${src.name}" is also live on the bus right now — power that module down first, or two modules will fight over ${hex(src.baseId)}.` : ''))) return
     profBusy = true; profMsg = ''
     try {
-      // applyProfile is the whole hardware sequence (config + re-address + burn) at the OLD id —
-      // atomic. Once it returns ok the module IS the profile, so consume the source. Lua follows
-      // best-effort (it must never block the source removal that prevents a duplicate).
-      const r = await api.applyProfile(setGuid, profSrc)
-      luaCopy(profSrc, setGuid)
+      // Atomic hardware sequence (config + re-address + burn) on the PHYSICAL connected module
+      // (setGuid). It is what physically becomes the profile.
+      await api.applyProfile(setGuid, profSrc)
+      // Put the profile's Lua on that physical module — still reachable via setGuid, now at src's id.
       let luaOk = true
-      try { await api.luaUpload(setGuid, luaAssemble(setGuid)) } catch { luaOk = false }
-      await api.remove(profSrc)
-      toast(`Module is now "${src.name}" at ${hex(r?.baseId ?? src.baseId)}`
+      try { await api.luaUpload(setGuid, luaAssemble(profSrc)) } catch { luaOk = false }
+      // The physical module now IS the profile at src's base ID, so the profile entry (profSrc)
+      // already matches it. Keep that one and remove the entry we opened — its identity is gone
+      // (the module the user pressed Settings on has been turned into the profile).
+      await api.remove(setGuid)
+      toast(`"${tgt.name}" is now "${src.name}" at ${hex(src.baseId)}`
         + (luaOk ? '' : ' — but the Lua upload failed; re-upload it from the Lua tab.'), luaOk ? 'ok' : 'error', luaOk ? 4000 : 8000)
-      setDrawer = false; pick(setGuid)
+      setDrawer = false; pick(profSrc)
     } catch (e) { profMsg = 'Failed (module unchanged or only partially written): ' + e.message }
     finally { profBusy = false }
   }
@@ -363,9 +365,9 @@
       {#if setMsg}<p class="lbl" style="margin-top:10px">{setMsg}</p>{/if}
 
       <p class="lbl" style="margin-top:18px">Flash a profile onto this module</p>
-      <p class="hint" style="margin-top:0">Commission the <b>connected</b> module you opened: it takes another module's full
-        config <b>and its base ID + name</b>, then burns — <b>becoming</b> that module. The source entry is removed afterward
-        (power the source down first if it's a live module). The target must be on the bus.</p>
+      <p class="hint" style="margin-top:0">Commission the <b>connected</b> module you opened: it takes the selected module's full
+        config <b>and its base ID + name</b>, then burns — <b>becoming</b> that module. The entry you opened is then removed and
+        the <b>selected</b> profile becomes the live module (power the selected module down first if it's also live). The target must be on the bus.</p>
       <div style="display:flex;gap:8px;align-items:flex-end;margin-top:6px">
         <div class="field" style="flex:1;max-width:240px;margin:0"><label>Profile to write</label>
           <select bind:value={profSrc}>
