@@ -63,6 +63,23 @@ jobs:
           tag_name: v${{ steps.ver.outputs.version }}
           name: dingoConfig v${{ steps.ver.outputs.version }}
           generate_release_notes: true
+          prerelease: ${{ contains(steps.ver.outputs.version, '-') }}
+          body: |
+            **Prerelease — feature-complete, compile-validated, not field-validated.**
+            Pairs with **CoffeeDingoFW v5.5.101**.
+
+            ### New in this build
+            - **Linear sensor scaling** on a CANBoard analog input — enter two datasheet points
+              (mV → value) and the input reads out in engineering units (bar, °C, …), usable in
+              Conditions, outputs and CAN.
+            - **Multi-position switch reworked** to match the optimised firmware (points packed
+              two-per-word, up to 10 positions, legacy uniform decode removed).
+
+            > ⚠️ The CANBoard analog features need **CoffeeDingoFW v5.5.101**, which **has not been
+            > flashed/tested on a CanBoard yet** — verify on hardware before relying on it.
+
+            See [CHANGELOG.md](https://github.com/${{ github.repository }}/blob/main/CHANGELOG.md) and
+            the README's "Added in this fork" list for the full option list.
           files: publish/dingoConfig-${{ steps.ver.outputs.version }}/*.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -18,6 +18,7 @@ public class AnalogInput : IDeviceFunction
         {
             Switch?.Name = value;
             Rotary?.Name = value;
+            Scale?.Name = value;
             field = value;
         }
     }
@@ -25,6 +26,7 @@ public class AnalogInput : IDeviceFunction
     [JsonPropertyName("enabled")] public bool Enabled { get; set; }
     [JsonPropertyName("switch")] public AnalogSwitch Switch { get; set; }
     [JsonPropertyName("rotary")] public RotarySwitch Rotary { get; set; }
+    [JsonPropertyName("scale")] public AnalogScale Scale { get; set; }
     
     [JsonIgnore][Plotable(displayName:"Millivolts")] public double Millivolts { get; set; }
     
@@ -38,6 +40,7 @@ public class AnalogInput : IDeviceFunction
         
         Switch = new AnalogSwitch(number, name);
         Rotary = new RotarySwitch(number, name);
+        Scale = new AnalogScale(number, name);
 
         Params = InitParams();
     }
@@ -60,7 +63,8 @@ public class AnalogInput : IDeviceFunction
 
         allParams.AddRange(Switch.InitParams(ref subIndex));
         allParams.AddRange(Rotary.InitParams(ref subIndex));
-        
+        allParams.AddRange(Scale.InitParams(ref subIndex));
+
         return allParams;
     }
 }

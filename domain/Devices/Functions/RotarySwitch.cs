@@ -8,26 +8,28 @@ namespace domain.Devices.Functions;
 public class RotarySwitch(int number, string name) : IDeviceFunction
 {
     [JsonIgnore] public const int BaseIndex = 0x2200;
+    [JsonIgnore] public const int MaxPositions = 10;   // matches firmware MAX_SWITCH_POS
+
     [JsonPropertyName("number")] public int Number { get; set; } = number;
     [JsonPropertyName("name")] public string Name { get; set; } = name;
     [JsonPropertyName("enabled")] public bool Enabled { get; set; }
     [JsonPropertyName("invert")] public bool Invert { get; set; }
-    [JsonPropertyName("fOffset")] public double Offset { get; set; }
-    [JsonPropertyName("fStep")] public double Step { get; set; }
-    [JsonPropertyName("fMaxPos")] public double MaxPos { get; set; }
 
     // Calibrated per-position decode (uneven switches): each position has a centre voltage (mV);
-    // a position registers within ±tolerance, capped at the midpoint to its neighbours.
-    [JsonPropertyName("usePoints")] public bool UsePoints { get; set; }
+    // a position registers within ±tolerance, capped at the midpoint to its neighbours. The point
+    // voltages are sent to the firmware PACKED two per 32-bit word (CanBoard flash is tight).
     [JsonPropertyName("numPos")] public int NumPos { get; set; } = 2;
     [JsonPropertyName("tolerance")] public int Tolerance { get; set; } = 200;
-    [JsonPropertyName("points")] public int[] Points { get; set; } = new int[12];   // mV per position (matches firmware MAX_SWITCH_POS)
+    [JsonPropertyName("points")] public int[] Points { get; set; } = new int[MaxPositions];   // mV per position
     // Position labels — project-side only (the firmware doesn't store names); not a device param.
-    [JsonPropertyName("positionNames")] public string[] PositionNames { get; set; } = new string[12];
+    [JsonPropertyName("positionNames")] public string[] PositionNames { get; set; } = new string[MaxPositions];
 
     [JsonIgnore][Plotable(displayName:"Pos")] public int Pos { get; set; }
-    
+
     [JsonIgnore] public List<DeviceParameter> Params { get; } = null!;
+
+    private int PointAt(int k) => k >= 0 && k < Points.Length ? Points[k] : 0;
+    private void SetPointAt(int k, int v) { if (k >= 0 && k < Points.Length) Points[k] = v; }
 
     public List<DeviceParameter> InitParams(ref int subIndex)
     {
@@ -37,42 +39,13 @@ public class RotarySwitch(int number, string name) : IDeviceFunction
             {
                 ParentName = Name, Name = $"rotarySwitch[{Number}].enabled", Index = BaseIndex + (Number - 1), SubIndex = subIndex++,
                 GetValue = () => Enabled, SetValue = val => Enabled = (bool)val,
-                ValueType = Enabled.GetType(),
-                DefaultValue = false
+                ValueType = Enabled.GetType(), DefaultValue = false
             },
             new DeviceParameter
             {
                 ParentName = Name, Name = $"rotarySwitch[{Number}].invert", Index = BaseIndex + (Number - 1), SubIndex = subIndex++,
                 GetValue = () => Invert, SetValue = val => Invert = (bool)val,
-                ValueType = Invert.GetType(),
-                DefaultValue = false
-            },
-            new DeviceParameter
-            {
-                ParentName = Name, Name = $"rotarySwitch[{Number}].offset", Index = BaseIndex + (Number - 1), SubIndex = subIndex++,
-                GetValue = () => Offset, SetValue = val => Offset = (double)val,
-                ValueType = Offset.GetType(),
-                DefaultValue = 0.0
-            },
-            new DeviceParameter
-            {
-                ParentName = Name, Name = $"rotarySwitch[{Number}].step", Index = BaseIndex + (Number - 1), SubIndex = subIndex++,
-                GetValue = () => Step, SetValue = val => Step = (double)val,
-                ValueType = Step.GetType(),
-                DefaultValue = 100.0
-            },
-            new DeviceParameter
-            {
-                ParentName = Name, Name = $"rotarySwitch[{Number}].maxpos", Index = BaseIndex + (Number - 1), SubIndex = subIndex++,
-                GetValue = () => MaxPos, SetValue = val => MaxPos = (double)val,
-                ValueType = MaxPos.GetType(),
-                DefaultValue = 10.0
-            },
-            new DeviceParameter
-            {
-                ParentName = Name, Name = $"rotarySwitch[{Number}].usePoints", Index = BaseIndex + (Number - 1), SubIndex = subIndex++,
-                GetValue = () => UsePoints, SetValue = val => UsePoints = (bool)val,
-                ValueType = UsePoints.GetType(), DefaultValue = false
+                ValueType = Invert.GetType(), DefaultValue = false
             },
             new DeviceParameter
             {
@@ -87,14 +60,16 @@ public class RotarySwitch(int number, string name) : IDeviceFunction
                 ValueType = Tolerance.GetType(), DefaultValue = 200
             }
         ];
-        // One param per calibrated point voltage (firmware subindices 13..24).
-        for (var k = 0; k < Points.Length; k++)
+        // Calibrated point voltages, packed two per 32-bit word: low half = even position, high half = odd.
+        for (var p = 0; p < MaxPositions / 2; p++)
         {
-            var idx = k;
+            var lo = p * 2;
+            var hi = p * 2 + 1;
             list.Add(new DeviceParameter
             {
-                ParentName = Name, Name = $"rotarySwitch[{Number}].point[{idx}]", Index = BaseIndex + (Number - 1), SubIndex = subIndex++,
-                GetValue = () => Points[idx], SetValue = val => Points[idx] = (int)val,
+                ParentName = Name, Name = $"rotarySwitch[{Number}].pointPair[{p}]", Index = BaseIndex + (Number - 1), SubIndex = subIndex++,
+                GetValue = () => (PointAt(lo) & 0xFFFF) | ((PointAt(hi) & 0xFFFF) << 16),
+                SetValue = val => { var w = Convert.ToInt32(val); SetPointAt(lo, w & 0xFFFF); SetPointAt(hi, (w >> 16) & 0xFFFF); },
                 ValueType = typeof(int), DefaultValue = 0
             });
         }

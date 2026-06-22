@@ -3,6 +3,27 @@
 All notable changes to **dingoConfig** are recorded here. Versions follow [SemVer](https://semver.org/);
 `-rc.N` tags are prereleases (feature-complete but not field-validated).
 
+## [0.6.0-rc.1] — 2026-06-22 (prerelease)
+
+Adds **linear sensor scaling** on a CANBoard analog input, and reworks the multi-position switch to
+match the optimised firmware. Pairs with **CoffeeDingoFW v5.5.101**.
+
+### Added
+- **Linear scaling (sensor) mode** for an analog input. Enter two datasheet points (mV → value) and
+  the input reads out in **engineering units** (bar, °C, …); the tool computes gain/offset and the
+  firmware publishes the scaled value for use in Conditions, outputs and CAN. On/off **or**
+  multi-position **or** linear-scaled — the three are mutually exclusive.
+- A **"Scaled Value"** variable per analog input in the variable map (selectable as a logic input).
+
+### Changed
+- **Multi-position switch protocol reworked** to match firmware v5.5.101: point voltages are sent
+  **packed two per 32-bit word** (5 words instead of 12), the legacy uniform offset/step params are
+  gone, and the cap is **10 positions**. Re-save any existing analog-switch config against v5.5.101.
+
+### Notes
+- The CANBoard analog features need **CoffeeDingoFW ≥ v5.5.101**, which **has not been flashed/tested
+  on a CanBoard yet**. Verify on hardware before relying on it. This config build is compile-validated.
+
 ## [0.5.0-rc.1] — 2026-06-22 (prerelease)
 
 Headline: **multi-position & calibrated switches on a CANBoard analog input**, plus a CANBoard-focused

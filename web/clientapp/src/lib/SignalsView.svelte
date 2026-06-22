@@ -110,10 +110,9 @@
   })
 
   function initMp(rot) {
-    // A saved calibrated config carries usePoints + numPos + points[]; older/uniform ones carry fMaxPos.
-    const usePoints = !!rot.enabled && rot.usePoints && rot.numPos >= 2 && Array.isArray(rot.points)
-    const n = usePoints ? rot.numPos
-            : (!!rot.enabled && rot.fMaxPos >= 1 ? Math.round(rot.fMaxPos) + 1 : 5)
+    // The calibrated config carries numPos + points[] (mV per position); reconstruct the rows from them.
+    const usePoints = !!rot.enabled && (rot.numPos ?? 0) >= 2 && Array.isArray(rot.points)
+    const n = usePoints ? rot.numPos : 5
     mp = { on: !!rot.enabled, positions: n, autoRpu: true, autoR: !usePoints,
            tolerance: usePoints && rot.tolerance > 0 ? rot.tolerance : 200, autoTol: !usePoints,
            vsup: 5, rpu: 4700, series: 'E24', invert: !!rot.invert, burn: false, rows: [] }
@@ -122,13 +121,6 @@
       // calibrated points: the stored voltages are the source of truth; suggest a resistor for each
       for (let k = 0; k < n; k++) {
         const mv = rot.points[k] ?? 0
-        mp.rows.push({ mv, r: nearestStandard(resistorForMv(mv, mpOpts()), mp.series) })
-      }
-    } else if (mp.on && rot.fStep > 0) {
-      // legacy uniform reconstruct from offset/step; top detent is the open switch
-      for (let k = 0; k < n; k++) {
-        if (k === n - 1) { mp.rows.push({ r: Infinity, mv: ocVoltageMv(mpOpts()) }); continue }
-        const mv = rot.fOffset + rot.fStep * (k + 0.5)
         mp.rows.push({ mv, r: nearestStandard(resistorForMv(mv, mpOpts()), mp.series) })
       }
     } else { recommend() }
@@ -171,6 +163,19 @@
   function capturePos(i) { setV(i, liveMv() / 1000) }                                   // live mV → this row's voltage
   function captureStep() { capturePos(calStep); if (calStep < mp.rows.length - 1) calStep++ }
 
+  // ---- linear sensor scaling (analog input → firmware AnalogScale): scaled = gain*mV + offset ----
+  // Two datasheet points (mV → engineering value) define the line; the tool sends gain/offset.
+  let sc = $state({ on: false, units: '', inLowMv: 500, outLow: 0, inHighMv: 4500, outHigh: 100 })
+  let scGain = $derived(((+sc.outHigh || 0) - (+sc.outLow || 0)) / (((+sc.inHighMv || 0) - (+sc.inLowMv || 0)) || 1))
+  let scOffset = $derived((+sc.outLow || 0) - scGain * (+sc.inLowMv || 0))
+  let scLive = $derived(sc.on && live && f?.name ? scGain * (liveByName[f.name]?.value ?? 0) + scOffset : null)
+  function initScale(s) {
+    s = s ?? {}
+    sc = { on: !!s.enabled, units: s.units ?? '',
+           inLowMv: s.inLowMv ?? 500, outLow: s.outLow ?? 0,
+           inHighMv: s.inHighMv ?? 4500, outHigh: s.outHigh ?? 100 }
+  }
+
   function openNew(kd) {
     const slot = list(kd).find((x) => !x.enabled)
     if (!slot) { toast(`All ${kd.label.toLowerCase()} slots are in use.`, 'error'); return }
@@ -182,7 +187,13 @@
     f = { ...row, enabled: isNew ? true : row.enabled }
     idHex = hex(row.id ?? 0x100)
     // deep-copy the nested objects so editing the drawer doesn't mutate the shared list
-    if (kind === 'analoginput') { f.rotary = { ...(row.rotary ?? {}) }; f.switch = { ...(row.switch ?? {}) }; initMp(f.rotary); if (mp.on) f.switch.enabled = false }   // an input is on/off OR multi-position, never both
+    if (kind === 'analoginput') {
+      // an input is on/off OR multi-position OR linear-scale, never more than one
+      f.rotary = { ...(row.rotary ?? {}) }; f.switch = { ...(row.switch ?? {}) }; f.scale = { ...(row.scale ?? {}) }
+      initMp(f.rotary); initScale(f.scale)
+      if (f.switch.enabled) { mp.on = false; sc.on = false }
+      else if (mp.on) { sc.on = false }
+    }
     drawer = true
   }
   function close() { drawer = false; editing = null }
@@ -193,10 +204,12 @@
     // Multi-position switch: write the derived bands onto the analog input's RotarySwitch.
     if (editing.kind === 'analoginput') {
       body.rotary = { ...f.rotary, enabled: mp.on, invert: mp.invert,
-        fOffset: bands.offsetMv, fStep: bands.stepMv, fMaxPos: bands.maxPos,        // legacy uniform fallback
-        usePoints: mp.on, numPos: mp.rows.length, tolerance: Math.round(+mp.tolerance || 200),
-        points: Array.from({ length: 12 }, (_, k) => (k < mp.rows.length ? Math.round(mp.rows[k].mv) : 0)) }
-      if (mp.on) body.enabled = true   // firmware reads nothing on this channel unless it's enabled
+        numPos: mp.rows.length, tolerance: Math.round(+mp.tolerance || 200),
+        points: Array.from({ length: 10 }, (_, k) => (k < mp.rows.length ? Math.round(mp.rows[k].mv) : 0)) }
+      body.scale = { ...f.scale, enabled: sc.on, units: sc.units, gain: scGain, offset: scOffset,
+        inLowMv: +sc.inLowMv || 0, outLow: +sc.outLow || 0, inHighMv: +sc.inHighMv || 0, outHigh: +sc.outHigh || 0 }
+      // firmware reads nothing on this channel unless it's enabled
+      if (mp.on || sc.on || f.switch.enabled) body.enabled = true
     }
     // Only CAN kinds carry a hex frame id; keypad master's id is a plain decimal node id.
     if (editing.kind === 'caninput' || editing.kind === 'canoutput') {
@@ -213,7 +226,7 @@
       toast(r?.written
         ? `Saved ${labelFor(editing.kind)} ${editing.number} to device`
         : `Saved ${labelFor(editing.kind)} ${editing.number} to the project — module offline; Deploy when connected`, r?.written ? 'ok' : 'info')
-      if (editing.kind === 'analoginput' && mp.on && mp.burn && r?.written) {
+      if (editing.kind === 'analoginput' && mp.burn && r?.written) {
         try { await api.action(current.guid, 'burn'); toast('Burned to flash — persists across reboot', 'ok') }
         catch (e) { toast('Saved, but burn failed: ' + e.message, 'error') }
       }
@@ -560,7 +573,7 @@
         <div class="field"><label>Name</label><input bind:value={f.name} /></div>
 
         <p class="lbl" style="margin-top:14px">🔘 On/off switch (single threshold)</p>
-        <label class="chk"><input type="checkbox" bind:checked={f.switch.enabled} onchange={() => { if (f.switch.enabled) mp.on = false }} /> Use this input as an on/off switch at a voltage threshold</label>
+        <label class="chk"><input type="checkbox" bind:checked={f.switch.enabled} onchange={() => { if (f.switch.enabled) { mp.on = false; sc.on = false } }} /> Use this input as an on/off switch at a voltage threshold</label>
         {#if f.switch.enabled}
           <div class="f3" style="margin-top:6px">
             <div class="field"><label>Threshold (mV)</label><input type="number" bind:value={f.switch.threshold} /></div>
@@ -571,7 +584,7 @@
         {/if}
 
         <p class="lbl" style="margin-top:14px">🎚 Multi-position switch</p>
-        <label class="chk"><input type="checkbox" bind:checked={mp.on} onchange={() => { if (mp.on) { f.switch.enabled = false; if (mp.rows.length === 0) recommend() } }} /> Decode this input as a rotary / multi-position switch</label>
+        <label class="chk"><input type="checkbox" bind:checked={mp.on} onchange={() => { if (mp.on) { f.switch.enabled = false; sc.on = false; if (mp.rows.length === 0) recommend() } }} /> Decode this input as a rotary / multi-position switch</label>
 
         {#if mp.on}
           {@const livePos = live ? liveByName[f.name + ' Pos']?.value : undefined}
@@ -635,6 +648,25 @@
           <p class="hint">Wire the 5&nbsp;V supply —[pull-up {mp.rpu}Ω]— input pin; the switch grounds the pin through the listed resistor at each position — the top detent leaves it open (reads the pull-up max). The board's own {(R_IN / 1000)}kΩ to GND is already included. Read the position anywhere as “{f.name}” — a Condition, an output's driver, or a CAN output.</p>
         {:else}
           <p class="hint">Analog channel. Turn on the multi-position switch above, or use a Condition to make an on/off signal, or read the raw value on CAN.</p>
+        {/if}
+
+        <p class="lbl" style="margin-top:14px">📈 Linear scaling (sensor)</p>
+        <label class="chk"><input type="checkbox" bind:checked={sc.on} onchange={() => { if (sc.on) { f.switch.enabled = false; mp.on = false } }} /> Scale this input to engineering units (pressure, temperature, …)</label>
+        {#if sc.on}
+          <p class="hint">Enter two points from the sensor's datasheet (input voltage → reading). The tool sends gain &amp; offset; the module publishes “{f.name}” in your units for use in Conditions, outputs and CAN.</p>
+          <div class="f3" style="margin-top:6px">
+            <div class="field"><label>Units</label><input bind:value={sc.units} placeholder="bar, °C, psi…" /></div>
+            <div class="field"></div><div class="field"></div>
+          </div>
+          <table class="ladder">
+            <thead><tr><th>Point</th><th>Input (mV)</th><th>Reads ({sc.units || 'units'})</th></tr></thead>
+            <tbody>
+              <tr><td>Low</td><td><input type="number" bind:value={sc.inLowMv} /></td><td><input type="number" step="any" bind:value={sc.outLow} /></td></tr>
+              <tr><td>High</td><td><input type="number" bind:value={sc.inHighMv} /></td><td><input type="number" step="any" bind:value={sc.outHigh} /></td></tr>
+            </tbody>
+          </table>
+          <p class="hint">gain <b>{scGain.toFixed(5)}</b> {sc.units || 'units'}/mV · offset <b>{scOffset.toFixed(3)}</b> {sc.units || 'units'}{#if live} · live {Math.round(liveByName[f.name]?.value ?? 0)} mV → <b>{scLive != null ? scLive.toFixed(2) : '—'} {sc.units}</b>{/if}</p>
+          <label class="chk"><input type="checkbox" bind:checked={mp.burn} /> Burn to flash on save (persist across reboot)</label>
         {/if}
       {:else if editing.kind === 'keypad'}
         <label class="opt" style="border:0;padding-top:0"><input type="checkbox" bind:checked={f.enabled} /> Keypad enabled <span class="desc">this PDM drives the keypad's LEDs</span></label>

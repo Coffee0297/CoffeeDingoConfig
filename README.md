@@ -10,6 +10,28 @@ SPA) that owns the CAN link — runs on **Windows, macOS, and Linux**.
 > input-driven sleep — only work on that build. The tool expects firmware **≥ 5.5.100** and shows a
 > "firmware needs updating" notice below that.
 
+## Added in this fork — options not in the upstream dingoConfig `testing` branch
+
+UI options/features this fork adds on top of the original dingoConfig (`testing` branch):
+
+1. **Analog input as an on/off switch** — single voltage threshold, momentary/latched, invertible.
+2. **Analog input as a multi-position / rotary switch** (up to 10) — a **resistor-ladder designer**
+   (E12/E24, auto pull-up, even spread, noise-margin readout) **and** a **calibrate-from-switch** guide
+   that captures the live voltage at each detent; uneven steps decode via per-position windows.
+3. **Analog input as a linear-scaled sensor** — two-point (mV → value) scaling; the input reads out in
+   engineering units (bar, °C, psi…) and the scaled value is usable in Conditions, outputs and CAN.
+4. **CANBoard live readouts** — analog millivolts, decoded position, digital I/O and logic stream to the
+   UI (mini-charts, per-switch live position, dashboard tiles).
+5. **CANBoard-focused UI** — Outputs is a digital-output card grid; Signals leads with the physical I/O;
+   the Dashboard shows only what the board measures (no PDM-only battery/total-current tiles).
+6. **Reload resumes** the last view + selected module (System overview on first run).
+7. **Lua hidden on boards without a Lua engine** (CANBoard); a cross-module function can't push Lua to one.
+8. **Project save/open to a local PC file** (browser download + picker, cross-platform); per-output
+   hardware current rating shown by module model; `pdm-definitions.json` as the single source of truth.
+
+> ⚠️ The CANBoard analog features pair with **CoffeeDingoFW ≥ v5.5.101**, which **has not been flashed/
+> tested on a CanBoard yet** — verify on hardware before relying on it.
+
 ![System view — a 5-PDM + 3-CANBoard vehicle](docs/img/system.png)
 
 > The screenshots below are a sample **5×dingoPDM + 3×CANBoard** vehicle. One module ("Front Left")
@@ -60,11 +82,14 @@ Build logic from physical pins and CAN messages. Each block type has a guided ed
 - **Flasher** — blink pattern (on/off times, single-shot)
 - **Counter** — count up/down/reset events
 - **CAN output** — transmit any variable on the bus
-- **Analog input (CANBoard)** *(new in v0.5.0-rc.1)* — use one analog input as an **on/off switch**
-  (single threshold) **or** a **multi-position / rotary switch**. Design a standard-resistor ladder
+- **Analog input (CANBoard)** *(new in v0.5.0-rc.1, expanded in v0.6.0-rc.1)* — use one analog input
+  as an **on/off switch** (single threshold), a **multi-position / rotary switch** (up to 10), **or**
+  a **linear-scaled sensor** — mutually exclusive. For the switch: design a standard-resistor ladder
   (auto pull-up + even spread) or **calibrate an existing switch** by capturing the live voltage at
-  each detent — uneven steps decode via per-position tolerance windows (a reading outside every
-  window reads "no position"). Needs CoffeeDingoFW ≥ v5.5.101. See [CHANGELOG](CHANGELOG.md).
+  each detent — uneven steps decode via per-position tolerance windows (a reading outside every window
+  reads "no position"). For a sensor: enter two datasheet points (mV → value) and the input reads out
+  in your **engineering units** (bar, °C, …), usable in Conditions/outputs. Needs CoffeeDingoFW
+  ≥ v5.5.101. See [CHANGELOG](CHANGELOG.md).
 
 Every row carries a **live mini-chart** (last 30 s) — the flasher rows above show their square-wave
 output in real time.

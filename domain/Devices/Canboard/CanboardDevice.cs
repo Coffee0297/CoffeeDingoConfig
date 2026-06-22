@@ -451,9 +451,17 @@ public class CanboardDevice : IDeviceConfigurable
                     VariableIndex = index++,
                     SingleVariable = false
                 });
+                VarMap.Add(new DeviceVariable
+                {
+                    GetName  = () => AnalogInputs[num].Name,
+                    PropertyName = "Scaled Value",
+                    DataType = "float",
+                    VariableIndex = index++,
+                    SingleVariable = false
+                });
             }
         }
-        
+
         if (NumCanInputs > 0)
         {
             for (var i = 0; i < NumCanInputs; i++)
