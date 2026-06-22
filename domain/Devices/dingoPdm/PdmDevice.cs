@@ -40,7 +40,7 @@ public class PdmDevice : IDeviceConfigurable
     [JsonIgnore] protected bool PdmTypeOk;
     [JsonIgnore] public bool ConfigMismatch { get; set; } = true;
 
-    [JsonIgnore] public Guid Guid { get; }
+    [JsonPropertyName("guid")] public Guid Guid { get; set; }
     [JsonIgnore] public string Type { get; private set; } = "dingoPDM";
     [JsonIgnore] public string Icon { get; private set; } = string.Empty;
     [JsonIgnore] public int ConfigVersion { get; set; }

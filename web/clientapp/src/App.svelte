@@ -1,5 +1,5 @@
 <script>
-  import { telemetry, hubState, reconnectHub, api, luaReadToTabs, awgFor, awgForMm2, outputRatingA, deviceDefs } from './lib/store.js'
+  import { telemetry, hubState, reconnectHub, api, luaReadToTabs, awgFor, awgForMm2, outputRatingA, deviceDefs, gatherClientState, restoreClientState } from './lib/store.js'
   import { toast, toasts, dismiss } from './lib/toast.js'
   import { clickable, labelFields, dialog as dlg } from './lib/a11y.js'
   import Sparkline from './lib/Sparkline.svelte'
@@ -48,6 +48,7 @@
     projOpen = false
     try {
       const doc = await api.projDownload()
+      doc.dingoConfigClient = gatherClientState()   // cross-module functions, Lua, bridges, layout
       const name = (projFileName || 'project').replace(/\.json$/i, '') + '.json'
       const url = URL.createObjectURL(new Blob([JSON.stringify(doc, null, 2)], { type: 'application/json' }))
       const a = document.createElement('a'); a.href = url; a.download = name; a.click()
@@ -62,7 +63,9 @@
     if (!file) return
     projOpen = false
     try {
-      const r = await api.projUpload(await file.text())
+      const text = await file.text()
+      const r = await api.projUpload(text)                                  // backend loads devices (ignores the client section)
+      try { restoreClientState(JSON.parse(text).dingoConfigClient) } catch {}  // cross-module functions, Lua, bridges, layout
       scopeGuid = null
       toast(`Opened ${file.name} — ${r?.count ?? 0} module(s)`, 'ok')
     } catch (e) { toast('Open failed: ' + e.message, 'error') }

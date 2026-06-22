@@ -13,7 +13,7 @@ public class GrayhillKeypadDevice : IKeypadDevice
 {
     [JsonIgnore] private ILogger<GrayhillKeypadDevice>? _logger;
 
-    [JsonIgnore] public Guid Guid { get; }
+    [JsonPropertyName("guid")] public Guid Guid { get; set; }
     [JsonIgnore] public string Type => "GrayhillKeypad";
     [JsonPropertyName("name")] public string Name { get; set; }
     [JsonPropertyName("baseId")] public int BaseId { get; set; }

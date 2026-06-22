@@ -393,6 +393,41 @@ function loadCross() {
 export const crossFns = writable(loadCross())
 crossFns.subscribe((v) => { try { localStorage.setItem('dingoCrossFns', JSON.stringify(v)) } catch {} })
 
+// ---- Whole-project client state: everything kept in the browser (NOT on the device) — cross-module
+// functions, per-function Lua snippets, CAN-bridge IDs, and layout (car-map pins + wiring-graph
+// positions). Bundled into the saved project file so a Save/Open round-trips EVERYTHING. Device
+// guids are preserved across save/load, so this state (keyed by / referencing device guids) stays
+// valid on reload. ----
+export function gatherClientState() {
+  const ls = (k, def) => { try { return JSON.parse(localStorage.getItem(k) ?? def) } catch { return JSON.parse(def) } }
+  const graph = {}
+  try {
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i)
+      if (k && (k.startsWith('dingoGraphPos:') || k.startsWith('dingoGraphRemotes:'))) graph[k] = localStorage.getItem(k)
+    }
+  } catch {}
+  return {
+    version: 1,
+    crossFns: ls('dingoCrossFns', '[]'),
+    lua: ls('dingoLua', '{}'),
+    bridges: ls('dingoGfxBridges', '{}'),
+    pinpos: ls('pinpos', '{}'),
+    graph,
+  }
+}
+export function restoreClientState(c) {
+  // Opening a project replaces the whole project — including this state. A file with no client
+  // section (e.g. saved before this existed) clears it, matching "the opened project has none".
+  try {
+    crossFns.set(Array.isArray(c?.crossFns) ? c.crossFns : [])              // store subscriptions persist these
+    luaSnippets.set(c?.lua && typeof c.lua === 'object' ? c.lua : {})
+    localStorage.setItem('dingoGfxBridges', JSON.stringify(c?.bridges ?? {}))
+    localStorage.setItem('pinpos', JSON.stringify(c?.pinpos ?? {}))
+    for (const [k, v] of Object.entries(c?.graph ?? {})) if (typeof v === 'string') localStorage.setItem(k, v)
+  } catch (e) { console.warn('restore client state failed', e) }
+}
+
 // Next free stable slot for a NEW cross-module function (call when creating one).
 export function nextCmfSlot(list) { let n = 0; for (const f of (list ?? [])) if (f && typeof f.slot === 'number') n = Math.max(n, f.slot + 1); return n }
 // A function's stable slot (falls back to array index for any un-migrated entry).
