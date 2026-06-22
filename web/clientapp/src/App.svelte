@@ -40,11 +40,33 @@
     ['pdm', 'dingoPDM'], ['canboard', 'CANBoard'], ['dbcdevice', 'DBC Device'],
     ['blinkkeypad-PKP-2400', 'Blink Marine Keypad'], ['grayhillkeypad', 'Grayhill Keypad'],
   ]
-  let projFiles = $state([])
   let projFileName = $state('project.json')
-  async function toggleProj() { projOpen = !projOpen; if (projOpen) { try { const p = await api.project(); projFiles = p.files ?? [] } catch (e) { toast('Could not load projects: ' + e.message, 'error') } } }
-  async function doSave() { try { await api.projSave(projFileName); toast(`Saved ${projFileName}`, 'ok') } catch (e) { toast(e.message, 'error') } projOpen = false }
-  async function doOpenFile(f) { try { await api.projOpen(f); scopeGuid = null; toast(`Opened ${f}`, 'ok') } catch (e) { toast(e.message, 'error') } projOpen = false }
+  function toggleProj() { projOpen = !projOpen }
+  // Save the whole project as a file the browser writes to the user's PC (cross-platform — no
+  // server folder). The backend streams the project JSON; we download it under the chosen name.
+  async function doSave() {
+    projOpen = false
+    try {
+      const doc = await api.projDownload()
+      const name = (projFileName || 'project').replace(/\.json$/i, '') + '.json'
+      const url = URL.createObjectURL(new Blob([JSON.stringify(doc, null, 2)], { type: 'application/json' }))
+      const a = document.createElement('a'); a.href = url; a.download = name; a.click()
+      URL.revokeObjectURL(url)
+      toast(`Saved ${name}`, 'ok')
+    } catch (e) { toast('Save failed: ' + e.message, 'error') }
+  }
+  // Open a project file the user picks from anywhere on their PC.
+  let projOpenEl = $state(null)
+  async function doOpenFile(ev) {
+    const file = ev.target.files?.[0]; ev.target.value = ''
+    if (!file) return
+    projOpen = false
+    try {
+      const r = await api.projUpload(await file.text())
+      scopeGuid = null
+      toast(`Opened ${file.name} — ${r?.count ?? 0} module(s)`, 'ok')
+    } catch (e) { toast('Open failed: ' + e.message, 'error') }
+  }
   async function doNewProj() {
     projOpen = false
     if (!confirm('Start a new project? This clears every configured device.')) return
@@ -317,20 +339,19 @@
     <span class="switch" class:open={projOpen}>
       <button class="btn ghost" aria-haspopup="menu" aria-expanded={projOpen} onclick={toggleProj}>📁 Project ▾</button>
       <div class="menu" role="menu" style="min-width:250px">
-        <div class="mh">Save project</div>
+        <div class="mh">Project file (on your PC)</div>
         <div style="display:flex;gap:8px;padding:8px 13px">
-          <input class="in" style="flex:1" aria-label="Project file name" bind:value={projFileName} />
-          <button class="btn primary" onclick={doSave}>Save</button>
+          <input class="in" style="flex:1" aria-label="Save file name" bind:value={projFileName} />
+          <button class="btn primary" onclick={doSave}>⬇ Save</button>
         </div>
+        <div class="mi" role="menuitem" use:clickable onclick={() => projOpenEl?.click()}>📂 Open project…</div>
+        <input bind:this={projOpenEl} type="file" accept="application/json,.json" style="display:none" onchange={doOpenFile} />
         <div class="mi" role="menuitem" use:clickable onclick={doNewProj}>＋ New (clear devices)</div>
-        <div class="mh">Import / template</div>
+        <div class="mh">Config (apply-doc)</div>
         <div class="mi" role="menuitem" use:clickable onclick={() => importEl?.click()}>⬆ Import JSON…</div>
         <div class="mi" role="menuitem" use:clickable onclick={doExportJson}>⬇ Export config JSON</div>
         <div class="mi" role="menuitem" use:clickable onclick={doDownloadTemplate}>⬇ Download template</div>
         <input bind:this={importEl} type="file" accept="application/json,.json" style="display:none" onchange={doImportFile} />
-        <div class="mh">Open</div>
-        {#each projFiles as f}<div class="mi" role="menuitem" use:clickable onclick={() => doOpenFile(f)}>📂 {f}</div>{/each}
-        {#if projFiles.length === 0}<div class="mi muted">No saved projects</div>{/if}
       </div>
     </span>
 

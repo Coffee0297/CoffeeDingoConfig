@@ -114,6 +114,12 @@ export const api = {
   projSave: (FileName) => j('POST', '/api/project/save', { FileName }),
   projOpen: (FileName) => j('POST', '/api/project/open', { FileName }),
   projNew: () => j('POST', '/api/project/new'),
+  projDownload: () => j('GET', '/api/project/download'),   // full project JSON for a browser save
+  async projUpload(text) {                                  // load a project file picked on the PC
+    const r = await fetch('/api/project/upload', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: text })
+    if (!r.ok) throw new Error(await r.text())
+    return r.json()
+  },
   applyConfig: (doc) => j('POST', '/api/config', doc),
   // Commissioning a module writes its ENTIRE param set (thousands of paced CAN frames) then
   // re-addresses + burns — far longer than the default 15s. Use a long timeout so the client

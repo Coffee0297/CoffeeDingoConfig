@@ -786,6 +786,32 @@ public static class LiveApi
             dm.ClearDevices(); cfg.NewFile(); return Results.Ok(new { ok = true });
         });
 
+        // Local-PC project SAVE: stream the whole project (ConfigFile JSON) back so the browser
+        // saves it wherever the user chooses. No server-side folder — works on Windows/Mac/Linux.
+        api.MapGet("/project/download", (ConfigFileManager cfg, DeviceManager dm) =>
+            Results.Text(cfg.SerializeDevices(dm.GetDevices()), "application/json"));
+
+        // Local-PC project OPEN: load a project file the user picked on their PC (raw ConfigFile
+        // JSON in the body). The current project is replaced only on a successful parse.
+        api.MapPost("/project/upload", async (HttpRequest req, ConfigFileManager cfg, DeviceManager dm) =>
+        {
+            using var reader = new StreamReader(req.Body);
+            var json = await reader.ReadToEndAsync();
+            try
+            {
+                var devs = cfg.LoadDevicesFromJson(json);
+                if (devs == null) return Results.Text("Not a valid project file.", "text/plain", null, 400);
+                dm.ClearDevices();
+                dm.AddDevices(devs);
+                cfg.NewFile();   // opened from an external file, not one of our working-dir files
+                return Results.Ok(new { ok = true, count = devs.Count });
+            }
+            catch (Exception e)
+            {
+                return Results.Text("Couldn't open project: " + e.Message, "text/plain", null, 400);
+            }
+        });
+
         api.MapGet("/canlog", (CanMsgLogger log) => Results.Ok(
             log.GetMessageSum().OrderBy(m => m.Id).Select(m => new CanLogDto(
                 m.Direction.ToString(), m.Id, m.Len,
