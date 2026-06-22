@@ -654,6 +654,13 @@ public static class LiveApi
             return Results.Ok(new { busy = s.Busy, percent = s.Percent, phase = s.Phase });
         });
 
+        // Scan for DFU devices (runs dfu-util -l) so the operator can see what's attached before flashing.
+        api.MapGet("/flash/dfu", async (FirmwareFlashService flasher) =>
+        {
+            var s = await flasher.ScanAsync();
+            return Results.Ok(new { utilOk = s.UtilOk, util = s.Util, devices = s.DfuDevices, raw = s.Raw });
+        });
+
         // ---- Declarative whole-system config (AI-friendly): schema + snapshot + apply ----
         // GET schema  -> every device + every setting (name/type/default/enum options) + var-map
         api.MapGet("/config/schema", (SystemConfigService cfg) => Results.Ok(cfg.BuildSchema()));

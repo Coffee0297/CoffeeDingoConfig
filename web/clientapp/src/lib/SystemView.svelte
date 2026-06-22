@@ -115,8 +115,15 @@
   let fwFile = $state(null)
   let flashBusy = $state(false), flashLog = $state(''), flashOk = $state(null)
   let flashPct = $state(0), flashPhase = $state('')
-  function openFlash(guid) { flashGuid = guid; fwFile = null; flashLog = ''; flashOk = null; flashPct = 0; flashPhase = ''; flashDrawer = true }
+  let dfuScan = $state(null), dfuScanning = $state(false)
+  function openFlash(guid) { flashGuid = guid; fwFile = null; flashLog = ''; flashOk = null; flashPct = 0; flashPhase = ''; dfuScan = null; flashDrawer = true }
   function openFlashBlank() { openFlash('blank') }   // flash a new module not on the bus, via DFU
+  async function scanDfu() {
+    dfuScanning = true
+    try { dfuScan = await api.flashScan() }
+    catch (e) { dfuScan = { utilOk: false, devices: 0, raw: 'Scan failed: ' + e.message } }
+    finally { dfuScanning = false }
+  }
   function pickFile() { fwInput?.click() }
   function onFwFile(e) { fwFile = e.target.files?.[0] ?? null; e.target.value = '' }
   async function doFlash() {
@@ -415,6 +422,19 @@
           dfu-util, then it reboots into the new firmware. <b>Keep it powered</b> (~20 s). If it can't enter DFU, hold
           <b>BOOT0</b> and reset, then flash. The ROM bootloader is always recoverable via BOOT0.</p>
       {/if}
+
+      <div style="display:flex;align-items:center;gap:10px;margin-top:10px">
+        <button class="btn ghost" disabled={flashBusy || dfuScanning} onclick={scanDfu}>{dfuScanning ? 'Scanning…' : '🔍 Scan for DFU device'}</button>
+        {#if dfuScan}
+          {#if dfuScan.devices > 0}<span style="color:var(--ok,#3aa)">✓ {dfuScan.devices} DFU interface{dfuScan.devices === 1 ? '' : 's'} detected</span>
+          {:else if !dfuScan.utilOk}<span style="color:var(--err)">✗ dfu-util not found/runnable</span>
+          {:else}<span style="color:var(--err)">✗ no DFU device — put the board in DFU (BOOT0 + reset) and/or install the WinUSB driver (Zadig)</span>{/if}
+        {/if}
+      </div>
+      {#if dfuScan?.raw}
+        <pre style="background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:8px;font-size:11px;max-height:140px;overflow:auto;white-space:pre-wrap;margin-top:6px">{dfuScan.raw}</pre>
+      {/if}
+
       {#if flashLog}
         <p class="lbl" style="margin-top:14px">Progress
           {#if flashBusy}<span class="muted">— {flashPhase || 'working'}… {flashPct}%</span>

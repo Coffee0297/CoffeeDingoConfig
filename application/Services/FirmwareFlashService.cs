@@ -106,6 +106,27 @@ public partial class FirmwareFlashService(
         catch { return false; }
     }
 
+    public record DfuScan(bool UtilOk, string Util, int DfuDevices, string Raw);
+
+    /// <summary>List what dfu-util sees right now — so the UI can show the operator their DFU device
+    /// (or tell them nothing is detected). Counts "Found DFU:" lines (STM32 ROM DFU = 0483:df11).</summary>
+    public async Task<DfuScan> ScanAsync()
+    {
+        var dfu = ResolveDfuUtil();
+        try
+        {
+            var (_, outp) = await RunAsync(dfu, "-l", 8_000);
+            var n = DfuFoundRegex().Matches(outp).Count;
+            return new(true, dfu, n, outp.Trim());
+        }
+        catch (Exception ex)
+        {
+            return new(false, dfu, 0, $"Could not run dfu-util ({dfu}): {ex.Message}");
+        }
+    }
+
+    [GeneratedRegex(@"Found DFU:")] private static partial Regex DfuFoundRegex();
+
     [GeneratedRegex(@"(\d{1,3})%")] private static partial Regex PercentRegex();
 
     // dfu-util runs an erase pass then a download pass, each reporting 0→100%. Map them into

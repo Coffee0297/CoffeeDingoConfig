@@ -102,6 +102,7 @@ export const api = {
     return r.json()
   },
   flashStatus: () => j('GET', '/api/flash/status'),
+  flashScan: () => j('GET', '/api/flash/dfu'),   // list DFU devices dfu-util can see
   setFunction: (guid, kind, number, body) => j('POST', `/api/devices/${guid}/function/${kind}/${number}`, body),
   writeParam: (guid, Index, Sub, Value) => j('POST', `/api/devices/${guid}/writeparam`, { Index, Sub, Value }),
   sdoRead: (Node, Index, Sub) => j('POST', '/api/sdo/read', { Node, Index, Sub }),
