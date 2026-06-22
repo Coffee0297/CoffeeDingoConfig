@@ -115,7 +115,11 @@ export const api = {
   projOpen: (FileName) => j('POST', '/api/project/open', { FileName }),
   projNew: () => j('POST', '/api/project/new'),
   applyConfig: (doc) => j('POST', '/api/config', doc),
-  applyProfile: (targetGuid, source) => j('POST', `/api/devices/${targetGuid}/apply-profile`, { Source: source }),
+  // Commissioning a module writes its ENTIRE param set (thousands of paced CAN frames) then
+  // re-addresses + burns — far longer than the default 15s. Use a long timeout so the client
+  // waits for the whole sequence and still runs its cleanup (remove the opened entry); aborting
+  // early left the re-addressed module AND the source as a duplicate.
+  applyProfile: (targetGuid, source) => j('POST', `/api/devices/${targetGuid}/apply-profile`, { Source: source }, 120000),
   configTemplate: () => j('GET', '/api/config/template'),
   configSnapshot: (lua) => j('GET', '/api/config' + (lua ? '?lua=true' : '')),
 }
