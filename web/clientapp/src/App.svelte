@@ -1,5 +1,5 @@
 <script>
-  import { telemetry, hubState, reconnectHub, api, luaReadToTabs, awgFor, awgForMm2 } from './lib/store.js'
+  import { telemetry, hubState, reconnectHub, api, luaReadToTabs, awgFor, awgForMm2, outputRatingA } from './lib/store.js'
   import { toast, toasts, dismiss } from './lib/toast.js'
   import { clickable, labelFields, dialog as dlg } from './lib/a11y.js'
   import Sparkline from './lib/Sparkline.svelte'
@@ -422,6 +422,7 @@
             {@const rule = ruleText(o.input)}
             {@const wire = awgFor(o.currentLimit)}
             {@const ovr = o.wireGaugeMm2 > 0}
+            {@const rating = outputRatingA(current.type, o.number)}
             <div class="card" use:clickable aria-label={'Configure ' + (o.name?.trim() ? o.name : 'output ' + o.number)} onclick={() => (editNum = o.number)}>
               <div class="num">O{o.number}</div>
               <div class="top">
@@ -442,6 +443,7 @@
               </div>
               <div class="ft">
                 <span class="tag">{driverTag(o.input)}</span>
+                {#if rating}<span class="tag" style={(o.currentLimit ?? 0) > rating ? 'color:var(--err);border-color:var(--err)' : ''} title={`OUT${o.number} hardware channel rating is ${rating} A` + ((o.currentLimit ?? 0) > rating ? ` — your ${o.currentLimit} A trip is above it (allowed; size the wiring & load to suit)` : '')}>rated {rating} A</span>{/if}
                 {#if o.enabled && ovr}<span class="tag" title={`Gauge set for this output (recommended ≥ ${wire?.mm2} mm²)`}>{awgForMm2(o.wireGaugeMm2)} AWG · {o.wireGaugeMm2} mm²</span>
                 {:else if o.enabled && wire}<span class="tag" title={`Min wire for a ${o.currentLimit} A trip (short automotive run; step up for long runs)`}>≥ {wire.awg} AWG · {wire.mm2} mm²</span>{/if}
                 {#if o.wireColor}<span class="tag" title={'Wire colour: ' + o.wireColor + (o.wireStripe ? ' / ' + o.wireStripe + ' stripe' : '')} style="display:inline-flex;align-items:center;gap:5px"><span style="width:11px;height:11px;border-radius:50%;border:1px solid var(--line-2);display:inline-block;background:{o.wireStripe ? `repeating-linear-gradient(135deg, ${o.wireColor} 0 3px, ${o.wireStripe} 3px 5px)` : o.wireColor}"></span>wire</span>{/if}
@@ -493,7 +495,7 @@
 
   {#if editNum != null && current}
     {@const eo = current.outputs.find((o) => o.number === editNum)}
-    {#if eo}<OutputDrawer output={eo} guid={current.guid} connected={current.connected} onclose={() => (editNum = null)} />{/if}
+    {#if eo}<OutputDrawer output={eo} guid={current.guid} connected={current.connected} deviceType={current.type} onclose={() => (editNum = null)} />{/if}
   {/if}
 
   {#if dialog === 'add' || dialog === 'modify'}

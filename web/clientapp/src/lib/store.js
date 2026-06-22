@@ -149,6 +149,27 @@ export const WIRE_GAUGES = [
 ]
 export const awgForMm2 = (mm2) => WIRE_GAUGES.find((g) => g.mm2 === Number(mm2))?.awg ?? '?'
 
+// Per-output HARDWARE channel current rating (continuous A), indexed by output NUMBER (OUT1 =
+// index 0), from the dingoPDM hardware docs (corygrant.github.io/dingoPDM/hardware/pcb):
+//   dingoPDM      — OUT1-2: 14A (Profet BTS7002-1EPP), OUT3-8: 8A (Profet BTS7008-2EPA)
+//   dingoPDM-Max  — OUT1-4: 26A (Profet BTS70012-1ESP)
+// (PT-DPDM ratings aren't published, so it returns null and the UI just omits the rating.)
+// Setting a trip ABOVE the channel rating is allowed on purpose — this is advisory; the UI only
+// flags it so the installer sizes the wiring/load accordingly.
+const OUTPUT_RATINGS_A = {
+  pdm: [14, 14, 8, 8, 8, 8, 8, 8],
+  max: [26, 26, 26, 26],
+}
+// Rated channel current (A) for an output on a given module type, or null if not known.
+export function outputRatingA(deviceType, outputNumber) {
+  const t = (deviceType || '').toLowerCase()
+  let tbl = null
+  if (t.includes('max')) tbl = OUTPUT_RATINGS_A.max                                   // dingoPDM-Max
+  else if (t.includes('pt-dpdm') || t.includes('ptdpdm')) tbl = null                  // ratings undocumented
+  else if (t.includes('pdm')) tbl = OUTPUT_RATINGS_A.pdm                              // dingoPDM
+  return tbl ? (tbl[(Number(outputNumber) | 0) - 1] ?? null) : null
+}
+
 // Voltage drop over a copper wire run at a given current. lengthM is one-way; the feed +
 // return path is 2·L. ρ ≈ 0.0175 Ω·mm²/m (copper, slightly warm). Returns volts + % of
 // system voltage (13.8 V running) or null if inputs are incomplete.
