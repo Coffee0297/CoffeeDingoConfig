@@ -1,5 +1,5 @@
 <script>
-  import { telemetry, hubState, reconnectHub, api, luaReadToTabs, awgFor, awgForMm2, outputRatingA } from './lib/store.js'
+  import { telemetry, hubState, reconnectHub, api, luaReadToTabs, awgFor, awgForMm2, outputRatingA, deviceDefs } from './lib/store.js'
   import { toast, toasts, dismiss } from './lib/toast.js'
   import { clickable, labelFields, dialog as dlg } from './lib/a11y.js'
   import Sparkline from './lib/Sparkline.svelte'
@@ -422,7 +422,7 @@
             {@const rule = ruleText(o.input)}
             {@const wire = awgFor(o.currentLimit)}
             {@const ovr = o.wireGaugeMm2 > 0}
-            {@const rating = outputRatingA(current.type, o.number)}
+            {@const rating = outputRatingA($deviceDefs, current.type, o.number)}
             <div class="card" use:clickable aria-label={'Configure ' + (o.name?.trim() ? o.name : 'output ' + o.number)} onclick={() => (editNum = o.number)}>
               <div class="num">O{o.number}</div>
               <div class="top">

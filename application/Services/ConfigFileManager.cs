@@ -145,6 +145,12 @@ public class ConfigFileManager(ILogger<ConfigFileManager> logger, DeviceDefiniti
                 var def = deviceDefinitionManager.GetByPdmType(device.PdmType) ?? DeviceDefinitionManager.DefaultPdm;
                 device.ApplyDefinition(def);
             }
+            // Same for CANboards — their specs also live in pdm-definitions.json now.
+            foreach (var device in config.CanboardDevices)
+            {
+                var def = deviceDefinitionManager.GetByCanboardType(device.CanboardType) ?? DeviceDefinitionManager.DefaultCanboard;
+                device.ApplyDefinition(def);
+            }
 
             var allDevices = new List<IDevice>();
             allDevices.AddRange(config.PdmDevices);

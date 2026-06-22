@@ -409,6 +409,11 @@ public static class LiveApi
         api.MapGet("/devices", (DeviceManager dm) =>
             Results.Ok(dm.GetAllDevices().Select(d => DingoMap.ToDto(d, dm.GetDeviceUiState(d.Guid))).ToArray()));
 
+        // Device hardware specs (counts + per-output current ratings, per model). The single source
+        // of truth is pdm-definitions.json; the UI reads ratings (etc.) from here, not hardcoded.
+        api.MapGet("/definitions", (DeviceDefinitionManager defs) =>
+            Results.Ok(new { pdms = defs.GetAllPdms(), canboards = defs.GetAllCanboards() }));
+
         api.MapPost("/devices", (AddDeviceReq r, DeviceManager dm) =>
         {
             var id = DingoMap.ParseId(r.BaseId);

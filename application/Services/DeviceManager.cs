@@ -70,7 +70,9 @@ public class DeviceManager(ILogger<DeviceManager> logger, ILoggerFactory loggerF
             "pdm" => new PdmDevice(
                 deviceDefinitionManager.GetByPdmType(pdmTypeId) ?? DeviceDefinitionManager.DefaultPdm,
                 name, baseId),
-            "canboard" => new CanboardDevice(name, baseId),
+            "canboard" => new CanboardDevice(
+                deviceDefinitionManager.GetByCanboardType(0) ?? DeviceDefinitionManager.DefaultCanboard,
+                name, baseId),
             "dbcdevice" => new DbcDevice(name, baseId),
             "blinkkeypad" => new BlinkMarineKeypadDevice(name, baseId, model),
             "grayhillkeypad" => new GrayhillKeypadDevice(name, baseId, model),

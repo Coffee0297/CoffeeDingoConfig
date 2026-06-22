@@ -122,6 +122,7 @@ export const api = {
   applyProfile: (targetGuid, source) => j('POST', `/api/devices/${targetGuid}/apply-profile`, { Source: source }, 120000),
   configTemplate: () => j('GET', '/api/config/template'),
   configSnapshot: (lua) => j('GET', '/api/config' + (lua ? '?lua=true' : '')),
+  definitions: () => j('GET', '/api/definitions'),
 }
 
 // Minimum recommended copper wire gauge to carry an output's current LIMIT (the trip
@@ -149,25 +150,21 @@ export const WIRE_GAUGES = [
 ]
 export const awgForMm2 = (mm2) => WIRE_GAUGES.find((g) => g.mm2 === Number(mm2))?.awg ?? '?'
 
-// Per-output HARDWARE channel current rating (continuous A), indexed by output NUMBER (OUT1 =
-// index 0), from the dingoPDM hardware docs (corygrant.github.io/dingoPDM/hardware/pcb):
-//   dingoPDM      — OUT1-2: 14A (Profet BTS7002-1EPP), OUT3-8: 8A (Profet BTS7008-2EPA)
-//   dingoPDM-Max  — OUT1-4: 26A (Profet BTS70012-1ESP)
-// (PT-DPDM ratings aren't published, so it returns null and the UI just omits the rating.)
-// Setting a trip ABOVE the channel rating is allowed on purpose — this is advisory; the UI only
-// flags it so the installer sizes the wiring/load accordingly.
-const OUTPUT_RATINGS_A = {
-  pdm: [14, 14, 8, 8, 8, 8, 8, 8],
-  max: [26, 26, 26, 26],
-}
-// Rated channel current (A) for an output on a given module type, or null if not known.
-export function outputRatingA(deviceType, outputNumber) {
+// Device hardware specs (per-model counts + per-output current ratings, icons, min firmware, …)
+// are NOT hardcoded here — they come from the backend, whose single source of truth is
+// pdm-definitions.json. Fetched once at startup into this store.
+export const deviceDefs = writable({ pdms: [], canboards: [] })
+api.definitions().then((d) => { if (d) deviceDefs.set(d) }).catch((e) => console.warn('definitions load failed', e))
+
+// Rated channel current (A) for an output, looked up from the loaded definitions by the device's
+// type name and output NUMBER (OUT1 = index 0). null when unknown (the UI then shows no rating).
+// Setting a trip above the rating is allowed — advisory only; callers just flag it.
+export function outputRatingA(defs, deviceType, outputNumber) {
   const t = (deviceType || '').toLowerCase()
-  let tbl = null
-  if (t.includes('max')) tbl = OUTPUT_RATINGS_A.max                                   // dingoPDM-Max
-  else if (t.includes('pt-dpdm') || t.includes('ptdpdm')) tbl = null                  // ratings undocumented
-  else if (t.includes('pdm')) tbl = OUTPUT_RATINGS_A.pdm                              // dingoPDM
-  return tbl ? (tbl[(Number(outputNumber) | 0) - 1] ?? null) : null
+  const all = [...(defs?.pdms ?? []), ...(defs?.canboards ?? [])]
+  const def = all.find((d) => (d.typeName || '').toLowerCase() === t)
+  const r = def?.outputCurrentRatings
+  return Array.isArray(r) ? (r[(Number(outputNumber) | 0) - 1] ?? null) : null
 }
 
 // Voltage drop over a copper wire run at a given current. lengthM is one-way; the feed +

@@ -1,5 +1,5 @@
 <script>
-  import { api, luaGet, luaSet, luaAssemble, awgFor, vDrop, WIRE_GAUGES, awgForMm2, outputRatingA } from './store.js'
+  import { api, luaGet, luaSet, luaAssemble, awgFor, vDrop, WIRE_GAUGES, awgForMm2, outputRatingA, deviceDefs } from './store.js'
   import { toast } from './toast.js'
   import { dialog, labelFields, clickable } from './a11y.js'
   import LuaEditor from './LuaEditor.svelte'
@@ -157,7 +157,7 @@
         build those in <b>Signals &amp; logic</b>. Save writes to the device; <b>Burn</b> persists to flash.</p>
     </div>
   {:else if tab === 'prot'}
-    {@const rating = outputRatingA(deviceType, output.number)}
+    {@const rating = outputRatingA($deviceDefs, deviceType, output.number)}
     <div class="dbody" use:labelFields>
       <p class="lbl">Current protection</p>
       <div class="f2">

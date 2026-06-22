@@ -15,5 +15,8 @@ public record PdmDeviceDefinition(
     int NumKeypads,
     int MinMajorVersion,
     int MinMinorVersion,
-    int MinBuildVersion
+    int MinBuildVersion,
+    // Per-output continuous current rating (A), indexed by output number (OUT1 = index 0).
+    // null/empty = unknown (the UI then shows no rating for that model).
+    int[]? OutputCurrentRatings = null
     );
