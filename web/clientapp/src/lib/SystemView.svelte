@@ -271,18 +271,20 @@
   const maxA = (d) => (d.outputs ?? []).filter((o) => o.enabled).reduce((a, o) => a + (o.currentLimit ?? 0), 0)
   let sysMaxA = $derived(devices.reduce((a, d) => a + maxA(d), 0))
 
-  // A dingoPDM/CANboard occupies a CAN-ID span of baseId-1 (settings) .. baseId+23 (cyclic
-  // status). Two modules clash if those spans overlap — i.e. their base IDs are within 24 of
-  // each other. Space them >= 0x20 apart to be safe. Flag any overlapping pairs.
-  const ID_SPAN_BEFORE = 1, ID_SPAN_AFTER = 23
+  // A module owns a CAN-ID span from its base: config reply/request at +0/+1, then its cyclic
+  // broadcasts. The span is per type and matches the firmware's NUM_TX_MSGS — a CANboard sends 9
+  // cyclic msgs (baseId..baseId+10), a dingoPDM/-Max sends 27 (baseId..baseId+28). Two modules
+  // clash only if those spans actually overlap; e.g. two CANboards 0x10 apart do NOT.
+  const ID_SPAN_BEFORE = 1
+  const idSpanAfter = (d) => /canboard/i.test(d.type) ? 10 : 28
   let idConflicts = $derived.by(() => {
     const m = devices.filter((d) => /pdm|canboard/i.test(d.type))
     const out = []
     for (let i = 0; i < m.length; i++)
       for (let j = i + 1; j < m.length; j++) {
         const a = m[i], b = m[j]
-        if (a.baseId - ID_SPAN_BEFORE <= b.baseId + ID_SPAN_AFTER &&
-            b.baseId - ID_SPAN_BEFORE <= a.baseId + ID_SPAN_AFTER)
+        if (a.baseId - ID_SPAN_BEFORE <= b.baseId + idSpanAfter(b) &&
+            b.baseId - ID_SPAN_BEFORE <= a.baseId + idSpanAfter(a))
           out.push([a, b])
       }
     return out
@@ -307,7 +309,7 @@
 {/if}
 
 {#if idConflicts.length}
-  <div class="sys-alert">⚠ {idConflicts.length} CAN ID overlap{idConflicts.length === 1 ? '' : 's'} — each module needs its own span (baseId−1 … baseId+23). Re-space these ≥ 0x20 apart:
+  <div class="sys-alert">⚠ {idConflicts.length} CAN ID overlap{idConflicts.length === 1 ? '' : 's'} — each module owns a span from its base (CANboard baseId−1…+10, dingoPDM baseId−1…+28). Re-space these so their spans don't intersect:
     {#each idConflicts as [a, b]}<b>{a.name} ({hex(a.baseId)}) ↔ {b.name} ({hex(b.baseId)})</b>{' '}{/each}</div>
 {/if}
 

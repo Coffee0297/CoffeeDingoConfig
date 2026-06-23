@@ -538,7 +538,7 @@
               </select></div>
             <div class="field"><label>Base ID</label><input bind:value={dlgBase} /></div>
           </div>
-          <div class="hint">Each module claims 16 broadcast IDs + settings/msg from its base — keep modules from overlapping.</div>
+          <div class="hint">Each module owns a CAN-ID span from its base — CANboard baseId…+10, dingoPDM baseId…+28 (incl. settings). Keep modules' spans from overlapping.</div>
         </div>
         <div class="mf2">
           <button class="btn ghost" onclick={() => (dialog = null)}>Cancel</button>
