@@ -16,6 +16,7 @@
     <EmbeddedResource Include="wwwroot\**" />
     <EmbeddedResource Include="..\llms.txt" Link="wwwroot\llms.txt" />
     <EmbeddedResource Include="..\AI-CONFIG.md" Link="wwwroot\AI-CONFIG.md" />
+    <EmbeddedResource Include="..\docs\can-frame-map.md" Link="wwwroot\can-frame-map.md" />
   </ItemGroup>
 
   <!-- Device definitions are read from the output dir at startup. -->
@@ -29,6 +30,7 @@
   <ItemGroup>
     <Content Include="..\llms.txt" Link="llms.txt" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="..\AI-CONFIG.md" Link="AI-CONFIG.md" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="..\docs\can-frame-map.md" Link="can-frame-map.md" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
   <!-- The Vite SPA lives in clientapp/ and builds into wwwroot/. Keep its source

@@ -19,7 +19,7 @@ public class PdmDevice : IDeviceConfigurable
 
     [JsonIgnore] protected int MinMajorVersion { get; private set; } = 5;
     [JsonIgnore] protected int MinMinorVersion { get; private set; } = 5;
-    [JsonIgnore] protected int MinBuildVersion { get; private set; } = 100;
+    [JsonIgnore] protected int MinBuildVersion { get; private set; } = 102;
 
     [JsonIgnore] protected int NumDigitalInputs { get; private set; } = 2;
     [JsonIgnore] protected int NumOutputs { get; private set; } = 8;
@@ -293,7 +293,7 @@ public class PdmDevice : IDeviceConfigurable
                 val => DeviceState = (DeviceState)val),
             (new DbcSignal { Name = "PdmType", StartBit = 12, Length = 4 },
                 val => PdmTypeOk = PdmType == (int)val),
-            (new DbcSignal { Name = "TotalCurrent", StartBit = 16, Length = 16, Factor = 1.0, Unit = "A" },
+            (new DbcSignal { Name = "TotalCurrent", StartBit = 16, Length = 16, Factor = 0.1, Unit = "A" },
                 val => TotalCurrent = val),
             (new DbcSignal { Name = "BatteryVoltage", StartBit = 32, Length = 16, Factor = 0.1, Unit = "V" },
                 val => BatteryVoltage = val),
@@ -308,7 +308,7 @@ public class PdmDevice : IDeviceConfigurable
         {
             var index = i;
             StatusSigs[cyclicIndex].Add((
-                new DbcSignal { Name = $"Output{index + 1}.Current", StartBit = i * 16, Length = 16, Factor = 1.0, Unit = "A" },
+                new DbcSignal { Name = $"Output{index + 1}.Current", StartBit = i * 16, Length = 16, Factor = 0.1, Unit = "A" },
                 val => Outputs[index].Current = val
             ));
         }
@@ -321,7 +321,7 @@ public class PdmDevice : IDeviceConfigurable
         {
             var index = i;
             StatusSigs[cyclicIndex].Add((
-                new DbcSignal { Name = $"Output{index + 1}.Current", StartBit = (i - 4) * 16, Length = 16, Factor = 1.0, Unit = "A" },
+                new DbcSignal { Name = $"Output{index + 1}.Current", StartBit = (i - 4) * 16, Length = 16, Factor = 0.1, Unit = "A" },
                 val => Outputs[index].Current = val
             ));
         }
@@ -412,26 +412,28 @@ public class PdmDevice : IDeviceConfigurable
         }
         cyclicIndex++;
 
-        // Messages 7-22: CAN input values (2 per message)
-        for (var msg = cyclicIndex; msg <= 22; msg++)
+        // Msg 7-22: CAN input values, 2 per message at offsets +9..+24 (CanInput 1..32). The
+        // firmware sends 16 of these (boards/*/msg.cpp TxMsg7..22). cyclicIndex is +9 here.
+        var canValueBase = cyclicIndex;
+        for (var k = 0; k < 16; k++)
         {
-            StatusSigs[msg] = [];
+            var offset = canValueBase + k;
+            StatusSigs[offset] = [];
             for (var i = 0; i < 2; i++)
             {
-                var index = (msg - cyclicIndex) * 2 + i;
+                var index = k * 2 + i;
                 if (index < NumCanInputs)
                 {
-                    StatusSigs[msg].Add((
+                    StatusSigs[offset].Add((
                         new DbcSignal { Name = $"CanInput{index + 1}.Value", StartBit = i * 32, Length = 32 },
                         val => CanInputs[index].Value = (int)val
                     ));
                 }
             }
         }
+        cyclicIndex = canValueBase + 16; // -> +25
 
-        cyclicIndex++;
-
-        // Message 23: Output duty cycles
+        // Message 23: Output duty cycles (offset +25)
         StatusSigs[cyclicIndex] = [];
         for (var i = 0; i < NumOutputs; i++)
         {
@@ -442,7 +444,11 @@ public class PdmDevice : IDeviceConfigurable
             ));
         }
 
-        MaxCyclicId = cyclicIndex;
+        // Msgs 24-26 (offsets +26..+28) re-broadcast keypad button/dial telemetry. Not decoded
+        // here: the model has no live keypad button/dial-state storage and the tool reads keypad
+        // state from the keypad node directly. They still belong to the device's CAN ID range.
+        // ponytail: skip keypad-rebroadcast decode; add Button/Dial live-value fields if ever needed.
+        MaxCyclicId = cyclicIndex + 3; // +28 = keypad-2 dials, highest cyclic offset emitted
     }
 
     private void InitVarMap()

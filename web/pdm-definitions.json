@@ -15,7 +15,7 @@
       "numKeypads": 2,
       "minMajorVersion": 5,
       "minMinorVersion": 5,
-      "minBuildVersion": 100,
+      "minBuildVersion": 102,
       "outputCurrentRatings": [14, 14, 8, 8, 8, 8, 8, 8]
     },
     {
@@ -33,7 +33,7 @@
       "numKeypads": 2,
       "minMajorVersion": 5,
       "minMinorVersion": 5,
-      "minBuildVersion": 100,
+      "minBuildVersion": 102,
       "outputCurrentRatings": [26, 26, 26, 26]
     },
     {
@@ -51,7 +51,7 @@
       "numKeypads": 2,
       "minMajorVersion": 5,
       "minMinorVersion": 5,
-      "minBuildVersion": 100,
+      "minBuildVersion": 102,
       "outputCurrentRatings": null
     }
   ],
@@ -71,7 +71,7 @@
       "numConditions": 8,
       "minMajorVersion": 5,
       "minMinorVersion": 5,
-      "minBuildVersion": 100,
+      "minBuildVersion": 102,
       "outputCurrentRatings": null
     }
   ]

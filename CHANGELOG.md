@@ -3,6 +3,29 @@
 All notable changes to **dingoConfig** are recorded here. Versions follow [SemVer](https://semver.org/);
 `-rc.N` tags are prereleases (feature-complete but not field-validated).
 
+## [Unreleased]
+
+CAN frame-map reference + decode fixes. Pairs with **CoffeeDingoFW v5.5.102**.
+
+### Added
+- **`docs/can-frame-map.md`** — address-agnostic CAN broadcast frame map for every device type
+  (which `baseId + 2 + N` offset and which bits carry each signal). Served at `/can-frame-map.md`
+  and via the new MCP **`get_frame_map`** tool, so an agent can decode the bus with no device bound.
+- Refreshed `dbc/` with the authoritative `CANBoard_0.5.1.dbc`, `dingoPdm_0.5.1.dbc` and
+  `dingoPdm-Max_0.5.1.dbc`; removed the stale `CANBoard_2.1.1.dbc` (wrong layout).
+
+### Fixed
+- **dingoPDM cyclic decode** (`PdmDevice`): CAN-input values now decode through offset +24 (1–32);
+  the output **duty-cycle** frame reads at +25 (it was overwriting +10 / CAN values 7–8); and
+  `MaxCyclicId` is +28 so frames +11…+28 are routed instead of dropped by `InIdRange`.
+- **CANBoard** `MaxCyclicId` is +10 (was +7) so CAN-value frames +8…+10 reach the decoder; stale
+  message-offset comments corrected.
+- **Current scaling** now decodes at **0.1 A/bit** to match firmware ≥ 5.5.102.
+
+### Changed
+- Minimum firmware bumped to **5.5.102** (the 0.1 A/bit + bit-32 CAN-value wire format); older
+  firmware logs a "needs update" notice.
+
 ## [0.6.0-rc.2] — 2026-06-22 (prerelease)
 
 Built-in firmware flasher improvements.

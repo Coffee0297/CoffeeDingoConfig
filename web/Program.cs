@@ -76,6 +76,9 @@ IResult ServeDoc(string file, string mime)
 }
 app.MapGet("/llms.txt", () => ServeDoc("llms.txt", "text/markdown"));
 app.MapGet("/AI-CONFIG.md", () => ServeDoc("AI-CONFIG.md", "text/markdown"));
+// Address-agnostic CAN broadcast frame map (which ID offset + bits carry each signal). Served
+// raw and via the MCP get_frame_map tool so an agent can decode the bus with no device bound.
+app.MapGet("/can-frame-map.md", () => ServeDoc("can-frame-map.md", "text/markdown"));
 
 // SPA fallback so a refresh on any route returns index.html (from the same provider).
 app.MapFallbackToFile("index.html", new StaticFileOptions { FileProvider = spaFiles });

@@ -18,7 +18,7 @@ public class CanboardDevice : IDeviceConfigurable
 
     [JsonIgnore] protected int MinMajorVersion { get; private set; } = 5;
     [JsonIgnore] protected int MinMinorVersion { get; private set; } = 5;
-    [JsonIgnore] protected int MinBuildVersion { get; private set; } = 100;
+    [JsonIgnore] protected int MinBuildVersion { get; private set; } = 102;
 
     [JsonIgnore] protected int NumAnalogInputs { get; private set; } = 5; //Also serve as rotary switches and analog/dig inputs
     [JsonIgnore] protected int NumDigitalInputs { get; private set; } = 8;
@@ -288,7 +288,7 @@ public class CanboardDevice : IDeviceConfigurable
         
         cyclicIndex++;
 
-        // Message 3 (BaseId + 4): CAN inputs & virtual inputs
+        // Message 3 (BaseId + 5): CAN inputs & virtual inputs
         StatusSigs[cyclicIndex] = [];
         for (var i = 0; i < NumCanInputs; i++)
         {
@@ -309,7 +309,7 @@ public class CanboardDevice : IDeviceConfigurable
         
         cyclicIndex++;
 
-        // Message 4 (BaseId + 5): Counters & conditions
+        // Message 4 (BaseId + 6): Counters & conditions
         StatusSigs[cyclicIndex] = [];
         for (var i = 0; i < NumCounters; i++)
         {
@@ -329,7 +329,7 @@ public class CanboardDevice : IDeviceConfigurable
         }
         cyclicIndex++;
 
-        // Message 5-8 (BaseId + 6 to BaseId + 9): CAN input values (2 per message)
+        // Messages 5-8 (BaseId + 7 to BaseId + 10): CAN input values (2 per message)
         for (var msg = cyclicIndex; msg <= 10; msg++)
         {
             StatusSigs[msg] = [];
@@ -346,7 +346,7 @@ public class CanboardDevice : IDeviceConfigurable
             }
         }
 
-        MaxCyclicId = cyclicIndex;
+        MaxCyclicId = 10; // last CAN-input-value frame = BaseId+10 (firmware NUM_TX_MSGS=9 → offsets +2..+10)
     }
     
     private void InitVarMap()

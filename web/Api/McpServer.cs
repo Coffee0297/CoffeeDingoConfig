@@ -381,6 +381,10 @@ public static class McpServer
             Schema("""{"type":"object","properties":{}}"""),
             _ => new(GET, "/api/config/template", null)),
 
+        new("get_frame_map", "Get the address-agnostic CAN broadcast frame map for every device type (dingoPDM, dingoPDM-Max, PT-DPDM, CANBoard): which CAN ID offset and which bits carry each transmitted signal — rotary switches, digital/analog inputs, output state & current, CAN/virtual inputs, counters, conditions, keypads, etc. Each cyclic message N is at 'baseId + 2 + N'. Reference doc; needs no connection or bound device.",
+            Schema("""{"type":"object","properties":{}}"""),
+            _ => new(GET, "/can-frame-map.md", null)),
+
         new("get_config", "Get the current full project config (optionally include Lua).",
             Schema("""{"type":"object","properties":{"lua":{"type":"boolean"}}}"""),
             a => new(GET, "/api/config" + Q(a, "lua"), null)),
