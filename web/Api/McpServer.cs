@@ -71,8 +71,9 @@ public static class McpServer
         "Typical flow: list_adapters -> connect -> discover/list_devices -> read_device -> inspect/change " +
         "outputs/params/signals -> burn to persist. Writes are queued and acknowledged by the device; a " +
         "tool result with isError:true means the operation did NOT complete. Start with the prompts/skills " +
-        "(connect-and-discover, configure-a-module, wire-outputs-safely, signals-and-logic, flash-firmware, " +
-        "keypad-sdo, logs-and-troubleshooting) for guided playbooks.";
+        "(connect-and-discover, configure-a-module, wire-outputs-safely, signals-and-logic, lua-programming, " +
+        "cross-module-signals, cross-module-functions, can-addressing, flash-firmware, keypad-sdo, " +
+        "logs-and-troubleshooting) for guided playbooks — read lua-programming before writing any device Lua.";
 
     // ----------------------------------------------------------------- routing
     public static void MapMcp(this WebApplication app)
@@ -364,8 +365,8 @@ public static class McpServer
             Schema("""{"type":"object","properties":{"guid":{"type":"string"}},"required":["guid"]}"""),
             a => new(POST, $"/api/devices/{Str(a, "guid")}/read", null)),
 
-        new("device_action", "Run a lifecycle action: read, write, writeall, burn, sleep, wakeup, bootloader.",
-            Schema("""{"type":"object","properties":{"guid":{"type":"string"},"action":{"type":"string","enum":["read","write","writeall","burn","sleep","wakeup","bootloader"]}},"required":["guid","action"]}"""),
+        new("device_action", "Run a lifecycle action: read, write, writeall, burn, sleep, wakeup, bootloader, or uploadlua (push the Lua stored on the record — e.g. from an offline deploy_cross_module — to the now-live module; pair with writeall to also push output bindings).",
+            Schema("""{"type":"object","properties":{"guid":{"type":"string"},"action":{"type":"string","enum":["read","write","writeall","burn","sleep","wakeup","bootloader","uploadlua"]}},"required":["guid","action"]}"""),
             a => new(POST, $"/api/devices/{Str(a, "guid")}/{Str(a, "action")}", null)),
 
         new("apply_profile", "Copy another device's profile onto this device (Source = source device guid).",
@@ -384,6 +385,10 @@ public static class McpServer
         new("get_frame_map", "Get the address-agnostic CAN broadcast frame map for every device type (dingoPDM, dingoPDM-Max, PT-DPDM, CANBoard): which CAN ID offset and which bits carry each transmitted signal — rotary switches, digital/analog inputs, output state & current, CAN/virtual inputs, counters, conditions, keypads, etc. Each cyclic message N is at 'baseId + 2 + N'. Reference doc; needs no connection or bound device.",
             Schema("""{"type":"object","properties":{}}"""),
             _ => new(GET, "/can-frame-map.md", null)),
+
+        new("get_definitions", "Device hardware catalog per model (from pdm-definitions.json): channel counts (outputs, digital/analog inputs, CAN/virtual inputs, flashers, counters, conditions, keypads) and per-output current ratings. Use it to learn what a model has before add_device — no connection needed.",
+            Schema("""{"type":"object","properties":{}}"""),
+            _ => new(GET, "/api/definitions", null)),
 
         new("get_config", "Get the current full project config (optionally include Lua).",
             Schema("""{"type":"object","properties":{"lua":{"type":"boolean"}}}"""),
@@ -432,6 +437,18 @@ public static class McpServer
             Schema("""{"type":"object","properties":{"guid":{"type":"string"},"kind":{"type":"string"},"number":{"type":"integer"},"params":{"type":"object"}},"required":["guid","kind","number","params"]}"""),
             a => new(POST, $"/api/devices/{Str(a, "guid")}/function/{Str(a, "kind")}/{Num(a, "number")}", JsonRaw(ObjArg(a, "params")))),
 
+        new("broadcast_signals", "List the cyclic signals a module BROADCASTS on CAN (its frame map): per signal — name, byte offset from base, startBit, bitLength, factor, byteOrder, signed, unit, and kind (bool|value). Set inUse=true to return only signals whose function is enabled (exactly what the cross-module picker shows). Feed a chosen name to link_remote_signal. Needs no live device.",
+            Schema("""{"type":"object","properties":{"guid":{"type":"string"},"inUse":{"type":"boolean","description":"only signals actually configured/enabled on the source"}},"required":["guid"]}"""),
+            a => new(GET, $"/api/devices/{Str(a, "guid")}/broadcast-signals" + Q(a, "inUse"), null)),
+
+        new("link_remote_signal", "Cross-module IO picker: point a CONSUMER module's CAN input at a SOURCE module's broadcast signal (e.g. PDM-01 reads CB-1's 'RotarySwitch4.Pos'). guid = consumer; sourceGuid = the broadcasting module; canInput = consumer CAN-input slot (1-based); signal = exact name from broadcast_signals. Resolves the source's current CAN id + bit layout and writes the consumer's CAN input. Re-run after changing the source's base ID; burn to persist.",
+            Schema("""{"type":"object","properties":{"guid":{"type":"string","description":"consumer device guid"},"canInput":{"type":"integer","description":"consumer CAN-input slot, 1-based"},"sourceGuid":{"type":"string","description":"source (broadcasting) device guid"},"signal":{"type":"string","description":"signal name from broadcast_signals"}},"required":["guid","canInput","sourceGuid","signal"]}"""),
+            a => new(POST, $"/api/devices/{Str(a, "guid")}/link-remote", Json(new { CanInput = Num(a, "canInput"), SourceGuid = Str(a, "sourceGuid"), Signal = Str(a, "signal") }))),
+
+        new("deploy_cross_module", "Compile + deploy cross-module functions: each reads a TRIGGER signal on one module and drives TARGET outputs on others, with optional synchronised blink (a clock master, plus an optional failover backup that takes over if the master goes quiet). Pass 'functions' = array of { name, blink, blinkRateMs, trigger:{guid, varIndex}, targets:[{guid, output}], clockMaster?, clockBackup? }. varIndex comes from get_inputs on the trigger module. The backend compiles per-module Lua + binds each target output to its Lua slot. It SAVES to each module's record (persists in the project JSON) and pushes over CAN to whichever modules are live now — offline modules return written:false; push them later with device_action 'uploadlua' (+ 'writeall' for the bindings) when they connect, or just re-deploy. Targets must be PDMs (Lua engine) — for a CANBoard target use link_remote_signal. Set preview=true to get the compiled Lua back WITHOUT deploying. Burn each module to persist to flash. See the cross-module-functions skill.",
+            Schema("""{"type":"object","properties":{"functions":{"type":"array","items":{"type":"object","properties":{"name":{"type":"string"},"blink":{"type":"boolean"},"blinkRateMs":{"type":"integer"},"trigger":{"type":"object","properties":{"guid":{"type":"string"},"varIndex":{"type":"integer"}},"required":["guid","varIndex"]},"targets":{"type":"array","items":{"type":"object","properties":{"guid":{"type":"string"},"output":{"type":"integer"}},"required":["guid","output"]}},"clockMaster":{"type":"string"},"clockBackup":{"type":"string"}},"required":["trigger","targets"]}},"preview":{"type":"boolean","description":"compile only and return the Lua, don't deploy"}},"required":["functions"]}"""),
+            a => new(POST, "/api/system/cross-module/deploy", JsonRaw(a))),
+
         new("get_signals", "List a device's signals.",
             Schema("""{"type":"object","properties":{"guid":{"type":"string"}},"required":["guid"]}"""),
             a => new(GET, $"/api/devices/{Str(a, "guid")}/signals", null)),
@@ -459,7 +476,7 @@ public static class McpServer
             Schema("""{"type":"object","properties":{"guid":{"type":"string"}},"required":["guid"]}"""),
             a => new(GET, $"/api/devices/{Str(a, "guid")}/lua", null)),
 
-        new("set_lua", "Upload a Lua script to a device (Source = script text).",
+        new("set_lua", "Save a Lua program to a device (source = script text). Stored on the device record (persists in the project JSON, offline-safe) and pushed over CAN when the module is live; returns 'written' (true=pushed, false=saved offline — push later with device_action 'uploadlua'). Read the lua-programming skill first for the on-device API.",
             Schema("""{"type":"object","properties":{"guid":{"type":"string"},"source":{"type":"string"}},"required":["guid","source"]}"""),
             a => new(POST, $"/api/devices/{Str(a, "guid")}/lua", Json(new { Source = Str(a, "source") }))),
 
@@ -481,6 +498,20 @@ public static class McpServer
         new("flash_status", "Poll the current firmware-flash progress/result.",
             Schema("""{"type":"object","properties":{}}"""),
             _ => new(GET, "/api/flash/status", null)),
+
+        new("scan_dfu", "Scan USB for modules in DFU mode (runs dfu-util -l). Returns whether dfu-util is present, how many boards are in DFU, and the raw listing — run before flash_blank so it isn't blind.",
+            Schema("""{"type":"object","properties":{}}"""),
+            _ => new(GET, "/api/flash/dfu", null)),
+
+        new("flash_blank", "Flash a BLANK / new module already in USB DFU (BOOT0 + reset) — no CAN bus or bound device needed. 'path' is a server-local .bin whose bytes are written via dfu-util. Use scan_dfu first to confirm a board is in DFU. Destructive — only when the operator intends it.",
+            Schema("""{"type":"object","properties":{"path":{"type":"string"}},"required":["path"]}"""),
+            a =>
+            {
+                var bytes = File.ReadAllBytes(Str(a, "path"));
+                var c = new ByteArrayContent(bytes);
+                c.Headers.ContentType = new("application/octet-stream");
+                return new(POST, "/api/flash/blank", c);
+            }),
 
         // -------- keypad / SDO ---------------------------------------------
         new("sdo_read", "CANopen SDO read (Node 1..127).",
@@ -511,6 +542,14 @@ public static class McpServer
         new("project_save", "Save the project to a file name (server-local).",
             Schema("""{"type":"object","properties":{"fileName":{"type":"string"}},"required":["fileName"]}"""),
             a => new(POST, "/api/project/save", Json(new { FileName = Str(a, "fileName") }))),
+
+        new("project_download", "Return the whole current project as one ConfigFile JSON document (every bound device + its config). For inspecting or backing up the project inline; inverse of project_upload.",
+            Schema("""{"type":"object","properties":{}}"""),
+            _ => new(GET, "/api/project/download", null)),
+
+        new("project_upload", "Replace the whole project from a ConfigFile JSON document (pass it under 'project'): clears current devices and loads those in the doc. Inverse of project_download.",
+            Schema("""{"type":"object","properties":{"project":{"type":"object"}},"required":["project"]}"""),
+            a => new(POST, "/api/project/upload", JsonRaw(ObjArg(a, "project")))),
 
         // -------- logs ------------------------------------------------------
         new("get_canlog", "Get the recent CAN traffic log.",
@@ -647,6 +686,163 @@ public static class McpServer
             Common causes: wrong base ID, module not powered, bus not terminated, or a write to a
             module that is broadcasting but not answering host reads. Export with
             `export_syslog` / `export_canlog` for an offline trace.
+            """),
+
+        new("lua-programming", "Write & upload device Lua (the exact on-device API)",
+            "The complete Lua API the firmware exposes, the program model, and how to upload + validate.",
+            """
+            # Skill: Lua programming
+
+            Only **dingoPDM / PDM-MAX** run Lua (the CANBoard has no engine). The device runs Lua **source**
+            directly — there is no separate compile step. Upload with `set_lua {guid, source}` (send the
+            WHOLE program text), then ALWAYS check `get_lua_error {guid}` (empty string = healthy). `burn`
+            to persist. A runaway script is killed by an instruction-budget guard. `set_lua` stores the
+            program on the device record (saved in the project JSON, offline-safe) and pushes over CAN when
+            the module is live; if it was offline, push later with `device_action {guid, action:"uploadlua"}`.
+            `get_lua` returns the live program when connected, else the stored one.
+
+            ## You define these callbacks
+            - `function onTick()` — called every tick (rate set by `setTickRate`).
+            - `function onCanRx(bus, id, dlc, data)` — called for each frame whose id you registered with
+              `canRxAdd(id)`. `data` is a 1-indexed table of bytes; `bus` is always 1 (one CAN bus).
+
+            ## The API (exactly what's registered on the device)
+            - `setTickRate(hz)` — onTick frequency, 1..1000 Hz. Call once at top level (e.g. `setTickRate(50)`).
+            - `readVar(index) -> number` — read any var-map signal by its **index**. Get the index↔name map
+              from `get_inputs {guid}` (each entry has `index` + `name`). Booleans read as 0/1.
+            - `setLuaOut(slot, value)` — drive **Lua output slot** `0..31`. To make an output/virtual-input/
+              CAN-output follow it, set that target's **Input** to **"Lua Out N"** (N = slot+1) via
+              `set_output_config` / `set_function` (use the var-map index of "Lua Out N" from `get_inputs`).
+            - `canRxAdd(id)` — register a CAN id so `onCanRx` fires for it (call at top level).
+            - `txCan(bus, id, ext, data)` — transmit. `bus`=1, `id` number, `ext` true/1 for 29-bit,
+              `data` a 1-indexed table of up to 8 byte values, e.g. `txCan(1, 0x200, false, {0xFF, dlc})`.
+            - `luaLog(msg)` — record a string; read it back with `get_lua_error` (handy for debugging).
+            - Timers: `local t = Timer.new()` · `t:reset()` · `t:getElapsedSeconds() -> number`.
+
+            ## Program model (over MCP)
+            In the UI a program is assembled from a global section + per-function snippets; over MCP you send
+            the **entire** assembled source as one `source` string. Define top-level setup (setTickRate,
+            canRxAdd) once, then `onTick` / `onCanRx`.
+
+            ## Example — mirror a CAN bit to output 1, and blink output 2 at 1 Hz
+            ```lua
+            setTickRate(50)
+            canRxAdd(0x200)
+            local blink = Timer.new()
+            function onCanRx(bus, id, dlc, data)
+              if id == 0x200 then setLuaOut(0, (data[1] & 0x01))  end   -- Lua Out 1 ← bit0 of 0x200
+            end
+            function onTick()
+              if blink:getElapsedSeconds() >= 0.5 then setLuaOut(1, 1 - readVar(LUA_OUT2_IDX)); blink:reset() end
+            end
+            ```
+            Then point output 1's Input at "Lua Out 1" and output 2's at "Lua Out 2" (`set_output_config`),
+            `set_lua`, `get_lua_error`, `burn`.
+
+            Honesty: `set_lua` can succeed yet the program have a runtime error — only `get_lua_error` (read
+            from the device) confirms it's healthy. A failed read is not proof of health.
+            """),
+
+        new("cross-module-signals", "Use one module's signal on another (the IO picker)",
+            "Point a consumer's CAN input at a source module's broadcast signal — feature B, server-side.",
+            """
+            # Skill: cross-module signals
+
+            Make module B react to a signal module A already broadcasts (e.g. PDM-01 reads CB-1's rotary
+            switch 4). This decodes A's **native** broadcast frame — no extra config on A.
+
+            1. `list_devices` — note the **source** guid (broadcaster, A) and **consumer** guid (B).
+            2. `broadcast_signals {guid: A, inUse: true}` — list what A actually broadcasts (set `inUse:true`
+               to see only its configured signals, like the UI picker). Pick a signal `name`
+               (e.g. `RotarySwitch4.Pos`, `Output3.Current`, `CanInput2`). `get_frame_map` documents the
+               full layout if you want it with no device bound.
+            3. `link_remote_signal {guid: B, canInput: N, sourceGuid: A, signal: "<name>"}` — writes B's
+               CAN-input slot N to decode that signal at A's current id+bits. Now use it on B like any CAN
+               input (drive an output, a condition, etc.).
+            4. `device_action {guid: B, action: "burn"}` to persist.
+
+            **Re-addressing:** the link resolves A's CURRENT base id. If you later change A's base id
+            (`modify_device`), **re-run `link_remote_signal`** for each consumer so their CAN-input ids
+            track the new base, then re-burn those consumers.
+
+            Note: this is the direct-decode model. The older "re-broadcast bridge" (a CAN output on the
+            source) still exists in the UI for Lua-computed values; for plain broadcast signals prefer this.
+            """),
+
+        new("can-addressing", "Base IDs, spans, and the CAN frame map",
+            "Pick collision-free base IDs and find which frame/bits carry each signal.",
+            """
+            # Skill: CAN addressing & frame map
+
+            - **Footprint:** a module owns `baseId .. baseId + span`, matching firmware NUM_TX_MSGS —
+              **CANBoard `base..+10`**, **dingoPDM/-Max `base..+28`** (config at +0/+1, cyclic from +2).
+              Two modules clash if these ranges overlap; space them apart accordingly.
+            - `get_definitions` — per-model channel counts + output current ratings (before `add_device`).
+            - `get_frame_map` — the address-agnostic map: which `base + offset` and bits carry each
+              transmitted signal, for every device type. Needs no connection.
+            - `broadcast_signals {guid}` — the same, resolved to one live module's signals (+ `inUse`).
+            - **Change a base id:** `modify_device {guid, name, baseId}` (hex like `0x1A0` or decimal). Keep
+              OBD-II diagnostic ids (0x7DF, 0x7E0–0x7EF, 0x7F1) clear unless the bus has no OBD. After a
+              change, re-run `link_remote_signal` for any consumers of that module (see cross-module-signals).
+            - Offline planning: the repo's `tools/canfree.py` reads a DBC or CAN log and reports free ids +
+              suggests collision-free bases (`canfree bus.dbc --preset dingo:5pdm,2cb`).
+            """),
+
+        new("cross-module-functions", "Author & deploy a behaviour spanning modules (blinkers, etc.)",
+            "Define a trigger → targets behaviour (optionally a synchronised blink) and deploy it with deploy_cross_module.",
+            """
+            # Skill: cross-module functions
+
+            A cross-module function reads ONE **trigger** signal on a module and drives **target outputs**
+            on other modules — optionally as a **synchronised blink** (one module is the clock master so
+            every lamp flashes in lock-step), with an optional **failover backup** master. `deploy_cross_module`
+            compiles this to per-module Lua + output bindings. Targets must be **dingoPDM/-Max** (Lua runs only
+            on PDMs); for a CANBoard target use `link_remote_signal` + a local rule instead. It works **offline**:
+            each module's Lua + bindings are saved to the project record and pushed over CAN to whatever is live
+            now — push the rest when they connect (no need for every module to be live at once).
+
+            ## Author it offline (no UI)
+            1. `list_devices` → the **guid** of each module.
+            2. `get_inputs {guid}` on the **trigger** module → find the **varIndex** of the trigger signal
+               (each entry has `index` + `name`, e.g. a digital input, a CAN input, a condition).
+            3. Note each **target** module's guid + **output number** (1-based).
+            4. Build the `functions` array and call `deploy_cross_module`.
+
+            ## Schema (one entry per function)
+            ```json
+            {
+              "name": "Hazards",
+              "blink": true,                       // false = targets simply follow the trigger
+              "blinkRateMs": 350,                  // half-period; ignored when blink=false
+              "trigger": { "guid": "<owner>", "varIndex": 42 },
+              "targets": [
+                { "guid": "<pdmA>", "output": 3 },
+                { "guid": "<pdmB>", "output": 5 }
+              ],
+              "clockMaster": "<pdmA>",             // optional; defaults to the trigger owner. blink only.
+              "clockBackup": "<pdmB>"              // optional; takes over if the master's clock stops. blink only.
+            }
+            ```
+            - **Slots & CAN IDs:** each function's array **position** is its slot → it claims trigger id
+              `0x520 + slot*2` and clock id `+1`. Keep those clear of your modules' base-ID spans and of
+              other functions (deploy several in ONE call so slots don't collide).
+            - **No blink:** every target output = the trigger (on/off). **Blink:** target = trigger AND clock.
+
+            ## Deploy + verify
+            - Preview first (no device touched): `deploy_cross_module {functions:[...], preview:true}` returns
+              the compiled per-module Lua + output bindings so you can review it offline.
+            - `deploy_cross_module {functions:[...]}` → per module `{ok, written, boundOutputs}`. `written:true`
+              = pushed over CAN; `written:false` = saved to the project record (module offline). It does NOT
+              require every module live — deploy now, push the offline ones later.
+            - Each target output's **current limit must already be set** (Read it, or `set_output_config`) — the
+              deploy refuses to guess a trip point.
+            - **Deploy offline, push when online:** the Lua + bindings persist in the project JSON (save it).
+              When a module connects: `device_action {guid, action:"writeall"}` (push params incl. bindings) then
+              `device_action {guid, action:"uploadlua"}` (push the stored Lua) — or just re-run deploy_cross_module.
+            - Verify: `get_lua_error {guid}` (empty = healthy), then `device_action {guid, action:"burn"}` to persist.
+
+            This is the Lua deployment of the System-view "cross-module functions". The exact generated Lua
+            (trigger publish over CAN, clock gen + failover, setLuaOut drives) is described in lua-programming.
             """),
     };
 }

@@ -1,10 +1,36 @@
 <script>
+  import { onMount } from 'svelte'
   import { crossFns, deployCrossModule, cmfTrigId, cmfClkId, cmfIsLua, cmfSlotOf, nextCmfSlot, api, luaAssemble, deviceHasLua } from './store.js'
+  import { conflictPairs } from './canids.js'
   import { toast } from './toast.js'
   import { dialog, labelFields, clickable } from './a11y.js'
   import LuaEditor from './LuaEditor.svelte'
   let { devices = [], pick, addModule, remove } = $props()
   const hex = (n) => '0x' + (n ?? 0).toString(16).toUpperCase().padStart(3, '0')
+
+  // Import any cross-module functions deployed via the backend (MCP `deploy_cross_module`) that aren't
+  // already in the list, so agent-deployed functions show up here as editable functions. By name.
+  onMount(async () => {
+    try {
+      const backend = await api.crossModuleGet()
+      if (!Array.isArray(backend) || !backend.length) return
+      let added = 0
+      crossFns.update((list) => {
+        const have = new Set((list ?? []).map((f) => f?.name))
+        let slot = nextCmfSlot(list)
+        const add = backend
+          .filter((f) => f && f.name && f.trigger?.guid && !have.has(f.name))
+          .map((f) => { added++; return {
+            name: f.name, mode: 'lua', blink: !!f.blink, blinkRateMs: f.blinkRateMs ?? 350,
+            trigger: { guid: f.trigger?.guid ?? '', varIndex: f.trigger?.varIndex ?? null, varName: f.trigger?.varName ?? '' },
+            targets: Array.isArray(f.targets) ? f.targets : [],
+            clockMaster: f.clockMaster ?? '', clockBackup: f.clockBackup ?? '', luaByModule: {}, slot: slot++,
+          } })
+        return add.length ? [...(list ?? []), ...add] : list
+      })
+      if (added) toast(`Imported ${added} cross-module function(s) deployed via MCP`, 'info')
+    } catch {}
+  })
 
   // ---- Cross-module functions (persisted; rule→native firmware wiring, lua→Lua) ----
   let fnDrawer = $state(false)
@@ -275,20 +301,9 @@
   // broadcasts. The span is per type and matches the firmware's NUM_TX_MSGS — a CANboard sends 9
   // cyclic msgs (baseId..baseId+10), a dingoPDM/-Max sends 27 (baseId..baseId+28). Two modules
   // clash only if those spans actually overlap; e.g. two CANboards 0x10 apart do NOT.
-  const ID_SPAN_BEFORE = 1
-  const idSpanAfter = (d) => /canboard/i.test(d.type) ? 10 : 28
-  let idConflicts = $derived.by(() => {
-    const m = devices.filter((d) => /pdm|canboard/i.test(d.type))
-    const out = []
-    for (let i = 0; i < m.length; i++)
-      for (let j = i + 1; j < m.length; j++) {
-        const a = m[i], b = m[j]
-        if (a.baseId - ID_SPAN_BEFORE <= b.baseId + idSpanAfter(b) &&
-            b.baseId - ID_SPAN_BEFORE <= a.baseId + idSpanAfter(a))
-          out.push([a, b])
-      }
-    return out
-  })
+  // The per-type spans + overlap test live in canids.js (shared with the "suggest free base"
+  // action and tools/canfree.py) so the warning and the allocator can never disagree.
+  let idConflicts = $derived(conflictPairs(devices))
 </script>
 
 <svelte:window onpointermove={move} onpointerup={up} />

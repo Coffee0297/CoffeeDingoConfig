@@ -49,6 +49,12 @@ public record SdoWriteReq(int Node, int Index, int Sub, uint Value, int Size);
 public record SdoNodeReq(int Node);
 public record ProjReq(string FileName);
 public record LuaReq(string Source);
+public record LinkRemoteReq(int CanInput, string SourceGuid, string Signal);
+public record CrossTrigReq(string Guid, int? VarIndex);
+public record CrossTargetReq(string Guid, int Output);
+public record CrossFnReq(string? Name, bool Disabled, bool Blink, int BlinkRateMs, CrossTrigReq? Trigger,
+    List<CrossTargetReq>? Targets, string? ClockMaster, string? ClockBackup);
+public record DeployCrossReq(List<CrossFnReq>? Functions, bool Preview);
 
 // ---------- editable device functions (CAN inputs, conditions, …) ----------
 public static class FunctionMap
@@ -585,18 +591,25 @@ public static class LiveApi
         api.MapPost("/devices/{guid}/lua", (string guid, LuaReq r, DeviceManager dm, ICommsAdapterManager adapters) =>
         {
             if (!Guid.TryParse(guid, out var g)) return Results.BadRequest();
-            if (RequireLiveModule(g, dm, adapters, "upload Lua to") is { } bad) return bad;
-            var ok = dm.UploadLua(g, r.Source ?? "");
-            return ok ? Results.Ok(new { ok = true }) : Results.BadRequest(new { ok = false, error = "upload rejected (too big or no device)" });
+            // Store on the device record (persists in the project JSON, offline-safe), then push over
+            // CAN only when the module is live — same model as output/function params. Push it later
+            // with device_action "uploadlua" once the module is online.
+            dm.StoreLua(g, r.Source ?? "");
+            var live = IsLiveModule(g, dm, adapters);
+            if (live && !dm.UploadLua(g, r.Source ?? ""))
+                return Results.BadRequest(new { ok = false, error = "upload rejected (too big, or not a Lua-capable PDM)" });
+            return Results.Ok(new { ok = true, written = live });
         });
 
         // Read the stored Lua program back from the device (a live CAN read).
         api.MapGet("/devices/{guid}/lua", async (string guid, DeviceManager dm, ICommsAdapterManager adapters) =>
         {
             if (!Guid.TryParse(guid, out var g)) return Results.BadRequest();
-            if (RequireLiveModule(g, dm, adapters, "read Lua from") is { } bad) return bad;
-            var source = await dm.ReadLua(g);
-            return Results.Ok(new { source });
+            // Live: read the running program off the device. Offline: return the stored program from
+            // the project record (so cross-module / authored Lua is visible without a live module).
+            if (IsLiveModule(g, dm, adapters))
+                return Results.Ok(new { source = await dm.ReadLua(g), live = true });
+            return Results.Ok(new { source = dm.GetStoredLua(g), live = false });
         });
 
         // Read the device's last Lua runtime error (empty if none).
@@ -741,6 +754,141 @@ public static class LiveApi
             return ok ? Results.Ok(new { ok }) : Results.BadRequest(new { ok, error = "id and length are required" });
         });
 
+        // Broadcast-signal catalog: what this device TRANSMITS cyclically, address-agnostic
+        // (offset = MessageId - BaseId, so it holds at any base ID). Feeds the cross-module
+        // "remote signal" picker — a consumer decodes another module's native frame at
+        // base+offset. Derived straight from GetStatusSigs() (the CAN frame map).
+        api.MapGet("/devices/{guid}/broadcast-signals", (string guid, bool? inUse, DeviceManager dm) =>
+        {
+            if (!Guid.TryParse(guid, out var g) || dm.GetDevice(g) is not { } d)
+                return Results.NotFound();
+            var baseId = d.BaseId;
+            var onlyInUse = inUse ?? false;   // ?inUse=true → only signals whose function is enabled (the picker's view)
+            var sigs = d.GetStatusSigs()
+                .Where(t => !onlyInUse || SignalInUse(d, t.Signal.Name))
+                .Select(t => new
+                {
+                    name = t.Signal.Name,
+                    offset = t.MessageId - baseId,
+                    startBit = t.Signal.StartBit,
+                    bitLength = t.Signal.Length,
+                    factor = t.Signal.Factor,
+                    valueOffset = t.Signal.Offset,
+                    byteOrder = (int)t.Signal.ByteOrder,
+                    signed = t.Signal.IsSigned,
+                    unit = t.Signal.Unit,
+                    kind = t.Signal.Length == 1 ? "bool" : "value",
+                })
+                .OrderBy(s => s.offset).ThenBy(s => s.startBit)
+                .ToList();
+            return Results.Ok(sigs);
+        });
+
+        // Cross-module IO picker (feature B), server-side: point a consumer module's CAN input at a
+        // SOURCE module's broadcast signal. Resolves the signal's current absolute CAN id + bit layout
+        // from the source's frame map and writes the consumer's CAN input — what the UI picker does
+        // client-side, in one call. Re-run after a source base-ID change to re-resolve the id.
+        api.MapPost("/devices/{guid}/link-remote", (string guid, LinkRemoteReq r, DeviceManager dm, ICommsAdapterManager adapters) =>
+        {
+            if (!Guid.TryParse(guid, out var cg) || dm.GetDevice(cg) is not IDeviceConfigurable consumer)
+                return Results.BadRequest(new { error = "bad or non-configurable consumer guid" });
+            if (!Guid.TryParse(r.SourceGuid, out var sg) || dm.GetDevice(sg) is not { } src)
+                return Results.BadRequest(new { error = "bad source guid" });
+            var match = src.GetStatusSigs().FirstOrDefault(t => t.Signal.Name == r.Signal);
+            if (match.Signal is null)
+                return Results.NotFound(new { error = $"'{r.Signal}' is not broadcast by {src.Name}" });
+            var (fn, paramIndex) = FunctionMap.Resolve(consumer, "caninput", r.CanInput);
+            if (fn is not CanInput ci || paramIndex < 0)
+                return Results.NotFound(new { error = $"CAN input #{r.CanInput} not found on the consumer" });
+            var sig = match.Signal;
+            ci.Enabled = true;
+            ci.Id = match.MessageId;            // absolute id = source base + offset (setter sets Ide)
+            ci.StartBit = sig.StartBit;
+            ci.BitLength = sig.Length;
+            ci.Factor = sig.Factor;
+            ci.Offset = sig.Offset;
+            ci.ByteOrder = sig.ByteOrder;
+            ci.Signed = sig.IsSigned;
+            if (string.IsNullOrWhiteSpace(ci.Name) || System.Text.RegularExpressions.Regex.IsMatch(ci.Name, @"^canInput\d+$"))
+                ci.Name = $"{src.Name} {sig.Name}";
+            var live = IsLiveModule(cg, dm, adapters);
+            if (live) dm.WriteFunctionParams(cg, paramIndex);
+            return Results.Ok(new
+            {
+                ok = true, written = live, source = src.Name, signal = sig.Name, canInput = r.CanInput,
+                id = ci.Id, ide = ci.Ide, startBit = ci.StartBit, bitLength = ci.BitLength,
+                factor = ci.Factor, offset = ci.Offset, byteOrder = (int)ci.ByteOrder, signed = ci.Signed, name = ci.Name,
+            });
+        });
+
+        // Cross-module functions, server-side: compile a list of function definitions (trigger → target
+        // outputs, optional synchronised blink with a clock master + failover backup) into per-module
+        // Lua + output bindings, and deploy to each PDM. Mirrors the System-view "cross-module functions"
+        // compiler. Lua runs only on PDMs, so every involved module must be a live dingoPDM/-Max.
+        api.MapPost("/system/cross-module/deploy", async (HttpRequest req, DeviceManager dm, ICommsAdapterManager adapters, CrossModuleStore store) =>
+        {
+            using var doc = await JsonDocument.ParseAsync(req.Body);
+            var root = doc.RootElement;
+            var preview = root.TryGetProperty("preview", out var pv) && pv.ValueKind == JsonValueKind.True;
+            var fnsEl = root.TryGetProperty("functions", out var fe) && fe.ValueKind == JsonValueKind.Array ? fe : default;
+            var fns = fnsEl.ValueKind == JsonValueKind.Array
+                ? JsonSerializer.Deserialize<List<CrossFnReq>>(fnsEl.GetRawText(), new JsonSerializerOptions { PropertyNameCaseInsensitive = true }) ?? new()
+                : new List<CrossFnReq>();
+            // Record the raw function DEFINITIONS so the System view can list/edit MCP-deployed
+            // functions (it imports them on mount). Skipped for a preview.
+            if (!preview && fnsEl.ValueKind == JsonValueKind.Array) store.Set(fnsEl.GetRawText());
+            var compiled = CompileCrossModule(fns);
+            if (preview)
+                return Results.Ok(new
+                {
+                    ok = true, preview = true,
+                    modules = compiled.Select(kv => new
+                    {
+                        guid = kv.Key,
+                        name = Guid.TryParse(kv.Key, out var pg) && dm.GetDevice(pg) is { } pd ? pd.Name : kv.Key,
+                        lua = kv.Value.Lua, bindings = kv.Value.Bindings,
+                    }).ToList(),
+                });
+            var results = new List<object>();
+            var allOk = true;
+            void Fail(string name, string error) { allOk = false; results.Add(new { name, ok = false, error }); }
+            foreach (var (gs, plan) in compiled)
+            {
+                if (!Guid.TryParse(gs, out var g) || dm.GetDevice(g) is not { } dev) { Fail(gs, "device not in project"); continue; }
+                if (dev is not PdmDevice pdm) { Fail(dev.Name, $"{dev.Name} has no Lua engine — only dingoPDM/-Max run Lua. Use link_remote_signal for a CANBoard target."); continue; }
+                try
+                {
+                    // Offline-safe: store Lua + bindings on the device record (persists in the project),
+                    // and push over CAN only when the module is live — exactly how params behave. A
+                    // module that's offline gets "saved" (written=false); push later with device_action
+                    // "uploadlua" + "writeall", or re-deploy once it's online.
+                    var live = IsLiveModule(g, dm, adapters);
+                    dm.StoreLua(g, plan.Lua);
+                    if (live) dm.UploadLua(g, plan.Lua);
+                    var luaOut1 = pdm.VarMap.FirstOrDefault(v => v.GetName() == "Lua Out 1");
+                    var bound = new List<int>();
+                    foreach (var outNum in plan.Bindings)
+                    {
+                        var o = pdm.GetOutputs().FirstOrDefault(x => x.Number == outNum);
+                        if (o == null) continue;
+                        if (luaOut1 == null) throw new InvalidOperationException("couldn't resolve the 'Lua Out 1' var-map index");
+                        if (o.CurrentLimit <= 0) throw new InvalidOperationException($"output {outNum} has no current limit yet — set it (Read or set_output_config) before binding so its trip point isn't guessed");
+                        o.Enabled = true;
+                        o.Input = luaOut1.VariableIndex + (outNum - 1);   // drive output N from "Lua Out N"
+                        if (live) dm.WriteOutputParams(g, outNum);        // record edit persists; CAN write only when live
+                        bound.Add(outNum);
+                    }
+                    results.Add(new { name = dev.Name, ok = true, written = live, boundOutputs = bound, luaBytes = plan.Lua.Length });
+                }
+                catch (Exception e) { Fail(dev.Name, e.Message); }
+            }
+            return Results.Ok(new { ok = allOk, modules = results });
+        });
+
+        // The cross-module function DEFINITIONS currently held on the backend (set by deploy_cross_module).
+        // The System view imports these on mount so MCP-deployed functions appear in its list.
+        api.MapGet("/system/cross-module", (CrossModuleStore store) => Results.Text(store.Get(), "application/json"));
+
         api.MapGet("/devices/{guid}/signals", (string guid, DeviceManager dm) =>
         {
             if (!Guid.TryParse(guid, out var g)) return Results.Ok(Array.Empty<SignalDto>());
@@ -811,7 +959,7 @@ public static class LiveApi
             return Results.Ok(new { ok = true, current = cfg.CurrentFileName });
         });
 
-        api.MapPost("/project/open", async (ProjReq r, ConfigFileManager cfg, DeviceManager dm) =>
+        api.MapPost("/project/open", async (ProjReq r, ConfigFileManager cfg, DeviceManager dm, CrossModuleStore xmod) =>
         {
             // Load FIRST; only clear the current project once we have a valid replacement. The old
             // order cleared then checked for null, silently wiping every device on a bad/missing file.
@@ -821,6 +969,7 @@ public static class LiveApi
                 if (devs == null)
                     return Results.Text($"Could not open '{r.FileName}' — not found or not a valid project file.", "text/plain", null, 400);
                 dm.ClearDevices();
+                xmod.Clear();   // cross-module defs are per-project; the UI re-imports for the new project
                 dm.AddDevices(devs);
                 return Results.Ok(new { ok = true, count = devs.Count });
             }
@@ -830,9 +979,9 @@ public static class LiveApi
             }
         });
 
-        api.MapPost("/project/new", (ConfigFileManager cfg, DeviceManager dm) =>
+        api.MapPost("/project/new", (ConfigFileManager cfg, DeviceManager dm, CrossModuleStore xmod) =>
         {
-            dm.ClearDevices(); cfg.NewFile(); return Results.Ok(new { ok = true });
+            dm.ClearDevices(); xmod.Clear(); cfg.NewFile(); return Results.Ok(new { ok = true });
         });
 
         // Local-PC project SAVE: stream the whole project (ConfigFile JSON) back so the browser
@@ -842,7 +991,7 @@ public static class LiveApi
 
         // Local-PC project OPEN: load a project file the user picked on their PC (raw ConfigFile
         // JSON in the body). The current project is replaced only on a successful parse.
-        api.MapPost("/project/upload", async (HttpRequest req, ConfigFileManager cfg, DeviceManager dm) =>
+        api.MapPost("/project/upload", async (HttpRequest req, ConfigFileManager cfg, DeviceManager dm, CrossModuleStore xmod) =>
         {
             using var reader = new StreamReader(req.Body);
             var json = await reader.ReadToEndAsync();
@@ -851,6 +1000,7 @@ public static class LiveApi
                 var devs = cfg.LoadDevicesFromJson(json);
                 if (devs == null) return Results.Text("Not a valid project file.", "text/plain", null, 400);
                 dm.ClearDevices();
+                xmod.Clear();   // cross-module defs are per-project; the UI re-imports for the new project
                 dm.AddDevices(devs);
                 cfg.NewFile();   // opened from an external file, not one of our working-dir files
                 return Results.Ok(new { ok = true, count = devs.Count });
@@ -907,7 +1057,7 @@ public static class LiveApi
             // These talk to live hardware over CAN. The writes are fire-and-forget, so without
             // a guard they "succeed" silently against an empty bus. Refuse unless the adapter is
             // connected AND the target module is actually broadcasting (seen within ~500 ms).
-            string[] liveActions = ["read", "readall", "write", "writeall", "burn", "sleep", "wakeup", "bootloader", "version"];
+            string[] liveActions = ["read", "readall", "write", "writeall", "burn", "sleep", "wakeup", "bootloader", "version", "uploadlua"];
             if (liveActions.Contains(action))
             {
                 if (!adapters.GetStatus().isConnected)
@@ -933,6 +1083,9 @@ public static class LiveApi
                 case "wakeup": dm.RequestWakeup(g); break;
                 case "bootloader": dm.RequestBootloader(g); break;
                 case "version": dm.RequestVersion(g); break;
+                // Push the Lua program stored on the record (e.g. an offline cross-module deploy) to the
+                // now-live module. Pair with "writeall" to also push the output bindings (params).
+                case "uploadlua": dm.UploadLua(g, dm.GetStoredLua(g)); break;
                 default: return Results.NotFound();
             }
             return Results.Ok(new { ok = true });
@@ -966,5 +1119,142 @@ public static class LiveApi
         if (dev == null) return false;
         dev.UpdateIsConnected();
         return dev.Connected;
+    }
+
+    // Is a broadcast signal actually wired up on its source? Mirrors the UI picker's filter so
+    // broadcast_signals?inUse=true shows only configured signals. System telemetry is always live;
+    // everything else follows its function's Enabled flag (analog sub-signals need the input + its
+    // rotary/switch mode enabled).
+    private static bool SignalInUse(IDevice d, string name)
+    {
+        if (System.Text.RegularExpressions.Regex.IsMatch(name, "^(DeviceState|PdmType|TotalCurrent|BatteryVoltage|BoardTemp|Heartbeat)"))
+            return true;
+        var m = System.Text.RegularExpressions.Regex.Match(name, @"^([A-Za-z]+?)(\d+)");
+        if (!m.Success) return true;
+        var kind = m.Groups[1].Value;
+        var n = int.Parse(m.Groups[2].Value);
+        var digitalMode = name.Contains("DigitalMode");
+        if (d is PdmDevice p)
+            return kind switch
+            {
+                "Input" => p.GetInputs().FirstOrDefault(x => x.Number == n)?.Enabled ?? false,
+                "Output" => p.GetOutputs().FirstOrDefault(x => x.Number == n)?.Enabled ?? false,
+                "CanInput" => p.GetCanInputs().FirstOrDefault(x => x.Number == n)?.Enabled ?? false,
+                "VirtualInput" => p.GetVirtualInputs().FirstOrDefault(x => x.Number == n)?.Enabled ?? false,
+                "Condition" => p.GetConditions().FirstOrDefault(x => x.Number == n)?.Enabled ?? false,
+                "Counter" => p.GetCounters().FirstOrDefault(x => x.Number == n)?.Enabled ?? false,
+                "Flasher" => p.GetFlashers().FirstOrDefault(x => x.Number == n)?.Enabled ?? false,
+                "Wiper" => p.GetWipers()?.Enabled ?? false,
+                _ => true,
+            };
+        if (d is CanboardDevice c)
+            return kind switch
+            {
+                "AnalogInput" => c.GetAnalogInputs().FirstOrDefault(x => x.Number == n) is { } a && a.Enabled && (!digitalMode || a.Switch.Enabled),
+                "RotarySwitch" => c.GetAnalogInputs().FirstOrDefault(x => x.Number == n) is { } a && a.Enabled && a.Rotary.Enabled,
+                "DigitalInput" => c.GetDigitalInputs().FirstOrDefault(x => x.Number == n)?.Enabled ?? false,
+                "DigitalOutput" => c.GetDigitalOutputs().FirstOrDefault(x => x.Number == n)?.Enabled ?? false,
+                "CanInput" => c.GetCanInputs().FirstOrDefault(x => x.Number == n)?.Enabled ?? false,
+                "VirtualInput" => c.GetVirtualInputs().FirstOrDefault(x => x.Number == n)?.Enabled ?? false,
+                "Condition" => c.GetConditions().FirstOrDefault(x => x.Number == n)?.Enabled ?? false,
+                "Counter" => c.GetCounters().FirstOrDefault(x => x.Number == n)?.Enabled ?? false,
+                "Flasher" => c.GetFlashers().FirstOrDefault(x => x.Number == n)?.Enabled ?? false,
+                _ => true,
+            };
+        return true;
+    }
+
+    private sealed class CmfMod
+    {
+        public readonly HashSet<int> Rx = new();
+        public readonly List<string> Decl = new(), RxCases = new(), Tick = new();
+        public readonly HashSet<int> TrigDecl = new(), ClkDecl = new(), ClkGen = new();
+        public readonly List<int> Bindings = new();
+    }
+
+    // Compile cross-module function definitions into per-module Lua + output bindings — a faithful
+    // port of compileCrossModule() in store.js. Each function uses a reserved CAN-ID pair from its
+    // slot (array index): trigger 0x520+slot*2, clock +1. Blink uses a clock master (defaults to the
+    // trigger owner) and an optional failover backup.
+    private static Dictionary<string, (string Lua, List<int> Bindings)> CompileCrossModule(IReadOnlyList<CrossFnReq> fns)
+    {
+        const int idBase = 0x520;
+        var mods = new Dictionary<string, CmfMod>();
+        CmfMod M(string g) { if (!mods.TryGetValue(g, out var m)) mods[g] = m = new CmfMod(); return m; }
+
+        for (var i = 0; i < fns.Count; i++)
+        {
+            var f = fns[i];
+            if (f is null || f.Disabled || string.IsNullOrEmpty(f.Trigger?.Guid) || f.Trigger!.VarIndex is null) continue;
+            var slot = i;
+            int trig = idBase + slot * 2, clk = trig + 1;
+            var half = ((f.BlinkRateMs <= 0 ? 350 : f.BlinkRateMs) / 1000.0).ToString("0.000", System.Globalization.CultureInfo.InvariantCulture);
+            var p = $"_cmf{slot}";
+            var blink = f.Blink;
+            var ownerG = f.Trigger.Guid;
+            var masterG = blink ? (string.IsNullOrEmpty(f.ClockMaster) ? ownerG : f.ClockMaster) : null;
+            var backupG = blink && !string.IsNullOrEmpty(f.ClockBackup) ? f.ClockBackup : null;
+
+            var om = M(ownerG);
+            om.Tick.Add($"  {p}trig = readVar({f.Trigger.VarIndex}) ~= 0 and 1 or 0");
+            om.Tick.Add($"  txCan(1, {trig}, false, {{ {p}trig }})");
+            om.Decl.Add($"local {p}trig = 0");
+
+            void NeedTrig(string g)
+            {
+                if (g == ownerG) return;
+                var m = M(g);
+                if (m.TrigDecl.Add(slot)) { m.Decl.Add($"local {p}trig = 0"); m.Rx.Add(trig); m.RxCases.Add($"  if id == {trig} then {p}trig = data[1] end"); }
+            }
+            void NeedClkRx(string g)
+            {
+                var m = M(g);
+                if (m.ClkDecl.Add(slot)) { m.Decl.Add($"local {p}clk = 0"); m.Rx.Add(clk); m.RxCases.Add($"  if id == {clk} then {p}clk = data[1] end"); }
+            }
+
+            if (masterG != null)
+            {
+                var m = M(masterG);
+                NeedTrig(masterG);
+                m.Decl.Add($"local {p}clk = 0"); m.Decl.Add($"local {p}ct = Timer.new()");
+                m.ClkGen.Add(slot);
+                m.Tick.Add($"  if {p}trig == 1 then\n    if {p}ct:getElapsedSeconds() >= {half} then {p}ct:reset(); {p}clk = 1 - {p}clk end\n  else {p}clk = 0; {p}ct:reset() end\n  txCan(1, {clk}, false, {{ {p}clk, 0 }})");
+            }
+            if (backupG != null && backupG != masterG)
+            {
+                var m = M(backupG);
+                NeedTrig(backupG);
+                m.Decl.Add($"local {p}clk = 0"); m.Decl.Add($"local {p}ct = Timer.new()"); m.Decl.Add($"local {p}seen = Timer.new()");
+                m.Rx.Add(clk);
+                m.RxCases.Add($"  if id == {clk} and data[2] == 0 then {p}seen:reset() end");
+                m.Tick.Add($"  if {p}seen:getElapsedSeconds() > 0.3 and {p}trig == 1 then\n    if {p}ct:getElapsedSeconds() >= {half} then {p}ct:reset(); {p}clk = 1 - {p}clk end\n    txCan(1, {clk}, false, {{ {p}clk, 1 }})\n  end");
+            }
+            foreach (var t in f.Targets ?? new List<CrossTargetReq>())
+            {
+                if (string.IsNullOrEmpty(t.Guid) || t.Output <= 0) continue;
+                var m = M(t.Guid);
+                NeedTrig(t.Guid);
+                var oslot = t.Output - 1;
+                string drive;
+                if (blink) { if (!m.ClkGen.Contains(slot)) NeedClkRx(t.Guid); drive = $"({p}trig ~= 0 and {p}clk ~= 0) and 1 or 0"; }
+                else drive = $"({p}trig ~= 0) and 1 or 0";
+                m.Tick.Add($"  setLuaOut({oslot}, {drive})");
+                m.Bindings.Add(t.Output);
+            }
+        }
+
+        var outp = new Dictionary<string, (string, List<int>)>();
+        foreach (var (g, m) in mods)
+        {
+            if (m.Tick.Count == 0) continue;
+            var sb = new System.Text.StringBuilder();
+            sb.Append("-- Cross-module functions — generated by dingoConfig (MCP deploy).\n");
+            sb.Append(string.Join("\n", m.Decl.Distinct())).Append('\n');
+            foreach (var id in m.Rx) sb.Append($"canRxAdd({id})\n");
+            if (m.RxCases.Count > 0) sb.Append("function onCanRx(bus, id, dlc, data)\n").Append(string.Join("\n", m.RxCases.Distinct())).Append("\nend\n");
+            sb.Append("function onTick()\n").Append(string.Join("\n", m.Tick)).Append("\nend\nsetTickRate(50)\n");
+            outp[g] = (sb.ToString(), m.Bindings);
+        }
+        return outp;
     }
 }

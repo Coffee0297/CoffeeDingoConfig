@@ -133,6 +133,9 @@ public class PdmDevice : IDeviceConfigurable
     [JsonPropertyName("sleepIgnoreAlwaysOn")] public bool SleepIgnoreAlwaysOn { get; set; } = true;
     [JsonPropertyName("filtersEnabled")] public bool CanFiltersEnabled { get; set; }
     [JsonPropertyName("connectUsbToCan")] public bool ConnectUsbToCan { get; set; } = true;
+    // Stored Lua program (the assembled source). Persists in the project JSON so cross-module /
+    // authored Lua survives offline; pushed to the device over CAN only when it's live.
+    [JsonPropertyName("lua")] public string LuaProgram { get; set; } = "";
     [JsonPropertyName("bitrate")] public CanBitRate BitRate { get; set; } = CanBitRate.BitRate500K;
     [JsonIgnore] public TimeSpan CyclicGap { get; } =  TimeSpan.FromSeconds(0);
     [JsonIgnore] public TimeSpan CyclicPause { get; } = TimeSpan.FromMilliseconds(0);

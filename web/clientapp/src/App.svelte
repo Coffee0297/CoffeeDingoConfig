@@ -1,5 +1,6 @@
 <script>
-  import { telemetry, hubState, reconnectHub, api, luaReadToTabs, awgFor, awgForMm2, outputRatingA, deviceDefs, gatherClientState, restoreClientState } from './lib/store.js'
+  import { telemetry, hubState, reconnectHub, api, luaReadToTabs, awgFor, awgForMm2, outputRatingA, deviceDefs, gatherClientState, restoreClientState, linksForSource } from './lib/store.js'
+  import { suggestBase, usedIds, freeRanges } from './lib/canids.js'
   import { toast, toasts, dismiss } from './lib/toast.js'
   import { clickable, labelFields, dialog as dlg } from './lib/a11y.js'
   import Sparkline from './lib/Sparkline.svelte'
@@ -116,10 +117,22 @@
   function openSettings() { dialog = 'settings' }
   function openModify() { if (!current) return; dlgName = current.name; dlgBase = hex(current.baseId); dialog = 'modify' }
   async function saveDialog() {
+    const wasModify = dialog === 'modify' && !!current
+    const oldBase = current?.baseId
+    const newBase = parseInt(String(dlgBase).replace(/^0x/i, ''), 16)
+    const src = current
     try {
       if (dialog === 'add') await api.addDevice(dlgType, dlgName || dlgType, dlgBase)
-      else if (dialog === 'modify' && current) await api.modify(current.guid, dlgName, dlgBase)
+      else if (wasModify) await api.modify(current.guid, dlgName, dlgBase)
     } catch (e) { toast(e.message, 'error'); return }
+    // Re-basing a module that others point at: flag the consumers (we never auto-write them).
+    if (wasModify && Number.isInteger(newBase) && newBase !== oldBase) {
+      const affected = linksForSource(src.guid)
+      if (affected.length) {
+        const names = [...new Set(affected.map((l) => devices.find((d) => d.guid === l.consumerGuid)?.name ?? '?'))]
+        toast(`${src.name} moved to ${dlgBase} — ${affected.length} remote signal(s) on ${names.join(', ')} now target the new base; re-save & burn those CAN inputs to apply.`, 'info', 10000)
+      }
+    }
     dialog = null
   }
 
@@ -171,6 +184,19 @@
   let t = $derived($telemetry)
   let devices = $derived(t.devices ?? [])
   let current = $derived(devices.find((d) => d.guid === scopeGuid) ?? devices[0] ?? null)
+
+  // canfree, in the UI: collision-free base-ID suggestion for the Add/Modify dialog. Used IDs come
+  // from the live fleet (excluding the device being re-based). OBD-II diag IDs are reserved by
+  // default but can be turned off for buses with no OBD (remembered across reloads).
+  let reserveObd = $state((() => { try { return localStorage.getItem('dingoReserveObd') !== '0' } catch { return true } })())
+  $effect(() => { try { localStorage.setItem('dingoReserveObd', reserveObd ? '1' : '0') } catch {} })
+  let dlgUsed = $derived(usedIds(devices, { reserve: reserveObd, exclude: dialog === 'modify' && current ? current.guid : null }))
+  let dlgFree = $derived(freeRanges(dlgUsed, 16).slice(0, 4))
+  function suggestFreeBase() {
+    const b = suggestBase(dlgType, dlgUsed)
+    if (b == null) { toast('No collision-free CAN-ID window for this module type.', 'error'); return }
+    dlgBase = hex(b)
+  }
   // Keep the Base ID editor in sync with the selected device — but only when the device
   // actually changes, so live telemetry ticks don't clobber what the user is typing.
   let baseIdSyncedGuid = null
@@ -536,9 +562,15 @@
               <select bind:value={dlgType} disabled={dialog === 'modify'}>
                 {#each deviceTypes as [v, l]}<option value={v}>{l}</option>{/each}
               </select></div>
-            <div class="field"><label>Base ID</label><input bind:value={dlgBase} /></div>
+            <div class="field"><label>Base ID</label>
+              <div style="display:flex;gap:6px">
+                <input style="flex:1;min-width:0" bind:value={dlgBase} />
+                <button class="btn ghost" type="button" style="padding:6px 10px" title="Lowest collision-free base for this module type (avoids every module's span + OBD diag IDs)" onclick={suggestFreeBase}>Suggest</button>
+              </div></div>
           </div>
           <div class="hint">Each module owns a CAN-ID span from its base — CANboard baseId…+10, dingoPDM baseId…+28 (incl. settings). Keep modules' spans from overlapping.</div>
+          <label style="display:flex;gap:8px;align-items:center;font-size:13px;margin-top:6px;cursor:pointer"><input type="checkbox" bind:checked={reserveObd} /> Reserve OBD-II diagnostic IDs (0x7DF, 0x7E0–0x7EF, 0x7F1) — uncheck for buses with no OBD</label>
+          {#if dlgFree.length}<div class="hint">Free windows (≥16): {dlgFree.map(([a, b]) => `${hex(a)}–${hex(b)}`).join(', ')}{#if freeRanges(dlgUsed, 16).length > 4}, …{/if}</div>{/if}
         </div>
         <div class="mf2">
           <button class="btn ghost" onclick={() => (dialog = null)}>Cancel</button>

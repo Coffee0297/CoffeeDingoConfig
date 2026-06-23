@@ -21,6 +21,7 @@ builder.Services.AddSingleton<ICommsAdapterManager, CommsAdapterManager>();
 builder.Services.AddSingleton<DeviceDefinitionManager>();
 builder.Services.AddSingleton<ConfigFileManager>();
 builder.Services.AddSingleton<DeviceManager>();
+builder.Services.AddSingleton<CrossModuleStore>();
 builder.Services.AddSingleton<FirmwareFlashService>();
 builder.Services.AddSingleton<SdoService>();
 builder.Services.AddSingleton<SystemConfigService>();

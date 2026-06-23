@@ -17,8 +17,11 @@ Features/options this fork adds on top of the original dingoConfig. (The analog 
 
 **Whole-vehicle / multi-module**
 1. **System overview + map of the car** — a single view of every module in the vehicle, laid out as a map.
-2. **Cross-module / shared components** — define a behaviour once that spans modules; pull a **remote
-   signal** from another module over CAN to drive a function locally.
+2. **Cross-module / shared components** — define a behaviour once that spans modules, and **point a CAN
+   input at another module's broadcast signal** with a searchable picker. It lists only the source's
+   *wired-up* signals (e.g. "CB-1 → rotary switch 4") and fills the frame ID/bits/scaling for you,
+   address-agnostically (`base + offset`); nothing is written until you Save, and re-basing the source
+   flags the consumers that need re-applying.
 3. **Wiring node-graph (wiring modules)** — drag from an output ● to an input ● to wire functions within
    or across modules; visual block layout.
 4. **System summary** — per-module live current total + "N on", and a **vehicle-wide worst-case load**
@@ -55,6 +58,17 @@ Features/options this fork adds on top of the original dingoConfig. (The analog 
 14. **Quality of life** — reload resumes the last view + module; Lua hidden on boards without a Lua engine;
     **project save/open to a local PC file** (cross-platform); per-output hardware current rating by model.
 
+**CAN addressing & frame map**
+15. **Collision-free base IDs** — the System view flags modules whose CAN-ID spans overlap (per-type,
+    matching the firmware's broadcast footprint), and **Add / Modify module** can **Suggest** the lowest
+    free base, with an **OBD-II reserve toggle** (uncheck for buses with no OBD) and a live free-window
+    readout. A standalone [`tools/canfree.py`](tools/canfree.py) does the same **offline from a DBC or CAN
+    log** — free-ID report + base-address allocator (e.g. `--preset dingo:5pdm,2cb`).
+16. **Address-agnostic CAN frame map** — [`docs/can-frame-map.md`](docs/can-frame-map.md) documents every
+    cyclic frame each module type broadcasts as `base + offset` + bit layout (rotary switches, inputs,
+    output state/current, …). Served at `/can-frame-map.md` and via the `get_frame_map` MCP tool, so an
+    agent can decode the bus with no device connected.
+
 > ⚠️ The CANBoard analog features (9–11) pair with **CoffeeDingoFW ≥ v5.5.101**, which **has not been
 > flashed/tested on a CanBoard yet** — verify on hardware before relying on it.
 
@@ -82,7 +96,9 @@ Features/options this fork adds on top of the original dingoConfig. (The analog 
 Every module on the bus in one place — live current/temperature/state per module, a draggable
 **car-layout map** to match your physical install, in-app **firmware update** and **⚙ Settings**
 per module, and **cross-module functions** (define a behaviour once across modules). Live modules
-show green; project modules not seen on the bus are flagged.
+show green; project modules not seen on the bus are flagged. Overlapping CAN-ID spans are flagged,
+and **Add / Modify module** can **Suggest a collision-free base ID** (with an OBD-II reserve toggle
+and a live free-window readout).
 
 ### Outputs — smart high-side switches
 ![Outputs](docs/img/outputs.png)
@@ -101,7 +117,9 @@ Save writes live to the device; **Burn** persists to flash.
 ![Signals & logic with live mini-charts](docs/img/signals.png)
 
 Build logic from physical pins and CAN messages. Each block type has a guided editor:
-- **CAN input** — pull a value/bit out of an incoming frame (factor/offset/byte-order/signed)
+- **CAN input** — pull a value/bit out of an incoming frame (factor/offset/byte-order/signed), or
+  **pull it from another module**: pick the source module + one of its wired-up broadcast signals and
+  the ID/bits/scaling fill in (`base + offset`, so it survives the source being re-addressed)
 - **Digital pin** — physical input (momentary/latched, pull, debounce, invert)
 - **Condition** — true when a signal crosses a value
 - **Virtual input** — AND/OR/NOR up to 3 signals
@@ -139,6 +157,19 @@ Define a behaviour once that spans modules (e.g. a synchronised blinker triggere
 clocked by another). A **rule** compiles to native CAN-input/flasher/output wiring (no Lua);
 switch it to **Lua** to write it yourself — needed for clock-failover. Deploy pushes it to every
 involved module.
+
+### CAN addressing & frame map
+The System view flags modules whose CAN-ID spans overlap, and **Add / Modify module** suggests the
+lowest collision-free base ID — with an **OBD-II diagnostic reserve toggle** (uncheck for buses with no
+OBD) and a live free-window readout. The spans match the firmware's broadcast footprint
+(CANBoard `base…+10`, dingoPDM `base…+28`).
+
+[`docs/can-frame-map.md`](docs/can-frame-map.md) is the **address-agnostic CAN frame map** — what every
+module type transmits, written as `base + offset` and bit layout (rotary switches, inputs, output
+state/current, …). It's served at `/can-frame-map.md` and via the `get_frame_map` MCP tool, so it works
+with no device connected. For offline work, [`tools/canfree.py`](tools/canfree.py) reads a **DBC or CAN
+log** and reports free IDs + suggests collision-free base addresses
+(`canfree bus.dbc --preset dingo:5pdm,2cb`).
 
 ### Plot
 ![Global plot](docs/img/plot.png)
@@ -282,7 +313,7 @@ dotnet publish web/web.csproj -c Release -r osx-arm64 --self-contained true \
 ## Drive it from an AI model (MCP)
 
 dingoConfig **hosts an MCP server inside the app** so AI clients can drive an entire system
-directly — no UI automation. **Every UI capability is exposed as a tool (48)**, plus seven guided
+directly — no UI automation. **Every UI capability is exposed as a tool (57)**, plus eleven guided
 **skills** (playbooks). There's an in-app **MCP** tab (endpoint, *Test connection*, copy-paste
 client configs, and the live tool + skill catalog).
 
@@ -297,13 +328,15 @@ client configs, and the live tool + skill catalog).
   stdio→`/mcp` forwarder (zero-dependency, Node 18+) for stdio-only clients. Use an **absolute**
   path in `args` — stdio clients launch `node` from their own cwd, so a relative path fails
   ("Connection closed"). The MCP tab emits the correct absolute path; see [`mcp/README.md`](mcp/README.md).
-- **Tools (48):** full UI coverage — connection (`list_adapters`/`connect`/`discover`/`identify`),
-  devices (`add_device`/`read_device`/`device_action`/`apply_profile`), config
-  (`get_schema`/`get_config`/`apply_config`), outputs, params, signals & logic
-  (`get_signals`/`set_function`/`get_lua`/`set_lua`), firmware (`flash_firmware`/`flash_status`),
-  keypad SDO, project, and logs.
-- **Skills (7):** `connect-and-discover`, `configure-a-module`, `wire-outputs-safely`,
-  `signals-and-logic`, `flash-firmware`, `keypad-sdo`, `logs-and-troubleshooting`.
+- **Tools (57):** full UI + system coverage — connection (`list_adapters`/`connect`/`discover`/`identify`),
+  devices (`add_device`/`read_device`/`device_action`/`apply_profile`/`get_definitions`), config
+  (`get_schema`/`get_config`/`apply_config`/`get_frame_map`), outputs, params, signals & logic
+  (`get_signals`/`set_function`/`get_lua`/`set_lua`), **cross-module** (`broadcast_signals`/`link_remote_signal`/`deploy_cross_module`),
+  firmware (`flash_firmware`/`flash_blank`/`scan_dfu`/`flash_status`), keypad SDO, project
+  (incl. `project_download`/`project_upload`), and logs.
+- **Skills (11):** `connect-and-discover`, `configure-a-module`, `wire-outputs-safely`,
+  `signals-and-logic`, **`lua-programming`** (the full on-device Lua API), **`cross-module-signals`**,
+  **`cross-module-functions`**, **`can-addressing`**, `flash-firmware`, `keypad-sdo`, `logs-and-troubleshooting`.
 - **Discovery:** `GET /mcp` (health) · `GET /mcp/info` (full catalog + copy-paste configs) ·
   `GET /mcp/skills[/{id}]` (playbooks) · [`/llms.txt`](http://localhost:5000/llms.txt) and
   [`AI-CONFIG.md`](AI-CONFIG.md) document the config surface.
@@ -325,10 +358,12 @@ dingoConfig-redesign/
 ├── web/               the app
 │   ├── Program.cs         DI + serves the SPA + /api + SignalR (single process)
 │   ├── Api/LiveApi.cs     REST /api/* + SignalR telemetry hub (/hub/live)
-│   ├── Api/McpServer.cs   in-app MCP server (POST /mcp) — 48 tools + 7 skills, loops back to /api
+│   ├── Api/McpServer.cs   in-app MCP server (POST /mcp) — 57 tools + 11 skills, loops back to /api
 │   ├── clientapp/         Svelte + Vite source → builds into ../wwwroot
 │   └── wwwroot/           built SPA (generated by `npm run build`)
 ├── mcp/               stdio→HTTP bridge for MCP clients that don't speak HTTP
+├── tools/canfree.py   offline CAN-ID free-space report + base-address allocator (DBC / CAN log)
+├── docs/can-frame-map.md  address-agnostic CAN broadcast frame map (served at /can-frame-map.md)
 ├── AI-CONFIG.md       AI config-surface design
 └── llms.txt           AI-client discovery doc (also served at /llms.txt)
 ```

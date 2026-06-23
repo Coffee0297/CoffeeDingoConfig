@@ -821,6 +821,16 @@ public class DeviceManager(ILogger<DeviceManager> logger, ILoggerFactory loggerF
     /// stores it, persists to FRAM, and recompiles. Frames are send-only (acks are
     /// observed on the bus but not awaited here).
     /// </summary>
+    /// <summary>Store a Lua program on the device RECORD only (no CAN). Persists in the project JSON
+    /// so cross-module / authored Lua survives offline; push it with UploadLua when the module is live.</summary>
+    public void StoreLua(Guid deviceId, string source)
+    {
+        if (GetDevice(deviceId) is PdmDevice p) p.LuaProgram = source ?? string.Empty;
+    }
+
+    /// <summary>The Lua program stored on the device record (empty for non-PDM / none stored).</summary>
+    public string GetStoredLua(Guid deviceId) => GetDevice(deviceId) is PdmDevice p ? p.LuaProgram : string.Empty;
+
     public bool UploadLua(Guid deviceId, string source)
     {
         var device = GetDevice(deviceId);

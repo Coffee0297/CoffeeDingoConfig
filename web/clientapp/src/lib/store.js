@@ -83,6 +83,7 @@ export const api = {
   action: (guid, act) => j('POST', `/api/devices/${guid}/${act}`),
   outputConfig: (guid, body) => j('POST', `/api/devices/${guid}/outputconfig`, body),
   signals: (guid) => j('GET', `/api/devices/${guid}/signals`),
+  broadcastSignals: (guid) => j('GET', `/api/devices/${guid}/broadcast-signals`),
   inputs: (guid, type) => j('GET', `/api/devices/${guid}/inputs${type ? `?type=${type}` : ''}`),
   functions: (guid) => j('GET', `/api/devices/${guid}/functions`),
   luaUpload: (guid, Source) => j('POST', `/api/devices/${guid}/lua`, { Source }),
@@ -122,6 +123,7 @@ export const api = {
   projOpen: (FileName) => j('POST', '/api/project/open', { FileName }),
   projNew: () => j('POST', '/api/project/new'),
   projDownload: () => j('GET', '/api/project/download'),   // full project JSON for a browser save
+  crossModuleGet: () => j('GET', '/api/system/cross-module'),   // cross-module defs deployed via MCP (for the UI to import)
   async projUpload(text) {                                  // load a project file picked on the PC
     const r = await fetch('/api/project/upload', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: text })
     if (!r.ok) throw new Error(await r.text())
@@ -400,6 +402,36 @@ function loadCross() {
 export const crossFns = writable(loadCross())
 crossFns.subscribe((v) => { try { localStorage.setItem('dingoCrossFns', JSON.stringify(v)) } catch {} })
 
+// ===========================================================================
+// Remote signal references (feature B). A consumer's CAN input is tagged with the source
+// module + the broadcast signal it decodes, base-ID-independent: the wanted CAN id is always
+// sourceBaseId + offset, recomputed live. Stored client-side (the device only holds the raw
+// CAN-input params); round-trips with the project. NOTHING auto-writes - a link only records
+// intent; the user applies it by saving the CAN input (write + burn).
+// ===========================================================================
+function loadRemoteLinks() { try { return JSON.parse(localStorage.getItem('dingoRemoteLinks') || '[]') } catch { return [] } }
+export const remoteLinks = writable(loadRemoteLinks())
+remoteLinks.subscribe((v) => { try { localStorage.setItem('dingoRemoteLinks', JSON.stringify(v)) } catch {} })
+
+// info = { sourceGuid, signal, label, offset, startBit, bitLength, factor, valueOffset, byteOrder, signed }
+export function setRemoteLink(consumerGuid, canInput, info) {
+  remoteLinks.update((list) => [
+    ...list.filter((l) => !(l.consumerGuid === consumerGuid && l.canInput === canInput)),
+    { consumerGuid, canInput, ...info },
+  ])
+}
+export function clearRemoteLink(consumerGuid, canInput) {
+  remoteLinks.update((list) => list.filter((l) => !(l.consumerGuid === consumerGuid && l.canInput === canInput)))
+}
+export const remoteLinkFor = (consumerGuid, canInput) =>
+  get(remoteLinks).find((l) => l.consumerGuid === consumerGuid && l.canInput === canInput) || null
+export const linksForSource = (sourceGuid) => get(remoteLinks).filter((l) => l.sourceGuid === sourceGuid)
+// The CAN id a link WANTS, given the source's current base (null if the source isn't in the project).
+export function wantedId(link, devices) {
+  const src = (devices || []).find((d) => d.guid === link.sourceGuid)
+  return src ? src.baseId + link.offset : null
+}
+
 // ---- Whole-project client state: everything kept in the browser (NOT on the device) — cross-module
 // functions, per-function Lua snippets, CAN-bridge IDs, and layout (car-map pins + wiring-graph
 // positions). Bundled into the saved project file so a Save/Open round-trips EVERYTHING. Device
@@ -417,6 +449,7 @@ export function gatherClientState() {
   return {
     version: 1,
     crossFns: ls('dingoCrossFns', '[]'),
+    remoteLinks: ls('dingoRemoteLinks', '[]'),
     lua: ls('dingoLua', '{}'),
     bridges: ls('dingoGfxBridges', '{}'),
     pinpos: ls('pinpos', '{}'),
@@ -428,6 +461,7 @@ export function restoreClientState(c) {
   // section (e.g. saved before this existed) clears it, matching "the opened project has none".
   try {
     crossFns.set(Array.isArray(c?.crossFns) ? c.crossFns : [])              // store subscriptions persist these
+    remoteLinks.set(Array.isArray(c?.remoteLinks) ? c.remoteLinks : [])
     luaSnippets.set(c?.lua && typeof c.lua === 'object' ? c.lua : {})
     localStorage.setItem('dingoGfxBridges', JSON.stringify(c?.bridges ?? {}))
     localStorage.setItem('pinpos', JSON.stringify(c?.pinpos ?? {}))

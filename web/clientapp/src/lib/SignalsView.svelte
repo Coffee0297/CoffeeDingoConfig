@@ -1,5 +1,5 @@
 <script>
-  import { api, luaGet, luaSet, luaAssemble, luaReadToTabs, luaSnippets, deviceHasLua } from './store.js'
+  import { api, luaGet, luaSet, luaAssemble, luaReadToTabs, luaSnippets, deviceHasLua, telemetry, remoteLinks, remoteLinkFor, setRemoteLink, clearRemoteLink } from './store.js'
   import { recommendResistors, deriveBands, nodeVoltageMv, resistorForMv, nearestStandard, recommendPullup, supplyCurrentMa, ocVoltageMv, autoTolerance, decodePoints, R_IN } from './ladder.js'
   import { toast } from './toast.js'
   import { dialog, labelFields, clickable } from './a11y.js'
@@ -89,6 +89,77 @@
   let f = $state({})
   let idHex = $state('0x100')
   let saving = $state(false)
+
+  // ---- Remote signal reference (feature B): fill this CAN input from another module's broadcast
+  // frame (base+offset, from the CAN frame map). Staged only — nothing writes until Save. ----
+  let allDevices = $derived($telemetry.devices ?? [])
+  let sources = $derived(allDevices.filter((d) => d.guid !== current?.guid && /pdm|canboard/i.test(d.type)))
+  let links = $derived($remoteLinks)
+  const linkFor = (num) => links.find((l) => l.consumerGuid === current?.guid && l.canInput === num)
+  const devName = (g) => allDevices.find((d) => d.guid === g)?.name ?? '(module)'
+  const prettySig = (n) => (n || '').replace(/\./g, ' · ')
+  let remoteSrc = $state('')      // source device guid
+  let remoteSel = $state('')      // chosen signal name
+  let remoteSearch = $state('')
+  let remoteSigsRaw = $state([])  // [{name, offset, startBit, bitLength, factor, valueOffset, byteOrder, signed, unit, kind}]
+  let remoteFuncs = $state(null)  // the source's /functions config (to tell which signals are in use)
+  let remoteBusy = $state(false)
+  $effect(() => {
+    const g = remoteSrc
+    if (!g) { remoteSigsRaw = []; remoteFuncs = null; return }
+    let alive = true; remoteBusy = true
+    Promise.all([api.broadcastSignals(g), api.functions(g).catch(() => null)])
+      .then(([s, fx]) => { if (alive) { remoteSigsRaw = Array.isArray(s) ? s : []; remoteFuncs = fx; remoteBusy = false } })
+      .catch(() => { if (alive) { remoteSigsRaw = []; remoteFuncs = null; remoteBusy = false } })
+    return () => { alive = false }
+  })
+  // A broadcast signal is "in use" only when the function producing it is enabled on the source
+  // (system telemetry is always live). Hides the dozens of unconfigured CAN/virtual/condition slots.
+  // srcDev = the source's telemetry record (PDM smart-output enabled lives there — /functions
+  // omits `outputs`). fx = the source's /functions config (everything else).
+  function signalInUse(name, fx, srcDev) {
+    if (!fx) return true   // config unavailable — don't hide everything
+    if (/^(DeviceState|PdmType|TotalCurrent|BatteryVoltage|BoardTemp|Heartbeat)/.test(name)) return true
+    const m = name.match(/^([A-Za-z]+?)(\d+)/)
+    if (!m) return true
+    const n = +m[2]
+    const at = (arr) => (arr || []).find((x) => x.number === n)
+    switch (m[1]) {
+      case 'RotarySwitch': { const a = at(fx.analogIn); return !!(a?.enabled && a.rotary?.enabled) }
+      case 'AnalogInput': { const a = at(fx.analogIn); return /DigitalMode/.test(name) ? !!(a?.enabled && a.switch?.enabled) : !!a?.enabled }
+      case 'Input': return !!at(fx.inputs)?.enabled
+      case 'DigitalInput': return !!at(fx.digitalIn)?.enabled
+      case 'Output': return !!at(srcDev?.outputs)?.enabled         // PDM smart outputs (telemetry, not /functions)
+      case 'DigitalOutput': return !!at(fx.digitalOut)?.enabled    // CANBoard low-side outputs
+      case 'CanInput': return !!at(fx.canInputs)?.enabled
+      case 'VirtualInput': return !!at(fx.virtualInputs)?.enabled
+      case 'Condition': return !!at(fx.conditions)?.enabled
+      case 'Counter': return !!at(fx.counters)?.enabled
+      case 'Flasher': return !!at(fx.flashers)?.enabled
+      default: return /^Wiper/.test(name) ? !!fx.wiper?.enabled : true   // /functions key is `wiper`
+    }
+  }
+  let remoteSrcDev = $derived(allDevices.find((d) => d.guid === remoteSrc) ?? null)
+  let remoteSigs = $derived(remoteSigsRaw.filter((s) => signalInUse(s.name, remoteFuncs, remoteSrcDev)))
+  let remoteSigsFiltered = $derived(remoteSearch
+    ? remoteSigs.filter((s) => (s.name + ' ' + (s.unit || '')).toLowerCase().includes(remoteSearch.toLowerCase()))
+    : remoteSigs)
+  function applyRemote() {
+    const src = allDevices.find((d) => d.guid === remoteSrc)
+    const sig = remoteSigs.find((s) => s.name === remoteSel)
+    if (!src || !sig) { toast('Pick a module and a signal first.', 'error'); return }
+    idHex = hex(src.baseId + sig.offset)
+    f.ide = false                                   // native broadcast frames are 11-bit standard
+    f.startBit = sig.startBit; f.bitLength = sig.bitLength
+    f.byteOrder = sig.byteOrder; f.factor = sig.factor; f.offset = sig.valueOffset; f.signed = sig.signed
+    if (!f.name || /^canInput\d+$/i.test(f.name)) f.name = `${src.name} ${sig.name}`
+    f._remote = { sourceGuid: src.guid, signal: sig.name, label: prettySig(sig.name), offset: sig.offset,
+      startBit: sig.startBit, bitLength: sig.bitLength, factor: sig.factor, valueOffset: sig.valueOffset,
+      byteOrder: sig.byteOrder, signed: sig.signed }
+    f = { ...f }
+    toast(`Filled from ${src.name} · ${prettySig(sig.name)} → ${idHex}. Save to apply.`, 'info')
+  }
+  function clearRemote() { remoteSrc = ''; remoteSel = ''; delete f._remote; f = { ...f } }
 
   // ---- multi-position switch designer (analog input → firmware RotarySwitch) ----
   // FW decodes pos = clamp(floor((mV-offset)/step), 0, maxPos). This panel picks resistor
@@ -194,6 +265,11 @@
       if (f.switch.enabled) { mp.on = false; sc.on = false }
       else if (mp.on) { sc.on = false }
     }
+    if (kind === 'caninput') {
+      const lk = remoteLinkFor(current?.guid, editing.number)
+      remoteSrc = lk?.sourceGuid ?? ''; remoteSel = lk?.signal ?? ''; remoteSearch = ''
+      if (lk) f._remote = { ...lk }
+    }
     drawer = true
   }
   function close() { drawer = false; editing = null }
@@ -201,6 +277,7 @@
   async function save() {
     if (!current || !editing) return
     const body = { ...f }
+    delete body._remote   // client-only metadata; never sent to the device
     // Multi-position switch: write the derived bands onto the analog input's RotarySwitch.
     if (editing.kind === 'analoginput') {
       body.rotary = { ...f.rotary, enabled: mp.on, invert: mp.invert,
@@ -218,6 +295,12 @@
       const max = f.ide ? 0x1FFFFFFF : 0x7FF
       if (id > max) { toast(`CAN ID 0x${id.toString(16).toUpperCase()} exceeds the ${f.ide ? '29' : '11'}-bit max (0x${max.toString(16).toUpperCase()}). ${id > 0x7FF ? 'Set Frame = Extended.' : ''}`, 'error'); return }
       body.id = id
+    }
+    // Record/clear the cross-module link (feature B). Client-side only — this is what lets a
+    // base-ID change later flag which CAN inputs need re-applying.
+    if (editing.kind === 'caninput') {
+      if (f._remote) setRemoteLink(current.guid, editing.number, f._remote)
+      else clearRemoteLink(current.guid, editing.number)
     }
     saving = true
     try {
@@ -388,9 +471,9 @@
       {/if}
       <div style="display:flex;gap:10px;align-items:center;margin-top:10px">
         <button class="btn primary" disabled={luaBusy || !live} title={live ? '' : 'Connect the module to upload Lua'} onclick={uploadLua}>{luaBusy ? 'Uploading…' : 'Upload to device'}</button>
-        <button class="btn ghost" disabled={luaBusy || !live} title={live ? '' : 'Connect the module to read its Lua'} onclick={readLua}>Read from device</button>
+        <button class="btn ghost" disabled={luaBusy} title={live ? 'Read the running program off the device' : 'Show the program stored in the project (e.g. deployed offline via cross-module functions)'} onclick={readLua}>{live ? 'Read from device' : 'Show stored Lua'}</button>
         <button class="btn ghost" disabled={luaBusy || !live} title={live ? '' : 'Connect the module to read its error state'} onclick={checkLuaError}>Check error</button>
-        {#if luaMsg}<span class="muted">{luaMsg}</span>{:else if !live}<span class="muted" style="font-size:12px">Module offline — Lua is saved locally; connect to upload.</span>{/if}
+        {#if luaMsg}<span class="muted">{luaMsg}</span>{:else if !live}<span class="muted" style="font-size:12px">Module offline — “Show stored Lua” reveals the saved/deployed program; connect to upload changes.</span>{/if}
       </div>
       {#if luaDevErr}
         <div class="sys-alert" style="margin-top:8px">⚠ Device Lua error: <span style="font-family:var(--mono)">{luaDevErr}</span></div>
@@ -413,7 +496,7 @@
         <div style="flex:1">
           <div class="nm2">{s.name} {#if k.physical && !s.enabled}<span class="muted" style="font-weight:400">(disabled)</span>{/if}</div>
           <div class="def">
-            {#if k.key === 'caninput'}{hex(s.id)} · bit {s.startBit}+{s.bitLength}{#if s.factor !== 1} · ×{s.factor}{/if}
+            {#if k.key === 'caninput'}{hex(s.id)} · bit {s.startBit}+{s.bitLength}{#if s.factor !== 1} · ×{s.factor}{/if}{#if linkFor(s.number)} · 🔗 {devName(linkFor(s.number).sourceGuid)}{/if}
             {:else if k.key === 'condition'}{varName(s.input)} {opTxt[s.operator]} {s.arg}
             {:else if k.key === 'virtualinput'}{s.not0 ? '!' : ''}{varName(s.var0)} {condTxt[s.cond0]} {s.not1 ? '!' : ''}{varName(s.var1)}
             {:else if k.key === 'flasher'}{s.onTime}ms on / {s.offTime}ms off
@@ -474,6 +557,23 @@
         </div>
       {:else if editing.kind === 'caninput'}
         <div class="field"><label>Name</label><input bind:value={f.name} placeholder="e.g. Engine RPM" /></div>
+        {#if sources.length}
+          <p class="lbl" style="margin-top:12px">🔗 Pull from another module (optional)</p>
+          <div class="f2">
+            <div class="field"><label>Source module</label>
+              <select bind:value={remoteSrc}><option value="">— manual entry —</option>{#each sources as d}<option value={d.guid}>{d.name} ({hex(d.baseId)})</option>{/each}</select></div>
+            <div class="field"><label>Signal{#if remoteBusy} …{/if}</label>
+              <select bind:value={remoteSel} disabled={!remoteSrc}><option value="">— pick a broadcast signal —</option>{#each remoteSigsFiltered as s}<option value={s.name}>{prettySig(s.name)}{s.unit ? ' (' + s.unit + ')' : ''} · {s.kind}</option>{/each}</select></div>
+          </div>
+          {#if remoteSrc}
+            <div class="f2">
+              <div class="field"><label>Filter signals</label><input bind:value={remoteSearch} placeholder="switch, rotary, output…" /></div>
+              <div class="field" style="align-self:end"><button class="btn primary" type="button" disabled={!remoteSel} onclick={applyRemote}>Use this signal</button></div>
+            </div>
+          {/if}
+          {#if remoteSrc && !remoteBusy && remoteSigs.length === 0}<p class="hint">No signals are wired up on <b>{devName(remoteSrc)}</b> yet — enable an input / output / logic block there first, or use manual entry.</p>{/if}
+          {#if f._remote}<p class="hint">Linked to <b>{devName(f._remote.sourceGuid)}</b> · {f._remote.label} (base+{f._remote.offset}). The fields below are filled from its broadcast frame; re-basing that module flags this input for re-save. <button type="button" class="linkbtn" onclick={clearRemote}>unlink</button></p>{/if}
+        {/if}
         <p class="lbl">IDs seen on the bus</p>
         <div class="bus"><div class="bh"><span class="pulse" style="background:var(--ok);border-radius:50%"></span> live</div>
           <div class="scroll">
