@@ -260,10 +260,11 @@ def parse_device(spec):
     return {'name': name, 'span': span, 'spacing': spacing}
 
 
-# dingoPDM owns base..base+28 (29 cyclic+config IDs); CANBoard owns base..base+10 (11).
+# dingoPDM owns base..base+28 (29 cyclic+config IDs); CANBoard owns base..base+13 (14):
+# +0/+1 config, +2..+11 cyclic, +12/+13 OpenBLT XCP bootloader command/response.
 PRESET_KINDS = {
     'pdm': ('dingoPDM', 29, 32), 'dingopdm': ('dingoPDM', 29, 32),
-    'cb': ('CANBoard', 11, 16), 'canboard': ('CANBoard', 11, 16),
+    'cb': ('CANBoard', 14, 16), 'canboard': ('CANBoard', 14, 16),
 }
 
 

@@ -23,6 +23,7 @@ builder.Services.AddSingleton<ConfigFileManager>();
 builder.Services.AddSingleton<DeviceManager>();
 builder.Services.AddSingleton<CrossModuleStore>();
 builder.Services.AddSingleton<FirmwareFlashService>();
+builder.Services.AddSingleton<CanFlashService>();
 builder.Services.AddSingleton<SdoService>();
 builder.Services.AddSingleton<SystemConfigService>();
 builder.Services.AddSingleton<CanMsgLogger>();
@@ -54,8 +55,22 @@ Microsoft.Extensions.FileProviders.IFileProvider spaFiles =
         ? new Microsoft.Extensions.FileProviders.PhysicalFileProvider(physicalWwwroot)
         : new Microsoft.Extensions.FileProviders.ManifestEmbeddedFileProvider(typeof(Program).Assembly, "wwwroot");
 
+// SPA cache policy: Vite emits content-hashed bundles under /assets (the name changes when the
+// content does), so cache those forever (immutable) — but index.html must always be revalidated,
+// or the browser keeps serving an old index that points at an old bundle after a republish (the
+// "I don't see the new UI" trap). no-cache = "may store, but revalidate first" → a 304 when
+// unchanged (cheap) or the new index after a deploy. API/MCP/SignalR + /llms.txt etc. are not
+// static files, so none of this touches them.
+void SpaCache(Microsoft.AspNetCore.StaticFiles.StaticFileResponseContext ctx)
+{
+    if (ctx.File.Name.Equals("index.html", StringComparison.OrdinalIgnoreCase))
+        ctx.Context.Response.Headers.CacheControl = "no-cache";
+    else if (ctx.Context.Request.Path.StartsWithSegments("/assets"))
+        ctx.Context.Response.Headers.CacheControl = "public, max-age=31536000, immutable";
+}
+
 app.UseDefaultFiles(new DefaultFilesOptions { FileProvider = spaFiles });
-app.UseStaticFiles(new StaticFileOptions { FileProvider = spaFiles });
+app.UseStaticFiles(new StaticFileOptions { FileProvider = spaFiles, OnPrepareResponse = SpaCache });
 app.UseCors("spa");
 
 app.MapHub<LiveHub>("/hub/live");
@@ -82,7 +97,7 @@ app.MapGet("/AI-CONFIG.md", () => ServeDoc("AI-CONFIG.md", "text/markdown"));
 app.MapGet("/can-frame-map.md", () => ServeDoc("can-frame-map.md", "text/markdown"));
 
 // SPA fallback so a refresh on any route returns index.html (from the same provider).
-app.MapFallbackToFile("index.html", new StaticFileOptions { FileProvider = spaFiles });
+app.MapFallbackToFile("index.html", new StaticFileOptions { FileProvider = spaFiles, OnPrepareResponse = SpaCache });
 
 var isDevelopment = app.Environment.IsDevelopment();
 const string url = "http://localhost:5000";

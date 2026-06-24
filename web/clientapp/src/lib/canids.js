@@ -11,10 +11,12 @@ export const OBD_RESERVED = (() => {
   return s
 })()
 
-// Footprint per module type, matching firmware NUM_TX_MSGS: a CANboard owns base..base+10
-// (9 cyclic msgs), a dingoPDM/-Max owns base..base+28 (27). +1 guard ID below base (settings).
+// Footprint per module type, matching firmware NUM_TX_MSGS: a CANboard owns base..base+11
+// (10 cyclic msgs), a dingoPDM/-Max owns base..base+28 (27). +1 guard ID below base (settings).
 export const ID_BEFORE = 1
-export const spanAfter = (type) => (/canboard/i.test(type || '') ? 10 : 28)
+// CANBoard owns base..base+13: +0/+1 config, +2..+11 cyclic, +12/+13 OpenBLT XCP bootloader
+// (command/response). dingoPDM owns base..base+28 (its +12/+13 already fall inside that span).
+export const spanAfter = (type) => (/canboard/i.test(type || '') ? 13 : 28)
 export const isModule = (type) => /pdm|canboard/i.test(type || '')
 
 export function nextPow2(n) {

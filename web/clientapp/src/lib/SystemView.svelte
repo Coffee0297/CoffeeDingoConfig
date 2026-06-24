@@ -142,8 +142,10 @@
   let flashBusy = $state(false), flashLog = $state(''), flashOk = $state(null)
   let flashPct = $state(0), flashPhase = $state('')
   let dfuScan = $state(null), dfuScanning = $state(false)
-  function openFlash(guid) { flashGuid = guid; fwFile = null; flashLog = ''; flashOk = null; flashPct = 0; flashPhase = ''; dfuScan = null; flashDrawer = true }
+  let flashMode = $state('dfu')   // 'dfu' = USB DFU (.bin), 'can' = OpenBLT XCP over CAN (.srec)
+  function openFlash(guid) { flashMode = 'dfu'; flashGuid = guid; fwFile = null; flashLog = ''; flashOk = null; flashPct = 0; flashPhase = ''; dfuScan = null; flashDrawer = true }
   function openFlashBlank() { openFlash('blank') }   // flash a new module not on the bus, via DFU
+  function openFlashCan(guid) { openFlash(guid); flashMode = 'can' }   // reflash over CAN (no USB needed)
   async function scanDfu() {
     dfuScanning = true
     try { dfuScan = await api.flashScan() }
@@ -154,21 +156,24 @@
   function onFwFile(e) { fwFile = e.target.files?.[0] ?? null; e.target.value = '' }
   async function doFlash() {
     if (!fwFile || !flashGuid || flashBusy) return
+    const can = flashMode === 'can'
     const blank = flashGuid === 'blank'
     const label = blank ? 'a blank module (DFU)' : dName(flashGuid)
+    const how = can ? 'over CAN' : 'over USB DFU'
     flashBusy = true; flashOk = null; flashPct = 0; flashPhase = 'Starting…'
-    flashLog = `Flashing ${fwFile.name} (${(fwFile.size / 1024).toFixed(0)} KB) to ${label}… keep the module powered.`
+    flashLog = `Flashing ${fwFile.name} (${(fwFile.size / 1024).toFixed(0)} KB) to ${label} ${how}… keep the module powered.`
     // poll live progress from the backend while the flash POST is in flight
     const poll = setInterval(async () => {
-      try { const s = await api.flashStatus(); if (flashBusy && (s.busy || s.percent)) { flashPct = s.percent; flashPhase = s.phase } } catch {}
+      try { const s = can ? await api.flashCanStatus() : await api.flashStatus(); if (flashBusy && (s.busy || s.percent)) { flashPct = s.percent; flashPhase = s.phase } } catch {}
     }, 300)
     try {
       const buf = await fwFile.arrayBuffer()
-      const r = blank ? await api.flashBlank(buf) : await api.flash(flashGuid, buf)
+      const r = can ? await api.flashCan(flashGuid, buf) : (blank ? await api.flashBlank(buf) : await api.flash(flashGuid, buf))
       flashBusy = false                                  // stop late poll callbacks clobbering the final state
       flashOk = r.ok; flashPct = r.ok ? 100 : flashPct; flashPhase = r.ok ? 'Done' : 'Failed'
       flashLog = (r.log || (r.ok ? 'Done.' : 'Failed.')).trimEnd()
-      toast(r.ok ? `Firmware flashed to ${label}` : 'Firmware flash failed', r.ok ? 'ok' : 'error')
+      if (can && r.ok && r.version) flashLog += `\nModule version: ${r.version}`
+      toast(r.ok ? `Firmware flashed to ${label} ${how}` : 'Firmware flash failed', r.ok ? 'ok' : 'error')
     } catch (err) { flashOk = false; flashPhase = 'Failed'; flashLog += '\nFlash failed: ' + err.message; toast('Flash failed: ' + err.message, 'error') }
     finally { clearInterval(poll); flashBusy = false }
   }
@@ -324,7 +329,7 @@
 {/if}
 
 {#if idConflicts.length}
-  <div class="sys-alert">⚠ {idConflicts.length} CAN ID overlap{idConflicts.length === 1 ? '' : 's'} — each module owns a span from its base (CANboard baseId−1…+10, dingoPDM baseId−1…+28). Re-space these so their spans don't intersect:
+  <div class="sys-alert">⚠ {idConflicts.length} CAN ID overlap{idConflicts.length === 1 ? '' : 's'} — each module owns a span from its base (CANboard baseId−1…+11, dingoPDM baseId−1…+28). Re-space these so their spans don't intersect:
     {#each idConflicts as [a, b]}<b>{a.name} ({hex(a.baseId)}) ↔ {b.name} ({hex(b.baseId)})</b>{' '}{/each}</div>
 {/if}
 
@@ -349,15 +354,20 @@
         <div style="display:flex;gap:6px;margin-top:8px">
           <button class="btn ghost" style="flex:1;font-size:12px"
             onclick={(e) => { e.stopPropagation(); openSettings(d.guid) }}>⚙ Settings</button>
-          <button class="btn ghost" style="flex:1;font-size:12px" disabled={flashBusy} title={flashBusy ? 'A firmware flash is already in progress' : 'Flash firmware over USB DFU (works even if the module is dark on the CAN bus)'}
-            onclick={(e) => { e.stopPropagation(); openFlash(d.guid) }}>⬆ Firmware</button>
+          {#if /canboard/i.test(d.type)}
+            <button class="btn ghost" style="flex:1;font-size:12px" disabled={flashBusy} title={flashBusy ? 'A firmware flash is already in progress' : 'Reflash the application over CAN via the OpenBLT bootloader (no USB needed)'}
+              onclick={(e) => { e.stopPropagation(); openFlashCan(d.guid) }}>⬆ Over CAN</button>
+          {:else}
+            <button class="btn ghost" style="flex:1;font-size:12px" disabled={flashBusy} title={flashBusy ? 'A firmware flash is already in progress' : 'Flash firmware over USB DFU (works even if the module is dark on the CAN bus)'}
+              onclick={(e) => { e.stopPropagation(); openFlash(d.guid) }}>⬆ Firmware</button>
+          {/if}
         </div>
       {/if}
     </div>
   {/each}
   <div class="pdm add-module" use:clickable onclick={addModule}>+ Add module</div>
 </div>
-<input type="file" accept=".bin" bind:this={fwInput} onchange={onFwFile} style="display:none" />
+<input type="file" accept={flashMode === 'can' ? '.srec,.s19' : '.bin'} bind:this={fwInput} onchange={onFwFile} style="display:none" />
 
 {#if setDrawer}
   <div class="scrim show" onclick={() => { if (!setBusy) setDrawer = false }}></div>
@@ -421,7 +431,7 @@
 {#if flashDrawer}
   <div class="scrim show" onclick={() => { if (!flashBusy) flashDrawer = false }}></div>
   <aside class="drawer show" use:dialog={{ onclose: closeDrawer }}>
-    <div class="dh"><div><div class="nm">{flashGuid === 'blank' ? 'Flash a new / blank module' : 'Update firmware'}</div>
+    <div class="dh"><div><div class="nm">{flashGuid === 'blank' ? 'Flash a new / blank module' : (flashMode === 'can' ? 'Update firmware over CAN' : 'Update firmware')}</div>
       <div class="meta">{flashGuid === 'blank' ? 'blank module in DFU' : dName(flashGuid)} — flashes over USB DFU</div></div>
       <button class="x" aria-label="Close" onclick={() => { if (!flashBusy) flashDrawer = false }}>✕</button></div>
     <div class="dbody" use:labelFields>

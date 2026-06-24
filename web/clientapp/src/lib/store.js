@@ -104,6 +104,13 @@ export const api = {
   },
   flashStatus: () => j('GET', '/api/flash/status'),
   flashScan: () => j('GET', '/api/flash/dfu'),   // list DFU devices dfu-util can see
+  // Flash a module's app over CAN via the OpenBLT XCP bootloader (.srec). No USB/DFU.
+  async flashCan(guid, bytes) {
+    const r = await fetch(`/api/devices/${guid}/flash-can`, { method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: bytes })
+    if (!r.ok) throw new Error(await r.text())
+    return r.json()
+  },
+  flashCanStatus: () => j('GET', '/api/flash-can/status'),
   setFunction: (guid, kind, number, body) => j('POST', `/api/devices/${guid}/function/${kind}/${number}`, body),
   writeParam: (guid, Index, Sub, Value) => j('POST', `/api/devices/${guid}/writeparam`, { Index, Sub, Value }),
   sdoRead: (Node, Index, Sub) => j('POST', '/api/sdo/read', { Node, Index, Sub }),

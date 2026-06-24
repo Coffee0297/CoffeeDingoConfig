@@ -31,7 +31,7 @@ public class CanboardDevice : IDeviceConfigurable
     [JsonIgnore] protected int NumConditions { get; private set; } = 8;
     
     [JsonIgnore] public bool CanSleep { get; } = false;
-    [JsonIgnore] public bool CanBootloader { get; } = false;
+    [JsonIgnore] public bool CanBootloader { get; } = true;   // OpenBLT XCP-over-CAN bootloader
 
     [JsonIgnore] public const int BaseIndex = 0x0000;
     [JsonPropertyName("canboardType")] public int CanboardType { get; set; }
@@ -895,7 +895,24 @@ public class CanboardDevice : IDeviceConfigurable
 
     public DeviceCanFrame? GetBootloaderMsg()
     {
-        return null;
+        // The CANBoard now has the OpenBLT CAN bootloader: MsgCmd::Bootloader (33) with the
+        // "BOOTL" signature, sent to BaseId+1 (config RX), makes the app enter it. Same frame
+        // shape as the PDM (see PdmDevice.GetBootloaderMsg).
+        return new DeviceCanFrame
+        {
+            SendOnly = true,
+            DeviceBaseId = BaseId,
+            Frame = new CanFrame
+            (
+                Id: BaseId + ConfigTxOffset,
+                Len: 8,
+                Payload: [
+                    Convert.ToByte(MessageCommand.Bootloader), (byte)'B', (byte)'O', (byte)'O', (byte)'T', (byte)'L', 0,
+                    0
+                ]
+            ),
+            Name = "Bootloader"
+        };
     }
 
     public List<CanFrame> GetCyclicMsgs()

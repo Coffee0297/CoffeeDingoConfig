@@ -307,7 +307,7 @@ public static class LiveApi
         api.MapGet("/discover", (CanMsgLogger log) =>
         {
             var ids = log.GetMessageSum()
-                .Where(m => m.Direction == DataDirection.Rx && m.Len == 8)
+                .Where(m => m.Direction == DataDirection.Rx && m.Len == 8 && m.Count >= 10) // cyclic only; skip sparse config frames (see /identify)
                 .Select(m => m.Id).Distinct().OrderBy(x => x).ToList();
             var found = new List<object>();
             int i = 0;
@@ -360,7 +360,16 @@ public static class LiveApi
             }
 
             // dingoPDM / CANBoard: contiguous run of 8-byte status frames, base = runStart - 2.
-            var ids = rx.Where(m => m.Len == 8 && !claimed.Contains(m.Id)).Select(m => m.Id).Distinct().OrderBy(x => x).ToList();
+            // Build the run from CYCLIC broadcasts ONLY. A device's one-off config frames at base+0
+            // (replies) and base+1 (request echoes) are sparse; when they linger on the bus they sit
+            // just below the cyclic run (which starts at base+2), drag runStart down two IDs, and make
+            // runStart-2 land two below the real base — which then probes the wrong Version id. That is
+            // exactly what mis-detected the CANBoard (base 0x640 frames at 0x640/0x641 → inferred 0x63E
+            // → probed 0x63F not 0x641 → no reply → "unconfirmed, default PDM"). Cyclic frames are sent
+            // ~10 Hz so they pass count>=10 within a second; sparse config one-offs do not.
+            const int cyclicMinCount = 10;
+            var ids = rx.Where(m => m.Len == 8 && m.Count >= cyclicMinCount && !claimed.Contains(m.Id))
+                        .Select(m => m.Id).Distinct().OrderBy(x => x).ToList();
             var candidates = new List<(int baseId, int runLen, int statusId)>();
             int i = 0;
             while (i < ids.Count)
@@ -672,6 +681,24 @@ public static class LiveApi
         {
             var s = await flasher.ScanAsync();
             return Results.Ok(new { utilOk = s.UtilOk, util = s.Util, devices = s.DfuDevices, raw = s.Raw });
+        });
+
+        // In-app firmware update over CAN (OpenBLT XCP). Upload a .srec (raw body); commands the
+        // module into its CAN bootloader and programs it over the live SLCAN link — no USB/DFU.
+        api.MapPost("/devices/{guid}/flash-can", async (string guid, HttpRequest req, CanFlashService flasher) =>
+        {
+            if (!Guid.TryParse(guid, out var g)) return Results.BadRequest();
+            using var ms = new MemoryStream();
+            await req.Body.CopyToAsync(ms);
+            var res = await flasher.FlashAsync(g, ms.ToArray());
+            return Results.Ok(new { ok = res.Ok, log = res.Log, version = res.Version });
+        });
+
+        // Live CAN-flash progress (polled by the UI while a CAN flash is in flight).
+        api.MapGet("/flash-can/status", (CanFlashService flasher) =>
+        {
+            var s = flasher.Status();
+            return Results.Ok(new { busy = s.Busy, percent = s.Percent, phase = s.Phase });
         });
 
         // ---- Declarative whole-system config (AI-friendly): schema + snapshot + apply ----

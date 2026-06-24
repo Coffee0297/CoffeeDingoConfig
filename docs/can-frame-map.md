@@ -17,9 +17,16 @@ A module owns 3 + N consecutive 11-bit CAN IDs off its `baseId`:
 | `baseId + 0`  | device → tool   | config replies, version, info/warning/error                |
 | `baseId + 1`  | tool → device   | config requests / commands (read/write/burn/sleep/…)        |
 | `baseId + 2 + N` | device → tool | **cyclic telemetry, message N** — this document            |
+| `baseId + 12` | tool → device   | OpenBLT XCP bootloader **command** (only while in the bootloader) |
+| `baseId + 13` | device → tool   | OpenBLT XCP bootloader **response** (only while in the bootloader) |
 
 So **telemetry message N is at CAN ID `baseId + 2 + N`.** Broadcast period is 100 ms
 (`CAN_TX_CYCLIC_MSG_DELAY`). Default base IDs: dingoPDM / -Max = `0x0DE` (222), CANBoard = `0x640` (1600).
+
+`baseId + 12` / `baseId + 13` are the OpenBLT XCP-over-CAN bootloader command/response IDs, used
+only when a module is in its CAN bootloader (firmware update over CAN). They are derived at runtime
+from `baseId`, so the CANBoard footprint is `baseId .. baseId + 13` (14 IDs); the dingoPDM/-Max span
+already covers them. Keep this coherent with `canids.js` (`spanAfter`) and `tools/canfree.py`.
 
 **Bit numbering** is DBC "Intel" / little-endian sawtooth: bit *b* lives in byte `b/8`, bit `b%8`
 (LSB = 0). Multi-byte fields are little-endian. Below, `bits a–b` means start bit *a*, through *b*
@@ -123,7 +130,7 @@ Bytes 0–1/2–3/4–5/6–7 = dial 1/2/3/4, u16 each.
 
 5 analog inputs (each also usable as rotary switch or on/off switch), 8 digital inputs,
 4 low-side digital outputs, 8 CAN inputs, 8 virtual inputs, 4 flashers, 4 counters, 8 conditions.
-**9 cyclic messages, offsets +2 … +10.**
+**10 cyclic messages, offsets +2 … +11.**
 
 ### Msg 0 — `base+2` — Analog inputs 1–4 (mV) — *always sent*
 Bytes 0–1/2–3/4–5/6–7 = AnalogInput 1/2/3/4 millivolts, u16, **1 mV/bit**.
@@ -172,13 +179,18 @@ Message `5+k` carries CAN input values `2k+1` and `2k+2` (k = 0…3), so values 
 | 0–31  | CANInputValue (odd)  | bytes 0–3, 32-bit; scaling/byte-order per that input's config |
 | 32–63 | CANInputValue (even) | bytes 4–7, 32-bit; scaling/byte-order per that input's config |
 
+### Msg 9 — `base+11` — Digital output duty cycle — *sent if any DO PWM enabled*
+Bytes 0–3 = DigitalOutput 1–4 duty %, u8 each (bytes 4–7 reserved, 0). Mirrors the PDM's Msg 23.
+On/off state stays in Msg 2 (bits 48–51); this frame carries the live PWM duty.
+
 ---
 
 ## Notes
 
-- **Firmware version.** This map reflects firmware **≥ v5.5.102** and the matching `*_0.5.1.dbc`
-  (mirrored in this repo's `dbc/`). Two wire-format fixes landed in 5.5.102 — decode older
-  firmware accordingly:
+- **Firmware version.** This map reflects firmware **≥ v5.5.103** and the matching `*_0.5.1.dbc`
+  (mirrored in this repo's `dbc/`). 5.5.103 added the CANBoard digital-output **PWM duty** frame
+  (Msg 9, `base+11`) — absent on older firmware. Two wire-format fixes landed in 5.5.102 — decode
+  older firmware accordingly:
   - The **second CAN-input *value*** in each value-pair frame moved from bit 33 to **bit 32**
     (bytes 4–7). Firmware ≤ 5.5.101 encoded it one bit high (`EncodeLE(... 33, 32)`), so on the
     wire it sat at bits 33–63 with its MSB truncated. The odd value (bit 0) was always fine.

@@ -499,6 +499,20 @@ public static class McpServer
             Schema("""{"type":"object","properties":{}}"""),
             _ => new(GET, "/api/flash/status", null)),
 
+        new("flash_firmware_can", "Flash a CANBoard's application firmware over CAN via the OpenBLT XCP bootloader (no USB/DFU). 'path' is a server-local .srec; its bytes are uploaded. The module is commanded into its bootloader and programmed over the live CAN link, then reset into the new app.",
+            Schema("""{"type":"object","properties":{"guid":{"type":"string"},"path":{"type":"string"}},"required":["guid","path"]}"""),
+            a =>
+            {
+                var bytes = File.ReadAllBytes(Str(a, "path"));
+                var c = new ByteArrayContent(bytes);
+                c.Headers.ContentType = new("application/octet-stream");
+                return new(POST, $"/api/devices/{Str(a, "guid")}/flash-can", c);
+            }),
+
+        new("flash_can_status", "Poll the current CAN (XCP) firmware-flash progress/result.",
+            Schema("""{"type":"object","properties":{}}"""),
+            _ => new(GET, "/api/flash-can/status", null)),
+
         new("scan_dfu", "Scan USB for modules in DFU mode (runs dfu-util -l). Returns whether dfu-util is present, how many boards are in DFU, and the raw listing — run before flash_blank so it isn't blind.",
             Schema("""{"type":"object","properties":{}}"""),
             _ => new(GET, "/api/flash/dfu", null)),
@@ -775,7 +789,7 @@ public static class McpServer
             # Skill: CAN addressing & frame map
 
             - **Footprint:** a module owns `baseId .. baseId + span`, matching firmware NUM_TX_MSGS —
-              **CANBoard `base..+10`**, **dingoPDM/-Max `base..+28`** (config at +0/+1, cyclic from +2).
+              **CANBoard `base..+11`**, **dingoPDM/-Max `base..+28`** (config at +0/+1, cyclic from +2).
               Two modules clash if these ranges overlap; space them apart accordingly.
             - `get_definitions` — per-model channel counts + output current ratings (before `add_device`).
             - `get_frame_map` — the address-agnostic map: which `base + offset` and bits carry each
