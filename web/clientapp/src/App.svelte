@@ -38,6 +38,20 @@
   let graphWin = $state(60)
   let cardMode = $state({}) // output number -> 'amps' | 'trig'
   let editNum = $state(null)
+  // Open a graph item's settings: outputs → Outputs tab (PDM drawer / CANBoard SignalsView),
+  // everything else → Signals & logic with the matching editor auto-opened.
+  let signalsTarget = $state(null)
+  let targetNonce = 0
+  function openItemSettings(kind, number) {
+    if (kind === 'output') {
+      view = 'outputs'
+      if (isPdm) editNum = number
+      else signalsTarget = { kind: 'digitaloutput', number, n: ++targetNonce }   // CANBoard digital output
+    } else {
+      view = 'signals'
+      signalsTarget = { kind, number, n: ++targetNonce }
+    }
+  }
   let dialog = $state(null) // 'add' | 'modify' | 'settings'
   let dlgName = $state(''), dlgType = $state('pdm'), dlgBase = $state('0x7CE')
   const deviceTypes = [
@@ -356,7 +370,7 @@
 
     <span class="nav-seg">
       {#each navs as [id, label]}
-        <button class:active={view === id} aria-current={view === id ? 'page' : undefined} onclick={() => (view = id)}>{label}</button>
+        <button class:active={view === id} aria-current={view === id ? 'page' : undefined} onclick={() => { view = id; signalsTarget = null }}>{label}</button>
       {/each}
     </span>
     <button class="btn ghost" title="Help for this view" aria-label="Help for this view" style="padding:6px 10px;font-weight:700" onclick={() => (helpOpen = true)}>?</button>
@@ -463,7 +477,7 @@
           </div>
         </div>
       {:else if /canboard|can.?board/i.test(current.type)}
-        <SignalsView {current} ids={t.ids} mode="outputs" />
+        <SignalsView {current} ids={t.ids} mode="outputs" openTarget={signalsTarget} />
       {:else if /keypad/i.test(current.type)}
         <KeypadView device={current} {devices} />
       {:else if !isPdm}
@@ -521,9 +535,9 @@
     {:else if view === 'system'}
       <SystemView {devices} connected={t.connected} pick={pickModule} {addModule} remove={removeByGuid} />
     {:else if view === 'signals'}
-      <SignalsView {current} ids={t.ids} />
+      <SignalsView {current} ids={t.ids} openTarget={signalsTarget} />
     {:else if view === 'wiring'}
-      <GraphView device={current} {devices} />
+      <GraphView device={current} {devices} onOpenSettings={openItemSettings} />
     {:else if view === 'plot'}
       <PlotView {devices} />
     {:else if view === 'logs'}

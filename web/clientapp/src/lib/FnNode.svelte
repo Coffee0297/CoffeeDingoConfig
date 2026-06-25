@@ -42,6 +42,7 @@
     {:else}
       <span class="fn-ttl" title={data.onRename ? 'Double-click to rename' : ''} ondblclick={(e) => { e.stopPropagation(); startEdit() }}>{data.label}</span>
     {/if}
+    {#if data.onSettings}<button class="fn-gear" title="Open this item's settings" aria-label={'Settings for ' + data.label} onclick={(e) => { e.stopPropagation(); data.onSettings() }}>⚙</button>{/if}
     {#if data.deletable}<button class="fn-del" title="Delete this block" aria-label={'Delete ' + data.label} onclick={(e) => { e.stopPropagation(); data.onDelete?.() }}>✕</button>{/if}
   </div>
 
@@ -84,11 +85,11 @@
   .fn-hd { height: 22px; box-sizing: border-box; color: #fff; font-size: 10px; font-weight: 700; letter-spacing: .02em;
     padding: 0 8px; border-radius: 5px 5px 0 0; display: flex; align-items: center; gap: 6px; overflow: hidden; }
   .fn-kind { opacity: .85; text-transform: uppercase; flex: none; }
-  .fn-ttl { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: text; }
+  .fn-ttl { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: text; flex: 1; }
   .fn-edit { flex: 1; min-width: 0; font: inherit; font-weight: 600; color: #111; background: #fff; border: 0; border-radius: 3px; padding: 0 4px; }
-  .fn-del { margin-left: auto; background: rgba(255,255,255,.22); color: #fff; border: 0; border-radius: 4px;
+  .fn-gear, .fn-del { margin-left: 3px; background: rgba(255,255,255,.22); color: #fff; border: 0; border-radius: 4px;
     cursor: pointer; font-size: 10px; line-height: 1; padding: 1px 4px; flex: none; }
-  .fn-del:hover { background: rgba(0,0,0,.4); }
+  .fn-gear:hover, .fn-del:hover { background: rgba(0,0,0,.4); }
   .fn-sub { font-size: 10px; color: var(--muted, #9a9ab0); padding: 3px 9px 0; font-family: var(--mono, monospace); }
   .fn-body { position: relative; }
   .fn-row { position: absolute; height: 18px; display: flex; align-items: center; gap: 5px; font-size: 11px; line-height: 1; max-width: 62%; }

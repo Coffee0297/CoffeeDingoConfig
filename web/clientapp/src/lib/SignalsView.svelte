@@ -5,7 +5,8 @@
   import { dialog, labelFields, clickable } from './a11y.js'
   import LuaEditor from './LuaEditor.svelte'
   import Sparkline from './Sparkline.svelte'
-  let { current, ids = [], mode = 'all' } = $props()  // 'all' = full signals list; 'outputs' = digital-output cards only
+  let { current, ids = [], mode = 'all', openTarget = null } = $props()  // 'all' = full signals list; 'outputs' = digital-output cards only
+  // openTarget {kind, number, n}: auto-open an item's editor (from the Wiring graph's gear button).
   // Writes/uploads only reach hardware when the module is live on the bus; config edits still
   // persist to the project offline. Read-backs (Lua read, error check) need a live module.
   let live = $derived(!!current?.connected)
@@ -52,6 +53,17 @@
     } catch (e) { loadErr = 'Could not load this module’s signals — ' + e.message }
   }
   $effect(() => { current?.guid; reload() })
+
+  // Auto-open an item's editor when navigated here from the Wiring graph (gear button).
+  let seededTarget = $state(0)
+  $effect(() => {
+    const t = openTarget
+    if (!t || !funcs || t.n === seededTarget) return
+    const ARR = { input: funcs.inputs ?? funcs.digitalIn, analoginput: funcs.analogIn, caninput: funcs.canInputs, virtualinput: funcs.virtualInputs, condition: funcs.conditions, counter: funcs.counters, flasher: funcs.flashers, canoutput: funcs.canOutputs, digitaloutput: funcs.digitalOut }
+    const arr = ARR[t.kind]
+    const row = arr?.find((x) => x.number === t.number) ?? arr?.[t.number - 1]
+    if (row) { seededTarget = t.n; seed(t.kind, row, false) }
+  })
 
   const hex = (n) => '0x' + (n ?? 0).toString(16).toUpperCase()
   const opTxt = ['=', '≠', '>', '<', '≥', '≤', '&', '!&']
