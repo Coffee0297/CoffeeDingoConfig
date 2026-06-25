@@ -889,8 +889,13 @@ public class PdmDevice : IDeviceConfigurable
     {
         var lastConnected = Connected;
         var timeSpan = DateTime.Now - LastRxTime;
-        Connected = timeSpan.TotalMilliseconds < 500;
-        
+        // ponytail: heartbeat window. 500ms was tighter than the bus's worst inter-status gap,
+        // so a single missed/late broadcast flipped Connected→false (red "not found" + Clear()
+        // wiping live values) then back — the badge strobed. 3000ms tolerates a couple of dropped
+        // broadcasts; a genuinely removed module still clears within 3s. Tighten only if a real
+        // disconnect must be detected faster than the status broadcast period × 3.
+        Connected = timeSpan.TotalMilliseconds < 3000;
+
         return Connected & !lastConnected;
     }
     

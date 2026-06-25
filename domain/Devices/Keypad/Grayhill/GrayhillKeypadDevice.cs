@@ -91,8 +91,10 @@ public class GrayhillKeypadDevice : IKeypadDevice
     {
         var lastConnected = Connected;
         var timeSpan = DateTime.Now - _lastRxTime;
-        Connected = timeSpan.TotalMilliseconds < 500;
-        
+        // ponytail: heartbeat window — 3000ms so the "live" badge doesn't strobe on sub-second
+        // feed gaps. See PdmDevice.UpdateIsConnected.
+        Connected = timeSpan.TotalMilliseconds < 3000;
+
         return Connected & !lastConnected;
     }
 
