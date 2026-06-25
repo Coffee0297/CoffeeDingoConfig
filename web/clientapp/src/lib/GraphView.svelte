@@ -220,6 +220,8 @@
     try { remotes = JSON.parse(localStorage.getItem(remKey()) || '[]') } catch { remotes = [] }
     try {
       ;[funcs, vmap] = await Promise.all([api.functions(device.guid), api.inputs(device.guid).catch(() => [])])
+      boolSrc = await api.inputs(device.guid, 'bool').catch(() => [])
+      numSrc = [...await api.inputs(device.guid, 'float').catch(() => []), ...await api.inputs(device.guid, 'int').catch(() => [])]
       build()
     } catch (e) { msg = 'load failed: ' + e.message }
   }
@@ -319,12 +321,84 @@
     remotes = [...remotes, { srcGuid: remoteDev, srcVar: sig.index, label: sig.name, devName: dName(remoteDev) }]
     saveRemotes(); build(); remoteOpen = false
   }
+
+  // ===== Circuit Builders =====================================================================
+  // Data-driven wizards that scaffold + auto-wire a set of functions. Each builder declares its
+  // fields; build(ctx, sel) creates Conditions/Flashers/VirtualInputs and wires the outputs.
+  let boolSrc = $state([]), numSrc = $state([])   // typed source lists (bool triggers / numeric)
+  let bOpen = $state(false), bKey = $state(''), bSel = $state({}), bBusy = $state(false), bMsg = $state('')
+  const bOps = [{ v: 2, t: 'greater than' }, { v: 3, t: 'less than' }, { v: 4, t: '≥' }, { v: 5, t: '≤' }, { v: 0, t: 'equals' }]
+  // Outputs the builder can target: PDM smart outputs (device.outputs) OR CANBoard digital outputs.
+  const builderOutputs = $derived(device?.outputs?.length ? device.outputs : (funcs?.digitalOut ?? []))
+  const bOutName = (n) => builderOutputs.find((o) => o.number === +n)?.name?.trim() || ('output' + n)
+  const And = 0, Or = 1   // BoolOperator
+
+  const BUILDERS = [
+    { key: 'simple', name: 'Simple switched circuit', desc: 'One input drives one output directly.',
+      fields: [{ k: 'input', t: 'bool', label: 'Driven by' }, { k: 'output', t: 'out', label: 'Output' }],
+      build: async (ctx, s) => { await ctx.wireOutput(s.output, +s.input) } },
+    { key: 'analog', name: 'Analog triggered switch', desc: 'Output turns on when an analog signal crosses a threshold (creates a Condition).',
+      fields: [{ k: 'analog', t: 'num', label: 'Analog signal' }, { k: 'op', t: 'op', label: 'Turn on when it is' }, { k: 'thr', t: 'number', label: 'Threshold', def: 0 }, { k: 'output', t: 'out', label: 'Output' }],
+      build: async (ctx, s) => { const c = await ctx.condition(+s.analog, +s.op, +s.thr, 'CB ' + bOutName(s.output)); await ctx.wireOutput(s.output, c) } },
+    { key: 'blinker', name: 'Blinker / hazard', desc: 'Left/right (+ optional hazard) blink two outputs. Builds a flasher + the side logic.',
+      fields: [{ k: 'left', t: 'bool', label: 'Left trigger' }, { k: 'right', t: 'bool', label: 'Right trigger' },
+        { k: 'hazard', t: 'bool', label: 'Hazard trigger', opt: true }, { k: 'leftOut', t: 'out', label: 'Left output' },
+        { k: 'rightOut', t: 'out', label: 'Right output' }, { k: 'rate', t: 'number', label: 'Blink rate (ms)', def: 400 }],
+      build: async (ctx, s) => {
+        const fl = await ctx.flasher(ctx.alwaysOn(), +s.rate, +s.rate, 'CB Blink')
+        const haz = s.hazard ? +s.hazard : 0
+        const side = async (trig, name) => haz
+          ? ctx.virtual({ v0: +trig, op0: Or, v1: haz, op1: And, v2: fl }, name)   // (trig OR hazard) AND blink
+          : ctx.virtual({ v0: +trig, op0: And, v1: fl }, name)                     // trig AND blink
+        await ctx.wireOutput(s.leftOut, await side(s.left, 'CB Left'))
+        await ctx.wireOutput(s.rightOut, await side(s.right, 'CB Right'))
+      } },
+  ]
+  const curBuilder = $derived(BUILDERS.find((b) => b.key === bKey))
+
+  function openBuilder(key) {
+    bKey = key; bMsg = ''
+    const b = BUILDERS.find((x) => x.key === key)
+    bSel = {}; for (const f of b.fields) bSel[f.k] = f.def ?? ''
+    bOpen = true
+  }
+  // ctx helpers — each create returns the new function's OUTPUT varmap index, ready to wire.
+  async function bRefresh() { funcs = await api.functions(device.guid); vmap = await api.inputs(device.guid).catch(() => vmap) }
+  function bIdx(nodeId) { return maps().srcToIdx[nodeId + '|out'] }
+  function bFree(arr) { const s = (funcs?.[arr] ?? []).find((x) => !x.enabled); if (!s) throw new Error(`No free ${arr} slots`); return s.number }
+  const builderCtx = {
+    alwaysOn: () => vmap.find((v) => v.name === 'Always On')?.index ?? 1,
+    wireOutput: (outNum, srcIdx) => isCanboard
+      ? api.setFunction(device.guid, 'digitaloutput', outNum, { enabled: true, input: srcIdx })
+      : applyGraphConnection(device.guid, 'output:' + outNum, 'input', srcIdx, devices),
+    condition: async (input, op, arg, name) => { const n = bFree('conditions'); await api.setFunction(device.guid, 'condition', n, { enabled: true, input, operator: op, arg, name }); await bRefresh(); return bIdx('condition:' + n) },
+    flasher: async (input, onTime, offTime, name) => { const n = bFree('flashers'); await api.setFunction(device.guid, 'flasher', n, { enabled: true, input, onTime, offTime, single: false, name }); await bRefresh(); return bIdx('flasher:' + n) },
+    virtual: async (c, name) => { const n = bFree('virtualInputs'); await api.setFunction(device.guid, 'virtualinput', n, { enabled: true, not0: !!c.not0, var0: c.v0 ?? 0, cond0: c.op0 ?? And, not1: !!c.not1, var1: c.v1 ?? 0, cond1: c.op1 ?? And, not2: !!c.not2, var2: c.v2 ?? 0, mode: 0, name }); await bRefresh(); return bIdx('virtualinput:' + n) },
+  }
+  async function applyBuilder() {
+    if (!curBuilder) return
+    const missing = curBuilder.fields.filter((f) => !f.opt && (bSel[f.k] === '' || bSel[f.k] == null))
+    if (missing.length) { bMsg = 'Fill in: ' + missing.map((f) => f.label).join(', '); return }
+    bBusy = true; bMsg = ''
+    try {
+      await curBuilder.build(builderCtx, bSel)
+      await load()
+      localStorage.removeItem(posKey()); build()   // re-layout so the new blocks are visible
+      bOpen = false
+      msg = `built “${curBuilder.name}” — Burn to keep`
+    } catch (e) { bMsg = 'Failed: ' + e.message }
+    finally { bBusy = false }
+  }
 </script>
 
 <div class="h-row">
   <div><h1>{device?.name ?? '—'} · Wiring</h1>
     <p class="sub">Drag from a <b style="color:#594ae2">purple output ●</b> (right) to a <b style="color:#2a9d8f">green input ●</b> (left) to wire it · hover a block and click <b>✕</b> or select + press <b>Delete</b> to remove · then <b>Burn</b> to keep. {#if msg}— <b>{msg}</b>{/if}{#if !live}<br><span class="muted">Module offline — wiring saves to the project; connect + Deploy to apply it.</span>{/if}</p></div>
   <div style="margin-left:auto;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+    <select onchange={(e) => { if (e.target.value) { openBuilder(e.target.value); e.target.value = '' } }} style="font-size:13px" title="Scaffold a ready-made circuit">
+      <option value="">⚡ Circuit builder…</option>
+      {#each BUILDERS as b}<option value={b.key}>{b.name}</option>{/each}
+    </select>
     <select onchange={(e) => { if (e.target.value) { addNode(e.target.value); e.target.value = '' } }} style="font-size:13px">
       <option value="">+ Add node…</option>
       {#each ADDABLE as [k, l]}<option value={k}>{l}</option>{/each}
@@ -363,6 +437,40 @@
       </div>
       <p class="hint">Pick a signal (e.g. a switch or output state). It appears as a remote node — wire it to a local input
         and the tool auto-creates the CAN broadcast on “{dName(remoteDev)}” and the CAN receive here. Deploy/Burn both modules.</p>
+    </div>
+  </aside>
+{/if}
+
+{#if bOpen && curBuilder}
+  <div class="scrim show" onclick={() => (bOpen = false)}></div>
+  <aside class="drawer show" use:dialog={{ onclose: () => (bOpen = false) }}>
+    <div class="dh"><div><div class="nm">⚡ {curBuilder.name}</div>
+      <div class="meta">{curBuilder.desc}</div></div>
+      <button class="x" aria-label="Close" onclick={() => (bOpen = false)}>✕</button></div>
+    <div class="dbody" use:labelFields>
+      {#each curBuilder.fields as f}
+        <div class="field"><label>{f.label}{#if f.opt}<span class="muted">&nbsp;(optional)</span>{/if}</label>
+          {#if f.t === 'bool'}
+            <select bind:value={bSel[f.k]}><option value="">{f.opt ? '— none —' : 'Choose…'}</option>{#each boolSrc as v}<option value={v.index}>{v.name}</option>{/each}</select>
+          {:else if f.t === 'num'}
+            <select bind:value={bSel[f.k]}><option value="">Choose…</option>{#each numSrc as v}<option value={v.index}>{v.name}</option>{/each}</select>
+          {:else if f.t === 'out'}
+            <select bind:value={bSel[f.k]}><option value="">Choose…</option>{#each builderOutputs as o}<option value={o.number}>{'O' + o.number}{o.name?.trim() ? ' · ' + o.name : ''}</option>{/each}</select>
+          {:else if f.t === 'op'}
+            <select bind:value={bSel[f.k]}>{#each bOps as o}<option value={o.v}>{o.t}</option>{/each}</select>
+          {:else if f.t === 'number'}
+            <input type="number" step="any" bind:value={bSel[f.k]} />
+          {/if}
+        </div>
+      {/each}
+      <p class="hint">Creates the needed Conditions / Flashers / Virtual inputs and wires the outputs. You can tweak or delete
+        any of the generated blocks afterwards in the graph. {#if !live}Module offline — saved to the project; Deploy to apply.{/if}</p>
+      {#if bMsg}<p class="hint"><b>{bMsg}</b></p>{/if}
+    </div>
+    <div class="dfoot">
+      <span style="margin-left:auto"></span>
+      <button class="btn ghost" onclick={() => (bOpen = false)}>Cancel</button>
+      <button class="btn primary" disabled={bBusy} onclick={applyBuilder}>{bBusy ? 'Building…' : 'Build circuit'}</button>
     </div>
   </aside>
 {/if}
