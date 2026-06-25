@@ -23,6 +23,24 @@ public class PcanAdapter  : ICommsAdapter
     public TimeSpan RxTimeDelta { get; private set; }
     public bool IsConnected => RxTimeDelta < TimeSpan.FromMilliseconds(500);
 
+    // See ICommsAdapter.SetReceiveFilter. _acceptLo < 0 = accept all; otherwise only ids in
+    // [_acceptLo.._acceptHi] are surfaced. Gated in OnMessageAvailable so a flooded bus can't overload
+    // the synchronous DataReceived handlers during a CAN flash / config exchange. (PCAN can also filter
+    // in hardware via the channel acceptance filter; this host-side gate is the driver-agnostic
+    // equivalent of the SLCAN reader filter.)
+    private volatile int _acceptLo = -1;
+    private volatile int _acceptHi = -1;
+    public void SetReceiveFilter(int? loId, int? hiId = null)
+    {
+        _acceptLo = loId ?? -1;
+        _acceptHi = hiId ?? loId ?? -1;
+    }
+
+    // PCAN has a real hardware acceptance filter (PCANBasic message filtering); always suitable for a
+    // busy-bus CAN flash. (We gate host-side here too, but the hardware can drop traffic before the host.)
+    public Task<AdapterFilterProbe> ProbeFilterAsync(CancellationToken ct = default) =>
+        Task.FromResult(new AdapterFilterProbe(true, "pcan-hw", "Suitable — PCAN hardware acceptance filter."));
+
     public Task<bool> InitAsync(string port, CanBitRate bitRate, CancellationToken ct)
     {
         var channel = PcanChannel.Usb01;
@@ -157,7 +175,8 @@ public class PcanAdapter  : ICommsAdapter
                 Len: Convert.ToInt16(msg.DLC),
                 Payload: payload
             );
-            DataReceived?.Invoke(this, new CanFrameEventArgs(frame));
+            if (_acceptLo < 0 || (frame.Id >= _acceptLo && frame.Id <= _acceptHi))
+                DataReceived?.Invoke(this, new CanFrameEventArgs(frame));
         }
         catch (PcanBasicException)
         {

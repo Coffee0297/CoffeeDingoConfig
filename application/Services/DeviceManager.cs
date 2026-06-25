@@ -22,6 +22,15 @@ public class DeviceManager(ILogger<DeviceManager> logger, ILoggerFactory loggerF
 
     private readonly Dictionary<Guid, System.Timers.Timer> _cyclicTimers = new();
 
+    // --- Receive-filter (flooded-bus survival) -----------------------------------------------------
+    // On a saturated bus the SLCAN/PCAN reader can't surface every frame. While we're exchanging config
+    // with a module, clamp the adapter's RX to just that module's reply id so the answer can't be buried
+    // (see ICommsAdapter.SetReceiveFilter). Wired by the comms pipeline; null when no adapter is active.
+    private Action<int?, int?>? _setReceiveFilter;
+    private System.Threading.Timer? _filterIdleTimer;
+    private readonly object _filterLock = new();
+    private const int FilterIdleMs = 1500;   // lift the filter this long after the last config frame
+
     public int QueueCount => _requestQueue.Count;
 
     private const int MaxRetries = 2;
@@ -33,6 +42,40 @@ public class DeviceManager(ILogger<DeviceManager> logger, ILoggerFactory loggerF
     public void SetBatchTransmitCallback(Action<List<DeviceCanFrame>> callback)
     {
         _batchTransmitCallback = callback;
+    }
+
+    /// <summary>Wire how the receive filter reaches the active adapter (set by the comms pipeline).</summary>
+    public void SetReceiveFilterCallback(Action<int?, int?> callback) => _setReceiveFilter = callback;
+
+    /// <summary>
+    /// Clamp the active adapter's RX to <paramref name="baseId"/>'s whole id block for the duration of a
+    /// read/write/burn exchange, lifting it after <see cref="FilterIdleMs"/> of quiet. The block (not just
+    /// the config-reply id) so the module's telemetry keeps flowing during the exchange — clamping to one
+    /// id starves the status frames and the UI flickers the device "not found". Re-armed by every config
+    /// frame, so a chunked read/write holds it until the burst ends.
+    /// </summary>
+    private void ArmConfigFilter(int baseId)
+    {
+        if (_setReceiveFilter is null) return;
+        lock (_filterLock)
+        {
+            _setReceiveFilter(baseId, baseId + 15);   // config reply (base+0), status (base+2..) and XCP (base+12/13)
+            _filterIdleTimer ??= new System.Threading.Timer(_ =>
+            {
+                lock (_filterLock) _setReceiveFilter?.Invoke(null, null);
+            });
+            _filterIdleTimer.Change(FilterIdleMs, Timeout.Infinite);
+        }
+    }
+
+    /// <summary>
+    /// Stop the idle auto-lift so an external filter owner (the CAN flasher, which clamps to the XCP
+    /// reply id across the bootloader handoff) isn't cleared out from under it by a recently-armed config
+    /// exchange. The next read/write/burn re-arms the filter normally.
+    /// </summary>
+    public void SuspendConfigFilter()
+    {
+        lock (_filterLock) _filterIdleTimer?.Change(Timeout.Infinite, Timeout.Infinite);
     }
 
     /// <summary>
@@ -329,6 +372,15 @@ public class DeviceManager(ILogger<DeviceManager> logger, ILoggerFactory loggerF
             logger.LogWarning("Transmit callback not set - message not transmitted");
             return;
         }
+
+        // Flooded-bus survival: a config exchange (read/write/burn/version/modify — addressed to
+        // base+ConfigTxOffset, answered on base+ConfigRxOffset) clamps the adapter's RX to that reply id
+        // so a saturated bus can't bury the answer. Skip the Bootloader command — the CAN flasher owns
+        // the filter (base+13) across the XCP handoff that immediately follows it.
+        if (frame.Frame.Payload.Length > 0 &&
+            frame.Frame.Id == frame.DeviceBaseId + PdmDevice.ConfigTxOffset &&
+            (domain.Enums.MessageCommand)frame.Frame.Payload[0] != domain.Enums.MessageCommand.Bootloader)
+            ArmConfigFilter(frame.DeviceBaseId);
 
         //Some messages have no response, don't queue
         if (frame.SendOnly) return;
@@ -1099,13 +1151,13 @@ public class DeviceManager(ILogger<DeviceManager> logger, ILoggerFactory loggerF
     /// <returns>
     /// Send enter bootloader success
     /// </returns>
-    public bool RequestBootloader(Guid deviceId)
+    public bool RequestBootloader(Guid deviceId, bool canUpdate = false)
     {
         var device = GetDevice(deviceId);
         if (device is not IDeviceConfigurable configurable)
             return false;
 
-        var bootloaderMsg = configurable.GetBootloaderMsg();
+        var bootloaderMsg = configurable.GetBootloaderMsg(canUpdate);
 
         if (bootloaderMsg == null)
         {

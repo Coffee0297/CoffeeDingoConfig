@@ -667,7 +667,17 @@
         <div class="field"><label>Name</label><input bind:value={f.name} /></div>
         <div class="field"><label>Driven by</label>
           <select bind:value={f.input}><option value={0}>—</option>{#each inputsBool as v}<option value={v.index}>{v.name}</option>{/each}</select></div>
-        <p class="hint"><b>Low-side (ground) switch.</b> Wire the load between +12&nbsp;V and this output terminal — the board switches its ground when the driving signal is true. On/off only: no PWM, soft-start, or current sensing (those are PDM smart-output features).</p>
+        <p class="hint"><b>Low-side (ground) switch.</b> Wire the load between +12&nbsp;V and this output terminal — the board switches its ground when the driving signal is true.</p>
+        <p class="lbl" style="margin-top:18px">PWM / dimming</p>
+        <label class="opt" style="border:0;padding-top:0"><input type="checkbox" bind:checked={f.pwmEnabled} /> PWM enabled <span class="desc">duty instead of on/off</span></label>
+        <div class="f3">
+          <div class="field"><label>Freq (Hz)</label><input type="number" bind:value={f.frequency} /></div>
+          <div class="field"><label>Duty (%)</label><input type="number" bind:value={f.fixedDutyCycle} /></div>
+          <div class="field"><label>Min duty (%)</label><input type="number" bind:value={f.minDutyCycle} /></div>
+        </div>
+        <label class="opt"><input type="checkbox" bind:checked={f.softStartEnabled} /> Soft start <span class="desc">ramp up on turn-on</span></label>
+        <div class="field" style="max-width:230px"><label>Soft-start ramp (ms)</label><input type="number" bind:value={f.softStartRampTime} /></div>
+        <p class="hint">No current sensing on these outputs (that's a PDM smart-output feature). Save writes to the device; <b>Burn</b> persists to flash.</p>
       {:else if editing.kind === 'analoginput'}
         <label class="opt" style="border:0;padding-top:0"><input type="checkbox" bind:checked={f.enabled} /> Input enabled</label>
         <div class="field"><label>Name</label><input bind:value={f.name} /></div>

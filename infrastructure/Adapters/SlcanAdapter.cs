@@ -36,6 +36,82 @@ public class SlcanAdapter : ICommsAdapter
     
     private int _bitrate;
 
+    // CAN-id accept range applied in the reader (see SetReceiveFilter): _acceptLo < 0 = accept all,
+    // otherwise only ids in [_acceptLo.._acceptHi] are surfaced via DataReceived. Dropping the flood
+    // right in the read loop — BEFORE the synchronous DataReceived handlers — keeps the reader from
+    // backing up until the OS serial buffer overflows (which drops an XCP/config reply). A flash sets
+    // a single id (the XCP response); a config exchange sets the device's whole id block so its
+    // telemetry keeps flowing. volatile: written from the flash/config thread, read by SlcanRead.
+    private volatile int _acceptLo = -1;
+    private volatile int _acceptHi = -1;
+
+    public void SetReceiveFilter(int? loId, int? hiId = null)
+    {
+        _acceptLo = loId ?? -1;
+        _acceptHi = hiId ?? loId ?? -1;
+        // NOTE: the dingoFW SLCAN bridge has a firmware 'X' accept-filter command so a dingoPDM acting
+        // as the bridge needn't forward the flood at all. We do NOT push it here — a standalone SLCAN
+        // adapter would mis-handle the unknown command. The reader-side range above already drops the
+        // flood for every adapter; wiring 'X' (gated to a detected dingoPDM by USB VID/PID) is a follow-up.
+    }
+
+    // Fire-and-forget raw SLCAN command line under the shared write lock; swallows any port fault.
+    private void SendRaw(string cmd)
+    {
+        if (Serial is not { IsOpen: true }) return;
+        try { var b = Encoding.ASCII.GetBytes(cmd); lock (_writeLock) Serial?.Write(b, 0, b.Length); }
+        catch { /* best-effort */ }
+    }
+
+    // Count frames surfaced via DataReceived over a window (the reader-side filter is open during a probe).
+    private async Task<int> CountForAsync(int ms, CancellationToken ct)
+    {
+        int c = 0;
+        DataReceivedHandler h = (_, __) => Interlocked.Increment(ref c);
+        DataReceived += h;
+        try { await Task.Delay(ms, ct); } catch (OperationCanceledException) { }
+        finally { DataReceived -= h; }
+        return c;
+    }
+
+    public async Task<AdapterFilterProbe> ProbeFilterAsync(CancellationToken ct = default)
+    {
+        if (Serial is not { IsOpen: true }) return new(null, "none", "Adapter is not connected.");
+        var savedLo = _acceptLo; var savedHi = _acceptHi;
+        _acceptLo = -1; _acceptHi = -1;           // count everything the adapter actually forwards
+        try
+        {
+            int baseline = await CountForAsync(1200, ct);
+            if (baseline < 8)
+                return new(null, "none", $"Inconclusive — only {baseline} frames/1.2s on the bus. " +
+                    "Run with live traffic (power a module) so there's something to filter.");
+
+            // 1) dingoFW bridge filter: forward only an id that isn't on the bus.
+            SendRaw("X7FE\r");
+            int xc = await CountForAsync(1200, ct);
+            SendRaw("X\r");                        // clear
+            if (xc * 4 < baseline)
+                return new(true, "dingoFW-X",
+                    $"Suitable — honors the dingoFW 'X' bridge filter (forwarding {baseline}→{xc} per 1.2s). " +
+                    "Can flash over CAN on a busy bus.");
+
+            // 2) standard SLCAN M/m hardware filter: an impossible 32-bit match (must be set while closed).
+            SendRaw("C\r"); SendRaw("M55555555\r"); SendRaw("m00000000\r"); SendRaw("O\r");
+            int mc = await CountForAsync(1200, ct);
+            SendRaw("C\r"); SendRaw("M00000000\r"); SendRaw("mFFFFFFFF\r"); SendRaw("O\r");   // restore accept-all
+            if (mc * 4 < baseline)
+                return new(true, "slcan-Mm",
+                    $"Suitable — honors the SLCAN M/m hardware filter (forwarding {baseline}→{mc} per 1.2s).");
+
+            return new(false, "none",
+                $"NOT suitable — ignores both the dingoFW 'X' and SLCAN M/m filters (forwarding unchanged: " +
+                $"X {baseline}→{xc}, M/m {baseline}→{mc}). It will forward the whole bus, so a busy-bus CAN " +
+                "flash loses responses. Flash on a quiet bus, use real CAN hardware (PCAN/Kvaser), or — if " +
+                "this is a dingoPDM/CANBoard bridge — update its firmware to one with the 'X' filter.");
+        }
+        finally { _acceptLo = savedLo; _acceptHi = savedHi; }
+    }
+
     public Task<bool> InitAsync(string port, CanBitRate bitRate, CancellationToken ct)
     {
         try
@@ -361,6 +437,10 @@ public class SlcanAdapter : ICommsAdapter
             int id = 0;
             for (int k = 0; k < idLen; k++) id = (id << 4) | HexByteToInt(buf[off + 1 + k]);
             var payload = new byte[dlc > 0 ? dlc : 8];
+            // Accept-filter at the wire: under a flood, dropping out-of-range ids here (a cheap int
+            // compare) instead of in the handlers is what keeps the reader draining fast enough.
+            // RxStopwatch above still updated for every frame, so connection monitoring is unaffected.
+            if (_acceptLo >= 0 && (id < _acceptLo || id > _acceptHi)) return frameLen;
             for (int i = 0; i < dlc && !remote; i++)
                 payload[i] = (byte)((HexByteToInt(buf[dlcPos + 1 + i * 2]) << 4) | HexByteToInt(buf[dlcPos + 2 + i * 2]));
             DataReceived?.Invoke(this, new CanFrameEventArgs(new CanFrame(id, dlc, payload)));

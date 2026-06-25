@@ -47,4 +47,10 @@ public class SimAdapter(SimPlayback playback) : ICommsAdapter
 #pragma warning restore CS0067
 
     public bool IsConnected { get; private set; }
+
+    // Simulated playback has no live bus to flood, so there is nothing to filter.
+    public void SetReceiveFilter(int? loId, int? hiId = null) { }
+
+    public Task<AdapterFilterProbe> ProbeFilterAsync(CancellationToken ct = default) =>
+        Task.FromResult(new AdapterFilterProbe(null, "sim", "N/A — simulation has no live bus."));
 }

@@ -40,7 +40,14 @@ public partial class FirmwareFlashService(
         return OperatingSystem.IsWindows() ? "dfu-util.exe" : "dfu-util";   // assume on PATH
     }
 
-    public async Task<FlashResult> FlashAsync(Guid deviceId, byte[] binary)
+    /// <param name="flashAddr">
+    /// Where dfu-util writes the binary. Use 0x08004000 (the relocated app base) to update a module that
+    /// carries the OpenBLT bootloader — that erases only sectors 1+, leaving the bootloader in sector 0
+    /// intact (the only no-SWD recovery path). Use 0x08000000 only for a BLANK module / full image that
+    /// includes the bootloader. Flashing a relocated app at 0x08000000 would overwrite the bootloader AND
+    /// misplace the app — a brick.
+    /// </param>
+    public async Task<FlashResult> FlashAsync(Guid deviceId, byte[] binary, uint flashAddr)
     {
         if (binary.Length < 1024 || binary.Length > 512 * 1024)
             return new(false, $"Refused: binary size {binary.Length} bytes is outside the sane 1KB–512KB range.");
@@ -81,8 +88,11 @@ public partial class FirmwareFlashService(
             log.AppendLine("DFU device detected — flashing…");
 
             // 3. Flash + leave (reboots into the new firmware). Progress parsed from dfu-util.
+            //    dfu-util erases only the sectors the download covers (from flashAddr), so writing the app
+            //    at 0x08004000 leaves the bootloader in sector 0 untouched.
             Set("Writing", 15);
-            var (code, outp) = await RunAsync(dfu, $"-d {DfuId} -a 0 -s 0x08000000:leave -D \"{tmp}\"", 120_000, trackProgress: true);
+            log.AppendLine($"Flashing {binary.Length} bytes at 0x{flashAddr:X8}…");
+            var (code, outp) = await RunAsync(dfu, $"-d {DfuId} -a 0 -s 0x{flashAddr:X8}:leave -D \"{tmp}\"", 120_000, trackProgress: true);
             log.Append(outp);
             var ok = outp.Contains("File downloaded successfully", StringComparison.OrdinalIgnoreCase)
                      || (code == 0 && outp.Contains("Download", StringComparison.OrdinalIgnoreCase));

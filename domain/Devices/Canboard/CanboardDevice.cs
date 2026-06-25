@@ -31,7 +31,7 @@ public class CanboardDevice : IDeviceConfigurable
     [JsonIgnore] protected int NumConditions { get; private set; } = 8;
     
     [JsonIgnore] public bool CanSleep { get; } = false;
-    [JsonIgnore] public bool CanBootloader { get; } = true;   // OpenBLT XCP-over-CAN bootloader
+    [JsonPropertyName("canBootloader")] public bool CanBootloader { get; } = true;   // OpenBLT XCP-over-CAN bootloader
 
     [JsonIgnore] public const int BaseIndex = 0x0000;
     [JsonPropertyName("canboardType")] public int CanboardType { get; set; }
@@ -346,7 +346,19 @@ public class CanboardDevice : IDeviceConfigurable
             }
         }
 
-        MaxCyclicId = 10; // last CAN-input-value frame = BaseId+10 (firmware NUM_TX_MSGS=9 → offsets +2..+10)
+        // Message 9 (BaseId + 11): Digital output duty cycle — 1 byte per output, 0-100 %
+        // (mirrors the PDM's Msg 23). Only sent when a DO has PWM enabled.
+        StatusSigs[11] = [];
+        for (var i = 0; i < NumDigitalOutputs; i++)
+        {
+            var index = i;
+            StatusSigs[11].Add((
+                new DbcSignal { Name = $"DigitalOutput{index + 1}.DutyCycle", StartBit = index * 8, Length = 8, Unit = "%" },
+                val => DigitalOutputs[index].CurrentDutyCycle = val
+            ));
+        }
+
+        MaxCyclicId = 11; // last frame = BaseId+11 (firmware NUM_TX_MSGS=10 → offsets +2..+11)
     }
     
     private void InitVarMap()
@@ -893,11 +905,12 @@ public class CanboardDevice : IDeviceConfigurable
         return null;
     }
 
-    public DeviceCanFrame? GetBootloaderMsg()
+    public DeviceCanFrame? GetBootloaderMsg(bool canUpdate = false)
     {
         // The CANBoard now has the OpenBLT CAN bootloader: MsgCmd::Bootloader (33) with the
         // "BOOTL" signature, sent to BaseId+1 (config RX), makes the app enter it. Same frame
-        // shape as the PDM (see PdmDevice.GetBootloaderMsg).
+        // shape as the PDM (see PdmDevice.GetBootloaderMsg). The CANBoard has no USB-DFU, so it
+        // always enters OpenBLT-CAN and ignores byte 6; we still set it for a uniform frame.
         return new DeviceCanFrame
         {
             SendOnly = true,
@@ -907,8 +920,8 @@ public class CanboardDevice : IDeviceConfigurable
                 Id: BaseId + ConfigTxOffset,
                 Len: 8,
                 Payload: [
-                    Convert.ToByte(MessageCommand.Bootloader), (byte)'B', (byte)'O', (byte)'O', (byte)'T', (byte)'L', 0,
-                    0
+                    Convert.ToByte(MessageCommand.Bootloader), (byte)'B', (byte)'O', (byte)'O', (byte)'T', (byte)'L',
+                    (byte)(canUpdate ? 1 : 0), 0
                 ]
             ),
             Name = "Bootloader"

@@ -33,7 +33,7 @@ public class PdmDevice : IDeviceConfigurable
     [JsonIgnore] protected const int LuaOutputSlots = 32;  // matches firmware NUM_LUA_OUTPUTS
 
     [JsonIgnore] public bool CanSleep { get; } = true;
-    [JsonIgnore] public bool CanBootloader { get; } = true;
+    [JsonPropertyName("canBootloader")] public bool CanBootloader { get; } = true;
 
     [JsonIgnore] public const int BaseIndex = 0x0000;
     [JsonPropertyName("pdmType")] public int PdmType { get; set; }
@@ -1178,8 +1178,9 @@ public class PdmDevice : IDeviceConfigurable
         };
     }
 
-    public DeviceCanFrame GetBootloaderMsg()
+    public DeviceCanFrame GetBootloaderMsg(bool canUpdate = false)
     {
+        // byte 6 selects the path on the PDM firmware: 0 = USB-DFU, 1 = OpenBLT CAN update.
         return new DeviceCanFrame
         {
             SendOnly = true,
@@ -1189,8 +1190,8 @@ public class PdmDevice : IDeviceConfigurable
                 Id: BaseId + ConfigTxOffset,
                 Len: 8,
                 Payload: [
-                    Convert.ToByte(MessageCommand.Bootloader), (byte)'B', (byte)'O', (byte)'O', (byte)'T', (byte)'L', 0,
-                    0
+                    Convert.ToByte(MessageCommand.Bootloader), (byte)'B', (byte)'O', (byte)'O', (byte)'T', (byte)'L',
+                    (byte)(canUpdate ? 1 : 0), 0
                 ]
             ),
             Name = "Bootloader"

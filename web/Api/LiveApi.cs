@@ -301,6 +301,17 @@ public static class LiveApi
         api.MapPost("/disconnect", async (ICommsAdapterManager m) =>
             Results.Ok(new { ok = await m.DisconnectAsync() }));
 
+        // Is the connected adapter able to filter the bus at the wire — i.e. can it flash a module over
+        // CAN on a busy bus without losing responses? Probes the live adapter (see ProbeFilterAsync) and
+        // returns { suitable, mechanism, message }. Needs some bus traffic to test against.
+        api.MapPost("/adapter/probe-filter", async (ICommsAdapterManager m) =>
+        {
+            var a = m.ActiveAdapter;
+            if (a is null) return Results.Json(new { suitable = (bool?)null, mechanism = "none", message = "Not connected." });
+            var p = await a.ProbeFilterAsync();
+            return Results.Json(new { suitable = p.Suitable, mechanism = p.Mechanism, message = p.Message });
+        });
+
         // Auto-discover devices on the bus: PDMs broadcast a contiguous run of status
         // frames starting at BaseId + CyclicRxOffset(2). A run of >=3 consecutive 8-byte
         // RX ids => a device at (runStart - 2).
@@ -648,13 +659,14 @@ public static class LiveApi
             return Results.Ok(new { ok = true });
         });
 
-        // In-app firmware update: upload a .bin (raw body); commands DFU + flashes via dfu-util.
+        // In-app firmware update: upload the relocated app .bin (raw body); commands DFU + flashes via
+        // dfu-util at the app base 0x08004000, so the OpenBLT bootloader in sector 0 is preserved.
         api.MapPost("/devices/{guid}/flash", async (string guid, HttpRequest req, FirmwareFlashService flasher) =>
         {
             if (!Guid.TryParse(guid, out var g)) return Results.BadRequest();
             using var ms = new MemoryStream();
             await req.Body.CopyToAsync(ms);
-            var res = await flasher.FlashAsync(g, ms.ToArray());
+            var res = await flasher.FlashAsync(g, ms.ToArray(), 0x08004000u);
             return Results.Ok(new { ok = res.Ok, log = res.Log });
         });
 
@@ -665,7 +677,8 @@ public static class LiveApi
         {
             using var ms = new MemoryStream();
             await req.Body.CopyToAsync(ms);
-            var res = await flasher.FlashAsync(Guid.Empty, ms.ToArray());
+            // Blank module = full image that includes the bootloader → write from flash base 0x08000000.
+            var res = await flasher.FlashAsync(Guid.Empty, ms.ToArray(), 0x08000000u);
             return Results.Ok(new { ok = res.Ok, log = res.Log });
         });
 

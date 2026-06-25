@@ -5,9 +5,28 @@ All notable changes to **dingoConfig** are recorded here. Versions follow [SemVe
 
 ## [Unreleased]
 
-CAN frame-map reference + decode fixes. Pairs with **CoffeeDingoFW v5.5.102**.
+Flash firmware over CAN + bus-load-resilient comms, CANBoard digital-output PWM, CAN frame-map
+reference + decode fixes. Pairs with **CoffeeDingoFW v5.5.104** (OpenBLT CAN bootloader).
 
 ### Added
+- **Flash firmware over CAN (OpenBLT XCP)** — "Update firmware over CAN" reflashes a module's app
+  through the bootloader (`CanFlashService`, XCP cmd/resp `base+12`/`base+13`), no USB/DFU. Verified
+  end-to-end through a dingoPDM CAN bridge on a Kvaser-saturated **3000 msg/s** bus.
+- **Receive accept-filter on read / write / burn / flash** — `ICommsAdapter.SetReceiveFilter(loId,
+  hiId)` (SLCAN/PCAN/SocketCAN/Sim); `DeviceManager` arms a device-block filter during config
+  exchange and auto-lifts it when idle, so a flooded bus can't starve config or telemetry.
+  `ProbeFilterAsync` reports whether an adapter can hardware-filter — i.e. whether it's suitable for
+  flashing on a busy bus.
+- **Flash to the correct app address** (`FirmwareFlashService`) — USB-DFU now writes the app at its
+  real base (`0x08004000` for an in-app update, preserving the OpenBLT bootloader; `0x08000000` only
+  for a blank/full image), instead of always erasing from `0x08000000`.
+- **CANBoard digital-output PWM** — DO1–DO4 now expose the PDM's full PWM/dimming UI (PWM enable,
+  freq, duty %, min duty, soft-start + ramp) in the digital-output editor. New params on
+  `DigitalOutput` (sub 2–10, matching the firmware) round-trip through `set_function` /
+  `apply_config` automatically, so the MCP config surface exposes `digitalOutput[N].pwmEnabled` etc.
+  Live duty is decoded from the new **Msg 9 (`base+11`)** frame into each output's `CurrentDutyCycle`
+  (plotable). CANBoard CAN-ID footprint grew to `base−1…+11`; the System overlap check,
+  `canids.js`, `tools/canfree.py` and the frame map were updated to match.
 - **`docs/can-frame-map.md`** — address-agnostic CAN broadcast frame map for every device type
   (which `baseId + 2 + N` offset and which bits carry each signal). Served at `/can-frame-map.md`
   and via the new MCP **`get_frame_map`** tool, so an agent can decode the bus with no device bound.

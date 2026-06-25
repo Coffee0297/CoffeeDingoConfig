@@ -27,6 +27,13 @@ public unsafe class SocketCanAdapter : ICommsAdapter
 
     public bool IsConnected => _fd >= 0 && RxTimeDelta < TimeSpan.FromMilliseconds(500);
 
+    // Not wired for SocketCAN (Linux, not the current target). The kernel can filter at the socket
+    // (setsockopt CAN_RAW_FILTER) — implement here if CAN-flash-under-load is ever needed on Linux.
+    public void SetReceiveFilter(int? loId, int? hiId = null) { }
+
+    public Task<AdapterFilterProbe> ProbeFilterAsync(CancellationToken ct = default) =>
+        Task.FromResult(new AdapterFilterProbe(true, "socketcan", "Suitable — Linux kernel CAN_RAW_FILTER at the socket."));
+
     public Task<bool> InitAsync(string iface, CanBitRate bitRate, CancellationToken ct)
     {
         _ifName = iface;

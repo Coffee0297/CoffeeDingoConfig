@@ -20,8 +20,8 @@ public sealed class CanFlashService(
     public record FlashResult(bool Ok, string Log, string? Version = null);
     public record FlashStatus(bool Busy, int Percent, string Phase);
 
-    // The CANBoard application is relocated above the 16 KB bootloader (see canboard_v2.ld).
-    private const uint CanboardAppBase = 0x08004000;
+    // Every OpenBLT board relocates its application above the 16 KB bootloader to sector 1.
+    private const uint AppBase = 0x08004000;
 
     private volatile int _percent;
     private volatile string _phase = "idle";
@@ -39,15 +39,19 @@ public sealed class CanFlashService(
         catch (Exception ex) { return new(false, $"Not a valid S-record (.srec) file: {ex.Message}"); }
         log.AppendLine($"Parsed {image.TotalBytes} bytes in {image.Segments.Count} segment(s), base 0x{image.MinAddress:X8}.");
 
-        // 2. Wrong-board / sanity guard.
+        // 2. Wrong-board / sanity guard. Any board carrying the OpenBLT CAN bootloader can be
+        // flashed over CAN (CANBoard, dingoPDM, dingoPDM-Max); they all relocate the app to 0x08004000.
         var dev = dm.GetDevice(deviceId);
         if (dev is null) return new(false, "Device is not on the bus — connect and discover it first.");
-        if (!string.Equals(dev.Type, "CANBoard", StringComparison.OrdinalIgnoreCase))
-            return new(false, $"CAN flashing currently supports CANBoard only (device is '{dev.Type}'). Use USB-DFU for PDM modules.");
-        if (image.MinAddress != CanboardAppBase)
-            return new(false, $"Firmware base 0x{image.MinAddress:X8} does not match the CANBoard application base 0x{CanboardAppBase:X8} — wrong firmware for this module?");
-        if (image.TotalBytes is < 1024 or > 46 * 1024)
-            return new(false, $"Refused: image size {image.TotalBytes} bytes is outside the CANBoard app range (1 KB–46 KB).");
+        if (dev is not IDeviceConfigurable cfg || !cfg.CanBootloader)
+            return new(false, $"'{dev.Type}' does not have the OpenBLT CAN bootloader — it can't be flashed over CAN.");
+        if (image.MinAddress != AppBase)
+            return new(false, $"Firmware base 0x{image.MinAddress:X8} does not match the relocated application base 0x{AppBase:X8} — wrong firmware (or not a bootloader-relocated build) for this module?");
+        // CANBoard app region is 46 KB; the F446 PDMs are 368 KB (sectors 1–6).
+        bool isCanboard = string.Equals(dev.Type, "CANBoard", StringComparison.OrdinalIgnoreCase);
+        int maxBytes = (isCanboard ? 46 : 368) * 1024;
+        if (image.TotalBytes < 1024 || image.TotalBytes > maxBytes)
+            return new(false, $"Refused: image size {image.TotalBytes} bytes is outside the {dev.Type} app range (1 KB–{maxBytes / 1024} KB).");
 
         int baseId = dev.BaseId;
         _busy = true; Set("Entering bootloader", 2);
@@ -56,12 +60,21 @@ public sealed class CanFlashService(
 
         try
         {
-            // 3. Command the running app into the OpenBLT CAN bootloader (MsgCmd::Bootloader = 33).
-            if (!dm.RequestBootloader(deviceId))
+            // 3. Command the running app into the OpenBLT CAN bootloader (MsgCmd::Bootloader = 33,
+            // byte 6 = 1 = CAN-update entry; on the PDMs byte 6 = 0 would mean USB-DFU instead).
+            if (!dm.RequestBootloader(deviceId, canUpdate: true))
                 log.AppendLine("Device did not accept the bootloader command (continuing — it may already be in the bootloader).");
             else
                 log.AppendLine("Sent bootloader command; waiting for OpenBLT…");
             await Task.Delay(700, token);   // let the app write the magic + reset into the bootloader
+
+            // Admit only the bootloader's XCP response id at the adapter's read loop, so a flooded bus
+            // can't bury the response or stall the per-frame DataReceived handlers during programming
+            // (the reason a CAN flash failed on a saturated bus). Cleared after reset and in finally.
+            // SuspendConfigFilter first so a config exchange done seconds ago can't let its idle timer
+            // lift this filter out from under the flash.
+            dm.SuspendConfigFilter();
+            adapters.ActiveAdapter?.SetReceiveFilter(baseId + 13);
 
             using var xcp = new XcpCanMaster(adapters, baseId);
 
@@ -116,13 +129,25 @@ public sealed class CanFlashService(
             await xcp.ProgramResetAsync(token);
             log.AppendLine("Programming complete — module resetting into the new app.");
 
-            // 8. Re-discover and read back the version.
+            // Lift the receive filter so the re-discover / version read below sees the app's telemetry.
+            adapters.ActiveAdapter?.SetReceiveFilter(null);
+
+            // 8. Re-discover, then actively request the version so we can confirm the new app.
+            // (The app only broadcasts its version on request, so without this the read-back
+            // would still show the default until the next manual query.)
             Set("Re-discovering", 98);
-            await Task.Delay(2500, token);
-            var version = dm.GetDevice(deviceId) is domain.Devices.Canboard.CanboardDevice cb && cb.Connected
-                ? cb.Version : null;
+            await Task.Delay(1500, token);          // let the app boot and rejoin the bus
+            string? version = null;
+            for (int i = 0; i < 10 && version is null; i++)
+            {
+                if (i % 4 == 0) dm.RequestVersion(deviceId);   // (re)ask every ~1.2 s
+                await Task.Delay(300, token);
+                if (dm.GetDevice(deviceId) is domain.Devices.Canboard.CanboardDevice cb &&
+                    cb.Version is { Length: > 0 } v && v != "v0.0.0")
+                    version = v;
+            }
             Set("Done", 100);
-            log.AppendLine(version is { Length: > 0 } ? $"✓ Done — module reports {version}." : "✓ Done — module rebooting.");
+            log.AppendLine(version is not null ? $"✓ Done — module reports {version}." : "✓ Done — module rebooting (version not yet reported).");
             logger.LogInformation("CAN flash ok ({Bytes} bytes) for {Name}", written, dev.Name);
             return new(true, log.ToString(), version);
         }
@@ -132,7 +157,7 @@ public sealed class CanFlashService(
             logger.LogError(ex, "CAN flash error");
             return Fail(log, "Error: " + ex.Message);
         }
-        finally { _busy = false; }
+        finally { adapters.ActiveAdapter?.SetReceiveFilter(null); _busy = false; }
     }
 
     private FlashResult Fail(StringBuilder log, string msg)

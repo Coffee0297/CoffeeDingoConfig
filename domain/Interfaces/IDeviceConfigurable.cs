@@ -17,6 +17,8 @@ public interface IDeviceConfigurable : IDevice
     DeviceCanFrame? GetSleepMsg();
     DeviceCanFrame? GetWakeupMsg();
     bool CanBootloader { get; }
-    DeviceCanFrame? GetBootloaderMsg();
+    /// <param name="canUpdate">false = USB-DFU entry (byte 6 = 0); true = OpenBLT CAN-update
+    /// entry (byte 6 = 1). On the CANBoard the byte is ignored (it has no USB-DFU).</param>
+    DeviceCanFrame? GetBootloaderMsg(bool canUpdate = false);
     
 }

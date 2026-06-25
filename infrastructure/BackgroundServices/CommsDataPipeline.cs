@@ -46,6 +46,8 @@ public class CommsDataPipeline(
         
         // Set up transmit callbacks for DeviceManager
         deviceManager.SetBatchTransmitCallback(batch => _txChannel.Writer.TryWrite(batch));
+        // …and how its config-exchange receive filter reaches whichever adapter is active.
+        deviceManager.SetReceiveFilterCallback((lo, hi) => adapterManager.ActiveAdapter?.SetReceiveFilter(lo, hi));
 
         // Start both pipelines
         var rxTask = ProcessRxPipelineAsync(stoppingToken);

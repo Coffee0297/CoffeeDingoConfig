@@ -354,11 +354,12 @@
         <div style="display:flex;gap:6px;margin-top:8px">
           <button class="btn ghost" style="flex:1;font-size:12px"
             onclick={(e) => { e.stopPropagation(); openSettings(d.guid) }}>⚙ Settings</button>
-          {#if /canboard/i.test(d.type)}
-            <button class="btn ghost" style="flex:1;font-size:12px" disabled={flashBusy} title={flashBusy ? 'A firmware flash is already in progress' : 'Reflash the application over CAN via the OpenBLT bootloader (no USB needed)'}
+          {#if d.canBootloader}
+            <button class="btn ghost" style="flex:1;font-size:12px" disabled={flashBusy} title={flashBusy ? 'A firmware flash is already in progress' : 'Reflash the application over CAN via the OpenBLT bootloader — works for any OpenBLT board on the bus, no USB needed (pick the .srec)'}
               onclick={(e) => { e.stopPropagation(); openFlashCan(d.guid) }}>⬆ Over CAN</button>
-          {:else}
-            <button class="btn ghost" style="flex:1;font-size:12px" disabled={flashBusy} title={flashBusy ? 'A firmware flash is already in progress' : 'Flash firmware over USB DFU (works even if the module is dark on the CAN bus)'}
+          {/if}
+          {#if !/canboard/i.test(d.type)}
+            <button class="btn ghost" style="flex:1;font-size:12px" disabled={flashBusy} title={flashBusy ? 'A firmware flash is already in progress' : 'Flash over USB DFU (works even if the module is dark on CAN; this is also how you install/update the bootloader itself)'}
               onclick={(e) => { e.stopPropagation(); openFlash(d.guid) }}>⬆ Firmware</button>
           {/if}
         </div>
@@ -432,7 +433,7 @@
   <div class="scrim show" onclick={() => { if (!flashBusy) flashDrawer = false }}></div>
   <aside class="drawer show" use:dialog={{ onclose: closeDrawer }}>
     <div class="dh"><div><div class="nm">{flashGuid === 'blank' ? 'Flash a new / blank module' : (flashMode === 'can' ? 'Update firmware over CAN' : 'Update firmware')}</div>
-      <div class="meta">{flashGuid === 'blank' ? 'blank module in DFU' : dName(flashGuid)} — flashes over USB DFU</div></div>
+      <div class="meta">{flashGuid === 'blank' ? 'blank module in DFU' : dName(flashGuid)} — {flashMode === 'can' ? 'reflashes the app over CAN (.srec)' : 'flashes over USB DFU (.bin)'}</div></div>
       <button class="x" aria-label="Close" onclick={() => { if (!flashBusy) flashDrawer = false }}>✕</button></div>
     <div class="dbody" use:labelFields>
       <p class="lbl">Firmware file (.bin)</p>
