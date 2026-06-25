@@ -5,7 +5,22 @@
   import { toast } from './toast.js'
   import { dialog, labelFields, clickable } from './a11y.js'
   import LuaEditor from './LuaEditor.svelte'
-  let { devices = [], pick, addModule, remove } = $props()
+  let { devices = [], adapter = null, connected = false, pick, addModule, remove } = $props()
+
+  // Which flash path a module's card offers — exactly one button, picked by context:
+  //  • CANboard: always CAN (it carries the OpenBLT bootloader and has no USB-DFU port).
+  //  • dingoPDM on a dedicated CAN adapter (Kvaser/SLCAN/PCAN/SocketCAN/Sim): CAN, like the CANboard.
+  //  • dingoPDM on the "USB" adapter: that adapter IS a dingoPDM bridging USB↔CAN — you can't reflash
+  //    the bridge over the link it provides, so fall back to USB DFU.
+  // ponytail: when on the USB gateway, ALL PDMs fall back to USB. A downstream PDM could be flashed
+  // over CAN through the bridge, but telling which module is the bridge needs a backend flag — add
+  // a gateway marker to DeviceDto then key off it here if that case comes up.
+  let canAdapter = $derived(connected && !!adapter && adapter.toUpperCase() !== 'USB')
+  function flashTarget(d) {
+    if (/canboard/i.test(d.type)) return d.canBootloader ? 'can' : null
+    if (!/pdm/i.test(d.type)) return null
+    return d.canBootloader && canAdapter ? 'can' : 'usb'
+  }
   const hex = (n) => '0x' + (n ?? 0).toString(16).toUpperCase().padStart(3, '0')
 
   // Import any cross-module functions deployed via the backend (MCP `deploy_cross_module`) that aren't
@@ -351,16 +366,15 @@
         {d.connected ? `live · ${onCount(d)} on · ${totalA(d).toFixed(1)} A` : 'not found'}</div>
       {#if /pdm/i.test(d.type)}<div class="role" style="margin-top:2px">max load {maxA(d)} A</div>{/if}
       {#if /pdm|canboard/i.test(d.type)}
-        <div style="display:flex;gap:6px;margin-top:8px">
-          <button class="btn ghost" style="flex:1;font-size:12px"
-            onclick={(e) => { e.stopPropagation(); openSettings(d.guid) }}>⚙ Settings</button>
-          {#if d.canBootloader}
-            <button class="btn ghost" style="flex:1;font-size:12px" disabled={flashBusy} title={flashBusy ? 'A firmware flash is already in progress' : 'Reflash the application over CAN via the OpenBLT bootloader — works for any OpenBLT board on the bus, no USB needed (pick the .srec)'}
-              onclick={(e) => { e.stopPropagation(); openFlashCan(d.guid) }}>⬆ Over CAN</button>
-          {/if}
-          {#if !/canboard/i.test(d.type)}
-            <button class="btn ghost" style="flex:1;font-size:12px" disabled={flashBusy} title={flashBusy ? 'A firmware flash is already in progress' : 'Flash over USB DFU (works even if the module is dark on CAN; this is also how you install/update the bootloader itself)'}
-              onclick={(e) => { e.stopPropagation(); openFlash(d.guid) }}>⬆ Firmware</button>
+        {@const ft = flashTarget(d)}
+        <div class="card-actions">
+          <button class="btn ghost sm" onclick={(e) => { e.stopPropagation(); openSettings(d.guid) }}>⚙ Settings</button>
+          {#if ft === 'can'}
+            <button class="btn ghost sm" disabled={flashBusy} title={flashBusy ? 'A firmware flash is already in progress' : 'Reflash the application over CAN via the OpenBLT bootloader — no USB needed (pick the .srec)'}
+              onclick={(e) => { e.stopPropagation(); openFlashCan(d.guid) }}>⬆ Flash over CAN</button>
+          {:else if ft === 'usb'}
+            <button class="btn ghost sm" disabled={flashBusy} title={flashBusy ? 'A firmware flash is already in progress' : 'Flash over USB DFU — this module bridges the CAN bus, so it can only be reflashed over USB (also how you install/update the bootloader itself, pick the .bin)'}
+              onclick={(e) => { e.stopPropagation(); openFlash(d.guid) }}>⬆ Flash over USB</button>
           {/if}
         </div>
       {/if}

@@ -156,6 +156,8 @@ html{background:#14141b}
 .rx .pdm.err{border-color:#f0b6b6;background:#fdf2f2}
 .rx.dark .pdm.err{background:#3a1414;border-color:#5a2e2e}
 .rx .pdm.err .pt{color:var(--err)} .rx .pdm.err .st{color:var(--err)}
+.rx .pdm .card-actions{display:flex;gap:6px;margin-top:10px}
+.rx .pdm .card-actions .btn.sm{flex:1;font-size:12px;padding:6px 8px;white-space:nowrap}
 .rx .sys-alert{background:var(--err-bg);border-left:4px solid var(--err);padding:11px 15px;border-radius:6px;font-size:13px;color:var(--alert-ink);margin-bottom:8px}
 
 /* device action bar + dashboard + logs */

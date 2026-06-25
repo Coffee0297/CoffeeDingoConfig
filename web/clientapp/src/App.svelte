@@ -519,7 +519,7 @@
     {:else if view === 'dashboard'}
       <Dashboard {current} />
     {:else if view === 'system'}
-      <SystemView {devices} pick={pickModule} {addModule} remove={removeByGuid} />
+      <SystemView {devices} adapter={t.adapter} connected={t.connected} pick={pickModule} {addModule} remove={removeByGuid} />
     {:else if view === 'signals'}
       <SignalsView {current} ids={t.ids} />
     {:else if view === 'wiring'}
