@@ -192,7 +192,7 @@
       <p class="lbl" style="margin-top:18px">PWM / dimming</p>
       <label class="opt" style="border:0;padding-top:0"><input type="checkbox" bind:checked={f.pwmEnabled} /> PWM enabled <span class="desc">duty instead of on/off</span></label>
       <div class="f3">
-        <div class="field"><label>Freq (Hz)</label><input type="number" bind:value={f.freq} /></div>
+        <div class="field"><label>Freq (Hz)</label><input type="number" min="15" max="400" bind:value={f.freq} title="PWM frequency, 15–400 Hz. For dimming lights, 100–500 Hz is flicker-free (200 Hz is a good all-rounder for LED and incandescent). Below 15 Hz the output stops; above 400 Hz the firmware ignores the change." /></div>
         <div class="field"><label>Duty (%)</label><input type="number" bind:value={f.fixedDuty} /></div>
         <div class="field"><label>Min duty (%)</label><input type="number" bind:value={f.minDuty} /></div>
       </div>
