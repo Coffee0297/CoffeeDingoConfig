@@ -256,21 +256,17 @@ public class TelemetryBroadcaster(
                 lock (_lock) ids = _ids.OrderBy(x => x).Take(48).ToArray();
 
                 var status = adapterManager.GetStatus();
-                // Mark which PDM is the USB bridge so the UI routes flashing (bridge → USB, others → CAN).
-                //  • Bridge identified (dingoFW 'I' reply) → only the matching base id is the gateway.
-                //  • Not identified, adapter opened as "USB" → can't tell which PDM is the bridge, so flag
-                //    every PDM as gateway (all USB) — never CAN-flash an unidentified possible-bridge.
-                //  • Not identified, any other adapter (Kvaser/SLCAN/PCAN/SocketCAN/Sim) → no gateway, so
-                //    every module flashes over CAN.
+                // Mark which PDM is the USB<->CAN bridge so the UI flashes it over USB and every other
+                // module over CAN. A dingoPDM bridge reports its base id via the dingoFW 'I' reply at
+                // connect (GatewayBaseId); a standalone adapter (Kvaser/PCAN/generic SLCAN) never replies,
+                // so GatewayBaseId is null and no module is a gateway — everything flashes over CAN.
                 var gwBase = adapterManager.GatewayBaseId;
-                var usbUnidentified = gwBase is null &&
-                    string.Equals(status.activeAdapter, "USB", StringComparison.OrdinalIgnoreCase);
                 var devices = deviceManager.GetAllDevices()
                     .Select(d =>
                     {
                         var dto = DingoMap.ToDto(d, deviceManager.GetDeviceUiState(d.Guid));
                         bool isPdm = d.Type?.Contains("pdm", StringComparison.OrdinalIgnoreCase) ?? false;
-                        bool isGateway = isPdm && (gwBase is int gb ? d.BaseId == gb : usbUnidentified);
+                        bool isGateway = isPdm && gwBase is int gb && d.BaseId == gb;
                         return isGateway ? dto with { IsGateway = true } : dto;
                     }).ToArray();
                 var dto = new TelemetryDto(status.isConnected, status.activeAdapter, _total, _rate, ids, devices);

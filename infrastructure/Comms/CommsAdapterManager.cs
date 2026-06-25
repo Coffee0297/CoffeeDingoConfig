@@ -44,7 +44,12 @@ public class CommsAdapterManager(IServiceProvider serviceProvider, ILogger<Comms
         }
 
         // Adapter list with platform guard
-        var adapters = new List<string> { "USB", "SLCAN", "PCAN", "Sim" };
+        // No separate "USB" entry: a dingoPDM/CANBoard connected over USB speaks SLCAN, so it IS the SLCAN
+        // adapter. (USB-DFU firmware flashing is a different path entirely — dfu-util, not a comms adapter.)
+        var adapters = new List<string> { "SLCAN", "PCAN", "Sim" };
+
+        if (OperatingSystem.IsWindows())
+            adapters.Add("Kvaser");          // CANlib (canlib32.dll) — Windows driver
 
         if (OperatingSystem.IsLinux())
             adapters.Add("SocketCAN");
@@ -68,10 +73,10 @@ public class CommsAdapterManager(IServiceProvider serviceProvider, ILogger<Comms
     {
         return adapterName switch
         {
-            "USB" => serviceProvider.GetRequiredService<UsbAdapter>(),
             "SLCAN" => serviceProvider.GetRequiredService<SlcanAdapter>(),
             "SocketCAN" => serviceProvider.GetRequiredService<SocketCanAdapter>(),
             "PCAN" => serviceProvider.GetRequiredService<PcanAdapter>(),
+            "Kvaser" => serviceProvider.GetRequiredService<KvaserAdapter>(),
             "Sim" => serviceProvider.GetRequiredService<SimAdapter>(),
             _ => throw new ArgumentException($"Unknown adapter type: {adapterName}")
         };

@@ -51,7 +51,7 @@ public interface ICommsAdapter
     /// the host can flash THAT board over USB (you can't reflash the bridge over the link it provides) and
     /// every other module over CAN. Returns the base id, or null if nothing replied within the timeout
     /// (a standalone adapter — Kvaser/PCAN/generic SLCAN — or a pre-'I' firmware: the host then treats
-    /// every module as CAN-flashable, or USB-only when the adapter was opened as "USB"). Default: null.
+    /// every module as CAN-flashable). Default: null.
     /// </summary>
     Task<int?> IdentifyBridgeBaseIdAsync(CancellationToken ct = default) => Task.FromResult<int?>(null);
 }

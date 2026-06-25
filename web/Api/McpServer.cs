@@ -317,7 +317,7 @@ public static class McpServer
             _ => new(GET, "/api/adapters", null)),
 
         new("connect", "Open the CAN link. Bitrate is a string like '500K'.",
-            Schema("""{"type":"object","properties":{"adapter":{"type":"string","description":"USB | PCAN | SocketCAN | Sim"},"port":{"type":"string","description":"e.g. COM3"},"bitrate":{"type":"string","enum":["1000K","500K","250K","125K","100K"]}},"required":["adapter","port","bitrate"]}"""),
+            Schema("""{"type":"object","properties":{"adapter":{"type":"string","description":"SLCAN | PCAN | SocketCAN | Sim"},"port":{"type":"string","description":"e.g. COM3"},"bitrate":{"type":"string","enum":["1000K","500K","250K","125K","100K"]}},"required":["adapter","port","bitrate"]}"""),
             a => new(POST, "/api/connect", Json(new { Adapter = Str(a, "adapter"), Port = Str(a, "port"), Bitrate = Str(a, "bitrate") }))),
 
         new("disconnect", "Close the CAN link.",
@@ -593,7 +593,7 @@ public static class McpServer
 
             1. `list_adapters` — see which adapters/ports exist and whether already connected.
             2. `connect` with `{adapter, port, bitrate}`. Bitrate is a STRING like `"500K"`.
-               Typical bench: `{ "adapter":"USB", "port":"COM3", "bitrate":"500K" }`.
+               Typical bench: `{ "adapter":"SLCAN", "port":"COM3", "bitrate":"500K" }`.
             3. `discover` — auto-bind modules broadcasting on the bus, or `identify` to just look.
             4. `list_devices` — confirm bound modules; note each `guid` for later calls.
             5. `read_device {guid}` — pull the full, CRC-verified config from a module.

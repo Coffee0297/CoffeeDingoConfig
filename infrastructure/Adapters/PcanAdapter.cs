@@ -43,11 +43,21 @@ public class PcanAdapter  : ICommsAdapter
 
     public Task<bool> InitAsync(string port, CanBitRate bitRate, CancellationToken ct)
     {
-        var channel = PcanChannel.Usb01;
-        _channel = channel; // Store channel for disconnection detection
-        _worker = new Worker(channel, ConvertBaudRate(bitRate));
-        _rxStopwatch = Stopwatch.StartNew();
-        return Task.FromResult(true);
+        try
+        {
+            var channel = PcanChannel.Usb01;
+            _channel = channel; // Store channel for disconnection detection
+            _worker = new Worker(channel, ConvertBaudRate(bitRate));
+            _rxStopwatch = Stopwatch.StartNew();
+            return Task.FromResult(true);
+        }
+        catch (DllNotFoundException)
+        {
+            // PCANBasic.dll missing (PEAK driver not installed) — report a clean failed connect instead of
+            // tearing down the connect path. The other adapters keep working.
+            _worker = null;
+            return Task.FromResult(false);
+        }
     }
 
     public Task<bool> StartAsync(CancellationToken ct)

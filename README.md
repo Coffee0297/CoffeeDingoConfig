@@ -220,12 +220,19 @@ A **`?`** button in the top bar opens concise help for whatever view you're on.
 
 **Adapters** (pick on the Connect screen):
 
-| Adapter | Windows | macOS | Linux |
-|---|:---:|:---:|:---:|
-| **SLCAN** (CANable/CANtact serial, and the PDM's own USB) | ✅ | ✅ | ✅ |
-| **PCAN** (PEAK) | ✅ | — | — |
-| **SocketCAN** | — | — | ✅ |
-| **Sim** (replay a CAN capture) | ✅ | ✅ | ✅ |
+| Adapter | Windows | macOS | Linux | Driver needed |
+|---|:---:|:---:|:---:|---|
+| **SLCAN** (CANable/CANtact serial, and a dingoPDM's own USB) | ✅ | ✅ | ✅ | none (plain serial / USB-CDC) |
+| **PCAN** (PEAK) | ✅ | — | — | [PEAK driver](https://www.peak-system.com/Drivers.523.0.html) (provides `PCANBasic.dll`) |
+| **Kvaser** (Leaf/USBcan/etc., via CANlib) | ✅ | — | — | [Kvaser drivers](https://www.kvaser.com/download/) (provide `canlib32.dll`) |
+| **SocketCAN** | — | — | ✅ | in-kernel |
+| **Sim** (replay a CAN capture) | ✅ | ✅ | ✅ | none |
+
+> **PCAN/Kvaser drivers are NOT bundled** — they are vendor kernel drivers your CAN hardware needs
+> regardless, so install them on each bench PC. The build itself needs nothing extra: the PCAN managed
+> wrapper restores from NuGet on `git clone`, and Kvaser is called by P/Invoke (no package). The native
+> driver DLL is loaded lazily only when you actually connect with that adapter; if it's missing, that
+> adapter just fails to connect (the others still work).
 
 **Modules:** dingoPDM (V7), dingoPDM-MAX, CANBoard, plus Blink Marine / Grayhill keypads and
 generic DBC devices.

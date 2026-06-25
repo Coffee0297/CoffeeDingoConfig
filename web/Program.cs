@@ -11,10 +11,10 @@ var builder = WebApplication.CreateBuilder(args);
 builder.Host.ConfigureHostOptions(opts => opts.ShutdownTimeout = TimeSpan.FromSeconds(5));
 
 // --- Device engine (CAN adapters + device/comms services) ---
-builder.Services.AddTransient<UsbAdapter>();
 builder.Services.AddTransient<SlcanAdapter>();
 builder.Services.AddTransient<SocketCanAdapter>();   // only listed/resolved on Linux (runtime-gated)
 builder.Services.AddTransient<PcanAdapter>();
+builder.Services.AddTransient<KvaserAdapter>();      // only listed/resolved on Windows (canlib32.dll)
 builder.Services.AddTransient<SimAdapter>();
 
 builder.Services.AddSingleton<ICommsAdapterManager, CommsAdapterManager>();
