@@ -15,6 +15,7 @@ public class Condition : IDeviceFunction
     [JsonPropertyName("input")] public int Input { get; set; }
     [JsonPropertyName("operator")] public Operator Operator {get; set;} = Operator.Equal;
     [JsonPropertyName("arg")] public double Arg {get; set;}
+    [JsonPropertyName("argOff")] public double ArgOff {get; set;}   // hysteresis release; ==Arg → none
 
     [JsonIgnore][Plotable(displayName:"State")] public int Value {get; set;}
 
@@ -59,6 +60,13 @@ public class Condition : IDeviceFunction
                 ParentName = Name, Name = $"condition[{Number}].arg", Index = BaseIndex + (Number - 1), SubIndex = subIndex++,
                 GetValue = () => Arg, SetValue = val => Arg = (double)val,
                 ValueType = Arg.GetType(),
+                DefaultValue = 0.0
+            },
+            new DeviceParameter
+            {
+                ParentName = Name, Name = $"condition[{Number}].argOff", Index = BaseIndex + (Number - 1), SubIndex = subIndex++,
+                GetValue = () => ArgOff, SetValue = val => ArgOff = (double)val,
+                ValueType = ArgOff.GetType(),
                 DefaultValue = 0.0
             }
         ];

@@ -285,6 +285,7 @@
       remoteSrc = lk?.sourceGuid ?? ''; remoteSel = lk?.signal ?? ''; remoteSearch = ''
       if (lk) f._remote = { ...lk }
     }
+    if (kind === 'condition') f._hyst = (f.argOff != null && f.argOff !== f.arg)   // show hysteresis fields if a release point is set
     drawer = true
   }
   function close() { drawer = false; editing = null; driverReturn = null }
@@ -305,6 +306,7 @@
     if (!current || !editing) return
     const body = { ...f }
     delete body._remote   // client-only metadata; never sent to the device
+    if (editing.kind === 'condition') { if (!f._hyst) body.argOff = f.arg; delete body._hyst }   // no hysteresis → release == set
     // Multi-position switch: write the derived bands onto the analog input's RotarySwitch.
     if (editing.kind === 'analoginput') {
       body.rotary = { ...f.rotary, enabled: mp.on, invert: mp.invert,
@@ -651,6 +653,13 @@
             <select bind:value={f.operator}>{#each opTxt as o, i}<option value={i}>{o}</option>{/each}</select></div>
           <div class="field"><label>Value</label><input type="number" step="any" bind:value={f.arg} /></div>
         </div>
+        {#if [2, 3, 4, 5].includes(Number(f.operator))}
+          <label class="chk"><input type="checkbox" bind:checked={f._hyst} onchange={() => { if (!f._hyst) f.argOff = f.arg }} /> Hysteresis — separate turn-off value <span class="desc">stops chatter right at the threshold</span></label>
+          {#if f._hyst}
+            <div class="field" style="max-width:230px"><label>Turn off at</label><input type="number" step="any" bind:value={f.argOff} /></div>
+            <p class="hint">On past <b>{f.arg}</b>, off past <b>{f.argOff}</b>. For <i>greater than</i>, set turn-off <b>below</b> the value; for <i>less than</i>, <b>above</b> it.</p>
+          {/if}
+        {/if}
       {:else if editing.kind === 'virtualinput'}
         <div class="field"><label>Name</label><input bind:value={f.name} /></div>
         <div class="field"><label>Mode</label><select bind:value={f.mode}><option value={0}>Momentary</option><option value={1}>Latched</option></select></div>
@@ -716,8 +725,14 @@
         <label class="opt" style="border:0;padding-top:0"><input type="checkbox" bind:checked={f.pwmEnabled} /> PWM enabled <span class="desc">duty instead of on/off</span></label>
         {#if f.pwmEnabled}
           <label class="chk"><input type="checkbox" bind:checked={f.variableDutyCycle} /> Duty follows a signal <span class="desc">analog dimming — from a CAN value or an analog input</span></label>
+          <label class="chk"><input type="checkbox" bind:checked={f.variableFreq} /> Freq follows a signal <span class="desc">PWM frequency from an analog/CAN value</span></label>
           <div class="f3">
-            <div class="field"><label>Freq (Hz)</label><input type="number" bind:value={f.frequency} /></div>
+            {#if f.variableFreq}
+              <div class="field"><label>Freq source</label>
+                <select bind:value={f.freqInput}><option value={0}>—</option>{#each inputsNum as v}<option value={v.index}>{v.name}</option>{/each}</select></div>
+            {:else}
+              <div class="field"><label>Freq (Hz)</label><input type="number" bind:value={f.frequency} /></div>
+            {/if}
             {#if f.variableDutyCycle}
               <div class="field"><label>Duty source</label>
                 <select bind:value={f.dutyCycleInput}><option value={0}>—</option>{#each inputsNum as v}<option value={v.index}>{v.name}</option>{/each}</select></div>
@@ -732,6 +747,12 @@
                 oninput={(e) => (f.dutyCycleDenominator = Math.max(1, Math.round((+e.target.value || 0) / 100)))} /></div>
             <p class="hint">Duty tracks the source: <b>duty% = signal ÷ {f.dutyCycleDenominator || 1}</b>, clamped 0–100 then held at the min-duty floor.
               Set the value above to whatever the signal reads at full brightness (e.g. a 0–5000&nbsp;mV analog → 5000). Any numeric signal works — CAN or CANBoard.</p>
+          {/if}
+          {#if f.variableFreq}
+            <div class="field" style="max-width:260px"><label>Signal value at 400 Hz</label>
+              <input type="number" min="1" value={(f.freqInputDenom || 1) * 400}
+                oninput={(e) => (f.freqInputDenom = Math.max(1, Math.round((+e.target.value || 0) / 400)))} /></div>
+            <p class="hint"><b>Freq = signal ÷ {f.freqInputDenom || 1}</b>, clamped to 15–400 Hz. Set the value above to the signal reading that should give full 400 Hz.</p>
           {/if}
         {/if}
         <label class="opt"><input type="checkbox" bind:checked={f.softStartEnabled} /> Soft start <span class="desc">ramp up on turn-on</span></label>
