@@ -3,15 +3,23 @@
 All notable changes to **dingoConfig** are recorded here. Versions follow [SemVer](https://semver.org/);
 `-rc.N` tags are prereleases (feature-complete but not field-validated).
 
-## [Unreleased]
+## [0.6.0] — 2026-06-25
 
-Flash firmware over CAN + bus-load-resilient comms, CANBoard digital-output PWM, CAN frame-map
-reference + decode fixes. Pairs with **CoffeeDingoFW v5.5.104** (OpenBLT CAN bootloader).
+Flash firmware over CAN + bus-load-resilient comms, Kvaser support, smarter flash routing, CANBoard
+digital-output PWM + always-live analog inputs, CAN frame-map reference + decode fixes. Pairs with
+**CoffeeDingoFW v5.5.104** (OpenBLT CAN bootloader + always-live analog).
 
 ### Added
 - **Flash firmware over CAN (OpenBLT XCP)** — "Update firmware over CAN" reflashes a module's app
   through the bootloader (`CanFlashService`, XCP cmd/resp `base+12`/`base+13`), no USB/DFU. Verified
   end-to-end through a dingoPDM CAN bridge on a Kvaser-saturated **3000 msg/s** bus.
+- **Kvaser CAN adapter** (CANlib `canlib32.dll`, Windows) — a dedicated bus interface alongside
+  SLCAN/PCAN; channel = the port field (0-based). Driver not bundled (it's a vendor driver the
+  hardware needs anyway); the build needs nothing extra (P/Invoke, loaded lazily on connect).
+- **Per-module flash routing** — each System card shows one context-aware flash button: the USB↔CAN
+  bridge flashes over **USB** (identified at connect via the dingoFW `I` slcan-extension, which
+  reports the bridge's base id), while every downstream module and the CANBoard flash over **CAN**.
+  `DeviceDto.CanBootloader` / `IsGateway` drive it.
 - **Receive accept-filter on read / write / burn / flash** — `ICommsAdapter.SetReceiveFilter(loId,
   hiId)` (SLCAN/PCAN/SocketCAN/Sim); `DeviceManager` arms a device-block filter during config
   exchange and auto-lifts it when idle, so a flooded bus can't starve config or telemetry.
@@ -40,10 +48,23 @@ reference + decode fixes. Pairs with **CoffeeDingoFW v5.5.104** (OpenBLT CAN boo
 - **CANBoard** `MaxCyclicId` is +10 (was +7) so CAN-value frames +8…+10 reach the decoder; stale
   message-offset comments corrected.
 - **Current scaling** now decodes at **0.1 A/bit** to match firmware ≥ 5.5.102.
+- **"live" status badge no longer strobes** — the device-liveness window was widened 500 ms → 3000 ms,
+  so a single late/dropped status broadcast no longer flips a module to "not found" (and stops
+  `Clear()` wiping its live values each flicker).
+- **CANBoard analog inputs always read live** (needs **CoffeeDingoFW v5.5.104**) — the raw mV is
+  sampled and broadcast whether or not the input is "enabled"; only the rotary/switch/scale decoders
+  stay config-gated. Previously a disabled input read 0 mV.
+- **CANBoard board temperature removed** — the CANBoard has no temperature sensor, so the bogus Msg 1
+  reading is no longer decoded, plotted, or shown on its dashboard.
+- **"Not connected" vs "not responding"** — the System and Dashboard alarms now say *"Not connected to
+  a CAN adapter"* when there's no bus link, instead of wrongly reporting each module as "not on the bus".
 
 ### Changed
 - Minimum firmware bumped to **5.5.102** (the 0.1 A/bit + bit-32 CAN-value wire format); older
   firmware logs a "needs update" notice.
+- **Removed the redundant "USB" adapter** — a dingoPDM connected over USB speaks SLCAN, so it *is* the
+  SLCAN adapter; the duplicate entry is gone (USB-DFU firmware flashing is unaffected — it runs through
+  dfu-util, not a comms adapter).
 
 ## [0.6.0-rc.2] — 2026-06-22 (prerelease)
 

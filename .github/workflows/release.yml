@@ -65,21 +65,19 @@ jobs:
           generate_release_notes: true
           prerelease: ${{ contains(steps.ver.outputs.version, '-') }}
           body: |
-            **Prerelease — feature-complete, compile-validated, not field-validated.**
-            Pairs with **CoffeeDingoFW v5.5.101**.
+            Pairs with **CoffeeDingoFW v5.5.104** (OpenBLT CAN bootloader + always-live analog inputs).
 
-            ### New in this build
-            - **Linear sensor scaling** on a CANBoard analog input — enter two datasheet points
-              (mV → value) and the input reads out in engineering units (bar, °C, …), usable in
-              Conditions, outputs and CAN.
-            - **Multi-position switch reworked** to match the optimised firmware (points packed
-              two-per-word, up to 10 positions, legacy uniform decode removed).
+            ### Highlights
+            - **Flash firmware over CAN (OpenBLT XCP)** through a dingoPDM bridge — no USB/DFU.
+            - **Kvaser** CAN adapter (CANlib, Windows) alongside SLCAN/PCAN.
+            - **Smart flash routing** — the USB↔CAN bridge flashes over USB (identified via the dingoFW
+              `I` command); downstream modules and the CANBoard flash over CAN.
+            - **CANBoard analog inputs always read live**; **board-temp removed** (no sensor).
+            - Bus-load-resilient comms (receive accept-filter), CANBoard digital-output PWM, and a
+              non-strobing "live" badge.
 
-            > ⚠️ The CANBoard analog features need **CoffeeDingoFW v5.5.101**, which **has not been
-            > flashed/tested on a CanBoard yet** — verify on hardware before relying on it.
-
-            See [CHANGELOG.md](https://github.com/${{ github.repository }}/blob/main/CHANGELOG.md) and
-            the README's "Added in this fork" list for the full option list.
+            See [CHANGELOG.md](https://github.com/${{ github.repository }}/blob/main/CHANGELOG.md) for
+            the full list.
           files: publish/dingoConfig-${{ steps.ver.outputs.version }}/*.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
