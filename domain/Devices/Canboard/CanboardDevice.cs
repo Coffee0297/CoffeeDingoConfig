@@ -54,7 +54,10 @@ public class CanboardDevice : IDeviceConfigurable
     [JsonIgnore] public List<DeviceVariable> VarMap { get; set; } = null!;
     [JsonIgnore] public List<DeviceParameter> Params { get; set; } = null!;
     
-    [JsonIgnore][Plotable(displayName:"Temperature", unit:"degC")] public double BoardTempC { get; private set; }
+    // The CANBoard has no board-temperature sensor — the firmware's Msg 1 temp slot is unpopulated, so it
+    // is neither decoded nor exposed (no [Plotable], not in the dashboard). Kept as a 0 so the shared
+    // DeviceDto.Temp field has a value. (The PDMs DO have a real sensor — see PdmDevice.BoardTempC.)
+    [JsonIgnore] public double BoardTempC => 0;
     [JsonIgnore][Plotable(displayName:"Heartbeat", unit:" ")] public int Heartbeat { get; private set; }
     
     [JsonIgnore] public string Version { get; private set; } = "v0.0.0";
@@ -215,15 +218,12 @@ public class CanboardDevice : IDeviceConfigurable
 
         cyclicIndex++;
 
-        // Message 1 (BaseId + 3): Analog input 4 millivolts + board temperature
+        // Message 1 (BaseId + 3): Analog input 5 millivolts. (The firmware's temp slot at bit 48 is
+        // not populated — the CANBoard has no temperature sensor — so it is not decoded.)
         StatusSigs[cyclicIndex] =
         [
             (new DbcSignal { Name = "AnalogInput5.Millivolts", StartBit = 0, Length = 16, Unit = "mV"},
-                val => AnalogInputs[4].Millivolts = val),
-
-
-            (new DbcSignal { Name = "BoardTempC", StartBit = 48, Length = 16, Factor = 0.01, Unit = "degC"},
-                val => BoardTempC = val)
+                val => AnalogInputs[4].Millivolts = val)
         ];
         cyclicIndex++;
 

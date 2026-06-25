@@ -337,7 +337,9 @@
   </div>
 </div>
 
-{#if devices.some((d) => !d.connected)}
+{#if !connected && devices.length}
+  <div class="sys-alert">⚠ Not connected to a CAN adapter — connect one from the toolbar to see which modules are live.</div>
+{:else if devices.some((d) => !d.connected)}
   <div class="sys-alert">⚠ {devices.filter((d) => !d.connected).length} module(s) in the project not seen on the bus — check power/wiring/base ID.</div>
 {/if}
 
@@ -349,7 +351,7 @@
 <div class="cat-grp">Modules <span class="ct"></span></div>
 <div class="fleet">
   {#each devices as d (d.guid)}
-    <div class="pdm" class:err={!d.connected} use:clickable aria-label={"Open " + d.name} onclick={() => pick(d.guid)} style="position:relative">
+    <div class="pdm" class:err={connected && !d.connected} use:clickable aria-label={"Open " + d.name} onclick={() => pick(d.guid)} style="position:relative">
       <button class="x" style="position:absolute;top:8px;right:8px" title="Remove module" aria-label={"Remove " + d.name} onclick={(e) => { e.stopPropagation(); remove?.(d.guid) }}>✕</button>
       {#if renamingGuid === d.guid}
         <input class="in" style="font-weight:700;max-width:150px" bind:value={renameVal} use:focusSelect
@@ -360,8 +362,8 @@
         <div class="pt" title="Click to rename" use:clickable onclick={(e) => { e.stopPropagation(); startRename(d) }}>{d.name} <span style="opacity:.45;font-size:12px">✎</span></div>
       {/if}
       <div class="role">{d.type} · {hex(d.baseId)}</div>
-      <div class="st"><span class="dot-live" style={d.connected ? '' : 'background:var(--err)'}></span>
-        {d.connected ? `live · ${onCount(d)} on · ${totalA(d).toFixed(1)} A` : 'not found'}</div>
+      <div class="st"><span class="dot-live" style={d.connected ? '' : (connected ? 'background:var(--err)' : 'background:var(--faint)')}></span>
+        {d.connected ? `live · ${onCount(d)} on · ${totalA(d).toFixed(1)} A` : (connected ? 'not found' : 'no bus link')}</div>
       {#if /pdm/i.test(d.type)}<div class="role" style="margin-top:2px">max load {maxA(d)} A</div>{/if}
       {#if /pdm|canboard/i.test(d.type)}
         {@const ft = flashTarget(d)}

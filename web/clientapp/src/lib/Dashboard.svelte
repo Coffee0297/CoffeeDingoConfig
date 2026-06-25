@@ -5,6 +5,9 @@
   // A module is writable only when it's actually answering on the bus; the feed is "stale" when
   // the hub dropped or telemetry froze, so the tiles below are showing last-known, not live, data.
   let live = $derived(!!current?.connected)
+  // Adapter-level link: whether we're connected to a CAN bus at all. Distinguishes "no adapter connected"
+  // (nothing to talk to) from "adapter is up but THIS module isn't answering" (power/wiring/base ID).
+  let adapterConn = $derived(!!$telemetry?.connected)
   let stale = $derived($telemetry?.stale || $hubState !== 'live')
 
   let signals = $state([])
@@ -35,7 +38,7 @@
   let acting = $state(false)
   async function act(a) {
     if (!current || acting) return
-    if (!live) { toast(`${current.name} isn't on the bus — connect it before read/write/burn.`, 'error'); return }
+    if (!live) { toast(adapterConn ? `${current.name} isn't responding on the bus — check power, wiring and base ID.` : 'Not connected to a CAN adapter — connect one from the toolbar first.', 'error'); return }
     // Confirm the genuinely disruptive ones (persistent / stops the running program).
     if (a === 'burn' && !confirm(`Burn the config to "${current.name}"? This writes permanently to flash.`)) return
     if (a === 'bootloader' && !confirm(`Put "${current.name}" into its bootloader? It stops running until reflashed/rebooted.`)) return
@@ -63,20 +66,21 @@
     <button class="btn ghost" disabled={!live} onclick={() => act('wakeup')}>Wakeup</button>
     <button class="btn ghost" disabled={!live} onclick={() => act('bootloader')}>Bootloader</button>
     <button class="btn ghost" disabled={!live} onclick={() => act('version')}>Version</button>
-    {#if !live}<span class="mismatch">⚠ {current.name} not on the bus — read / write / burn need a live module</span>
+    {#if !adapterConn}<span class="mismatch">⚠ Not connected to a CAN adapter — read / write / burn need a bus connection</span>
+    {:else if !live}<span class="mismatch">⚠ {current.name} isn't responding on the bus — read / write / burn need a live module</span>
     {:else if current.version === 'v0.0.0'}<span class="mismatch">⚠ not read yet — press Read</span>{/if}
   </div>
 
   {#if !live || stale}
-    <div class="sys-alert">{!live ? `${current.name} is not on the bus — these are last-known values, not live.` : 'Live feed frozen — values below may be stale.'}</div>
+    <div class="sys-alert">{!adapterConn ? 'Not connected to a CAN adapter — values below are last-known, not live.' : !live ? `${current.name} isn't responding on the bus — these are last-known values, not live.` : 'Live feed frozen — values below may be stale.'}</div>
   {/if}
   <div class="tiles-stat" style={(!live || stale) ? 'opacity:.5' : ''}>
     {#if !isCb}
       <div class="stat"><div class="v">{current.battery.toFixed(1)} V</div><div class="k">Battery voltage</div></div>
       <div class="stat"><div class="v">{current.current.toFixed(1)} A</div><div class="k">Total current</div></div>
+      <div class="stat"><div class="v">{Math.round(current.temp)} °C</div><div class="k">Board temp</div></div>
+      <div class="stat"><div class="v">{current.state}</div><div class="k">Device state</div></div>
     {/if}
-    <div class="stat"><div class="v">{Math.round(current.temp)} °C</div><div class="k">Board temp</div></div>
-    {#if !isCb}<div class="stat"><div class="v">{current.state}</div><div class="k">Device state</div></div>{/if}
     <div class="stat"><div class="v">{current.version}</div><div class="k">FW version</div></div>
     <div class="stat"><div class="v">{current.bitrate}</div><div class="k">CAN bitrate</div></div>
   </div>
