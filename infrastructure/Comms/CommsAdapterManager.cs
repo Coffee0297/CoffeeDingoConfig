@@ -18,6 +18,8 @@ public class CommsAdapterManager(IServiceProvider serviceProvider, ILogger<Comms
 
     public bool IsConnected => _activeAdapter?.IsConnected ?? false;
 
+    public int? GatewayBaseId { get; private set; }
+
     public event EventHandler<CanFrameEventArgs>? DataReceived;
     public event EventHandler? Connected;
     public event EventHandler? Disconnected;
@@ -115,7 +117,14 @@ public class CommsAdapterManager(IServiceProvider serviceProvider, ILogger<Comms
             return await Task.FromResult(false);
         }
 
-        logger.LogInformation($"Adapter connected: {_activeAdapter.Name}");
+        // Ask the connected board whether it's a dingo USB<->CAN bridge and, if so, its base id, so the UI
+        // can route flashing (bridge → USB, everything else → CAN). Best-effort: a standalone adapter never
+        // replies and this returns null. Never fatal to the connection.
+        try { GatewayBaseId = await _activeAdapter.IdentifyBridgeBaseIdAsync(ct); }
+        catch { GatewayBaseId = null; }
+
+        logger.LogInformation($"Adapter connected: {_activeAdapter.Name}" +
+            (GatewayBaseId is int gw ? $" (USB bridge at 0x{gw:X3})" : ""));
         return await Task.FromResult(true);
     }
 
@@ -125,6 +134,7 @@ public class CommsAdapterManager(IServiceProvider serviceProvider, ILogger<Comms
 
         var adapter = _activeAdapter;
         _activeAdapter = null; // Null immediately so IsConnected returns false
+        GatewayBaseId = null;
 
         adapter.DataReceived -= OnDataReceived;
         adapter.Disconnected -= OnDisconnected;

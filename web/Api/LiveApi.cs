@@ -25,7 +25,7 @@ public record DeviceDto(string Guid, string Name, string Type, int BaseId, bool 
     double Battery, double Current, double Temp, string State, string Version, string Bitrate, OutputDto[] Outputs,
     bool Reading, int ReadDone, int ReadTotal, bool SleepEnabled, int SleepTimeoutMs,
     bool SleepInputEnabled, int SleepInput, bool SleepInputActiveHigh, bool SleepIgnoreAlwaysOn,
-    bool CanBootloader);
+    bool CanBootloader, bool IsGateway = false);
 public record AdaptersDto(string[] Adapters, string[] Ports, bool Connected, string? ActiveAdapter, string? ActivePort);
 public record TelemetryDto(bool Connected, string? Adapter, long CanTotal, long CanRate, int[] Ids, DeviceDto[] Devices);
 public record ConnectReq(string Adapter, string Port, string Bitrate);
@@ -255,9 +255,24 @@ public class TelemetryBroadcaster(
                 int[] ids;
                 lock (_lock) ids = _ids.OrderBy(x => x).Take(48).ToArray();
 
-                var devices = deviceManager.GetAllDevices()
-                    .Select(d => DingoMap.ToDto(d, deviceManager.GetDeviceUiState(d.Guid))).ToArray();
                 var status = adapterManager.GetStatus();
+                // Mark which PDM is the USB bridge so the UI routes flashing (bridge → USB, others → CAN).
+                //  • Bridge identified (dingoFW 'I' reply) → only the matching base id is the gateway.
+                //  • Not identified, adapter opened as "USB" → can't tell which PDM is the bridge, so flag
+                //    every PDM as gateway (all USB) — never CAN-flash an unidentified possible-bridge.
+                //  • Not identified, any other adapter (Kvaser/SLCAN/PCAN/SocketCAN/Sim) → no gateway, so
+                //    every module flashes over CAN.
+                var gwBase = adapterManager.GatewayBaseId;
+                var usbUnidentified = gwBase is null &&
+                    string.Equals(status.activeAdapter, "USB", StringComparison.OrdinalIgnoreCase);
+                var devices = deviceManager.GetAllDevices()
+                    .Select(d =>
+                    {
+                        var dto = DingoMap.ToDto(d, deviceManager.GetDeviceUiState(d.Guid));
+                        bool isPdm = d.Type?.Contains("pdm", StringComparison.OrdinalIgnoreCase) ?? false;
+                        bool isGateway = isPdm && (gwBase is int gb ? d.BaseId == gb : usbUnidentified);
+                        return isGateway ? dto with { IsGateway = true } : dto;
+                    }).ToArray();
                 var dto = new TelemetryDto(status.isConnected, status.activeAdapter, _total, _rate, ids, devices);
 
                 await hub.Clients.All.SendAsync("telemetry", dto, ct);

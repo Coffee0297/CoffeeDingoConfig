@@ -45,6 +45,11 @@ public class SlcanAdapter : ICommsAdapter
     private volatile int _acceptLo = -1;
     private volatile int _acceptHi = -1;
 
+    // Last base id reported by the dingoFW 'I' identify reply (see IdentifyBridgeBaseIdAsync / the reader).
+    // -1 = none seen since the last identify request. volatile: written by the reader thread, polled by the
+    // identify await.
+    private volatile int _bridgeBaseId = -1;
+
     public void SetReceiveFilter(int? loId, int? hiId = null)
     {
         _acceptLo = loId ?? -1;
@@ -110,6 +115,20 @@ public class SlcanAdapter : ICommsAdapter
                 "this is a dingoPDM/CANBoard bridge — update its firmware to one with the 'X' filter.");
         }
         finally { _acceptLo = savedLo; _acceptHi = savedHi; }
+    }
+
+    public async Task<int?> IdentifyBridgeBaseIdAsync(CancellationToken ct = default)
+    {
+        if (Serial is not { IsOpen: true }) return null;
+        _bridgeBaseId = -1;
+        SendRaw("I\r");                              // dingoFW identify; standalone adapters ignore it
+        // Poll for the reader to capture the 'I' reply. ~400ms is ample over a 115200 link; a non-dingo
+        // adapter never answers, so we just time out and return null (→ no bridge identified).
+        for (int i = 0; i < 20 && _bridgeBaseId < 0; i++)
+        {
+            try { await Task.Delay(20, ct); } catch (OperationCanceledException) { return null; }
+        }
+        return _bridgeBaseId >= 0 ? _bridgeBaseId : null;
     }
 
     public Task<bool> InitAsync(string port, CanBitRate bitRate, CancellationToken ct)
@@ -405,6 +424,13 @@ public class SlcanAdapter : ICommsAdapter
     // recovered instead of the whole line being discarded.
     private void ProcessFrameBytes(byte[] buf, int len)
     {
+        // dingoFW 'I' identify reply: 'I' + base id (3 hex) + CR. Not a CAN frame — a dingo bridge sends it
+        // over USB in answer to our 'I' request so we learn which board is the bridge. Capture and stop.
+        if (len >= 4 && buf[0] == (byte)'I')
+        {
+            _bridgeBaseId = ((HexByteToInt(buf[1]) << 8) | (HexByteToInt(buf[2]) << 4) | HexByteToInt(buf[3])) & 0x7FF;
+            return;
+        }
         int off = 0, guard = 0;
         while (off < len && guard++ < 24)
         {

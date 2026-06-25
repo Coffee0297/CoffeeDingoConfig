@@ -5,21 +5,19 @@
   import { toast } from './toast.js'
   import { dialog, labelFields, clickable } from './a11y.js'
   import LuaEditor from './LuaEditor.svelte'
-  let { devices = [], adapter = null, connected = false, pick, addModule, remove } = $props()
+  let { devices = [], connected = false, pick, addModule, remove } = $props()
 
-  // Which flash path a module's card offers — exactly one button, picked by context:
-  //  • CANboard: always CAN (it carries the OpenBLT bootloader and has no USB-DFU port).
-  //  • dingoPDM on a dedicated CAN adapter (Kvaser/SLCAN/PCAN/SocketCAN/Sim): CAN, like the CANboard.
-  //  • dingoPDM on the "USB" adapter: that adapter IS a dingoPDM bridging USB↔CAN — you can't reflash
-  //    the bridge over the link it provides, so fall back to USB DFU.
-  // ponytail: when on the USB gateway, ALL PDMs fall back to USB. A downstream PDM could be flashed
-  // over CAN through the bridge, but telling which module is the bridge needs a backend flag — add
-  // a gateway marker to DeviceDto then key off it here if that case comes up.
-  let canAdapter = $derived(connected && !!adapter && adapter.toUpperCase() !== 'USB')
+  // Which flash path a module's card offers — exactly one button:
+  //  • Offline: USB DFU (the dark-module recovery path; CAN needs a live bus).
+  //  • CANboard: CAN (it carries the OpenBLT bootloader and has no USB-DFU port).
+  //  • dingoPDM: USB when it's the bridge (d.isGateway — see the backend; you can't reflash the bridge
+  //    over the link it provides), otherwise CAN. The backend identifies the bridge via the dingoFW 'I'
+  //    reply at connect; downstream PDMs and PDMs on a dedicated CAN adapter (Kvaser/SLCAN/PCAN) get CAN.
   function flashTarget(d) {
     if (/canboard/i.test(d.type)) return d.canBootloader ? 'can' : null
     if (!/pdm/i.test(d.type)) return null
-    return d.canBootloader && canAdapter ? 'can' : 'usb'
+    if (!connected || !d.canBootloader) return 'usb'
+    return d.isGateway ? 'usb' : 'can'
   }
   const hex = (n) => '0x' + (n ?? 0).toString(16).toUpperCase().padStart(3, '0')
 

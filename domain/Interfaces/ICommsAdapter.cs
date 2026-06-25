@@ -44,4 +44,14 @@ public interface ICommsAdapter
     /// filtering. Needs some live bus traffic to test against. Restores the prior state before returning.
     /// </summary>
     Task<AdapterFilterProbe> ProbeFilterAsync(CancellationToken ct = default);
+
+    /// <summary>
+    /// Ask the connected board, if it is a dingo CAN&lt;-&gt;USB bridge, for its own CAN base id (the dingoFW
+    /// 'I' slcan-extension). Only the directly-connected bridge answers — over USB, never onto the bus — so
+    /// the host can flash THAT board over USB (you can't reflash the bridge over the link it provides) and
+    /// every other module over CAN. Returns the base id, or null if nothing replied within the timeout
+    /// (a standalone adapter — Kvaser/PCAN/generic SLCAN — or a pre-'I' firmware: the host then treats
+    /// every module as CAN-flashable, or USB-only when the adapter was opened as "USB"). Default: null.
+    /// </summary>
+    Task<int?> IdentifyBridgeBaseIdAsync(CancellationToken ct = default) => Task.FromResult<int?>(null);
 }
