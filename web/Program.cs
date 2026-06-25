@@ -46,6 +46,30 @@ builder.Logging.Services.AddSingleton<ILoggerProvider>(sp =>
 
 var app = builder.Build();
 
+// --- Crash guard -------------------------------------------------------------
+// The packaged exe's console window vanishes on a hard crash, taking the stack trace
+// with it (e.g. the first "Add from USB" scan throwing on a background thread). Capture
+// unhandled / unobserved exceptions to logs/crash.log + the in-app syslog so the next
+// repro is diagnosable instead of silent. Can't stop a truly fatal/native crash, but
+// catches managed exceptions before the CLR tears down.
+{
+    var crashLog = app.Services.GetRequiredService<SystemLogger>();
+    var crashFile = Path.Combine(AppContext.BaseDirectory, "logs", "crash.log");
+    void DumpCrash(string kind, Exception? ex)
+    {
+        try { crashLog.Log(application.Models.LogLevel.Error, "CrashGuard", $"{kind}: {ex?.Message}", ex?.ToString()); } catch { /* logger may be down */ }
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(crashFile)!);
+            File.AppendAllText(crashFile, $"{DateTime.Now:o}  {kind}{Environment.NewLine}{ex}{Environment.NewLine}{Environment.NewLine}");
+        }
+        catch { /* last resort — nothing more we can do */ }
+    }
+    AppDomain.CurrentDomain.UnhandledException += (_, e) =>
+        DumpCrash(e.IsTerminating ? "UnhandledException (terminating)" : "UnhandledException", e.ExceptionObject as Exception);
+    TaskScheduler.UnobservedTaskException += (_, e) => { DumpCrash("UnobservedTaskException", e.Exception); e.SetObserved(); };
+}
+
 // Serve the built Svelte SPA. Use the physical wwwroot when it exists (dev / folder deploy);
 // otherwise fall back to the copy embedded in the assembly so a single-file exe needs no
 // loose files (static web assets aren't bundled into single-file by default).

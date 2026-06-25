@@ -36,6 +36,7 @@
   let funcs = $state(null)
   let inputsBool = $state([])   // bool-typed VarMap entries (edges, on/off sources)
   let inputsAll = $state([])    // every VarMap entry (values to compare / send)
+  let inputsNum = $state([])    // numeric VarMap entries (analog/CAN values) — for variable PWM duty
 
   let loadErr = $state('')
   async function reload() {
@@ -45,6 +46,8 @@
       funcs = await api.functions(g)
       inputsBool = await api.inputs(g, 'bool')
       inputsAll = await api.inputs(g)
+      // numeric value sources (analog input, CAN value, scaled value, counter…) for variable PWM duty
+      inputsNum = [...await api.inputs(g, 'float'), ...await api.inputs(g, 'int')]
       loadErr = ''
     } catch (e) { loadErr = 'Could not load this module’s signals — ' + e.message }
   }
@@ -272,7 +275,19 @@
     }
     drawer = true
   }
-  function close() { drawer = false; editing = null }
+  function close() { drawer = false; editing = null; driverReturn = null }
+
+  // ---- "Build a rule" from an output's Driven-by ----
+  // Open the full Condition / Virtual-input editor, then return to the output and point it at the
+  // new logic var. driverReturn stashes the in-progress output edit so the detour doesn't lose it.
+  let driverReturn = $state(null)
+  function buildRule(kind) {
+    const kd = meta(kind)
+    const slot = list(kd).find((x) => !x.enabled)
+    if (!slot) { toast(`No free ${kd.label.toLowerCase()} slots — free one below in Signals & logic.`, 'error'); return }
+    driverReturn = { number: editing.number, snapshot: { ...f } }
+    seed(kind, slot, true)
+  }
 
   async function save() {
     if (!current || !editing) return
@@ -312,6 +327,18 @@
       if (editing.kind === 'analoginput' && mp.burn && r?.written) {
         try { await api.action(current.guid, 'burn'); toast('Burned to flash — persists across reboot', 'ok') }
         catch (e) { toast('Saved, but burn failed: ' + e.message, 'error') }
+      }
+      // Built a rule from an output's Driven-by? Hop back to the output and select the new logic var.
+      if (driverReturn && (editing.kind === 'condition' || editing.kind === 'virtualinput')) {
+        // VarMap labels append the property (e.g. "condition1 Value"); the bare name is "condition1".
+        const newVar = inputsBool.find((v) => v.name === body.name || v.name.startsWith(body.name + ' '))
+        const ret = driverReturn; driverReturn = null
+        const outRow = list(meta('digitaloutput')).find((x) => x.number === ret.number)
+        if (newVar && outRow) {
+          seed('digitaloutput', { ...outRow, ...ret.snapshot, input: newVar.index }, false)
+          toast(`Output now driven by "${body.name}" — Save it to keep`, 'ok')
+          return
+        }
       }
       close()
     } catch (e) { toast('Save failed: ' + e.message, 'error') }
@@ -667,14 +694,34 @@
         <div class="field"><label>Name</label><input bind:value={f.name} /></div>
         <div class="field"><label>Driven by</label>
           <select bind:value={f.input}><option value={0}>—</option>{#each inputsBool as v}<option value={v.index}>{v.name}</option>{/each}</select></div>
+        <div style="display:flex;gap:14px;margin:-2px 0 2px">
+          {#if funcs?.conditions}<button type="button" class="linkbtn" onclick={() => buildRule('condition')}>＋ Comparison (analog &gt; value)</button>{/if}
+          {#if funcs?.virtualInputs}<button type="button" class="linkbtn" onclick={() => buildRule('virtualinput')}>＋ Combination (A AND B)</button>{/if}
+        </div>
+        <p class="hint">Pick a signal above, or build a rule: a <b>Comparison</b> turns on when a signal crosses a value; a <b>Combination</b> ANDs/ORs several signals. Either becomes a new source you can drive this output from.</p>
         <p class="hint"><b>Low-side (ground) switch.</b> Wire the load between +12&nbsp;V and this output terminal — the board switches its ground when the driving signal is true.</p>
         <p class="lbl" style="margin-top:18px">PWM / dimming</p>
         <label class="opt" style="border:0;padding-top:0"><input type="checkbox" bind:checked={f.pwmEnabled} /> PWM enabled <span class="desc">duty instead of on/off</span></label>
-        <div class="f3">
-          <div class="field"><label>Freq (Hz)</label><input type="number" bind:value={f.frequency} /></div>
-          <div class="field"><label>Duty (%)</label><input type="number" bind:value={f.fixedDutyCycle} /></div>
-          <div class="field"><label>Min duty (%)</label><input type="number" bind:value={f.minDutyCycle} /></div>
-        </div>
+        {#if f.pwmEnabled}
+          <label class="chk"><input type="checkbox" bind:checked={f.variableDutyCycle} /> Duty follows a signal <span class="desc">analog dimming — from a CAN value or an analog input</span></label>
+          <div class="f3">
+            <div class="field"><label>Freq (Hz)</label><input type="number" bind:value={f.frequency} /></div>
+            {#if f.variableDutyCycle}
+              <div class="field"><label>Duty source</label>
+                <select bind:value={f.dutyCycleInput}><option value={0}>—</option>{#each inputsNum as v}<option value={v.index}>{v.name}</option>{/each}</select></div>
+            {:else}
+              <div class="field"><label>Duty (%)</label><input type="number" bind:value={f.fixedDutyCycle} /></div>
+            {/if}
+            <div class="field"><label>Min duty (%)</label><input type="number" bind:value={f.minDutyCycle} /></div>
+          </div>
+          {#if f.variableDutyCycle}
+            <div class="field" style="max-width:260px"><label>Signal value at 100% duty</label>
+              <input type="number" min="1" value={(f.dutyCycleDenominator || 1) * 100}
+                oninput={(e) => (f.dutyCycleDenominator = Math.max(1, Math.round((+e.target.value || 0) / 100)))} /></div>
+            <p class="hint">Duty tracks the source: <b>duty% = signal ÷ {f.dutyCycleDenominator || 1}</b>, clamped 0–100 then held at the min-duty floor.
+              Set the value above to whatever the signal reads at full brightness (e.g. a 0–5000&nbsp;mV analog → 5000). Any numeric signal works — CAN or CANBoard.</p>
+          {/if}
+        {/if}
         <label class="opt"><input type="checkbox" bind:checked={f.softStartEnabled} /> Soft start <span class="desc">ramp up on turn-on</span></label>
         <div class="field" style="max-width:230px"><label>Soft-start ramp (ms)</label><input type="number" bind:value={f.softStartRampTime} /></div>
         <p class="hint">No current sensing on these outputs (that's a PDM smart-output feature). Save writes to the device; <b>Burn</b> persists to flash.</p>
