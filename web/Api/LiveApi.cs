@@ -1243,6 +1243,39 @@ public static class LiveApi
             return Results.File(System.Text.Encoding.UTF8.GetBytes(sb.ToString()), "text/csv", "canlog.csv");
         });
 
+        // ---- CAN recorder (SavvyCAN-style): record every frame to a CSV and save it to the PC.
+        // Gated on a REAL CAN interface — the simulator can't be recorded.
+        api.MapPost("/canlog/record/start", (CanMsgLogger log, ICommsAdapterManager adapters) =>
+        {
+            var (connected, active, _) = adapters.GetStatus();
+            if (!connected || string.Equals(active, "Sim", StringComparison.OrdinalIgnoreCase))
+                return Results.BadRequest(new { ok = false, error = "Connect a real CAN interface first — the simulator can't be recorded." });
+            log.StartRecording(Path.Combine(AppContext.BaseDirectory, "logs"));
+            return Results.Ok(new { ok = true });
+        });
+        api.MapPost("/canlog/record/stop", (CanMsgLogger log) =>
+        {
+            log.StopRecording();
+            return Results.Ok(new { ok = true, frames = log.RecordedFrames, fileName = Path.GetFileName(log.RecordingPath ?? "") });
+        });
+        api.MapGet("/canlog/record/status", (CanMsgLogger log) => Results.Ok(new
+        {
+            recording = log.IsRecording, frames = log.RecordedFrames,
+            sinceMs = log.IsRecording ? (int)(DateTime.UtcNow - log.RecordingStarted).TotalMilliseconds : 0,
+            fileName = Path.GetFileName(log.RecordingPath ?? ""),
+        }));
+        api.MapGet("/canlog/record/download", (CanMsgLogger log) =>
+        {
+            log.FlushRecording();
+            var path = log.RecordingPath;
+            if (string.IsNullOrEmpty(path) || !File.Exists(path)) return Results.NotFound();
+            // Read with shared access (the writer keeps the file open while recording).
+            using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+            using var ms = new MemoryStream();
+            fs.CopyTo(ms);
+            return Results.File(ms.ToArray(), "text/csv", Path.GetFileName(path));
+        });
+
         // CSV export of the system log.
         api.MapGet("/syslog/export", (SystemLogger log) =>
         {

@@ -20,6 +20,42 @@ public class CanMsgLogger(int maxHistorySize = 100000, string logDirectory = "./
 
     private StreamWriter? _logWriter;
 
+    // ---- SavvyCAN-style recording: capture EVERY frame time-ordered to a CSV (replayable by the
+    // Sim adapter, and openable in SavvyCAN). Separate from the summary/history above.
+    private StreamWriter? _recWriter;
+    private readonly Lock _recLock = new();
+    public bool IsRecording { get; private set; }
+    public long RecordedFrames { get; private set; }
+    public DateTime RecordingStarted { get; private set; }
+    public string? RecordingPath { get; private set; }
+
+    public string StartRecording(string dir)
+    {
+        StopRecording();
+        Directory.CreateDirectory(dir);
+        var path = Path.Combine(dir, $"canlog_{DateTime.Now:yyyyMMdd_HHmmss}.csv");
+        lock (_recLock)
+        {
+            // FileShare.Read so the download can read the flushed portion even mid-record.
+            var fs = new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.Read);
+            _recWriter = new StreamWriter(fs) { AutoFlush = false };
+            _recWriter.WriteLine("Timestamp,Direction,CAN ID,Length,Data");
+            RecordingPath = path; RecordedFrames = 0; RecordingStarted = DateTime.UtcNow; IsRecording = true;
+        }
+        return path;
+    }
+
+    public void StopRecording()
+    {
+        lock (_recLock)
+        {
+            if (_recWriter != null) { try { _recWriter.Flush(); _recWriter.Dispose(); } catch { /* best-effort */ } _recWriter = null; }
+            IsRecording = false;
+        }
+    }
+
+    public void FlushRecording() { lock (_recLock) { try { _recWriter?.Flush(); } catch { } } }
+
     /// <summary>
     /// Get the message summary for each unique CAN ID (for UI grid display)
     /// </summary>
@@ -90,6 +126,20 @@ public class CanMsgLogger(int maxHistorySize = 100000, string logDirectory = "./
         {
             WriteToFile(entry);
         }
+
+        // Append to the active recording (time-ordered, every frame).
+        if (IsRecording)
+        {
+            lock (_recLock)
+            {
+                if (_recWriter != null)
+                {
+                    var data = entry.Payload == null ? "" : string.Join(" ", entry.Payload.Take(entry.Len).Select(b => b.ToString("X2")));
+                    _recWriter.WriteLine($"{entry.Timestamp:yyyy-MM-dd HH:mm:ss.fff},{dir},0x{entry.Id:X},{entry.Len},{data}");
+                    if ((++RecordedFrames % 500) == 0) _recWriter.Flush();   // bound data loss without flushing every frame
+                }
+            }
+        }
     }
 
     public void CreateLogFile()
@@ -140,5 +190,6 @@ public class CanMsgLogger(int maxHistorySize = 100000, string logDirectory = "./
     public void Dispose()
     {
         _logWriter?.Dispose();
+        StopRecording();
     }
 }
