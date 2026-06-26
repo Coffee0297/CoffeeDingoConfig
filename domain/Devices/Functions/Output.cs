@@ -41,6 +41,7 @@ public class Output : IDeviceFunction
     [JsonPropertyName("variableFreq")] public bool VariableFreq { get; set; }
     [JsonPropertyName("freqInput")] public int FreqInput { get; set; }
     [JsonPropertyName("freqInputDenom")] public int FreqInputDenom { get; set; } = 1;
+    [JsonPropertyName("rampDutyChanges")] public bool RampDutyChanges { get; set; }
     [JsonPropertyName("primaryOutput")] public int PrimaryOutput { get; set; } = -1; //-1 = pairing disabled
 
     [JsonPropertyName("warnLimit")] public double WarnLimit { get; set; } = 0.0;        //A, 0 = disabled
@@ -285,6 +286,13 @@ public class Output : IDeviceFunction
                 GetValue = () => FreqInputDenom, SetValue = val => FreqInputDenom = (int)val,
                 ValueType = FreqInputDenom.GetType(),
                 DefaultValue = 1
+            },
+            new DeviceParameter
+            {
+                ParentName = Name, Name = $"output[{Number}].rampDutyChanges", Index = BaseIndex + (Number - 1), SubIndex = subIndex++,
+                GetValue = () => RampDutyChanges, SetValue = val => RampDutyChanges = (bool)val,
+                ValueType = RampDutyChanges.GetType(),
+                DefaultValue = false
             }
         ];
     }

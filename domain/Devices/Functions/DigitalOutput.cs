@@ -27,6 +27,7 @@ public class DigitalOutput : IDeviceFunction
     [JsonPropertyName("variableFreq")] public bool VariableFreq { get; set; }
     [JsonPropertyName("freqInput")] public int FreqInput { get; set; }
     [JsonPropertyName("freqInputDenom")] public int FreqInputDenom { get; set; } = 1;
+    [JsonPropertyName("rampDutyChanges")] public bool RampDutyChanges { get; set; }
 
     [JsonIgnore][Plotable(displayName:"State")] public bool State { get; set; }
     [JsonIgnore][Plotable(displayName:"DutyCycle", unit:"%")] public double CurrentDutyCycle { get; set; }
@@ -143,6 +144,13 @@ public class DigitalOutput : IDeviceFunction
                 GetValue = () => FreqInputDenom, SetValue = val => FreqInputDenom = (int)val,
                 ValueType = FreqInputDenom.GetType(),
                 DefaultValue = 1
+            },
+            new DeviceParameter
+            {
+                ParentName = Name, Name = $"digitalOutput[{Number}].rampDutyChanges", Index = BaseIndex + (Number - 1), SubIndex = subIndex++,
+                GetValue = () => RampDutyChanges, SetValue = val => RampDutyChanges = (bool)val,
+                ValueType = RampDutyChanges.GetType(),
+                DefaultValue = false
             }
         ];
     }

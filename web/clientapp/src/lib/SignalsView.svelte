@@ -765,6 +765,9 @@
         {/if}
         <label class="opt"><input type="checkbox" bind:checked={f.softStartEnabled} /> Soft start <span class="desc">ramp up on turn-on</span></label>
         <div class="field" style="max-width:230px"><label>Soft-start ramp (ms)</label><input type="number" bind:value={f.softStartRampTime} /></div>
+        {#if f.softStartEnabled && f.variableDutyCycle}
+          <label class="opt"><input type="checkbox" bind:checked={f.rampDutyChanges} /> Ramp duty changes <span class="desc">slew on every change, not just turn-on — a full 0–100% takes the soft-start ramp time</span></label>
+        {/if}
         <p class="hint">No current sensing on these outputs (that's a PDM smart-output feature). Save writes to the device; <b>Burn</b> persists to flash.</p>
       {:else if editing.kind === 'analoginput'}
         <label class="opt" style="border:0;padding-top:0"><input type="checkbox" bind:checked={f.enabled} /> Input enabled</label>
