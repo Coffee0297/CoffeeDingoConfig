@@ -76,17 +76,33 @@
     finally { luaBusy = false }
   }
 
-  // Selectable input sources (VarMap) for the Rule tab — loaded once per device.
-  let inputs = $state([])
-  // Numeric value sources (analog/CAN/scaled/counter) for variable PWM duty/freq — same set
-  // SignalsView uses for a CANBoard digital output.
+  // Selectable input sources (VarMap). The firmware drives an output on=non-zero with no threshold
+  // (profet.cpp: `if ((*pInput) && bOutEnabled)`), and the VarMap is all floats — so a raw analog
+  // value (e.g. Battery Voltage) as a bare driver = always ON. Mirror the CANboard: the "Driving
+  // input" picker offers ONLY boolean sources; analog values must go through a Comparison first.
+  let inputs = $state([])          // ALL entries — kept for enableSourceVar name lookups + Lua-slot bind
+  let inputsBool = $state([])      // bool-typed entries only — the legal on/off drivers
+  // Numeric value sources (analog/CAN/scaled/counter) for variable PWM duty/freq + the Comparison builder.
   let inputsNum = $state([])
-  $effect(() => {
-    if (!guid) { inputs = []; inputsNum = []; return }
-    api.inputs(guid).then((r) => (inputs = r)).catch(() => (inputs = []))
-    Promise.all([api.inputs(guid, 'float').catch(() => []), api.inputs(guid, 'int').catch(() => [])])
-      .then(([f, i]) => (inputsNum = [...f, ...i])).catch(() => (inputsNum = []))
-  })
+  async function loadInputs() {
+    if (!guid) { inputs = []; inputsBool = []; inputsNum = []; return }
+    inputs = await api.inputs(guid).catch(() => [])
+    inputsBool = await api.inputs(guid, 'bool').catch(() => [])
+    const [fl, it] = await Promise.all([api.inputs(guid, 'float').catch(() => []), api.inputs(guid, 'int').catch(() => [])])
+    inputsNum = [...fl, ...it]
+  }
+  $effect(() => { loadInputs() })
+  // The driving-input options: bool sources only, plus a "—" none entry. If the device's current
+  // driver isn't a bool entry (e.g. set elsewhere), keep showing it so we never silently lose it.
+  let driverOpts = $derived((() => {
+    const opts = ssOpts(inputsBool, true)
+    const cur = Number(f.input) || 0
+    if (cur && !inputsBool.some((v) => v.index === cur)) {
+      const label = inputs.find((v) => v.index === cur)?.name ?? output.input ?? ('#' + cur)
+      opts.push({ value: cur, label })
+    }
+    return opts
+  })())
   // Build SearchSelect options from a VarMap list; `none` prepends a "— (0)" entry.
   const ssOpts = (arr, none = false) => (none ? [{ value: 0, label: '—' }] : []).concat((arr ?? []).map((v) => ({ value: v.index, label: v.name })))
   // "Signal value at full" fields for the variable duty/freq denominators (free-typing local state,
@@ -229,6 +245,74 @@
       if (fn) { if (fn.enabled === false) { try { await api.setFunction(guid, kind, fn.number, { enabled: true }); fn.enabled = true; toast(`Enabled "${fn.name}" — it was off`, 'ok') } catch (e) { toast('Could not enable source: ' + e.message, 'error') } } return }
     }
   }
+
+  // ---- inline rule builders (Comparison / Combination) ----
+  // OutputDrawer is a standalone drawer (no condition/virtualinput editors to navigate to), so it
+  // scaffolds a Condition / VirtualInput inline, writes it to a free slot, then points this output's
+  // Driving input at the new bool VarMap entry. Mirrors the CANboard buildRule path in SignalsView.
+  const opTxt = ['=', '≠', '>', '<', '≥', '≤', '&', '!&']   // Operator enum order
+  const condTxt = ['AND', 'OR', 'NOR']                       // BoolOperator order
+  let builder = $state(null)   // null | 'condition' | 'virtualinput'
+  let builderBusy = $state(false)
+  // Comparison form
+  let cmp = $state({ name: '', input: 0, operator: 2, arg: 0, hyst: false, argOff: 0 })   // operator 2 = greater-than
+  // Combination form (up to 3 bool signals)
+  let comb = $state({ name: '', mode: 0, not0: false, var0: 0, cond0: 0, not1: false, var1: 0, cond1: 0, not2: false, var2: 0 })
+
+  function openComparison() { builder = 'condition'; cmp = { name: '', input: 0, operator: 2, arg: 0, hyst: false, argOff: 0 } }
+  function openCombination() { builder = 'virtualinput'; comb = { name: '', mode: 0, not0: false, var0: 0, cond0: 0, not1: false, var1: 0, cond1: 0, not2: false, var2: 0 } }
+  function cancelBuilder() { builder = null }
+
+  // Find a free slot in a /functions array (first with enabled===false). Returns the slot or null.
+  async function freeSlot(arr, label) {
+    const fns = await api.functions(guid).catch(() => null)
+    const slot = (fns?.[arr] ?? []).find((x) => x.enabled === false)
+    if (!slot) { toast(`No free ${label} slots — free one in Signals & logic`, 'error'); return null }
+    return slot
+  }
+  // After writing a function, resolve its new bool VarMap entry by name and bind this output to it.
+  async function bindNewDriver(matchName, writtenFlag) {
+    inputsBool = await api.inputs(guid, 'bool').catch(() => inputsBool)
+    inputs = await api.inputs(guid).catch(() => inputs)
+    const v = inputsBool.find((x) => x.name === matchName || x.name.startsWith(matchName + ' '))
+    if (v) { f.input = v.index; autoEnableOutput() }
+    builder = null
+    toast(v
+      ? (writtenFlag ? `Output now driven by "${v.name}" — Save to keep` : `Built "${matchName}" — saved to project; Deploy when online`)
+      : `Built "${matchName}", but couldn't resolve its signal — set the driver by hand`, v && writtenFlag ? 'ok' : 'info')
+  }
+
+  async function confirmComparison() {
+    if (!cmp.input) { toast('Pick a signal to compare.', 'error'); return }
+    builderBusy = true
+    try {
+      const slot = await freeSlot('conditions', 'condition'); if (!slot) return
+      const name = cmp.name.trim() || `condition${slot.number}`
+      // greater/less ops can carry a separate release point; no hysteresis → argOff = arg (mirrors SignalsView save)
+      const argOff = cmp.hyst ? Number(cmp.argOff) : Number(cmp.arg)
+      const r = await api.setFunction(guid, 'condition', slot.number,
+        { enabled: true, name, input: Number(cmp.input), operator: Number(cmp.operator), arg: Number(cmp.arg), argOff })
+      await bindNewDriver(name, !!r?.written)
+    } catch (e) { toast('Build failed: ' + e.message, 'error') }
+    finally { builderBusy = false }
+  }
+
+  async function confirmCombination() {
+    if (!comb.var0 && !comb.var1 && !comb.var2) { toast('Pick at least one signal.', 'error'); return }
+    builderBusy = true
+    try {
+      const slot = await freeSlot('virtualInputs', 'virtual input'); if (!slot) return
+      const name = comb.name.trim() || `virtualInput${slot.number}`
+      const r = await api.setFunction(guid, 'virtualinput', slot.number, {
+        enabled: true, name, mode: Number(comb.mode),
+        not0: !!comb.not0, var0: Number(comb.var0), cond0: Number(comb.cond0),
+        not1: !!comb.not1, var1: Number(comb.var1), cond1: Number(comb.cond1),
+        not2: !!comb.not2, var2: Number(comb.var2),
+      })
+      await bindNewDriver(name, !!r?.written)
+    } catch (e) { toast('Build failed: ' + e.message, 'error') }
+    finally { builderBusy = false }
+  }
 </script>
 
 <div class="scrim show" onclick={onclose}></div>
@@ -255,13 +339,64 @@
       <label class="opt" style="border:0;padding-top:0"><input type="checkbox" bind:checked={f.enabled} /> Output enabled <span class="desc">master on/off for this channel</span></label>
       <p class="lbl">Turn ON when this source is true</p>
       <div class="field"><label>Driving input</label>
-        <SearchSelect placeholder="Search input…"
-          options={inputs.length ? inputs.map((i) => ({ value: i.index, label: i.name })) : [{ value: output.inputVal, label: output.input }]}
+        <SearchSelect placeholder="Search boolean source…"
+          options={driverOpts}
           bind:value={f.input} onpick={(v) => { autoEnableOutput(); enableSourceVar(v) }} /></div>
+      <div style="display:flex;gap:14px;margin:-2px 0 2px">
+        <button type="button" class="linkbtn" onclick={openComparison}>＋ Comparison (analog &gt; value)</button>
+        <button type="button" class="linkbtn" onclick={openCombination}>＋ Combination (A AND B)</button>
+      </div>
+
+      {#if builder === 'condition'}
+        <div style="border:1px solid var(--line-2);border-radius:var(--r-sm);padding:12px 14px;margin:8px 0;background:var(--surface-2)">
+          <p class="lbl" style="margin-top:0">New comparison</p>
+          <div class="field"><label>Name (optional)</label><input bind:value={cmp.name} placeholder="e.g. Engine hot" /></div>
+          <div class="field"><label>Signal</label>
+            <SearchSelect options={ssOpts(inputsNum, true)} bind:value={cmp.input} placeholder="Search value…" onpick={(v) => enableSourceVar(v)} /></div>
+          <div class="f2">
+            <div class="field"><label>Operator</label>
+              <select bind:value={cmp.operator}>{#each opTxt as o, i}<option value={i}>{o}</option>{/each}</select></div>
+            <div class="field"><label>Value</label><input type="number" step="any" bind:value={cmp.arg} /></div>
+          </div>
+          {#if [2, 3, 4, 5].includes(Number(cmp.operator))}
+            <label class="chk"><input type="checkbox" bind:checked={cmp.hyst} onchange={() => { if (!cmp.hyst) cmp.argOff = cmp.arg }} /> Hysteresis — separate turn-off value <span class="desc">stops chatter at the threshold</span></label>
+            {#if cmp.hyst}
+              <div class="field" style="max-width:230px"><label>Turn off at</label><input type="number" step="any" bind:value={cmp.argOff} /></div>
+              <p class="hint">On past <b>{cmp.arg}</b>, off past <b>{cmp.argOff}</b>. For <i>greater than</i>, set turn-off <b>below</b> the value; for <i>less than</i>, <b>above</b> it.</p>
+            {/if}
+          {/if}
+          <div style="display:flex;gap:8px;margin-top:8px">
+            <button class="btn primary" disabled={builderBusy} onclick={confirmComparison}>{builderBusy ? 'Building…' : 'Create &amp; use'}</button>
+            <button class="btn ghost" disabled={builderBusy} onclick={cancelBuilder}>Cancel</button>
+          </div>
+        </div>
+      {:else if builder === 'virtualinput'}
+        <div style="border:1px solid var(--line-2);border-radius:var(--r-sm);padding:12px 14px;margin:8px 0;background:var(--surface-2)">
+          <p class="lbl" style="margin-top:0">New combination</p>
+          <div class="f2">
+            <div class="field"><label>Name (optional)</label><input bind:value={comb.name} placeholder="e.g. Lights & door" /></div>
+            <div class="field"><label>Mode</label><select bind:value={comb.mode}><option value={0}>Momentary</option><option value={1}>Latched</option></select></div>
+          </div>
+          {#each [0, 1, 2] as i}
+            <div class="f3" style="align-items:end">
+              <label class="chk"><input type="checkbox" bind:checked={comb['not' + i]} /> NOT</label>
+              <div class="field"><label>Signal {i + 1}</label>
+                <SearchSelect options={ssOpts(inputsBool, true)} bind:value={comb['var' + i]} placeholder="Search signal…" onpick={(v) => enableSourceVar(v)} /></div>
+              {#if i < 2}<div class="field"><label>Join</label><select bind:value={comb['cond' + i]}>{#each condTxt as c, ci}<option value={ci}>{c}</option>{/each}</select></div>{:else}<div></div>{/if}
+            </div>
+          {/each}
+          <div style="display:flex;gap:8px;margin-top:8px">
+            <button class="btn primary" disabled={builderBusy} onclick={confirmCombination}>{builderBusy ? 'Building…' : 'Create &amp; use'}</button>
+            <button class="btn ghost" disabled={builderBusy} onclick={cancelBuilder}>Cancel</button>
+          </div>
+        </div>
+      {/if}
+
       <div class="preview">⚡ Right now this output is <b class="big">{output.state}</b></div>
-      <p class="hint">The dingoPDM drives each output from one source (a digital input, CAN signal, virtual
-        input, condition, flasher, …). Pick a virtual input or condition to combine several signals —
-        build those in <b>Signals &amp; logic</b>. Save writes to the device; <b>Burn</b> persists to flash.</p>
+      <p class="hint">Pick a <b>boolean</b> source (a digital input, condition, virtual input, flasher, …) — the output is on
+        whenever it's true. A raw analog value (e.g. battery voltage) can't drive on/off directly, so build a
+        <b>Comparison</b> to threshold it, or a <b>Combination</b> to AND/OR several signals. Save writes to the device;
+        <b>Burn</b> persists to flash.</p>
 
       <p class="lbl" style="margin-top:18px">PWM / dimming</p>
       <label class="opt" style="border:0;padding-top:0"><input type="checkbox" bind:checked={f.pwmEnabled} onchange={autoEnableOutput} /> PWM enabled <span class="desc">duty instead of on/off</span></label>
