@@ -10,15 +10,22 @@
   )
   const btns = [1, 2, 3, 4, 5, 6, 7, 8]
   const hex = (n) => '0x' + (n ?? 0).toString(16).toUpperCase()
+  // Cap live values to 3 decimals (trailing zeros trimmed) so the column doesn't jitter as they update.
+  const fmt3 = (v) => { const n = +v; return Number.isFinite(n) ? String(Math.round(n * 1000) / 1000) : v }
 
-  // ---- DBC signals (live decoded) ----
-  let sigs = $state([])
+  // ---- DBC signals (search-driven; big ECU DBCs run to tens of thousands of signals) ----
+  let sigs = $state([])           // current page of search results (live values refresh on the poll)
+  let dbcTotal = $state(0)        // total signals parsed from the DBC
+  let dbcMore = $state(false)     // more matches than the cap
+  let dbcQuery = $state('')
   $effect(() => {
     if (kind !== 'dbc' || !device?.guid) { sigs = []; return }
-    const g = device.guid
+    const g = device.guid, q = dbcQuery
     let alive = true
-    const load = async () => { try { if (alive) sigs = await api.dbcSignals(g) } catch {} }
-    load(); const id = setInterval(load, 500)
+    const load = async () => {
+      try { const r = await api.dbcSearch(g, q, 100); if (alive) { sigs = r.items ?? []; dbcTotal = r.total ?? 0; dbcMore = !!r.more } } catch {}
+    }
+    load(); const id = setInterval(load, 700)   // refresh live-decoded values for the shown subset
     return () => { alive = false; clearInterval(id) }
   })
 
@@ -201,15 +208,18 @@
     <button class="btn primary" style="margin-top:4px" disabled={busy} onclick={addSignal}>+ Add signal</button>
   </div>
 
-  <div class="cat-grp">Signals <span style="text-transform:none;letter-spacing:0;font-weight:500;color:var(--muted)">— live decoded values</span><span class="ct"></span></div>
+  <div class="cat-grp">Signals
+    <span style="text-transform:none;letter-spacing:0;font-weight:500;color:var(--muted)">— {dbcTotal.toLocaleString()} in this DBC; search to find one (live values shown)</span><span class="ct"></span></div>
+  <input placeholder="Search signal or message name… e.g. coolant" aria-label="Search DBC signals" bind:value={dbcQuery} style="max-width:360px;margin-bottom:8px" />
   <div class="tscroll"><table class="logtable" style="font-family:inherit">
     <thead><tr><th>Name</th><th>Message</th><th>Value</th><th>ID</th><th>Start</th><th>Len</th><th>Order</th><th>Signed</th><th>Factor</th><th>Unit</th></tr></thead>
     <tbody>
       {#each sigs as s}
-        <tr><td>{s.name}</td><td class="muted">{s.messageName}</td><td><b>{s.value}</b></td><td>{hex(s.id)}{s.isExtended ? ' (x)' : ''}</td><td>{s.startBit}</td><td>{s.length}</td>
+        <tr><td>{s.name}</td><td class="muted">{s.messageName}</td><td style="text-align:right;font-variant-numeric:tabular-nums;min-width:80px"><b>{fmt3(s.value)}</b></td><td>{hex(s.id)}{s.ide ? ' (x)' : ''}</td><td>{s.startBit}</td><td>{s.length}</td>
           <td>{s.byteOrder === 1 ? 'BE' : 'LE'}</td><td>{s.isSigned ? 'Yes' : 'No'}</td><td>{s.factor}</td><td>{s.unit}</td></tr>
       {/each}
-      {#if sigs.length === 0}<tr><td colspan="10" class="muted">No signals yet — open a .dbc file or define one from the sniffer above.</td></tr>{/if}
+      {#if sigs.length === 0}<tr><td colspan="10" class="muted">{dbcTotal ? 'No signals match — try another search term.' : 'No signals yet — open a .dbc file or define one from the sniffer above.'}</td></tr>{/if}
+      {#if dbcMore}<tr><td colspan="10" class="muted">Showing the first 100 matches — narrow the search to see more.</td></tr>{/if}
     </tbody>
   </table></div>
 {:else if kind === 'canboard'}

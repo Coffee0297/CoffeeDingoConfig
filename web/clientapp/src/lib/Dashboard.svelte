@@ -43,7 +43,13 @@
     if (a === 'burn' && !confirm(`Burn the config to "${current.name}"? This writes permanently to flash.`)) return
     if (a === 'bootloader' && !confirm(`Put "${current.name}" into its bootloader? It stops running until reflashed/rebooted.`)) return
     acting = true
-    try { await api.action(current.guid, a); toast(`${VERB[a] ?? a} ✓`, 'ok') }
+    try {
+      // Burn deploys the in-app config first, so it persists what you see — not just whatever
+      // is already in the module's RAM (which would drop edits you never pressed Write for).
+      if (a === 'burn') await api.action(current.guid, 'write')
+      await api.action(current.guid, a)
+      toast(`${VERB[a] ?? a} ✓`, 'ok')
+    }
     catch (e) { toast(`${VERB[a] ?? a} failed: ${e.message}`, 'error') }
     finally { acting = false }
   }
@@ -106,7 +112,7 @@
     <div class="statusgrid">
       {#each outs as o}
         <div class="sc"><span class="scn">O{o.number} {o.name?.trim() ? o.name : ''}</span>
-          <span class="state {sc(o.state)}" style="padding:1px 7px"><span class="ic"></span>{o.state === 'On' ? `ON · ${o.current.toFixed(1)}A` : o.state.toUpperCase()}</span></div>
+          <span class="state {sc(o.state)}" style="padding:1px 7px"><span class="ic"></span>{o.state === 'On' ? (o.pwmEnabled ? `ON · ${o.duty}% · ${o.current.toFixed(1)}A` : `ON · ${o.current.toFixed(1)}A`) : o.state.toUpperCase()}</span></div>
       {/each}
     </div>
   {/if}

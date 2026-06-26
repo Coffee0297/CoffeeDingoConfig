@@ -24,6 +24,10 @@ public class DigitalOutput : IDeviceFunction
     [JsonPropertyName("softStartRampTime")] public int SoftStartRampTime { get; set; }
     [JsonPropertyName("dutyCycleDenominator")] public int DutyCycleDenominator { get; set; } = 100;
     [JsonPropertyName("minDutyCycle")] public int MinDutyCycle { get; set; }
+    [JsonPropertyName("variableFreq")] public bool VariableFreq { get; set; }
+    [JsonPropertyName("freqInput")] public int FreqInput { get; set; }
+    [JsonPropertyName("freqInputDenom")] public int FreqInputDenom { get; set; } = 1;
+    [JsonPropertyName("rampDutyChanges")] public bool RampDutyChanges { get; set; }
 
     [JsonIgnore][Plotable(displayName:"State")] public bool State { get; set; }
     [JsonIgnore][Plotable(displayName:"DutyCycle", unit:"%")] public double CurrentDutyCycle { get; set; }
@@ -119,6 +123,34 @@ public class DigitalOutput : IDeviceFunction
                 GetValue = () => MinDutyCycle, SetValue = val => MinDutyCycle = (int)val,
                 ValueType = MinDutyCycle.GetType(),
                 DefaultValue = 0
+            },
+            new DeviceParameter
+            {
+                ParentName = Name, Name = $"digitalOutput[{Number}].variableFreq", Index = BaseIndex + (Number - 1), SubIndex = subIndex++,
+                GetValue = () => VariableFreq, SetValue = val => VariableFreq = (bool)val,
+                ValueType = VariableFreq.GetType(),
+                DefaultValue = false
+            },
+            new DeviceParameter
+            {
+                ParentName = Name, Name = $"digitalOutput[{Number}].freqInput", Index = BaseIndex + (Number - 1), SubIndex = subIndex++,
+                GetValue = () => FreqInput, SetValue = val => FreqInput = (int)val,
+                ValueType = FreqInput.GetType(),
+                DefaultValue = 0
+            },
+            new DeviceParameter
+            {
+                ParentName = Name, Name = $"digitalOutput[{Number}].freqInputDenom", Index = BaseIndex + (Number - 1), SubIndex = subIndex++,
+                GetValue = () => FreqInputDenom, SetValue = val => FreqInputDenom = (int)val,
+                ValueType = FreqInputDenom.GetType(),
+                DefaultValue = 1
+            },
+            new DeviceParameter
+            {
+                ParentName = Name, Name = $"digitalOutput[{Number}].rampDutyChanges", Index = BaseIndex + (Number - 1), SubIndex = subIndex++,
+                GetValue = () => RampDutyChanges, SetValue = val => RampDutyChanges = (bool)val,
+                ValueType = RampDutyChanges.GetType(),
+                DefaultValue = false
             }
         ];
     }

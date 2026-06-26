@@ -20,6 +20,8 @@
     return d.isGateway ? 'usb' : 'can'
   }
   const hex = (n) => '0x' + (n ?? 0).toString(16).toUpperCase().padStart(3, '0')
+  // An ECU/DBC device has no base id (its ids come from the DBC's messages) — show a dash, not 0x000.
+  const baseLabel = (d) => (/dbc/i.test(d?.type ?? '') && !d?.baseId) ? '—' : hex(d?.baseId)
 
   // Import any cross-module functions deployed via the backend (MCP `deploy_cross_module`) that aren't
   // already in the list, so agent-deployed functions show up here as editable functions. By name.
@@ -361,7 +363,7 @@
       {:else}
         <div class="pt" title="Click to rename" use:clickable onclick={(e) => { e.stopPropagation(); startRename(d) }}>{d.name} <span style="opacity:.45;font-size:12px">✎</span></div>
       {/if}
-      <div class="role">{d.type} · {hex(d.baseId)}</div>
+      <div class="role">{d.type} · {baseLabel(d)}</div>
       <div class="st"><span class="dot-live" style={d.connected ? '' : (connected ? 'background:var(--err)' : 'background:var(--faint)')}></span>
         {d.connected ? `live · ${onCount(d)} on · ${totalA(d).toFixed(1)} A` : (connected ? 'not found' : 'no bus link')}</div>
       {#if /pdm/i.test(d.type)}<div class="role" style="margin-top:2px">max load {maxA(d)} A</div>{/if}
@@ -370,10 +372,10 @@
         <div class="card-actions">
           <button class="btn ghost sm" onclick={(e) => { e.stopPropagation(); openSettings(d.guid) }}>⚙ Settings</button>
           {#if ft === 'can'}
-            <button class="btn ghost sm" disabled={flashBusy} title={flashBusy ? 'A firmware flash is already in progress' : 'Reflash the application over CAN via the OpenBLT bootloader — no USB needed (pick the .srec)'}
+            <button class="btn ghost sm" disabled={flashBusy || !connected} title={!connected ? 'Connect to the CAN bus first' : flashBusy ? 'A firmware flash is already in progress' : 'Reflash the application over CAN via the OpenBLT bootloader — no USB needed (pick the .srec)'}
               onclick={(e) => { e.stopPropagation(); openFlashCan(d.guid) }}>⬆ Flash over CAN</button>
           {:else if ft === 'usb'}
-            <button class="btn ghost sm" disabled={flashBusy} title={flashBusy ? 'A firmware flash is already in progress' : 'Flash over USB DFU — this module bridges the CAN bus, so it can only be reflashed over USB (also how you install/update the bootloader itself, pick the .bin)'}
+            <button class="btn ghost sm" disabled={flashBusy || !connected} title={!connected ? 'Connect to the CAN bus first' : flashBusy ? 'A firmware flash is already in progress' : 'Flash over USB DFU — this module bridges the CAN bus, so it can only be reflashed over USB (also how you install/update the bootloader itself, pick the .bin)'}
               onclick={(e) => { e.stopPropagation(); openFlash(d.guid) }}>⬆ Flash over USB</button>
           {/if}
         </div>
@@ -641,7 +643,7 @@
       <div class="pin pdm" class:err={!d.connected} style="position:absolute;left:{p.x}%;top:{p.y}%;transform:translate(-50%,-50%);display:flex;align-items:center;gap:7px;cursor:grab;z-index:2"
         onpointerdown={(e) => down(e, d.guid)} ondblclick={() => pick(d.guid)}>
         <span class="marker" style="width:17px;height:17px;border-radius:50%;border:3px solid #fff;box-shadow:0 1px 5px rgba(0,0,0,.45);background:{d.connected ? 'var(--accent)' : 'var(--err)'}"></span>
-        <span class="plabel" style="background:var(--surface);color:var(--ink);border:1px solid var(--line-2);border-radius:8px;padding:3px 9px;font-size:11px;font-weight:700;white-space:nowrap">{d.name}<span style="font-family:var(--mono);color:var(--muted);font-weight:500;margin-left:5px">{hex(d.baseId)}</span></span>
+        <span class="plabel" style="background:var(--surface);color:var(--ink);border:1px solid var(--line-2);border-radius:8px;padding:3px 9px;font-size:11px;font-weight:700;white-space:nowrap">{d.name}<span style="font-family:var(--mono);color:var(--muted);font-weight:500;margin-left:5px">{baseLabel(d)}</span></span>
       </div>
     {/each}
   </div>

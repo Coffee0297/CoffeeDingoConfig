@@ -7,6 +7,8 @@ public interface IDeviceConfigurable : IDevice
     List<DeviceVariable> VarMap { get; }
     List<DeviceParameter> Params { get; }
     bool ConfigMismatch { get; set; }
+    /// <summary>Per-param differences captured on the last Read — explains *why* the config didn't match.</summary>
+    List<ConfigDiffEntry> LastConfigDiff { get; set; }
     DeviceCanFrame GetCheckMsg();
     List<DeviceCanFrame> GetReadMsgs(bool allParams);
     List<DeviceCanFrame> GetWriteMsgs(bool allParams);

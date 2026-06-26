@@ -1,6 +1,7 @@
 <script>
   import { api, telemetry } from './store.js'
   import { clickable } from './a11y.js'
+  import { toast } from './toast.js'
   let tab = $state('can')
 
   // Overload (trip) log — read on demand from the device (it records trips autonomously).
@@ -50,6 +51,20 @@
   let syslog = $state([])
   let fmt = $state('hex')
 
+  // CAN recorder. Gated on a REAL interface being online — the Sim adapter can't be recorded.
+  let rec = $state(null), recBusy = $state(false)
+  let canRecord = $derived(!!$telemetry.connected && !!$telemetry.adapter && !/sim/i.test($telemetry.adapter))
+  async function startRec() {
+    recBusy = true
+    try { await api.canRecStart(); rec = await api.canRecStatus() }
+    catch (e) { toast(e.message, 'error') } finally { recBusy = false }
+  }
+  async function stopRec() {
+    recBusy = true
+    try { const r = await api.canRecStop(); rec = await api.canRecStatus(); toast(`Recorded ${r.frames.toLocaleString()} frames — save it to your PC`, 'ok') }
+    catch (e) { toast(e.message, 'error') } finally { recBusy = false }
+  }
+
   const LOG_CAP = 1000   // cap rendered rows so a long session can't grow the DOM unbounded
   let logStale = $state(false)
   $effect(() => {
@@ -57,7 +72,7 @@
     let alive = true
     const load = async () => {
       try {
-        if (tab === 'can') { const r = await api.canlog(); if (alive) { canlog = r.slice(-LOG_CAP); logStale = false } }
+        if (tab === 'can') { const r = await api.canlog(); if (alive) { canlog = r.slice(-LOG_CAP); logStale = false } try { const rs = await api.canRecStatus(); if (alive) rec = rs } catch {} }
         else { const r = await api.syslog(); if (alive) { syslog = r.slice(-LOG_CAP); logStale = false } }
       } catch { if (alive) logStale = true }   // surface a stale badge instead of silently freezing rows
     }
@@ -83,7 +98,17 @@
 {#if tab === 'can'}
   <div class="logbar">
     Format <select bind:value={fmt} aria-label="CAN data format"><option value="hex">Hex</option><option value="dec">Decimal</option></select>
-    <a class="btn ghost" href="/api/canlog/export" download style="margin-left:auto">⭳ Export CSV</a>
+    {#if rec?.recording}
+      <span style="color:var(--err);font-weight:700">● REC</span>
+      <span style="color:var(--muted)">{rec.frames.toLocaleString()} frames · {(rec.sinceMs / 1000).toFixed(0)}s</span>
+      <button class="btn" disabled={recBusy} onclick={stopRec}>■ Stop</button>
+    {:else}
+      <button class="btn primary" disabled={recBusy || !canRecord}
+        title={canRecord ? 'Record every CAN frame to a file you can save to the PC (and replay in Sim)' : 'Connect a real CAN interface to record — the simulator can’t be recorded'}
+        onclick={startRec}>● Record</button>
+      {#if rec && rec.frames > 0}<a class="btn ghost" href="/api/canlog/record/download" download>⭳ Save log to PC ({rec.frames.toLocaleString()} frames)</a>{/if}
+    {/if}
+    <a class="btn ghost" href="/api/canlog/export" download style="margin-left:auto">⭳ Export summary</a>
     {#if logStale}<span style="color:var(--err)">⚠ feed stale — reconnecting…</span>{/if}
     <span style="color:var(--muted)">{canlog.length} IDs</span>
   </div>

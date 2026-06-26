@@ -38,10 +38,25 @@
   let graphWin = $state(60)
   let cardMode = $state({}) // output number -> 'amps' | 'trig'
   let editNum = $state(null)
+  // Open a graph item's settings: outputs → Outputs tab (PDM drawer / CANBoard SignalsView),
+  // everything else → Signals & logic with the matching editor auto-opened.
+  let signalsTarget = $state(null)
+  let targetNonce = 0
+  function openItemSettings(kind, number) {
+    if (kind === 'output') {
+      view = 'outputs'
+      if (isPdm) editNum = number
+      else signalsTarget = { kind: 'digitaloutput', number, n: ++targetNonce }   // CANBoard digital output
+    } else {
+      view = 'signals'
+      signalsTarget = { kind, number, n: ++targetNonce }
+    }
+  }
   let dialog = $state(null) // 'add' | 'modify' | 'settings'
-  let dlgName = $state(''), dlgType = $state('pdm'), dlgBase = $state('0x7CE')
+  let dlgName = $state(''), dlgType = $state('pdm'), dlgBase = $state('0x7CE'), dlgDbcFile = $state(null)
   const deviceTypes = [
-    ['pdm', 'dingoPDM'], ['canboard', 'CANBoard'], ['dbcdevice', 'DBC Device'],
+    ['pdm', 'dingoPDM'], ['canboard', 'CANBoard'],
+    ['ecu', 'ECU (DBC — no base)'], ['dbcmodule', 'Module (DBC — base-addressed)'],
     ['blinkkeypad-PKP-2400', 'Blink Marine Keypad'], ['grayhillkeypad', 'Grayhill Keypad'],
   ]
   let projFileName = $state('project.json')
@@ -122,7 +137,20 @@
     const newBase = parseInt(String(dlgBase).replace(/^0x/i, ''), 16)
     const src = current
     try {
-      if (dialog === 'add') await api.addDevice(dlgType, dlgName || dlgType, dlgBase)
+      if (dialog === 'add') {
+        if (isDbcAdd) {
+          const base = dlgType === 'dbcmodule' ? (parseInt(String(dlgBase).replace(/^0x/i, ''), 16) || 0) : 0
+          if (dlgDbcFile) {
+            const r = await api.dbcImport(dlgName || dlgDbcFile.name.replace(/\.dbc$/i, ''), await dlgDbcFile.text(), base, dlgType === 'dbcmodule')
+            toast(`Imported ${r.count.toLocaleString()} signals from ${dlgDbcFile.name}`, 'ok')
+            scopeGuid = r.guid; view = 'signals'
+          } else {
+            await api.addDevice('dbcdevice', dlgName || (dlgType === 'ecu' ? 'ECU' : 'Module'), String(base))
+          }
+        } else {
+          await api.addDevice(dlgType, dlgName || dlgType, dlgBase)
+        }
+      }
       else if (wasModify) await api.modify(current.guid, dlgName, dlgBase)
     } catch (e) { toast(e.message, 'error'); return }
     // Re-basing a module that others point at: flag the consumers (we never auto-write them).
@@ -205,6 +233,9 @@
     if (g && g !== baseIdSyncedGuid) { baseIdSyncedGuid = g; editBaseId = hex(current.baseId) }
   })
   let isPdm = $derived(current && !/keypad|dbc|canboard|can.?board/i.test(current.type))
+  let isDbcDev = $derived(/dbc/i.test(current?.type ?? ''))   // an ECU/DBC device — lives under Signals &amp; logic
+  // Add-dialog: ECU = base-less DBC; Module = base-addressed DBC (e.g. a CANBoard described by its DBC).
+  let isDbcAdd = $derived(dlgType === 'ecu' || dlgType === 'dbcmodule')
   // Worst-case load: every enabled output drawing its full current limit at once.
   let maxAmps = $derived((current?.outputs ?? []).filter((o) => o.enabled).reduce((s, o) => s + (o.currentLimit ?? 0), 0))
   let readPct = $derived(current?.readTotal ? Math.round((current.readDone / current.readTotal) * 100) : 0)
@@ -283,12 +314,19 @@
     try { await api.remove(g); if (scopeGuid === g) scopeGuid = null } catch (e) { toast(e.message, 'error') }
   }
   // Burn permanently writes the in-app config to the module's flash — confirm + feedback.
+  // It first deploys (writes) the in-app config so what you see is what gets persisted: a 'burn'
+  // alone only saves whatever is currently in the module's RAM, which would drop edits you never
+  // pressed Deploy for. write-then-burn makes Burn a safe one-click "save permanently".
   let burning = $state(false)
   async function burn() {
     if (!current || burning) return
-    if (!confirm(`Burn the current config to "${current.name}"? This writes it permanently to the module's flash.`)) return
+    if (!confirm(`Burn the current config to "${current.name}"? This deploys your changes, then writes them permanently to the module's flash.`)) return
     burning = true
-    try { await api.action(current.guid, 'burn'); toast(`Burned to ${current.name}`, 'ok') }
+    try {
+      await api.action(current.guid, 'write')   // deploy in-app config first so the burn captures it
+      await api.action(current.guid, 'burn')
+      toast(`Deployed & burned to ${current.name}`, 'ok')
+    }
     catch (e) { toast('Burn failed: ' + e.message, 'error') } finally { burning = false }
   }
   // 'read'/'write' = bulk modified-param sync (one fast burst, CRC-checked) — the proven
@@ -308,10 +346,51 @@
     if (fails.length) toast(`${verb} failed for ${fails.length}/${targets.length}: ${fails.join('; ')}`, 'error', 8000)
     else if (targets.length) toast(`${verb} ${targets.length} module${targets.length === 1 ? '' : 's'} ✓`, 'ok')
   }
+  // Project-wide duplicate CAN-ID guard: poll the transmit-id map; summarise collisions + base overlaps.
+  let canIdInfo = $state(null), canIdOpen = $state(false)
+  $effect(() => {
+    let alive = true
+    const load = () => api.canIdMap().then((m) => { if (alive) canIdInfo = m }).catch(() => {})
+    load(); const id = setInterval(load, 5000)
+    return () => { alive = false; clearInterval(id) }
+  })
+  let canIdConflicts = $derived((canIdInfo?.collisions?.length ?? 0) + (canIdInfo?.overlaps?.length ?? 0))
+
+  // Sim playback: replay a CAN-log CSV when the Sim adapter is the active connection.
+  let sim = $state(null), simBusy = $state(false), simFileName = $state(''), simRateInput = $state(1000)
+  $effect(() => {
+    if (!(t.connected && t.adapter === 'Sim')) { sim = null; return }
+    let alive = true
+    const load = () => api.simStatus().then((s) => { if (alive) sim = s }).catch(() => {})
+    load(); const id = setInterval(load, 500)
+    return () => { alive = false; clearInterval(id) }
+  })
+  async function simLoadFile(e) {
+    const f = e.target.files?.[0]; if (!f) return
+    simBusy = true
+    try { const r = await api.simLoad(f); simFileName = f.name; toast(`Loaded ${r.total.toLocaleString()} frames from ${f.name}`, 'ok') }
+    catch (err) { toast('Load failed: ' + err.message, 'error') }
+    finally { simBusy = false; e.target.value = '' }
+  }
+
+  // Config-diff details: the precise per-param differences found on the last Read of this module.
+  let cfgDiff = $state([]), cfgDiffOpen = $state(false)
+  async function showCfgDiff() {
+    if (cfgDiffOpen) { cfgDiffOpen = false; return }
+    if (!current) return
+    try { cfgDiff = await api.configDiff(current.guid) } catch (e) { toast('Could not load diff: ' + e.message, 'error'); cfgDiff = [] }
+    cfgDiffOpen = true
+  }
   async function readScope(all) { readOpen = false; await eachScope(all, (d) => readOne(d.guid), 'Read') }
   async function deployScope(all) { deployOpen = false; await eachScope(all, (d) => api.action(d.guid, 'write'), 'Deployed') }
-  function pickModule(g) { scopeGuid = g; switchOpen = false; if (view === 'system') view = 'dashboard' }
-  function addModule() { dlgName = ''; dlgType = 'pdm'; dlgBase = '0x7CE'; dialog = 'add' }
+  function pickModule(g) {
+    scopeGuid = g; switchOpen = false; cfgDiffOpen = false; cfgDiff = []
+    // An ECU/DBC device has no Dashboard/Outputs — land on its signal view (Signals & logic).
+    const tp = devices.find((d) => d.guid === g)?.type ?? ''
+    if (/dbc/i.test(tp)) view = 'signals'
+    else if (view === 'system') view = 'dashboard'
+  }
+  function addModule() { dlgName = ''; dlgType = 'pdm'; dlgBase = '0x7CE'; dlgDbcFile = null; dialog = 'add' }
   function setMode(n, m) { cardMode = { ...cardMode, [n]: m } }
 
   const sc = (s) => (s === 'On' ? 'on' : s === 'Overcurrent' ? 'oc' : s === 'Fault' ? 'fault'
@@ -319,6 +398,8 @@
   const stT = (s) => (s === 'On' ? 'ON' : s === 'Overcurrent' ? 'OC' : s === 'Fault' ? 'FAULT'
     : s === 'Warning' ? 'WARN' : s === 'OpenLoad' ? 'OPEN' : 'OFF')
   const hex = (n) => '0x' + (n ?? 0).toString(16).toUpperCase().padStart(3, '0')
+  // An ECU/DBC device has no base id (its ids come from the DBC's messages) — show a dash, not 0x000.
+  const baseLabel = (d) => (/dbc/i.test(d?.type ?? '') && !d?.baseId) ? '—' : hex(d?.baseId)
   // Input is now the friendly source name resolved from the device's VarMap.
   function ruleText(inp) {
     if (!inp || inp === 'None') return null
@@ -346,7 +427,7 @@
         {#each devices as d (d.guid)}
           <div class="mi" role="menuitem" use:clickable onclick={() => pickModule(d.guid)}>
             <span class="dot-live" style={d.connected ? '' : 'background:var(--faint)'}></span>
-            {d.name}<span style="margin-left:auto;font-family:var(--mono);color:var(--muted)">{hex(d.baseId)}</span>
+            {d.name}<span style="margin-left:auto;font-family:var(--mono);color:var(--muted)">{baseLabel(d)}</span>
             <button class="x" style="margin-left:8px" title="Remove module" aria-label={'Remove ' + d.name} onclick={(e) => { e.stopPropagation(); removeByGuid(d.guid) }}>✕</button>
           </div>
         {/each}
@@ -356,7 +437,7 @@
 
     <span class="nav-seg">
       {#each navs as [id, label]}
-        <button class:active={view === id} aria-current={view === id ? 'page' : undefined} onclick={() => (view = id)}>{label}</button>
+        <button class:active={view === id} aria-current={view === id ? 'page' : undefined} onclick={() => { view = id; signalsTarget = null }}>{label}</button>
       {/each}
     </span>
     <button class="btn ghost" title="Help for this view" aria-label="Help for this view" style="padding:6px 10px;font-weight:700" onclick={() => (helpOpen = true)}>?</button>
@@ -398,7 +479,7 @@
       <select class="in" bind:value={bitrate} aria-label="CAN bitrate">{#each bitrates as b}<option value={b}>{b}</option>{/each}</select>
       <button class="btn primary" disabled={busy} onclick={connect}>{busy ? 'Connecting…' : 'Connect'}</button>
     {:else}
-      <button class="btn ghost" disabled={scanning} onclick={scanUsb} title="Scan the bus and add detected modules">{scanning ? 'Scanning…' : '🔍 Add from USB'}</button>
+      <button class="btn ghost" disabled={scanning} onclick={scanUsb} title="Scan the CAN bus and add detected modules">{scanning ? 'Scanning…' : '🔍 Add from CAN'}</button>
       <span class="switch" class:open={readOpen}>
         <span style="display:inline-flex">
           <button class="btn ghost" style="border-radius:8px 0 0 8px" disabled={!current || current?.reading || scopeBusy} onclick={() => readScope(false)}>{current?.reading ? `Reading ${readPct}%` : `Read: ${current?.name ?? '—'}`}</button>
@@ -433,7 +514,78 @@
     </div>
   {/if}
 
+  {#if current?.connected && current?.configMismatch}
+    <div class="hub-banner" style="top:{$hubState !== 'live' ? 96 : 58}px">
+      ⚠ Haven't synced with <b>&nbsp;{current.name}&nbsp;</b> yet — its stored config may differ from what's loaded here.
+      <b>&nbsp;Read</b>&nbsp;to pull the device's config in (and see what differs), or Deploy to overwrite the module with yours.
+      <button class="btn ghost" style="padding:2px 10px;margin-left:8px" disabled={scopeBusy} onclick={() => readScope(false)}>{scopeBusy ? 'Reading…' : 'Read from device'}</button>
+    </div>
+  {:else if current?.connected && current?.configDiffCount > 0}
+    <div class="hub-banner" style="top:{$hubState !== 'live' ? 96 : 58}px;background:var(--card);color:var(--muted);border-bottom-color:var(--line-2)">
+      ℹ Last Read of <b>&nbsp;{current.name}&nbsp;</b> found {current.configDiffCount} config difference(s) — values were synced from the device.
+      <button class="btn ghost" style="padding:2px 10px;margin-left:8px" onclick={showCfgDiff}>{cfgDiffOpen ? 'Hide' : 'What differed?'}</button>
+    </div>
+  {/if}
+  {#if cfgDiffOpen && cfgDiff.length}
+    <div style="max-height:40vh;overflow:auto;border-bottom:1px solid var(--line-2);background:var(--card)">
+      <table style="width:100%;border-collapse:collapse;font-size:12.5px">
+        <thead><tr style="position:sticky;top:0;background:var(--card);color:var(--muted);text-align:left">
+          <th style="padding:6px 14px">Parameter</th><th style="padding:6px 14px">This app</th><th style="padding:6px 14px">Device</th><th style="padding:6px 14px">Difference</th></tr></thead>
+        <tbody>
+          {#each cfgDiff as d}
+            <tr style="border-top:1px solid var(--line)">
+              <td style="padding:5px 14px;font-family:var(--mono)">{d.name}</td>
+              <td style="padding:5px 14px">{d.appValue ?? '—'}</td>
+              <td style="padding:5px 14px">{d.deviceValue ?? '—'}</td>
+              <td style="padding:5px 14px;color:var(--muted)">{d.kind === 'value' ? 'value differs' : d.kind === 'appOnly' ? 'app only — device firmware older' : 'device only — device firmware newer'}</td></tr>
+          {/each}
+        </tbody>
+      </table>
+    </div>
+  {/if}
+
   <main class="wrap">
+    {#if t.connected && t.adapter === 'Sim'}
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;background:var(--card);border:1px solid var(--line-2);border-radius:10px;padding:8px 14px;margin-bottom:14px;font-size:13px">
+        <b>▶ Sim playback</b>
+        <label class="btn ghost" style="cursor:pointer;padding:4px 10px" title="Replay a CAN-log CSV: timestamp, Rx/Tx, ID(hex), length, data(hex) — the app's CAN-log export format">
+          {simBusy ? 'Loading…' : ((simFileName || sim?.total) ? `📄 ${simFileName || 'loaded'}` : '📂 Load CSV…')}
+          <input type="file" accept=".csv,.txt" style="display:none" disabled={simBusy} onchange={simLoadFile} /></label>
+        {#if sim?.total}
+          <button class="btn ghost" style="padding:4px 10px" onclick={() => (sim.state === 'Playing' ? api.simPause() : api.simPlay())}>{sim.state === 'Playing' ? '⏸ Pause' : '▶ Play'}</button>
+          <button class="btn ghost" style="padding:4px 10px" onclick={() => api.simReset()}>⏹ Reset</button>
+          <label style="display:flex;gap:5px;align-items:center;cursor:pointer"><input type="checkbox" checked={sim.loop} onchange={(e) => api.simLoop(e.target.checked)} /> Loop</label>
+          {#if sim.syntheticTiming}
+            <label style="display:flex;gap:5px;align-items:center" title="This log has no timestamps — choose the replay rate in messages per second">
+              <input type="number" min="1" max="100000" style="width:84px" bind:value={simRateInput}
+                onchange={() => api.simRate(+simRateInput || 1000)} /> msg/s
+            </label>
+          {/if}
+          <span class="muted" style="margin-left:auto;font-family:var(--mono)">{sim.current}/{sim.total} · {sim.state}</span>
+        {:else}
+          <span class="muted">Load a CAN-log CSV to replay it on the simulated bus.</span>
+        {/if}
+      </div>
+    {/if}
+    {#if canIdConflicts > 0}
+      <div style="background:var(--warn-bg);color:var(--warn);border:1px solid var(--warn);border-radius:10px;padding:10px 14px;margin-bottom:14px;font-size:13px">
+        <div style="display:flex;align-items:center;gap:10px">
+          <b>⚠ {canIdConflicts} CAN-ID conflict{canIdConflicts === 1 ? '' : 's'}</b>
+          <span style="opacity:.85">two devices transmitting the same ID (or overlapping base-ID blocks) collide on the bus.</span>
+          <button class="btn ghost" style="padding:2px 10px;margin-left:auto" onclick={() => (canIdOpen = !canIdOpen)}>{canIdOpen ? 'Hide' : 'Show'}</button>
+        </div>
+        {#if canIdOpen}
+          <div style="margin-top:8px;display:flex;flex-direction:column;gap:4px;font-family:var(--mono);font-size:12px">
+            {#each canIdInfo.collisions as c}
+              <div><b>{c.hex}{c.ide ? ' (ext)' : ''}</b> — transmitted by: {c.owners.join(' · ')}</div>
+            {/each}
+            {#each canIdInfo.overlaps as o}
+              <div>base-ID blocks overlap: <b>{o.a}</b> ({o.aRange}) ↔ <b>{o.b}</b> ({o.bRange})</div>
+            {/each}
+          </div>
+        {/if}
+      </div>
+    {/if}
     {#if view === 'outputs'}
       {#if !current || isPdm}
         <div class="h-row">
@@ -457,15 +609,17 @@
           <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:10px">
             <input class="in" style="width:110px" bind:value={newBaseId} placeholder="0x7CE" />
             <button class="btn primary" onclick={addPdm}>+ Add dingoPDM</button>
-            <button class="btn ghost" onclick={scanUsb} disabled={!t.connected || scanning} title={t.connected ? 'Scan the bus and add detected modules' : 'Connect to an adapter first to scan the bus'}>{scanning ? 'Scanning…' : '🔍 Add from USB'}</button>
+            <button class="btn ghost" onclick={scanUsb} disabled={!t.connected || scanning} title={t.connected ? 'Scan the CAN bus and add detected modules' : 'Connect to an adapter first to scan the bus'}>{scanning ? 'Scanning…' : '🔍 Add from CAN'}</button>
             {#if t.ids.length}<span class="muted">IDs on bus:</span>
               {#each t.ids as id}<span class="idchip">{hex(id)}</span>{/each}{/if}
           </div>
         </div>
       {:else if /canboard|can.?board/i.test(current.type)}
-        <SignalsView {current} ids={t.ids} mode="outputs" />
+        <SignalsView {current} ids={t.ids} mode="outputs" openTarget={signalsTarget} />
       {:else if /keypad/i.test(current.type)}
         <KeypadView device={current} {devices} />
+      {:else if isDbcDev}
+        <div class="card flat"><p class="muted">This is an ECU / DBC device — it has no outputs. Its signals live under <button type="button" class="linkbtn" onclick={() => (view = 'signals')}>Signals &amp; logic</button>.</p></div>
       {:else if !isPdm}
         <DeviceTypeView device={current} />
       {:else}
@@ -479,7 +633,7 @@
             <div class="card" use:clickable aria-label={'Configure ' + (o.name?.trim() ? o.name : 'output ' + o.number)} onclick={() => (editNum = o.number)}>
               <div class="num">O{o.number}</div>
               <div class="top">
-                <span class="state {sc(o.state)}"><span class="ic"></span>{stT(o.state)}</span>
+                <span class="state {sc(o.state)}"><span class="ic"></span>{stT(o.state)}{#if o.pwmEnabled && o.state === 'On'} · {o.duty}%{/if}</span>
                 <span class="nm">{o.name?.trim() ? o.name : 'Output ' + o.number}</span>
                 <span class="amp">{(o.current ?? 0).toFixed(1)} <span class="amp-lim">/ {o.currentLimit} A</span></span>
               </div>
@@ -521,9 +675,13 @@
     {:else if view === 'system'}
       <SystemView {devices} connected={t.connected} pick={pickModule} {addModule} remove={removeByGuid} />
     {:else if view === 'signals'}
-      <SignalsView {current} ids={t.ids} />
+      {#if isDbcDev}
+        <DeviceTypeView device={current} />
+      {:else}
+        <SignalsView {current} ids={t.ids} openTarget={signalsTarget} />
+      {/if}
     {:else if view === 'wiring'}
-      <GraphView device={current} {devices} />
+      <GraphView device={current} {devices} onOpenSettings={openItemSettings} />
     {:else if view === 'plot'}
       <PlotView {devices} />
     {:else if view === 'logs'}
@@ -562,15 +720,28 @@
               <select bind:value={dlgType} disabled={dialog === 'modify'}>
                 {#each deviceTypes as [v, l]}<option value={v}>{l}</option>{/each}
               </select></div>
-            <div class="field"><label>Base ID</label>
-              <div style="display:flex;gap:6px">
-                <input style="flex:1;min-width:0" bind:value={dlgBase} />
-                <button class="btn ghost" type="button" style="padding:6px 10px" title="Lowest collision-free base for this module type (avoids every module's span + OBD diag IDs)" onclick={suggestFreeBase}>Suggest</button>
-              </div></div>
+            {#if dlgType !== 'ecu'}
+              <div class="field"><label>Base ID{#if dlgType === 'dbcmodule'} (module base){/if}</label>
+                <div style="display:flex;gap:6px">
+                  <input style="flex:1;min-width:0" bind:value={dlgBase} />
+                  <button class="btn ghost" type="button" style="padding:6px 10px" title="Lowest collision-free base for this module type (avoids every module's span + OBD diag IDs)" onclick={suggestFreeBase}>Suggest</button>
+                </div></div>
+            {/if}
           </div>
-          <div class="hint">Each module owns a CAN-ID span from its base — CANboard baseId…+10, dingoPDM baseId…+28 (incl. settings). Keep modules' spans from overlapping.</div>
-          <label style="display:flex;gap:8px;align-items:center;font-size:13px;margin-top:6px;cursor:pointer"><input type="checkbox" bind:checked={reserveObd} /> Reserve OBD-II diagnostic IDs (0x7DF, 0x7E0–0x7EF, 0x7F1) — uncheck for buses with no OBD</label>
-          {#if dlgFree.length}<div class="hint">Free windows (≥16): {dlgFree.map(([a, b]) => `${hex(a)}–${hex(b)}`).join(', ')}{#if freeRanges(dlgUsed, 16).length > 4}, …{/if}</div>{/if}
+          {#if isDbcAdd}
+            <div class="field" style="margin-top:4px"><label>DBC file {dlgType === 'dbcmodule' ? '' : '(optional)'}</label>
+              <label class="btn ghost" style="cursor:pointer;display:inline-block">{dlgDbcFile ? `📄 ${dlgDbcFile.name}` : '📂 Choose .dbc file…'}
+                <input type="file" accept=".dbc" style="display:none" onchange={(e) => (dlgDbcFile = e.target.files?.[0] ?? null)} /></label></div>
+            {#if dlgType === 'ecu'}
+              <div class="hint">An <b>ECU</b> has <b>no base ID</b> — its CAN IDs are the absolute message IDs in the .dbc (e.g. a vehicle ECU). Pick a file to import its signals so you can point CAN inputs at them and guard CAN-ID collisions.</div>
+            {:else}
+              <div class="hint">A <b>module</b> DBC (e.g. a CANBoard) is authored relative to a base — set the base above and its messages are re-addressed onto it on import, so the same DBC works at whatever base the module runs. It then joins the CAN-ID collision checks like any module.</div>
+            {/if}
+          {:else}
+            <div class="hint">Each module owns a CAN-ID span from its base — CANboard baseId…+10, dingoPDM baseId…+28 (incl. settings). Keep modules' spans from overlapping.</div>
+            <label style="display:flex;gap:8px;align-items:center;font-size:13px;margin-top:6px;cursor:pointer"><input type="checkbox" bind:checked={reserveObd} /> Reserve OBD-II diagnostic IDs (0x7DF, 0x7E0–0x7EF, 0x7F1) — uncheck for buses with no OBD</label>
+            {#if dlgFree.length}<div class="hint">Free windows (≥16): {dlgFree.map(([a, b]) => `${hex(a)}–${hex(b)}`).join(', ')}{#if freeRanges(dlgUsed, 16).length > 4}, …{/if}</div>{/if}
+          {/if}
         </div>
         <div class="mf2">
           <button class="btn ghost" onclick={() => (dialog = null)}>Cancel</button>
@@ -596,7 +767,7 @@
     <div class="modal-scrim show" onclick={() => (usbOpen = false)}>
       <div class="modal" use:dlg={{ onclose: () => (usbOpen = false) }} onclick={(e) => e.stopPropagation()} style="min-width:480px">
         <div class="mh2">Devices on the bus</div>
-        <div class="mb2">
+        <div class="mb2" style="max-height:60vh;overflow:auto">
           {#if scanning}
             <p class="muted">Scanning the bus…</p>
           {:else if usbFound.length === 0}
