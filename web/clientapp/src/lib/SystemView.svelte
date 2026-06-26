@@ -370,10 +370,10 @@
         <div class="card-actions">
           <button class="btn ghost sm" onclick={(e) => { e.stopPropagation(); openSettings(d.guid) }}>⚙ Settings</button>
           {#if ft === 'can'}
-            <button class="btn ghost sm" disabled={flashBusy} title={flashBusy ? 'A firmware flash is already in progress' : 'Reflash the application over CAN via the OpenBLT bootloader — no USB needed (pick the .srec)'}
+            <button class="btn ghost sm" disabled={flashBusy || !connected} title={!connected ? 'Connect to the CAN bus first' : flashBusy ? 'A firmware flash is already in progress' : 'Reflash the application over CAN via the OpenBLT bootloader — no USB needed (pick the .srec)'}
               onclick={(e) => { e.stopPropagation(); openFlashCan(d.guid) }}>⬆ Flash over CAN</button>
           {:else if ft === 'usb'}
-            <button class="btn ghost sm" disabled={flashBusy} title={flashBusy ? 'A firmware flash is already in progress' : 'Flash over USB DFU — this module bridges the CAN bus, so it can only be reflashed over USB (also how you install/update the bootloader itself, pick the .bin)'}
+            <button class="btn ghost sm" disabled={flashBusy || !connected} title={!connected ? 'Connect to the CAN bus first' : flashBusy ? 'A firmware flash is already in progress' : 'Flash over USB DFU — this module bridges the CAN bus, so it can only be reflashed over USB (also how you install/update the bootloader itself, pick the .bin)'}
               onclick={(e) => { e.stopPropagation(); openFlash(d.guid) }}>⬆ Flash over USB</button>
           {/if}
         </div>
