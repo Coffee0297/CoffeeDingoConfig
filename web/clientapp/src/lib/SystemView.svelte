@@ -1,11 +1,15 @@
 <script>
   import { onMount } from 'svelte'
   import { crossFns, deployCrossModule, cmfTrigId, cmfClkId, cmfIsLua, cmfSlotOf, nextCmfSlot, api, luaAssemble, deviceHasLua } from './store.js'
-  import { conflictPairs } from './canids.js'
+  import { conflictPairs, spanAfter, ID_BEFORE, isModule } from './canids.js'
   import { toast } from './toast.js'
   import { dialog, labelFields, clickable } from './a11y.js'
   import LuaEditor from './LuaEditor.svelte'
-  let { devices = [], connected = false, pick, addModule, remove } = $props()
+  let { devices = [], connected = false, adapter = '', pick, addModule, remove } = $props()
+  // Hardware-programming actions (flash, profile-write, base-ID re-address, deploy) need a real
+  // CAN/USB interface — the Sim adapter replays a log and can't touch hardware.
+  let simAdapter = $derived(!adapter || adapter === 'Sim')
+  const PROG_TIP = "Switch to a real CAN/USB interface — Sim can't program hardware"
 
   // Which flash path a module's card offers — exactly one button:
   //  • Offline: USB DFU (the dark-module recovery path; CAN needs a live bus).
@@ -125,6 +129,7 @@
     crossFns.update((list) => list.filter((_, k) => k !== idx))
   }
   async function deploy() {
+    if (simAdapter) { deployMsg = PROG_TIP + '.'; deployErr = true; return }
     deploying = true; deployMsg = ''; deployErr = false
     try {
       const res = await deployCrossModule(devices)
@@ -171,6 +176,7 @@
   function onFwFile(e) { fwFile = e.target.files?.[0] ?? null; e.target.value = '' }
   async function doFlash() {
     if (!fwFile || !flashGuid || flashBusy) return
+    if (simAdapter) { flashOk = false; flashPhase = 'Failed'; flashLog = PROG_TIP + '.'; toast(PROG_TIP, 'error'); return }
     const can = flashMode === 'can'
     const blank = flashGuid === 'blank'
     const label = blank ? 'a blank module (DFU)' : dName(flashGuid)
@@ -197,6 +203,10 @@
   let setDrawer = $state(false), setGuid = $state(null)
   let setSleepEnabled = $state(false), setSleepTimeoutS = $state(30)
   let setInputEnabled = $state(false), setInput = $state(1), setInputSleepHigh = $state(false), setIgnoreAlwaysOn = $state(true)
+  // Device-level CAN settings (all persist via writeParam — sub-indices match the firmware param map:
+  // 1 = bitrate (CanBitRate enum int), 3 = filters enabled, 4 = connect-USB-to-CAN).
+  let setBitrate = $state('500K'), setFiltersEnabled = $state(false), setConnectUsbToCan = $state(true)
+  const BITRATES = ['1000K', '500K', '250K', '125K', '100K']   // index = CanBitRate enum value
   let setBusy = $state(false), setMsg = $state('')
   let setBaseId = $state(''), baseBusy = $state(false), baseMsg = $state('')
   let profSrc = $state(''), profBusy = $state(false), profMsg = $state('')
@@ -208,6 +218,8 @@
     setGuid = g; setSleepEnabled = !!d?.sleepEnabled; setSleepTimeoutS = Math.round((d?.sleepTimeoutMs ?? 30000) / 1000)
     setInputEnabled = !!d?.sleepInputEnabled; setInput = d?.sleepInput || 1
     setInputSleepHigh = !!d?.sleepInputActiveHigh; setIgnoreAlwaysOn = d?.sleepIgnoreAlwaysOn !== false
+    setBitrate = BITRATES.includes(d?.bitrate) ? d.bitrate : '500K'
+    setFiltersEnabled = !!d?.canFiltersEnabled; setConnectUsbToCan = d?.connectUsbToCan !== false
     setBaseId = hex(d?.baseId ?? 0); baseMsg = ''
     profSrc = ''; profMsg = ''
     setMsg = ''; setDrawer = true
@@ -221,10 +233,15 @@
   // OTHER module may already occupy the selected's CAN span (that just relocates the collision).
   async function flashProfile() {
     if (!setGuid || !profSrc || profBusy) return
+    if (simAdapter) { profMsg = PROG_TIP + '.'; return }
     const src = devices.find((d) => d.guid === profSrc), tgt = devices.find((d) => d.guid === setGuid)
     if (!tgt?.connected) { profMsg = 'Connect the module you opened before flashing a profile onto it.'; return }
-    const clash = devices.find((d) => d.guid !== setGuid && d.guid !== profSrc
-      && /pdm|canboard/i.test(d.type) && Math.abs((d.baseId ?? 0) - (src?.baseId ?? 0)) <= ID_SPAN_AFTER)
+    // The target is about to BECOME src (same type + base). Block if any OTHER module's CAN span
+    // would overlap src's span at src.baseId — that just relocates the collision. Uses the shared
+    // span model (canids.js) so this guard agrees with the System overlap warning.
+    const srcBase = src?.baseId ?? 0, srcAfter = spanAfter(src?.type)
+    const clash = devices.find((d) => d.guid !== setGuid && d.guid !== profSrc && isModule(d.type)
+      && (d.baseId - ID_BEFORE <= srcBase + srcAfter) && (srcBase - ID_BEFORE <= (d.baseId ?? 0) + spanAfter(d.type)))
     if (clash) { profMsg = `Can't — ${clash.name} (${hex(clash.baseId)}) already occupies ${hex(src.baseId)}'s CAN span. Re-space it first.`; return }
     if (!confirm(`Flash "${src.name}" (${hex(src.baseId)}) onto the connected "${tgt.name}" (${hex(tgt.baseId)})?\n\n`
       + `The connected module is written with ${src.name}'s full config + Lua, re-addressed to ${hex(src.baseId)}, and burned — it becomes "${src.name}". `
@@ -253,10 +270,22 @@
   // the project record. Accepts hex (0xDE00) or decimal.
   async function changeBaseId() {
     if (!setGuid || baseBusy) return
+    if (simAdapter) { baseMsg = PROG_TIP + '.'; return }
     const d = devices.find((x) => x.guid === setGuid)
-    if (!confirm(`Change ${d?.name ?? 'this module'}'s CAN base ID to ${setBaseId}?` + (d?.connected ? '\n\nThe connected module will be re-addressed on the bus.' : ''))) return
+    // Parse hex (0xDE / DE) or decimal, enforce the 11-bit standard range.
+    const raw = String(setBaseId).trim()
+    const base = /^0x/i.test(raw) ? parseInt(raw.slice(2), 16) : (/[a-f]/i.test(raw) ? parseInt(raw, 16) : parseInt(raw, 10))
+    if (!Number.isInteger(base) || base < 1 || base > 0x7FF) {
+      baseMsg = `"${setBaseId}" isn't a valid base ID — use hex (0x100) or decimal, 1…0x7FF (11-bit).`; return
+    }
+    // Reject a base whose span would overlap another module's span (shared canids model).
+    const after = spanAfter(d?.type)
+    const clash = devices.find((x) => x.guid !== setGuid && isModule(x.type)
+      && (x.baseId - ID_BEFORE <= base + after) && (base - ID_BEFORE <= (x.baseId ?? 0) + spanAfter(x.type)))
+    if (clash) { baseMsg = `${hex(base)} overlaps ${clash.name}'s CAN span (${hex(clash.baseId)}). Pick a non-overlapping base.`; return }
+    if (!confirm(`Change ${d?.name ?? 'this module'}'s CAN base ID to ${hex(base)}?` + (d?.connected ? '\n\nThe connected module will be re-addressed on the bus.' : ''))) return
     baseBusy = true; baseMsg = ''
-    try { await api.modify(setGuid, d?.name ?? '', setBaseId); baseMsg = `Base ID set to ${setBaseId}.` }
+    try { await api.modify(setGuid, d?.name ?? '', hex(base)); baseMsg = `Base ID set to ${hex(base)}.` }
     catch (e) { baseMsg = 'Failed: ' + e.message }
     finally { baseBusy = false }
   }
@@ -273,6 +302,10 @@
       await api.writeParam(setGuid, 0x0000, 7, setInputEnabled ? inputPin : 0) // device.sleepInput
       await api.writeParam(setGuid, 0x0000, 8, setInputSleepHigh ? 1 : 0)      // device.sleepInputActiveHigh
       await api.writeParam(setGuid, 0x0000, 9, setIgnoreAlwaysOn ? 1 : 0)      // device.sleepIgnoreAlwaysOn
+      // device-level CAN settings: bitrate (CanBitRate enum int), filters, connect-USB-to-CAN
+      await api.writeParam(setGuid, 0x0000, 1, Math.max(0, BITRATES.indexOf(setBitrate)))  // device.canSpeed
+      await api.writeParam(setGuid, 0x0000, 3, setFiltersEnabled ? 1 : 0)      // device.canFiltersEnabled
+      await api.writeParam(setGuid, 0x0000, 4, setConnectUsbToCan ? 1 : 0)     // device.connectUsbToCan
       await api.action(setGuid, 'burn')
       setMsg = 'Saved + burned.'
     } catch (e) { setMsg = 'Failed: ' + e.message }
@@ -311,6 +344,21 @@
   }
   function focusSelect(node) { node.focus(); node.select?.() }
 
+  // A freshly-added module hasn't had a chance to answer yet (LastRxTime is briefly null), so it
+  // would read "not found" for ~1 s. Track first-seen times client-side and show "acquiring…" during
+  // a short grace window before falling back to "not found".
+  const ACQUIRE_MS = 2500
+  let firstSeen = $state({})
+  let nowTick = $state(Date.now())
+  $effect(() => {
+    const seen = { ...firstSeen }; let changed = false
+    for (const d of devices) if (!(d.guid in seen)) { seen[d.guid] = Date.now(); changed = true }
+    if (changed) firstSeen = seen
+    const id = setInterval(() => (nowTick = Date.now()), 500)
+    return () => clearInterval(id)
+  })
+  const acquiring = (d) => connected && !d.connected && (nowTick - (firstSeen[d.guid] ?? 0) < ACQUIRE_MS)
+
   const onCount = (d) => (d.outputs ?? []).filter((o) => o.state === 'On').length
   const totalA = (d) => (d.outputs ?? []).reduce((a, o) => a + o.current, 0)
   // Worst-case load per module: every enabled output at its current limit.
@@ -332,9 +380,9 @@
   <div><h1>System — {devices.length} module{devices.length === 1 ? '' : 's'}</h1>
     <p class="sub">All modules on the CAN bus. Click a module to open it; drag a pin to match your install.</p></div>
   <div style="display:flex;align-items:center;gap:14px">
-    <button class="btn ghost" disabled={flashBusy} title="Flash a brand-new / blank module over USB DFU (no CAN bus needed — put it in DFU with BOOT0 + reset)" onclick={openFlashBlank}>⬆ Flash new module</button>
+    <button class="btn ghost" disabled={flashBusy || simAdapter} title={simAdapter ? PROG_TIP : "Flash a brand-new / blank module over USB DFU (no CAN bus needed — put it in DFU with BOOT0 + reset)"} onclick={openFlashBlank}>⬆ Flash new module</button>
     <div class="stat" style="text-align:right" title="Sum across every module of every enabled output's current limit — worst case if the whole vehicle's loads switch on at their trip point at once">
-      <div class="v">{sysMaxA} A</div><div class="k">System max load</div>
+      <div class="v">{sysMaxA} A</div><div class="k">Max load (trip-sum)</div>
     </div>
   </div>
 </div>
@@ -353,7 +401,7 @@
 <div class="cat-grp">Modules <span class="ct"></span></div>
 <div class="fleet">
   {#each devices as d (d.guid)}
-    <div class="pdm" class:err={connected && !d.connected} use:clickable aria-label={"Open " + d.name} onclick={() => pick(d.guid)} style="position:relative">
+    <div class="pdm" class:err={connected && !d.connected && !acquiring(d)} use:clickable aria-label={"Open " + d.name} onclick={() => pick(d.guid)} style="position:relative">
       <button class="x" style="position:absolute;top:8px;right:8px" title="Remove module" aria-label={"Remove " + d.name} onclick={(e) => { e.stopPropagation(); remove?.(d.guid) }}>✕</button>
       {#if renamingGuid === d.guid}
         <input class="in" style="font-weight:700;max-width:150px" bind:value={renameVal} use:focusSelect
@@ -364,18 +412,19 @@
         <div class="pt" title="Click to rename" use:clickable onclick={(e) => { e.stopPropagation(); startRename(d) }}>{d.name} <span style="opacity:.45;font-size:12px">✎</span></div>
       {/if}
       <div class="role">{d.type} · {baseLabel(d)}</div>
-      <div class="st"><span class="dot-live" style={d.connected ? '' : (connected ? 'background:var(--err)' : 'background:var(--faint)')}></span>
-        {d.connected ? `live · ${onCount(d)} on · ${totalA(d).toFixed(1)} A` : (connected ? 'not found' : 'no bus link')}</div>
+      <div class="st"><span class="dot-live" style={d.connected ? '' : (acquiring(d) ? 'background:var(--faint)' : connected ? 'background:var(--err)' : 'background:var(--faint)')}></span>
+        {d.connected ? `live · ${onCount(d)} on · ${totalA(d).toFixed(1)} A` : (acquiring(d) ? 'acquiring…' : connected ? 'not found' : 'no bus link')}</div>
       {#if /pdm/i.test(d.type)}<div class="role" style="margin-top:2px">max load {maxA(d)} A</div>{/if}
       {#if /pdm|canboard/i.test(d.type)}
         {@const ft = flashTarget(d)}
         <div class="card-actions">
           <button class="btn ghost sm" onclick={(e) => { e.stopPropagation(); openSettings(d.guid) }}>⚙ Settings</button>
           {#if ft === 'can'}
-            <button class="btn ghost sm" disabled={flashBusy || !connected} title={!connected ? 'Connect to the CAN bus first' : flashBusy ? 'A firmware flash is already in progress' : 'Reflash the application over CAN via the OpenBLT bootloader — no USB needed (pick the .srec)'}
+            <button class="btn ghost sm" disabled={flashBusy || !connected || simAdapter || !d.connected}
+              title={simAdapter ? PROG_TIP : !connected ? 'Connect to the CAN bus first' : !d.connected ? 'Module not on the bus' : flashBusy ? 'A firmware flash is already in progress' : 'Reflash the application over CAN via the OpenBLT bootloader — no USB needed (pick the .srec)'}
               onclick={(e) => { e.stopPropagation(); openFlashCan(d.guid) }}>⬆ Flash over CAN</button>
           {:else if ft === 'usb'}
-            <button class="btn ghost sm" disabled={flashBusy || !connected} title={!connected ? 'Connect to the CAN bus first' : flashBusy ? 'A firmware flash is already in progress' : 'Flash over USB DFU — this module bridges the CAN bus, so it can only be reflashed over USB (also how you install/update the bootloader itself, pick the .bin)'}
+            <button class="btn ghost sm" disabled={flashBusy || !connected || simAdapter} title={simAdapter ? PROG_TIP : !connected ? 'Connect to the CAN bus first' : flashBusy ? 'A firmware flash is already in progress' : 'Flash over USB DFU — this module bridges the CAN bus, so it can only be reflashed over USB (also how you install/update the bootloader itself, pick the .bin)'}
               onclick={(e) => { e.stopPropagation(); openFlash(d.guid) }}>⬆ Flash over USB</button>
           {/if}
         </div>
@@ -397,10 +446,18 @@
       <div style="display:flex;gap:8px;align-items:flex-end">
         <div class="field" style="max-width:160px;margin:0"><label>Base ID (hex or dec)</label>
           <input type="text" bind:value={setBaseId} placeholder="0xDE00" /></div>
-        <button class="btn" disabled={baseBusy} onclick={changeBaseId}>{baseBusy ? 'Setting…' : 'Change base ID'}</button>
+        <button class="btn" disabled={baseBusy || simAdapter} title={simAdapter ? PROG_TIP : ''} onclick={changeBaseId}>{baseBusy ? 'Setting…' : 'Change base ID'}</button>
       </div>
       <p class="hint" style="margin-top:6px">The module's address on the CAN bus. Changing it on a <b>connected</b> module re-addresses
         it live; any CAN input/output bound to a fixed ID must be re-pointed. {#if baseMsg}<b>{baseMsg}</b>{/if}</p>
+
+      <p class="lbl" style="margin-top:18px">CAN</p>
+      <div class="field" style="max-width:240px"><label>Bus bitrate</label>
+        <select bind:value={setBitrate}>{#each BITRATES as b}<option value={b}>{b}</option>{/each}</select></div>
+      <label class="chk" style="margin-top:8px"><input type="checkbox" bind:checked={setFiltersEnabled} /> Hardware CAN filters enabled</label>
+      <label class="chk" style="margin-top:8px"><input type="checkbox" bind:checked={setConnectUsbToCan} /> Bridge USB traffic onto the CAN bus</label>
+      <p class="hint" style="margin-top:6px">Written and burned with <b>Save + burn</b> below (module must be on the bus). Changing the bitrate
+        takes effect after the module restarts — match it to the rest of the bus.</p>
 
       <p class="lbl" style="margin-top:18px">Sleep</p>
       <label class="chk"><input type="checkbox" bind:checked={setSleepEnabled} /> Auto-sleep enabled</label>
@@ -434,7 +491,7 @@
             <option value="">— pick a module —</option>
             {#each profProfiles as p}<option value={p.guid}>{p.name} ({hex(p.baseId)})</option>{/each}
           </select></div>
-        <button class="btn" disabled={profBusy || !profSrc || !setLive} title={setLive ? '' : 'Connect this module to flash a profile onto it'} onclick={flashProfile}>{profBusy ? 'Flashing…' : 'Flash to module'}</button>
+        <button class="btn" disabled={profBusy || !profSrc || !setLive || simAdapter} title={simAdapter ? PROG_TIP : setLive ? '' : 'Connect this module to flash a profile onto it'} onclick={flashProfile}>{profBusy ? 'Flashing…' : 'Flash to module'}</button>
       </div>
       {#if profProfiles.length === 0}<p class="hint">Add the modules you want as profiles first (offline is fine).</p>{/if}
       {#if profMsg}<p class="lbl" style="margin-top:8px">{profMsg}</p>{/if}
@@ -452,9 +509,9 @@
       <div class="meta">{flashGuid === 'blank' ? 'blank module in DFU' : dName(flashGuid)} — {flashMode === 'can' ? 'reflashes the app over CAN (.srec)' : 'flashes over USB DFU (.bin)'}</div></div>
       <button class="x" aria-label="Close" onclick={() => { if (!flashBusy) flashDrawer = false }}>✕</button></div>
     <div class="dbody" use:labelFields>
-      <p class="lbl">Firmware file (.bin)</p>
+      <p class="lbl">Firmware file ({flashMode === 'can' ? '.srec' : '.bin'})</p>
       <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
-        <button class="btn ghost" disabled={flashBusy} onclick={pickFile}>📂 Choose .bin…</button>
+        <button class="btn ghost" disabled={flashBusy} onclick={pickFile}>📂 Choose {flashMode === 'can' ? '.srec' : '.bin'}…</button>
         {#if fwFile}<span class="muted">{fwFile.name} · {(fwFile.size / 1024).toFixed(0)} KB</span>{/if}
       </div>
       {#if flashGuid === 'blank'}
@@ -524,7 +581,7 @@
 </div>
 
 <div style="display:flex;gap:10px;align-items:center;margin-top:12px">
-  {#if $crossFns.length}<button class="btn primary" disabled={deploying} onclick={deploy}>{deploying ? 'Deploying…' : 'Deploy to modules'}</button>{/if}
+  {#if $crossFns.length}<button class="btn primary" disabled={deploying || simAdapter} title={simAdapter ? PROG_TIP : ''} onclick={deploy}>{deploying ? 'Deploying…' : 'Deploy to modules'}</button>{/if}
   {#if deployMsg}<span style={deployErr ? 'color:var(--err)' : 'color:var(--muted)'}>{deployMsg}</span>{/if}
 </div>
 {#if devices.length < 2}

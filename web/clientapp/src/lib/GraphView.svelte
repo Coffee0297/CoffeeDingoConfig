@@ -5,6 +5,7 @@
   import { writable } from 'svelte/store'
   import { dialog, labelFields, clickable } from './a11y.js'
   import { api, varMapSources, applyGraphConnection, enableFunction, bridgeRemoteSignal, NODE_INPUTS, SYS_VARS } from './store.js'
+  import { toast } from './toast.js'
 
   let { device, devices = [], onOpenSettings } = $props()
   // graph kind -> the editor kind to open (Signals & logic editors, or the Outputs tab for outputs)
@@ -258,7 +259,7 @@
     const ci = id.indexOf(':'); const kind = id.slice(0, ci); const num = parseInt(id.slice(ci + 1), 10) || 0
     const k = fnKindOf(kind); if (!k || !name?.trim()) return
     try { await api.setFunction(device.guid, k, num, { name: name.trim() }); await load(); msg = `renamed → ${name.trim()}` }
-    catch (e) { msg = 'rename failed: ' + e.message }
+    catch (e) { msg = 'rename failed: ' + e.message; toast(msg, 'error') }
   }
 
   async function onconnect(conn) {
@@ -282,7 +283,7 @@
       msg = live ? `wired → ${conn.target}.${field} (Burn to keep)`
                  : `wired → ${conn.target}.${field} — saved to the project; connect + Deploy to apply`
       if (conn.source.startsWith('remote:')) await load()   // refresh to show the new CAN-in node
-    } catch (e) { msg = 'write failed: ' + e.message }
+    } catch (e) { msg = 'write failed: ' + e.message; toast(msg, 'error') }
   }
   // Clear any consumer inputs wired FROM this node's output ports — otherwise a disabled source
   // still has consumers pointing at its VarMap index, the edge is re-drawn, and the node reappears
@@ -307,7 +308,7 @@
       if (id.startsWith('remote:')) { remotes = remotes.filter((r) => 'remote:' + r.srcGuid + ':' + r.srcVar !== id); saveRemotes() }
       else { const ci = id.indexOf(':'); const kind = id.slice(0, ci); const num = parseInt(id.slice(ci + 1), 10); if (DELETABLE.has(kind)) { await unwireConsumers(id); await api.setFunction(device.guid, kind, num, { enabled: false }) } else { msg = 'this block is physical — can’t delete'; return } }
       msg = 'deleted ' + id; await load()
-    } catch (e) { msg = 'delete failed: ' + e.message }
+    } catch (e) { msg = 'delete failed: ' + e.message; toast(msg, 'error') }
   }
   // Delete-key path (svelte-flow removed the selection; apply to the device + refresh).
   async function ondelete({ nodes: dn, edges: de }) {
@@ -318,13 +319,13 @@
         else { const ci = n.id.indexOf(':'); const kind = n.id.slice(0, ci); const num = parseInt(n.id.slice(ci + 1), 10); if (DELETABLE.has(kind)) { await unwireConsumers(n.id); await api.setFunction(device.guid, kind, num, { enabled: false }) } }
       }
       msg = `deleted ${(dn ?? []).length} block(s) · ${(de ?? []).length} wire(s)`
-    } catch (e) { msg = 'delete failed: ' + e.message }
+    } catch (e) { msg = 'delete failed: ' + e.message; toast(msg, 'error') }
     await load()
   }
 
   async function addNode(kind) {
-    try { const id = await enableFunction(device.guid, kind); if (!id) { msg = `no free ${kind} slot`; return } await load(); msg = `added ${id}` }
-    catch (e) { msg = 'add failed: ' + e.message }
+    try { const id = await enableFunction(device.guid, kind); if (!id) { msg = `no free ${kind} slot`; toast(msg, 'error'); return } await load(); msg = `added ${id}` }
+    catch (e) { msg = 'add failed: ' + e.message; toast(msg, 'error') }
   }
 
   async function openRemote() { remoteOpen = true; remoteDev = devices.find((d) => d.guid !== device.guid)?.guid ?? ''; if (remoteDev) loadRemoteSignals(remoteDev) }
@@ -437,7 +438,7 @@
       localStorage.removeItem(posKey()); build()   // re-layout so the new blocks are visible
       bOpen = false
       msg = `built “${curBuilder.name}” — Burn to keep`
-    } catch (e) { bMsg = 'Failed: ' + e.message }
+    } catch (e) { bMsg = 'Failed: ' + e.message; toast(bMsg, 'error') }
     finally { bBusy = false }
   }
 </script>

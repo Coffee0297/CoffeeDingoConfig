@@ -11,9 +11,23 @@
   const lv = $derived(live ? $live?.[id] : null)
   const values = $derived(lv?.values ?? data.values ?? {})
   const status = $derived(lv?.status ?? data.status)
+  // Suppress the STATUS line when it adds nothing beyond the port values — i.e. it just echoes the
+  // single out-port's value (e.g. a digital input showing "STATE … off" in the row AND "STATUS [OFF]").
+  const norm = (s) => String(s ?? '').trim().toLowerCase()
+  const showStatus = $derived.by(() => {
+    if (!status || !norm(status.text)) return false
+    if (outPorts.length === 1) {
+      const pv = norm(values[outPorts[0].id])
+      if (pv && pv === norm(status.text)) return false
+    }
+    return true
+  })
   const HEADER = 22, PADY = 7, ROW = 18, SUBH = 15
   const rows = $derived(Math.max(inPorts.length, outPorts.length))
-  const bodyH = $derived(rows * ROW)
+  // rows are absolutely positioned starting at PADY; the body must include that top offset AND a
+  // matching bottom pad, otherwise it's PADY too short and the following fn-status border-top cuts
+  // through the last row's text (the user-reported "separator through the text" bug).
+  const bodyH = $derived(PADY + rows * ROW + PADY)
   const rowTop = (i) => PADY + i * ROW
   // handles are absolute from the node top, so they must clear the header AND the sub-line (if any)
   const handleTop = (i) => HEADER + (data.sub ? SUBH : 0) + PADY + i * ROW + ROW / 2 - 1
@@ -67,7 +81,7 @@
     {/each}
   </div>
 
-  {#if status}<div class="fn-status">STATUS <b class={toneClass(status.tone ?? status.text)}>[{status.text || '—'}]</b></div>{/if}
+  {#if showStatus}<div class="fn-status">STATUS <b class={toneClass(status.tone ?? status.text)}>[{status.text || '—'}]</b></div>{/if}
 
   {#each inPorts as p, i}
     <Handle type="target" position={Position.Left} id={p.id} class="h-in" style="top:{handleTop(i)}px" title={'input: ' + p.label} />
@@ -84,12 +98,15 @@
   :global(.svelte-flow__node.selected) .fnnode { box-shadow: 0 0 0 3px color-mix(in srgb, var(--c) 55%, transparent); }
   .fn-hd { height: 22px; box-sizing: border-box; color: #fff; font-size: 10px; font-weight: 700; letter-spacing: .02em;
     padding: 0 8px; border-radius: 5px 5px 0 0; display: flex; align-items: center; gap: 6px; overflow: hidden; }
-  .fn-kind { opacity: .85; text-transform: uppercase; flex: none; }
+  /* header text sits on an arbitrary node color — a dark shadow keeps white legible on light tones too */
+  .fn-kind, .fn-ttl { text-shadow: 0 1px 2px rgba(0,0,0,.55); }
+  .fn-kind { opacity: .9; text-transform: uppercase; flex: none; }
   .fn-ttl { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: text; flex: 1; }
   .fn-edit { flex: 1; min-width: 0; font: inherit; font-weight: 600; color: #111; background: #fff; border: 0; border-radius: 3px; padding: 0 4px; }
-  .fn-gear, .fn-del { margin-left: 3px; background: rgba(255,255,255,.22); color: #fff; border: 0; border-radius: 4px;
+  /* solid dark chip so the ⚙/✕ glyphs are legible on every node color (translucent-white failed on light headers) */
+  .fn-gear, .fn-del { margin-left: 3px; background: rgba(0,0,0,.4); color: #fff; border: 0; border-radius: 4px;
     cursor: pointer; font-size: 10px; line-height: 1; padding: 1px 4px; flex: none; }
-  .fn-gear:hover, .fn-del:hover { background: rgba(0,0,0,.4); }
+  .fn-gear:hover, .fn-del:hover { background: rgba(0,0,0,.62); }
   .fn-sub { font-size: 10px; color: var(--muted, #9a9ab0); padding: 3px 9px 0; font-family: var(--mono, monospace); }
   .fn-body { position: relative; }
   .fn-row { position: absolute; height: 18px; display: flex; align-items: center; gap: 5px; font-size: 11px; line-height: 1; max-width: 62%; }
@@ -102,7 +119,7 @@
   .fn-row .lbl, .fn-row .val, .fn-row .ty { line-height: 1; vertical-align: middle; margin: 0; }
   .fn-row .lbl { color: var(--ink, #d9d9e6); white-space: nowrap; }
   .fn-row .val { color: #e9edf6; font-family: var(--mono, monospace); font-size: 11px; font-weight: 600; min-width: 14px; text-align: center; }
-  .fn-row .val.on { color: #34d27b; } .fn-row .val.off { color: #6f6f86; font-weight: 500; }
+  .fn-row .val.on { color: #34d27b; } .fn-row .val.off { color: var(--muted, #9a9ab8); font-weight: 500; }
   .ty { display: inline-flex; align-items: center; justify-content: center; height: 14px; min-width: 14px; box-sizing: border-box;
     font-size: 8px; font-weight: 700; line-height: 1; padding: 0 2px; border-radius: 3px; flex: none; }
   .ty.bool { background: #1f6f50; color: #bdf0d4; } .ty.int { background: #26408b; color: #c2d0ff; } .ty.real { background: #7a5a12; color: #f3dca0; }

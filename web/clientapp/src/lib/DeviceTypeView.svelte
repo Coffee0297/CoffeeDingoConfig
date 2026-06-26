@@ -9,7 +9,7 @@
       : 'other'
   )
   const btns = [1, 2, 3, 4, 5, 6, 7, 8]
-  const hex = (n) => '0x' + (n ?? 0).toString(16).toUpperCase()
+  const hex = (n) => '0x' + (n ?? 0).toString(16).toUpperCase().padStart(3, '0')
   // Cap live values to 3 decimals (trailing zeros trimmed) so the column doesn't jitter as they update.
   const fmt3 = (v) => { const n = +v; return Number.isFinite(n) ? String(Math.round(n * 1000) / 1000) : v }
 
@@ -53,7 +53,7 @@
   })())
 
   // ---- Custom-signal form (filled by clicking the grid) ----
-  let cs = $state({ name: '', unit: '', id: '0x100', startBit: 7, length: 8, byteOrder: 1, isSigned: false, factor: 1, offset: 0, min: 0, max: 0 })
+  let cs = $state({ name: '', unit: '', id: '0x100', extended: false, startBit: 7, length: 8, byteOrder: 1, isSigned: false, isFloat: false, factor: 1, offset: 0, min: 0, max: 0 })
   let busy = $state(false), msg = $state('')
 
   // Which absolute DBC bits (byte*8 + bitInByte) the current selection covers.
@@ -103,11 +103,22 @@
     finally { busy = false; e.target.value = '' }
   }
   async function addSignal() {
+    // Validate id / bit layout before POST — a bad id silently became 0x0 before, and an
+    // out-of-frame start/length would decode garbage.
+    const raw = String(cs.id).trim()
+    const id = /^0x/i.test(raw) ? parseInt(raw.slice(2), 16) : parseInt(raw, 16)
+    const max = cs.extended ? 0x1FFFFFFF : 0x7FF
+    if (!Number.isInteger(id) || id < 0 || id > max) {
+      msg = `"${cs.id}" isn't a valid ${cs.extended ? '29' : '11'}-bit CAN ID (0…0x${max.toString(16).toUpperCase()}).`; return
+    }
+    const sb = Math.trunc(+cs.startBit), len = Math.trunc(+cs.length)
+    if (!Number.isInteger(sb) || sb < 0 || sb > 63) { msg = 'Start bit must be 0–63.'; return }
+    if (!Number.isInteger(len) || len < 1 || len > 64) { msg = 'Length must be 1–64 bits.'; return }
     busy = true; msg = ''
     try {
       await api.dbcAddSignal(device.guid, {
-        name: cs.name || 'signal', id: parseInt(String(cs.id).replace(/^0x/i, ''), 16) || 0,
-        startBit: +cs.startBit, length: +cs.length, byteOrder: +cs.byteOrder, isSigned: cs.isSigned,
+        name: cs.name || 'signal', id, extended: !!cs.extended,
+        startBit: sb, length: len, byteOrder: +cs.byteOrder, isSigned: cs.isSigned, isFloat: !!cs.isFloat,
         factor: +cs.factor, offset: +cs.offset, unit: cs.unit, min: +cs.min, max: +cs.max,
       })
       msg = `Added signal "${cs.name || 'signal'}" — it appears in the table below once it decodes.`
@@ -148,7 +159,7 @@
       <div style="max-height:220px;overflow:auto;border:1px solid var(--line);border-radius:8px">
         {#each ids as r}
           <div use:clickable aria-label={"Inspect " + hex(r.id)} onclick={() => pickId(r.id)} style="display:flex;justify-content:space-between;gap:10px;padding:4px 8px;cursor:pointer;font-family:var(--mono);font-size:12px;{r.id === sniffId ? 'background:var(--accent);color:#fff' : ''}">
-            <b>{hex(r.id)}</b><span style="opacity:.7">{r.count}</span>
+            <b>{hex(r.id)}{#if r.ide}<span title="29-bit extended frame" style="opacity:.8">x</span>{/if}</b><span style="opacity:.7">{r.count}</span>
           </div>
         {/each}
         {#if ids.length === 0}<div class="muted" style="padding:8px;font-size:12px">No CAN traffic seen.</div>{/if}
@@ -192,14 +203,18 @@
       <div class="field"><label>CAN ID</label><input bind:value={cs.id} /></div>
     </div>
     <div class="f3">
-      <div class="field"><label>Start bit</label><input type="number" bind:value={cs.startBit} /></div>
-      <div class="field"><label>Length (bits)</label><input type="number" bind:value={cs.length} /></div>
-      <div class="field"><label>Byte order</label><select bind:value={cs.byteOrder}><option value={0}>Little-endian</option><option value={1}>Big-endian</option></select></div>
+      <div class="field"><label>Start bit</label><input type="number" min="0" max="63" bind:value={cs.startBit} /></div>
+      <div class="field"><label>Length (bits)</label><input type="number" min="1" max="64" bind:value={cs.length} /></div>
+      <div class="field"><label>Byte order</label><select bind:value={cs.byteOrder}><option value={0}>Little-endian (Intel)</option><option value={1}>Big-endian (Motorola)</option></select></div>
     </div>
     <div class="f3">
       <div class="field"><label>Factor</label><input type="number" step="any" bind:value={cs.factor} /></div>
       <div class="field"><label>Offset</label><input type="number" step="any" bind:value={cs.offset} /></div>
       <div class="field"><label>Signed</label><select bind:value={cs.isSigned}><option value={false}>No</option><option value={true}>Yes</option></select></div>
+    </div>
+    <div class="f2">
+      <label class="chk"><input type="checkbox" bind:checked={cs.extended} /> Extended frame (29-bit ID)</label>
+      <label class="chk"><input type="checkbox" bind:checked={cs.isFloat} /> IEEE-754 float (32-bit)</label>
     </div>
     <div class="f2">
       <div class="field"><label>Min value</label><input type="number" step="any" bind:value={cs.min} /></div>

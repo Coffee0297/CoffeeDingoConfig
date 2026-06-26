@@ -9,6 +9,7 @@ public class CanLogEntry
     public DataDirection Direction  { get; set; }
     public int Count { get; set; }
     public int Id  { get; set; }
+    public bool IsExtended { get; set; }   // 29-bit extended frame vs 11-bit standard
     public int Len { get; set; }
     public byte[]? Payload { get; set; }
 };

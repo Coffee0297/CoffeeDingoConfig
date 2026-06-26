@@ -20,19 +20,23 @@ namespace web.Api;
 public record OutputDto(int Number, string Name, string State, double Current, int ResetCount, double Duty, string Input, double CurrentLimit,
     bool Enabled, int InputVal, double InrushLimit, int InrushTime, int ResetMode, int ResetTime, int ResetCountLimit,
     bool PwmEnabled, int Freq, int FixedDuty, int MinDuty, bool SoftStart, int SoftStartRamp,
-    double WarnLimit, double OpenLoadLimit, int OpenLoadTime, string WireColor, string WireStripe, double WireLength, double WireGaugeMm2);
+    double WarnLimit, double OpenLoadLimit, int OpenLoadTime, string WireColor, string WireStripe, double WireLength, double WireGaugeMm2,
+    bool VariableDutyCycle = false, int DutyCycleInput = 0, int DutyCycleDenom = 100,
+    bool VariableFreq = false, int FreqInput = 0, int FreqInputDenom = 1, bool RampDutyChanges = false,
+    int PrimaryOutput = -1);
 public record DeviceDto(string Guid, string Name, string Type, int BaseId, bool Connected,
     double Battery, double Current, double Temp, string State, string Version, string Bitrate, OutputDto[] Outputs,
     bool Reading, int ReadDone, int ReadTotal, bool SleepEnabled, int SleepTimeoutMs,
     bool SleepInputEnabled, int SleepInput, bool SleepInputActiveHigh, bool SleepIgnoreAlwaysOn,
-    bool CanBootloader, bool ConfigMismatch = false, int ConfigDiffCount = 0, bool IsGateway = false);
+    bool CanBootloader, bool ConfigMismatch = false, int ConfigDiffCount = 0, bool IsGateway = false,
+    bool CanFiltersEnabled = false, bool ConnectUsbToCan = true);
 public record AdaptersDto(string[] Adapters, string[] Ports, bool Connected, string? ActiveAdapter, string? ActivePort);
 public record TelemetryDto(bool Connected, string? Adapter, long CanTotal, long CanRate, int[] Ids, DeviceDto[] Devices);
 public record ConnectReq(string Adapter, string Port, string Bitrate);
 public record AddDeviceReq(string Type, string Name, string BaseId);
 public record ModifyReq(string Name, string BaseId);
 public record SignalDto(string Kind, string Name, string Value, bool On);
-public record CanLogDto(string Dir, int Id, int Len, string Data, int Count);
+public record CanLogDto(string Dir, int Id, bool Ide, int Len, string Data, int Count);
 public record SysLogDto(string Time, string Level, string Source, string Message);
 public record ProbeReq(string Base);
 public record SetOutputReq(int Number, double CurrentLimit);
@@ -40,7 +44,10 @@ public record OutputConfigReq(int Number, bool Enabled, int Input, double Curren
     int InrushTime, int ResetMode, int ResetTime, int ResetCountLimit,
     bool PwmEnabled, int Freq, int FixedDuty, int MinDuty, bool SoftStart, int SoftStartRamp,
     double WarnLimit = 0, double OpenLoadLimit = 0, int OpenLoadTime = 1000, string? Name = null,
-    string? WireColor = null, string? WireStripe = null, double? WireLength = null, double? WireGaugeMm2 = null);
+    string? WireColor = null, string? WireStripe = null, double? WireLength = null, double? WireGaugeMm2 = null,
+    bool VariableDutyCycle = false, int DutyCycleInput = 0, int DutyCycleDenom = 100,
+    bool VariableFreq = false, int FreqInput = 0, int FreqInputDenom = 1, bool RampDutyChanges = false,
+    int PrimaryOutput = -1);
 public record ApplyProfileReq(string Source);
 public record RenameReq(string Name);
 public record ReadParamReq(int Index, int Sub);
@@ -107,8 +114,8 @@ public static class FunctionMap
         return (b, Button.BaseIndex + (kp * 32) + btn);
     }
 
-    // Apply incoming JSON fields onto a function object by JsonPropertyName. Handles the scalar
-    // + enum + List<bool> shapes the function models use; arrays like SpeedMap are left untouched.
+    // Apply incoming JSON fields onto a function object by JsonPropertyName. Handles the scalar,
+    // enum, int[]/bool[], enum[] (e.g. Wiper.SpeedMap) and List<bool> shapes the function models use.
     public static void ApplyJson(object target, JsonElement body)
     {
         var props = target.GetType().GetProperties()
@@ -139,11 +146,23 @@ public static class FunctionMap
                     pi.PropertyType == typeof(int[]) ? jp.Value.EnumerateArray().Select(e => e.GetInt32()).ToArray() :
                     pi.PropertyType == typeof(bool[]) ? jp.Value.EnumerateArray().Select(e => e.GetBoolean()).ToArray() :
                     pi.PropertyType == typeof(List<bool>) ? jp.Value.EnumerateArray().Select(e => e.GetBoolean()).ToList() :
+                    // enum arrays (e.g. Wiper.SpeedMap = WiperSpeed[]) — coerce each int into the element enum
+                    (pi.PropertyType.IsArray && pi.PropertyType.GetElementType()!.IsEnum) ? CoerceEnumArray(pi.PropertyType.GetElementType()!, jp.Value) :
                     null;
                 if (val != null || t == typeof(string)) pi.SetValue(target, val);
             }
             catch { /* skip a malformed field rather than failing the whole save */ }
         }
+    }
+
+    // Build a typed enum[] from a JSON array of ints (System.Text.Json can't bind enum[] from raw ints here).
+    private static Array CoerceEnumArray(Type elementType, JsonElement arr)
+    {
+        var items = arr.EnumerateArray().ToArray();
+        var result = Array.CreateInstance(elementType, items.Length);
+        for (var i = 0; i < items.Length; i++)
+            result.SetValue(Enum.ToObject(elementType, items[i].GetInt32()), i);
+        return result;
     }
 }
 
@@ -153,11 +172,15 @@ public class LiveHub : Hub { }
 // ---------- helpers shared by hub broadcaster + REST ----------
 public static class DingoMap
 {
+    // Reject an unknown bitrate string instead of silently defaulting to 500K — a wrong default
+    // would put the adapter on the wrong bus speed and the operator would never know why nothing
+    // answers. The connect endpoint surfaces this message to the UI.
     public static CanBitRate ParseBitrate(string s) => s switch
     {
         "1000K" => CanBitRate.BitRate1000K, "500K" => CanBitRate.BitRate500K,
         "250K" => CanBitRate.BitRate250K, "125K" => CanBitRate.BitRate125K,
-        "100K" => CanBitRate.BitRate100K, _ => CanBitRate.BitRate500K
+        "100K" => CanBitRate.BitRate100K,
+        _ => throw new ArgumentException($"Unknown CAN bitrate '{s}' — use one of 1000K, 500K, 250K, 125K, 100K.")
     };
     public static string BitrateLabel(CanBitRate b) => b switch
     {
@@ -202,12 +225,15 @@ public static class DingoMap
                 o.Number, o.Name, o.State.ToString(), o.Current, o.ResetCount, Math.Clamp(o.CurrentDutyCycle, 0, 100), InputLabel(p, o.Input), o.CurrentLimit,
                 o.Enabled, o.Input, o.InrushCurrentLimit, o.InrushTime, (int)o.ResetMode, o.ResetTime, o.ResetCountLimit,
                 o.PwmEnabled, o.Frequency, o.FixedDutyCycle, o.MinDutyCycle, o.SoftStartEnabled, o.SoftStartRampTime,
-                o.WarnLimit, o.OpenLoadLimit, o.OpenLoadTime, o.WireColor, o.WireStripe, o.WireLength, o.WireGaugeMm2)).ToArray();
+                o.WarnLimit, o.OpenLoadLimit, o.OpenLoadTime, o.WireColor, o.WireStripe, o.WireLength, o.WireGaugeMm2,
+                o.VariableDutyCycle, o.DutyCycleInput, o.DutyCycleDenominator, o.VariableFreq, o.FreqInput, o.FreqInputDenom, o.RampDutyChanges,
+                o.PrimaryOutput)).ToArray();
             return new DeviceDto(p.Guid.ToString(), p.Name, p.Type, p.BaseId, p.Connected,
                 p.BatteryVoltage, p.TotalCurrent, p.BoardTempC, p.DeviceState.ToString(),
                 p.Version, BitrateLabel(p.BitRate), outs, reading, readDone, readTotal,
                 p.SleepEnabled, p.SleepTimeoutMs, p.SleepInputEnabled, p.SleepInput, p.SleepInputActiveHigh, p.SleepIgnoreAlwaysOn,
-                p.CanBootloader, p.Connected && p.ConfigMismatch, p.LastConfigDiff.Count);
+                p.CanBootloader, p.Connected && p.ConfigMismatch, p.LastConfigDiff.Count, false,
+                p.CanFiltersEnabled, p.ConnectUsbToCan);
         }
         if (d is domain.Devices.Canboard.CanboardDevice cb)
             // CANBoard has no battery/total-current sensing (those are PDM smart-output features) — leave
@@ -304,6 +330,14 @@ public static class LiveApi
     public static void MapDingoApi(this WebApplication app)
     {
         var api = app.MapGroup("/api");
+
+        // App version for the UI footer — single source of truth is web.csproj <Version>,
+        // read from the assembly name (Major.Minor.Build, e.g. 0.6.2).
+        api.MapGet("/version", () =>
+        {
+            var v = typeof(LiveApi).Assembly.GetName().Version;
+            return Results.Ok(new { version = v is null ? "0.0.0" : $"{v.Major}.{v.Minor}.{v.Build}" });
+        });
 
         api.MapGet("/adapters", (ICommsAdapterManager m) =>
         {
@@ -568,6 +602,14 @@ public static class LiveApi
             o.MinDutyCycle = r.MinDuty;
             o.SoftStartEnabled = r.SoftStart;
             o.SoftStartRampTime = r.SoftStartRamp;
+            o.VariableDutyCycle = r.VariableDutyCycle;
+            o.DutyCycleInput = r.DutyCycleInput;
+            o.DutyCycleDenominator = r.DutyCycleDenom;
+            o.VariableFreq = r.VariableFreq;
+            o.FreqInput = r.FreqInput;
+            o.FreqInputDenom = r.FreqInputDenom;
+            o.RampDutyChanges = r.RampDutyChanges;
+            o.PrimaryOutput = r.PrimaryOutput;
             o.WarnLimit = r.WarnLimit;
             o.OpenLoadLimit = r.OpenLoadLimit;
             o.OpenLoadTime = r.OpenLoadTime;
@@ -966,7 +1008,7 @@ public static class LiveApi
         api.MapPost("/sim/pause", async (application.Services.SimPlayback pb) => { await pb.Pause(); return Results.Ok(new { ok = true }); });
         api.MapPost("/sim/reset", async (application.Services.SimPlayback pb) => { await pb.Reset(); return Results.Ok(new { ok = true }); });
         api.MapPost("/sim/loop", (bool on, application.Services.SimPlayback pb) => { pb.Loop = on; return Results.Ok(new { ok = true, loop = pb.Loop }); });
-        api.MapPost("/sim/rate", async (int fps, application.Services.SimPlayback pb) => { await pb.SetRate(fps); return Results.Ok(new { ok = true, fps = pb.Fps }); });
+        api.MapPost("/sim/rate", async (int fps, application.Services.SimPlayback pb) => { await pb.SetRate(Math.Clamp(fps, 1, 100000)); return Results.Ok(new { ok = true, fps = pb.Fps }); });
         api.MapGet("/sim/status", (application.Services.SimPlayback pb) => Results.Ok(new
         {
             state = pb.State.ToString(), fileName = pb.CurrentFileName,
@@ -1226,7 +1268,7 @@ public static class LiveApi
 
         api.MapGet("/canlog", (CanMsgLogger log) => Results.Ok(
             log.GetMessageSum().OrderBy(m => m.Id).Select(m => new CanLogDto(
-                m.Direction.ToString(), m.Id, m.Len,
+                m.Direction.ToString(), m.Id, m.IsExtended, m.Len,
                 string.Join(" ", (m.Payload ?? Array.Empty<byte>()).Take(m.Len).Select(b => b.ToString("X2"))),
                 m.Count)).ToArray()));
 
@@ -1237,9 +1279,9 @@ public static class LiveApi
         // CSV export of the CAN traffic summary.
         api.MapGet("/canlog/export", (CanMsgLogger log) =>
         {
-            var sb = new System.Text.StringBuilder("Dir,ID,DLC,Data,Count\n");
+            var sb = new System.Text.StringBuilder("Dir,ID,Type,DLC,Data,Count\n");
             foreach (var m in log.GetMessageSum().OrderBy(m => m.Id))
-                sb.Append($"{m.Direction},0x{m.Id:X3},{m.Len},{string.Join(' ', (m.Payload ?? Array.Empty<byte>()).Take(m.Len).Select(b => b.ToString("X2")))},{m.Count}\n");
+                sb.Append($"{m.Direction},0x{m.Id:X3},{(m.IsExtended ? "EXT" : "STD")},{m.Len},{string.Join(' ', (m.Payload ?? Array.Empty<byte>()).Take(m.Len).Select(b => b.ToString("X2")))},{m.Count}\n");
             return Results.File(System.Text.Encoding.UTF8.GetBytes(sb.ToString()), "text/csv", "canlog.csv");
         });
 

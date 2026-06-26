@@ -7,7 +7,7 @@
   let testing = $state(false)
   let testResult = $state(null)   // { ok, text }
   let openSkill = $state(null)    // { id, title, markdown }
-  let skillBusy = $state(false)
+  let skillBusyId = $state(null)  // id of the skill currently loading — only that button shows busy
 
   async function load() {
     loadErr = ''
@@ -52,7 +52,7 @@
   }
 
   async function showSkill(id) {
-    skillBusy = true
+    skillBusyId = id
     try {
       const r = await fetch('/mcp/skills/' + encodeURIComponent(id), { headers: { Accept: 'application/json' } })
       if (!r.ok) throw new Error(`HTTP ${r.status}`)
@@ -60,7 +60,7 @@
     } catch (e) {
       toast('Could not load skill: ' + e.message, 'error', 6000)
     } finally {
-      skillBusy = false
+      skillBusyId = null
     }
   }
 
@@ -139,8 +139,8 @@
       <p class="sub">Guided playbooks the AI can follow end-to-end. Click to read.</p>
       <div class="skills">
         {#each info.skills ?? [] as s}
-          <button class="skill" use:clickable={() => showSkill(s.id)} disabled={skillBusy}>
-            <strong>{s.title}</strong>
+          <button class="skill" use:clickable={() => showSkill(s.id)} disabled={skillBusyId === s.id}>
+            <strong>{s.title}{#if skillBusyId === s.id} …{/if}</strong>
             <span>{s.summary}</span>
           </button>
         {/each}
@@ -178,35 +178,35 @@
   .mcp { padding: 16px; max-width: 1100px; }
   .head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 12px; }
   h2 { margin: 0 0 4px; }
-  .sub { color: var(--muted, #8a93a6); margin: 0 0 8px; font-size: 13px; }
+  .sub { color: var(--muted); margin: 0 0 8px; font-size: 13px; }
   .sub.note { margin: 6px 0 0; font-size: 12px; }
   .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 12px; }
-  .card { background: var(--panel, #161b27); border: 1px solid var(--line, #283042); border-radius: 10px; padding: 14px; margin-bottom: 12px; }
-  .card.err { border-color: var(--err, #d65a5a); color: var(--err, #d65a5a); }
-  .card.muted { color: var(--muted, #8a93a6); }
+  .card { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 14px; margin-bottom: 12px; }
+  .card.err { border-color: var(--err); color: var(--err); }
+  .card.muted { color: var(--muted); }
   h3 { margin: 0 0 8px; font-size: 15px; }
-  .count { display: inline-block; min-width: 20px; padding: 0 6px; border-radius: 10px; background: var(--line, #283042); font-size: 12px; vertical-align: middle; }
-  .kv { display: flex; justify-content: space-between; gap: 12px; padding: 4px 0; border-bottom: 1px dashed var(--line, #283042); }
-  .kv span { color: var(--muted, #8a93a6); font-size: 13px; }
+  .count { display: inline-block; min-width: 20px; padding: 0 6px; border-radius: 10px; background: var(--line); font-size: 12px; vertical-align: middle; }
+  .kv { display: flex; justify-content: space-between; gap: 12px; padding: 4px 0; border-bottom: 1px dashed var(--line); }
+  .kv span { color: var(--muted); font-size: 13px; }
   .row { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
-  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+  .mono { font-family: var(--mono); }
   .result { margin-top: 10px; padding: 8px 10px; border-radius: 8px; font-size: 13px; }
-  .result.ok { background: rgba(60,180,110,.15); color: var(--ok, #4cc38a); }
-  .result.bad { background: rgba(214,90,90,.15); color: var(--err, #d65a5a); }
+  .result.ok { background: var(--ok-bg); color: var(--ok); }
+  .result.bad { background: var(--err-bg); color: var(--err); }
   .cfg { margin-top: 10px; }
-  .cfg-h { display: flex; justify-content: space-between; align-items: center; font-size: 12px; color: var(--muted, #8a93a6); margin-bottom: 4px; }
-  pre { background: var(--bg, #0d1018); border: 1px solid var(--line, #283042); border-radius: 8px; padding: 10px; overflow-x: auto; font-size: 12px; margin: 0; }
+  .cfg-h { display: flex; justify-content: space-between; align-items: center; font-size: 12px; color: var(--muted); margin-bottom: 4px; }
+  pre { background: var(--surface-2); border: 1px solid var(--line); border-radius: 8px; padding: 10px; overflow-x: auto; font-size: 12px; margin: 0; }
   .skills { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 8px; }
-  .skill { text-align: left; display: flex; flex-direction: column; gap: 4px; background: var(--bg, #0d1018); border: 1px solid var(--line, #283042); border-radius: 8px; padding: 10px; cursor: pointer; color: inherit; }
-  .skill:hover { border-color: var(--accent, #4c8bf5); }
-  .skill span { color: var(--muted, #8a93a6); font-size: 12px; }
+  .skill { text-align: left; display: flex; flex-direction: column; gap: 4px; background: var(--surface-2); border: 1px solid var(--line); border-radius: 8px; padding: 10px; cursor: pointer; color: inherit; }
+  .skill:hover { border-color: var(--accent); }
+  .skill span { color: var(--muted); font-size: 12px; }
   .tools { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 6px; }
-  .tool { display: flex; flex-direction: column; gap: 2px; padding: 6px 8px; border-bottom: 1px solid var(--line, #283042); }
-  .tool code { color: var(--accent, #4c8bf5); font-size: 12px; }
-  .tool span { color: var(--muted, #8a93a6); font-size: 12px; }
+  .tool { display: flex; flex-direction: column; gap: 2px; padding: 6px 8px; border-bottom: 1px solid var(--line); }
+  .tool code { color: var(--accent-text); font-size: 12px; }
+  .tool span { color: var(--muted); font-size: 12px; }
   .btn.sm { padding: 2px 8px; font-size: 12px; }
   .scrim { position: fixed; inset: 0; background: rgba(0,0,0,.5); display: flex; justify-content: flex-end; z-index: 50; }
-  .drawer { width: min(720px, 92vw); height: 100%; background: var(--panel, #161b27); border-left: 1px solid var(--line, #283042); display: flex; flex-direction: column; }
-  .dh { display: flex; align-items: center; justify-content: space-between; padding: 12px 14px; border-bottom: 1px solid var(--line, #283042); }
+  .drawer { width: min(720px, 92vw); height: 100%; background: var(--surface); border-left: 1px solid var(--line); display: flex; flex-direction: column; }
+  .dh { display: flex; align-items: center; justify-content: space-between; padding: 12px 14px; border-bottom: 1px solid var(--line); }
   .md { flex: 1; overflow: auto; white-space: pre-wrap; margin: 0; border: none; border-radius: 0; }
 </style>
