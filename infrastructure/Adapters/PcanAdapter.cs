@@ -113,7 +113,7 @@ public class PcanAdapter  : ICommsAdapter
 
         try
         {
-            var msg = new PcanMessage((uint)frame.Id, MessageType.Standard, (byte)frame.Len, frame.Payload);
+            var msg = new PcanMessage((uint)frame.Id, frame.IsExtended ? MessageType.Extended : MessageType.Standard, (byte)frame.Len, frame.Payload);
 
             for (var i = 0; i < 3; i++)
             {
@@ -179,11 +179,13 @@ public class PcanAdapter  : ICommsAdapter
             var payload = new byte[msg.DLC];
             Array.Copy(msg.Data, payload, msg.DLC);
 
+            bool ext = msg.MsgType.HasFlag(MessageType.Extended);
             var frame = new CanFrame
             (
-                Id: Convert.ToInt16(msg.ID),
+                Id: (int)msg.ID,
                 Len: Convert.ToInt16(msg.DLC),
-                Payload: payload
+                Payload: payload,
+                IsExtended: ext
             );
             if (_acceptLo < 0 || (frame.Id >= _acceptLo && frame.Id <= _acceptHi))
                 DataReceived?.Invoke(this, new CanFrameEventArgs(frame));

@@ -67,13 +67,14 @@
 
   const LOG_CAP = 1000   // cap rendered rows so a long session can't grow the DOM unbounded
   let logStale = $state(false)
+  let canTotal = $state(0), sysTotal = $state(0)   // full row counts (pre-cap) for the "showing last N of M" hint
   $effect(() => {
     tab   // re-subscribe per tab so switching reloads immediately and tears down cleanly
     let alive = true
     const load = async () => {
       try {
-        if (tab === 'can') { const r = await api.canlog(); if (alive) { canlog = r.slice(-LOG_CAP); logStale = false } try { const rs = await api.canRecStatus(); if (alive) rec = rs } catch {} }
-        else { const r = await api.syslog(); if (alive) { syslog = r.slice(-LOG_CAP); logStale = false } }
+        if (tab === 'can') { const r = await api.canlog(); if (alive) { canTotal = r.length; canlog = r.slice(-LOG_CAP); logStale = false } try { const rs = await api.canRecStatus(); if (alive) rec = rs } catch {} }
+        else { const r = await api.syslog(); if (alive) { sysTotal = r.length; syslog = r.slice(-LOG_CAP); logStale = false } }
       } catch { if (alive) logStale = true }   // surface a stale badge instead of silently freezing rows
     }
     load(); const id = setInterval(load, 500)
@@ -90,7 +91,7 @@
 </div>
 
 <div class="tabs" role="tablist" style="margin-bottom:14px">
-  <span class="t" role="tab" tabindex="0" aria-selected={tab === 'can'} use:clickable class:active={tab === 'can'} onclick={() => (tab = 'can')}>CAN log</span>
+  <span class="t" role="tab" tabindex="0" aria-selected={tab === 'can'} use:clickable class:active={tab === 'can'} onclick={() => (tab = 'can')}>CAN traffic (by ID)</span>
   <span class="t" role="tab" tabindex="0" aria-selected={tab === 'sys'} use:clickable class:active={tab === 'sys'} onclick={() => (tab = 'sys')}>System log</span>
   <span class="t" role="tab" tabindex="0" aria-selected={tab === 'ovl'} use:clickable class:active={tab === 'ovl'} onclick={() => (tab = 'ovl')}>Overloads {#if evts.length}({evts.length}){/if}</span>
 </div>
@@ -110,21 +111,23 @@
     {/if}
     <a class="btn ghost" href="/api/canlog/export" download style="margin-left:auto">⭳ Export summary</a>
     {#if logStale}<span style="color:var(--err)">⚠ feed stale — reconnecting…</span>{/if}
-    <span style="color:var(--muted)">{canlog.length} IDs</span>
+    <span style="color:var(--muted)">{canTotal > LOG_CAP ? `showing last ${LOG_CAP} of ${canTotal.toLocaleString()} IDs` : `${canlog.length} IDs`}</span>
   </div>
-  <div class="tscroll"><table class="logtable">
-    <thead><tr><th>Dir</th><th>ID</th><th>DLC</th><th>Data</th><th>Count</th></tr></thead>
+  <div class="tscroll"><table class="logtable can-tbl">
+    <thead><tr><th>Dir</th><th class="r">ID</th><th>Type</th><th class="r">DLC</th><th>Data</th><th class="r">Count</th></tr></thead>
     <tbody>
       {#each canlog as m}
         <tr><td class={m.dir === 'Rx' ? 'dir-rx' : 'dir-tx'}>{m.dir}</td>
-          <td>{fmt === 'hex' ? hex(m.id) : m.id}</td><td>{m.len}</td>
-          <td>{fmt === 'hex' ? m.data : dec(m.data)}</td><td>{m.count}</td></tr>
+          <td class="r mono">{fmt === 'hex' ? hex(m.id) : m.id}</td>
+          <td class="mono"><span class="ftype" class:ext={m.ide} title={m.ide ? '29-bit extended frame' : '11-bit standard frame'}>{m.ide ? 'EXT' : 'STD'}</span></td>
+          <td class="r mono">{m.len}</td>
+          <td class="mono">{fmt === 'hex' ? m.data : dec(m.data)}</td><td class="r mono">{m.count}</td></tr>
       {/each}
-      {#if canlog.length === 0}<tr><td colspan="5" class="muted">No traffic.</td></tr>{/if}
+      {#if canlog.length === 0}<tr><td colspan="6" class="muted">No traffic.</td></tr>{/if}
     </tbody>
   </table></div>
 {:else if tab === 'sys'}
-  <div class="logbar"><a class="btn ghost" href="/api/syslog/export" download style="margin-left:auto">⭳ Export CSV</a>{#if logStale}<span style="color:var(--err)">⚠ feed stale — reconnecting…</span>{/if}<span style="color:var(--muted)">{syslog.length} entries</span></div>
+  <div class="logbar"><a class="btn ghost" href="/api/syslog/export" download style="margin-left:auto">⭳ Export CSV</a>{#if logStale}<span style="color:var(--err)">⚠ feed stale — reconnecting…</span>{/if}<span style="color:var(--muted)">{sysTotal > LOG_CAP ? `showing last ${LOG_CAP} of ${sysTotal.toLocaleString()} entries` : `${syslog.length} entries`}</span></div>
   <div class="tscroll"><table class="logtable">
     <thead><tr><th>Time</th><th>Level</th><th>Source</th><th>Message</th></tr></thead>
     <tbody>
@@ -190,3 +193,12 @@
     </table></div>
   {/if}
 {/if}
+
+<style>
+  /* CAN traffic table: monospace cells, right-aligned numerics with tabular figures so columns don't jitter. */
+  .can-tbl .mono { font-family: var(--mono); }
+  .can-tbl .r { text-align: right; font-variant-numeric: tabular-nums; }
+  /* STD/EXT frame-type badge — EXT highlighted so a 29-bit frame stands out from an 11-bit one. */
+  .can-tbl .ftype { display: inline-block; padding: 0 5px; border-radius: 4px; font-size: 10px; font-weight: 700; letter-spacing: .04em; color: var(--muted); border: 1px solid var(--line-2); }
+  .can-tbl .ftype.ext { color: var(--accent); border-color: var(--accent); }
+</style>

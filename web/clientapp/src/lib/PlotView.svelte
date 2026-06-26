@@ -36,7 +36,11 @@
   }
   function removeSeries(id) { series = series.filter((s) => s.id !== id) }
   function toggle(id) { series = series.map((s) => s.id === id ? { ...s, show: !s.show } : s) }
-  function clearAll() { series = series.map((s) => ({ ...s, pts: [] })) }
+  function clearAll() {
+    const hasData = series.some((s) => s.pts.length > 1)
+    if (hasData && !confirm('Clear all captured plot data? The lines reset to empty.')) return
+    series = series.map((s) => ({ ...s, pts: [] }))
+  }
 
   // ---- live sampling: one /signals call per distinct module, fanned out to its series ----
   $effect(() => {
@@ -115,9 +119,9 @@
     <p class="sub">Chart any signal from any module live. Add series, toggle lines, export a PNG.</p></div>
   <div style="margin-left:auto;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
     <label class="muted" style="font-size:13px">Window
-      <select bind:value={win} style="margin-left:4px">{#each [10, 30, 60, 120, 300] as s}<option value={s}>{s}s</option>{/each}</select></label>
+      <select class="in" bind:value={win} style="margin-left:4px">{#each [10, 30, 60, 120, 300] as s}<option value={s}>{s}s</option>{/each}</select></label>
     <button class="btn ghost" onclick={() => (paused = !paused)}>{paused ? '▶ Resume' : '⏸ Pause'}</button>
-    <button class="btn ghost" onclick={clearAll}>Clear</button>
+    <button class="btn ghost" onclick={clearAll}>Clear data</button>
     <button class="btn ghost" onclick={exportPng} disabled={!series.length}>⬇ Export PNG</button>
     {#if sampleErr}<span class="muted" style="color:var(--err);font-size:13px">⚠ feed stale — adapter connected?</span>{/if}
   </div>

@@ -482,7 +482,7 @@ public class SlcanAdapter : ICommsAdapter
             if (_acceptLo >= 0 && (id < _acceptLo || id > _acceptHi)) return frameLen;
             for (int i = 0; i < dlc && !remote; i++)
                 payload[i] = (byte)((HexByteToInt(buf[dlcPos + 1 + i * 2]) << 4) | HexByteToInt(buf[dlcPos + 2 + i * 2]));
-            DataReceived?.Invoke(this, new CanFrameEventArgs(new CanFrame(id, dlc, payload)));
+            DataReceived?.Invoke(this, new CanFrameEventArgs(new CanFrame(id, dlc, payload, IsExtended: ext)));
         }
         catch (IndexOutOfRangeException) { }
         return frameLen;

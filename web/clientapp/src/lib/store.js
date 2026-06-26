@@ -112,7 +112,13 @@ export const api = {
   },
   flashCanStatus: () => j('GET', '/api/flash-can/status'),
   setFunction: (guid, kind, number, body) => j('POST', `/api/devices/${guid}/function/${kind}/${number}`, body),
-  writeParam: (guid, Index, Sub, Value) => j('POST', `/api/devices/${guid}/writeparam`, { Index, Sub, Value }),
+  writeParam: (guid, Index, Sub, Value) => {
+    // The server param Value is unsigned (uint) — reject a negative/non-integer here with a clear
+    // message instead of letting it hit the server as a bare 400.
+    const v = Number(Value)
+    if (!Number.isInteger(v) || v < 0 || v > 0xFFFFFFFF) throw new Error(`writeParam Value must be an unsigned integer 0…4294967295 (got ${Value})`)
+    return j('POST', `/api/devices/${guid}/writeparam`, { Index, Sub, Value: v })
+  },
   sdoRead: (Node, Index, Sub) => j('POST', '/api/sdo/read', { Node, Index, Sub }),
   sdoWrite: (Node, Index, Sub, Value, Size) => j('POST', '/api/sdo/write', { Node, Index, Sub, Value, Size }),
   sdoStore: (Node) => j('POST', '/api/sdo/store', { Node }),
@@ -622,7 +628,7 @@ export function compileCrossModule() {
 // CurrentLimit is the hardware over-current trip: we refuse to invent it. If the source output
 // was never read/configured (no currentLimit), writing a guessed value could under- or
 // over-protect the circuit, so we throw and make the caller Read the module first.
-const _binBody = (o, input) => {
+export const _binBody = (o, input) => {
   if (o == null || o.currentLimit == null)
     throw new Error(`Output ${o?.number ?? '?'} has no current limit yet — Read the module before writing/deploying so its trip point isn't guessed.`)
   return {
@@ -631,6 +637,10 @@ const _binBody = (o, input) => {
     ResetMode: o.resetMode ?? 0, ResetTime: o.resetTime ?? 1000, ResetCountLimit: o.resetCountLimit ?? 3,
     PwmEnabled: o.pwmEnabled ?? false, Freq: o.freq ?? 100, FixedDuty: o.fixedDuty ?? 100, MinDuty: o.minDuty ?? 0,
     SoftStart: o.softStart ?? false, SoftStartRamp: o.softStartRamp ?? 0,
+    // Variable-PWM (duty/freq follow a signal) — carry through so a deploy/binburn doesn't reset them.
+    VariableDutyCycle: o.variableDutyCycle ?? false, DutyCycleInput: o.dutyCycleInput ?? 0, DutyCycleDenom: o.dutyCycleDenom ?? 100,
+    VariableFreq: o.variableFreq ?? false, FreqInput: o.freqInput ?? 0, FreqInputDenom: o.freqInputDenom ?? 1,
+    RampDutyChanges: o.rampDutyChanges ?? false, PrimaryOutput: o.primaryOutput ?? -1,
     WarnLimit: o.warnLimit ?? 0, OpenLoadLimit: o.openLoadLimit ?? 0, OpenLoadTime: o.openLoadTime ?? 1000,
   }
 }

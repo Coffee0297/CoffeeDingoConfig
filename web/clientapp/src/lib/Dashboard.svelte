@@ -1,5 +1,5 @@
 <script>
-  import { api, telemetry, hubState } from './store.js'
+  import { api, telemetry, hubState, luaReadToTabs } from './store.js'
   import { toast } from './toast.js'
   let { current } = $props()
   // A module is writable only when it's actually answering on the bus; the feed is "stale" when
@@ -21,7 +21,8 @@
     return () => { alive = false; clearInterval(id) }
   })
 
-  const sc = (s) => (s === 'On' ? 'on' : s === 'Overcurrent' ? 'oc' : s === 'Fault' ? 'fault' : 'off')
+  const sc = (s) => (s === 'On' ? 'on' : s === 'Overcurrent' ? 'oc' : s === 'Fault' ? 'fault'
+    : s === 'Warning' || s === 'OpenLoad' ? 'oc' : 'off')
   // A CANBoard has no battery / total-current sensing and no PDM-style outputs — its dashboard
   // shows board temp + its own I/O instead. Drive that off the device type.
   let isCb = $derived(/canboard|can.?board/i.test(current?.type ?? ''))
@@ -48,6 +49,9 @@
       // is already in the module's RAM (which would drop edits you never pressed Write for).
       if (a === 'burn') await api.action(current.guid, 'write')
       await api.action(current.guid, a)
+      // Read also pulls the Lua program back onto the per-output tabs, so a fresh-PC restore
+      // doesn't drop the Lua program (mirrors the toolbar Read path).
+      if (a === 'read') { try { await luaReadToTabs(current.guid) } catch (e) { toast('Lua read-back skipped: ' + e.message, 'info') } }
       toast(`${VERB[a] ?? a} ✓`, 'ok')
     }
     catch (e) { toast(`${VERB[a] ?? a} failed: ${e.message}`, 'error') }
@@ -67,11 +71,13 @@
     <button class="btn" disabled={!live} onclick={() => act('read')}>Read</button>
     <button class="btn" disabled={!live} onclick={() => act('write')}>Write</button>
     <button class="btn primary" disabled={!live} onclick={() => act('burn')}>Burn</button>
-    <span class="sep"></span>
-    <button class="btn ghost" disabled={!live} onclick={() => act('sleep')}>Sleep</button>
-    <button class="btn ghost" disabled={!live} onclick={() => act('wakeup')}>Wakeup</button>
-    <button class="btn ghost" disabled={!live} onclick={() => act('bootloader')}>Bootloader</button>
-    <button class="btn ghost" disabled={!live} onclick={() => act('version')}>Version</button>
+    {#if !isCb}
+      <span class="sep"></span>
+      <button class="btn ghost" disabled={!live} onclick={() => act('sleep')}>Sleep</button>
+      <button class="btn ghost" disabled={!live} onclick={() => act('wakeup')}>Wakeup</button>
+      <button class="btn ghost" disabled={!live} onclick={() => act('bootloader')}>Bootloader</button>
+      <button class="btn ghost" disabled={!live} onclick={() => act('version')}>Version</button>
+    {/if}
     {#if !adapterConn}<span class="mismatch">⚠ Not connected to a CAN adapter — read / write / burn need a bus connection</span>
     {:else if !live}<span class="mismatch">⚠ {current.name} isn't responding on the bus — read / write / burn need a live module</span>
     {:else if current.version === 'v0.0.0'}<span class="mismatch">⚠ not read yet — press Read</span>{/if}
@@ -82,9 +88,9 @@
   {/if}
   <div class="tiles-stat" style={(!live || stale) ? 'opacity:.5' : ''}>
     {#if !isCb}
-      <div class="stat"><div class="v">{current.battery.toFixed(1)} V</div><div class="k">Battery voltage</div></div>
-      <div class="stat"><div class="v">{current.current.toFixed(1)} A</div><div class="k">Total current</div></div>
-      <div class="stat"><div class="v">{Math.round(current.temp)} °C</div><div class="k">Board temp</div></div>
+      <div class="stat"><div class="v">{(current.battery ?? 0).toFixed(1)} V</div><div class="k">Battery voltage</div></div>
+      <div class="stat"><div class="v">{(current.current ?? 0).toFixed(1)} A</div><div class="k">Total current</div></div>
+      <div class="stat"><div class="v">{Math.round(current.temp ?? 0)} °C</div><div class="k">Board temp</div></div>
       <div class="stat"><div class="v">{current.state}</div><div class="k">Device state</div></div>
     {/if}
     <div class="stat"><div class="v">{current.version}</div><div class="k">FW version</div></div>
@@ -112,7 +118,7 @@
     <div class="statusgrid">
       {#each outs as o}
         <div class="sc"><span class="scn">O{o.number} {o.name?.trim() ? o.name : ''}</span>
-          <span class="state {sc(o.state)}" style="padding:1px 7px"><span class="ic"></span>{o.state === 'On' ? (o.pwmEnabled ? `ON · ${o.duty}% · ${o.current.toFixed(1)}A` : `ON · ${o.current.toFixed(1)}A`) : o.state.toUpperCase()}</span></div>
+          <span class="state {sc(o.state)}" style="padding:1px 7px"><span class="ic"></span>{o.state === 'On' ? (o.pwmEnabled ? `ON · ${o.duty}% · ${(o.current ?? 0).toFixed(1)}A` : `ON · ${(o.current ?? 0).toFixed(1)}A`) : (o.state ?? 'OFF').toUpperCase()}</span></div>
       {/each}
     </div>
   {/if}

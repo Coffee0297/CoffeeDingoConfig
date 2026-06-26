@@ -161,7 +161,7 @@
       <option value="">+ insert template…</option>
       {#each TEMPLATES as [name], i}<option value={i}>{name}</option>{/each}
     </select>
-    <button class="btn ghost" style="padding:3px 10px;font-size:12px" onclick={compile}>Compile</button>
+    <button class="btn ghost" style="padding:3px 10px;font-size:12px" title="Lua 5.3 syntax check in the browser — the firmware runs Lua 5.5, so this catches typos but isn't a full firmware compile" onclick={compile}>Check syntax</button>
     {#if compileMsg}<span style="font-size:12px;font-weight:600;color:{compileOk ? 'var(--ok)' : 'var(--err)'}">{compileMsg}</span>{/if}
     <span class="hint" style="margin:0 0 0 auto;font-size:11px">Tab = accept · Ctrl-Z undo</span>
   </div>

@@ -14,6 +14,12 @@ public unsafe class SocketCanAdapter : ICommsAdapter
 {
     public string Name => "SocketCAN";
 
+    // linux/can.h: the can_id field packs flags in its top bits. EFF flag marks a 29-bit frame;
+    // the mask isolates the id for each kind.
+    private const uint CanEffFlag = 0x80000000;
+    private const uint CanEffMask = 0x1FFFFFFF;
+    private const uint CanSffMask = 0x000007FF;
+
     private int _fd = -1;
     private Thread? _rxThread;
     private bool _running;
@@ -105,7 +111,8 @@ public unsafe class SocketCanAdapter : ICommsAdapter
             return Task.FromResult(false);
 
         CanFrameRaw raw = default;
-        raw.can_id = (uint)frame.Id;
+        // Set the EFF flag (bit 31) for an extended frame so SocketCAN sends it 29-bit.
+        raw.can_id = (uint)frame.Id | (frame.IsExtended ? CanEffFlag : 0u);
         raw.can_dlc = (byte)frame.Len;
 
         for (int i = 0; i < frame.Len; i++)
@@ -144,7 +151,10 @@ public unsafe class SocketCanAdapter : ICommsAdapter
                 for (int i = 0; i < raw.can_dlc; i++)
                     payload[i] = raw.data[i];
 
-                var frame = new CanFrame((int)raw.can_id, raw.can_dlc, payload);
+                // can_id packs the EFF flag (bit 31) above the id; mask to the id and carry the kind.
+                bool ext = (raw.can_id & CanEffFlag) != 0;
+                int id = (int)(raw.can_id & (ext ? CanEffMask : CanSffMask));
+                var frame = new CanFrame(id, raw.can_dlc, payload, IsExtended: ext);
                 DataReceived?.Invoke(this, new CanFrameEventArgs(frame));
             }
         }

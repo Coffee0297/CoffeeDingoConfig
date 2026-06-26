@@ -88,6 +88,7 @@ public class CanMsgLogger(int maxHistorySize = 100000, string logDirectory = "./
         var entry = new CanLogEntry
         {
             Id = msg.Id,
+            IsExtended = msg.IsExtended,
             Payload = msg.Payload,
             Len = msg.Len,
             Direction = dir,
@@ -95,14 +96,18 @@ public class CanMsgLogger(int maxHistorySize = 100000, string logDirectory = "./
             Count = 1
         };
 
-        // Update or add to message summary dictionary (O(1) operation)
+        // Summary is per (id, frame-kind): a standard 0x100 and an extended 0x100 are distinct frames
+        // on the bus and must not collapse into one row. Extended ids are ≤ 0x1FFFFFFF, so the high
+        // bit is free to use as the std/ext discriminator in the dictionary key.
+        var sumKey = msg.IsExtended ? (int)(msg.Id | unchecked((int)0x80000000)) : msg.Id;
         _messageSum.AddOrUpdate(
-            msg.Id,
+            sumKey,
             entry, // Add new
             (_, existing) => // Update existing
             {
                 existing.Payload = msg.Payload;
                 existing.Len = msg.Len;
+                existing.IsExtended = msg.IsExtended;
                 existing.Timestamp = DateTime.UtcNow;
                 existing.Direction = dir;
                 existing.Count++;

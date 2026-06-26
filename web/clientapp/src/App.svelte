@@ -81,6 +81,7 @@
     const file = ev.target.files?.[0]; ev.target.value = ''
     if (!file) return
     projOpen = false
+    if (devices.length && !confirm(`Open "${file.name}"? This replaces the current project (${devices.length} module${devices.length === 1 ? '' : 's'}) and all in-app state.`)) return
     try {
       const text = await file.text()
       const r = await api.projUpload(text)                                  // backend loads devices (ignores the client section)
@@ -101,6 +102,7 @@
     const file = ev.target.files?.[0]; ev.target.value = ''
     if (!file) return
     projOpen = false
+    if (devices.length && !confirm(`Import "${file.name}"? This applies its config over the current project (${devices.length} module${devices.length === 1 ? '' : 's'}).`)) return
     try {
       const doc = JSON.parse(await file.text())
       const r = await api.applyConfig(doc)
@@ -129,7 +131,6 @@
       toast(`Exported ${doc.devices?.length ?? 0} device(s)`, 'ok')
     } catch (e) { toast('Export failed: ' + e.message, 'error') }
   }
-  function openSettings() { dialog = 'settings' }
   function openModify() { if (!current) return; dlgName = current.name; dlgBase = hex(current.baseId); dialog = 'modify' }
   async function saveDialog() {
     const wasModify = dialog === 'modify' && !!current
@@ -304,7 +305,10 @@
   }
   async function setBase() {
     if (!current) return
-    try { await api.modify(current.guid, current.name, editBaseId); toast(`Base ID set to ${editBaseId}`, 'ok') }
+    try {
+      await api.modify(current.guid, current.name, editBaseId)
+      toast(current.connected ? `Base ID set to ${editBaseId}` : `Base ID set to ${editBaseId} in the project — not applied (module offline); connect to re-address it on the bus`, current.connected ? 'ok' : 'info')
+    }
     catch (e) { toast('Set base ID failed: ' + e.message, 'error') }
   }
   async function removeDev() { if (current) await removeByGuid(current.guid) }
@@ -392,6 +396,10 @@
   }
   function addModule() { dlgName = ''; dlgType = 'pdm'; dlgBase = '0x7CE'; dlgDbcFile = null; dialog = 'add' }
   function setMode(n, m) { cardMode = { ...cardMode, [n]: m } }
+  // Close the header dropdown menus (Module / Project / Read / Deploy) on an outside click or Escape.
+  function closeMenus() { switchOpen = false; projOpen = false; readOpen = false; deployOpen = false }
+  function onWinClick(e) { if (!e.target.closest?.('.switch')) closeMenus() }
+  function onWinKey(e) { if (e.key === 'Escape') closeMenus() }
 
   const sc = (s) => (s === 'On' ? 'on' : s === 'Overcurrent' ? 'oc' : s === 'Fault' ? 'fault'
     : s === 'Warning' || s === 'OpenLoad' ? 'oc' : 'off')
@@ -413,6 +421,7 @@
   }
 </script>
 
+<svelte:window onclick={onWinClick} onkeydown={onWinKey} />
 <div class="rx" class:dark={dark}>
   <header class="bar">
     <span class="logo">dingoConfig</span>
@@ -482,7 +491,7 @@
       <button class="btn ghost" disabled={scanning} onclick={scanUsb} title="Scan the CAN bus and add detected modules">{scanning ? 'Scanning…' : '🔍 Add from CAN'}</button>
       <span class="switch" class:open={readOpen}>
         <span style="display:inline-flex">
-          <button class="btn ghost" style="border-radius:8px 0 0 8px" disabled={!current || current?.reading || scopeBusy} onclick={() => readScope(false)}>{current?.reading ? `Reading ${readPct}%` : `Read: ${current?.name ?? '—'}`}</button>
+          <button class="btn ghost" style="border-radius:8px 0 0 8px" disabled={!current || !current.connected || current?.reading || scopeBusy} title={current && !current.connected ? 'Module not on the bus' : ''} onclick={() => readScope(false)}>{current?.reading ? `Reading ${readPct}%` : `Read: ${current?.name ?? '—'}`}</button>
           <button class="btn ghost" aria-label="Read target options" style="border-radius:0 8px 8px 0;border-left:1px solid var(--line-2);padding:7px 9px" onclick={() => (readOpen = !readOpen)}>▾</button>
         </span>
         <div class="menu" role="menu" style="right:0;left:auto"><div class="mh">Read target</div>
@@ -490,10 +499,10 @@
           <div class="mi" role="menuitem" class:muted={scopeBusy} use:clickable onclick={() => !scopeBusy && readScope(true)}>All {devices.length} modules</div>
         </div>
       </span>
-      <button class="btn" disabled={!current || burning} onclick={burn}>{burning ? 'Burning…' : 'Burn'}</button>
+      <button class="btn" disabled={!current || !current.connected || burning} title={current && !current.connected ? 'Module not on the bus' : ''} onclick={burn}>{burning ? 'Burning…' : 'Burn'}</button>
       <span class="switch" class:open={deployOpen}>
         <span style="display:inline-flex">
-          <button class="btn primary" style="border-radius:8px 0 0 8px" disabled={!current || scopeBusy} onclick={() => deployScope(false)}>{scopeBusy ? 'Deploying…' : `Deploy: ${current?.name ?? '—'}`}</button>
+          <button class="btn primary" style="border-radius:8px 0 0 8px" disabled={!current || !current.connected || scopeBusy} title={current && !current.connected ? 'Module not on the bus' : ''} onclick={() => deployScope(false)}>{scopeBusy ? 'Deploying…' : `Deploy: ${current?.name ?? '—'}`}</button>
           <button class="btn primary" aria-label="Deploy target options" style="border-radius:0 8px 8px 0;border-left:1px solid rgba(255,255,255,.35);padding:7px 9px" onclick={() => (deployOpen = !deployOpen)}>▾</button>
         </span>
         <div class="menu" role="menu" style="right:0;left:auto"><div class="mh">Deploy target</div>
@@ -503,7 +512,6 @@
       </span>
       <button class="btn ghost icon" title="Disconnect" aria-label="Disconnect" disabled={busy} onclick={disconnect}>⏏</button>
     {/if}
-    <button class="btn ghost icon" title="Settings" aria-label="Settings" onclick={openSettings}>⚙</button>
     <button class="btn ghost icon" title="Theme" aria-label="Toggle dark theme" aria-pressed={dark} onclick={() => (dark = !dark)}>{dark ? '☀' : '🌙'}</button>
   </header>
 
@@ -594,7 +602,7 @@
             <p class="sub">{current ? 'Each output is on when its rule is true — live state and current from the device.' : 'Connect and bind a device to see its outputs.'}</p>
           </div>
           <span class="win-tog" style="display:flex;align-items:center;gap:14px;color:var(--muted)">
-            {#if isPdm}<span title="Sum of the current limit of every enabled output — worst case if all switch on at their trip point">max load: <b style="color:var(--text)">{maxAmps} A</b></span>{/if}
+            {#if isPdm}<span title="Sum of the current limit of every enabled output — worst case if all switch on at their trip point">max load: <b style="color:var(--ink)">{maxAmps} A</b></span>{/if}
             <span>graphs:
               <button type="button" class="linkbtn" aria-pressed={graphWin===60} onclick={()=>graphWin=60} style={graphWin===60?'color:var(--accent);font-weight:700':'color:var(--muted)'}>1 min</button> ·
               <button type="button" class="linkbtn" aria-pressed={graphWin===600} onclick={()=>graphWin=600} style={graphWin===600?'color:var(--accent);font-weight:700':'color:var(--muted)'}>10 min</button></span>
@@ -623,41 +631,66 @@
       {:else if !isPdm}
         <DeviceTypeView device={current} />
       {:else}
-        <div class="grid">
-          {#each current.outputs as o (o.number)}
-            {@const mode = cardMode[current.guid + ':' + o.number] ?? 'amps'}
-            {@const rule = ruleText(o.input)}
-            {@const wire = awgFor(o.currentLimit)}
-            {@const ovr = o.wireGaugeMm2 > 0}
-            {@const rating = outputRatingA($deviceDefs, current.type, o.number)}
-            <div class="card" use:clickable aria-label={'Configure ' + (o.name?.trim() ? o.name : 'output ' + o.number)} onclick={() => (editNum = o.number)}>
-              <div class="num">O{o.number}</div>
-              <div class="top">
-                <span class="state {sc(o.state)}"><span class="ic"></span>{stT(o.state)}{#if o.pwmEnabled && o.state === 'On'} · {o.duty}%{/if}</span>
-                <span class="nm">{o.name?.trim() ? o.name : 'Output ' + o.number}</span>
-                <span class="amp">{(o.current ?? 0).toFixed(1)} <span class="amp-lim">/ {o.currentLimit} A</span></span>
-              </div>
-              <div class="rule-txt">
-                {#if rule}<span class="kw">ON when</span> <span class="sig">{rule}</span>{:else}<span class="muted">No rule set — tap edit to drive this output</span>{/if}
-              </div>
-              {#key mode}
-                <Sparkline value={mode === 'amps' ? (o.current ?? 0) : (o.state === 'On' || o.state === 'Warning' || o.state === 'OpenLoad' ? 1 : 0)} win={graphWin}
-                  tick={t.canTotal} color={o.state === 'Fault' ? '#d23b3b' : '#594ae2'} />
-              {/key}
-              <div class="spark-tog" role="group" aria-label="Graph mode">
-                <span role="button" tabindex="0" use:clickable aria-pressed={mode === 'amps'} class:on={mode === 'amps'} onclick={(e) => { e.stopPropagation(); setMode(current.guid + ':' + o.number, 'amps') }}>Amps</span>
-                <span role="button" tabindex="0" use:clickable aria-pressed={mode === 'trig'} class:on={mode === 'trig'} onclick={(e) => { e.stopPropagation(); setMode(current.guid + ':' + o.number, 'trig') }}>Trigger</span>
-              </div>
-              <div class="ft">
-                <span class="tag">{driverTag(o.input)}</span>
-                {#if rating}<span class="tag" style={(o.currentLimit ?? 0) > rating ? 'color:var(--err);border-color:var(--err)' : ''} title={`OUT${o.number} hardware channel rating is ${rating} A` + ((o.currentLimit ?? 0) > rating ? ` — your ${o.currentLimit} A trip is above it (allowed; size the wiring & load to suit)` : '')}>rated {rating} A</span>{/if}
-                {#if o.enabled && ovr}<span class="tag" title={`Gauge set for this output (recommended ≥ ${wire?.mm2} mm²)`}>{awgForMm2(o.wireGaugeMm2)} AWG · {o.wireGaugeMm2} mm²</span>
-                {:else if o.enabled && wire}<span class="tag" title={`Min wire for a ${o.currentLimit} A trip (short automotive run; step up for long runs)`}>≥ {wire.awg} AWG · {wire.mm2} mm²</span>{/if}
-                {#if o.wireColor}<span class="tag" title={'Wire colour: ' + o.wireColor + (o.wireStripe ? ' / ' + o.wireStripe + ' stripe' : '')} style="display:inline-flex;align-items:center;gap:5px"><span style="width:11px;height:11px;border-radius:50%;border:1px solid var(--line-2);display:inline-block;background:{o.wireStripe ? `repeating-linear-gradient(135deg, ${o.wireColor} 0 3px, ${o.wireStripe} 3px 5px)` : o.wireColor}"></span>wire</span>{/if}
-                {#if o.resetCount > 0}<span class="tag">{o.resetCount} resets</span>{/if}
-                <span class="edit-hint" use:clickable onclick={(e) => { e.stopPropagation(); editNum = o.number }}>edit →</span>
-              </div>
+        {#snippet outputCard(o)}
+          {@const mode = cardMode[current.guid + ':' + o.number] ?? 'amps'}
+          {@const rule = ruleText(o.input)}
+          {@const wire = awgFor(o.currentLimit)}
+          {@const ovr = o.wireGaugeMm2 > 0}
+          {@const rating = outputRatingA($deviceDefs, current.type, o.number)}
+          {@const followsO = o.primaryOutput >= 0 ? o.primaryOutput + 1 : null}
+          {@const drivesOuts = current.outputs.filter((x) => x.primaryOutput === o.number - 1).map((x) => x.number)}
+          <div class="card" use:clickable aria-label={'Configure ' + (o.name?.trim() ? o.name : 'output ' + o.number)} onclick={() => (editNum = o.number)}>
+            <div class="num">O{o.number}</div>
+            <div class="top">
+              <span class="state {sc(o.state)}"><span class="ic"></span>{stT(o.state)}{#if o.pwmEnabled && o.state === 'On'} · {o.duty}%{/if}</span>
+              <span class="nm">{o.name?.trim() ? o.name : 'Output ' + o.number}</span>
+              <span class="amp">{(o.current ?? 0).toFixed(1)} <span class="amp-lim">/ {o.currentLimit} A</span></span>
             </div>
+            <div class="rule-txt">
+              {#if followsO != null}<span class="kw">Follows</span> <span class="sig">output{followsO}</span> <span class="muted">— mirrors its state, ignores its own rule</span>{:else if rule}<span class="kw">ON when</span> <span class="sig">{rule}</span>{:else}<span class="muted">No rule set — tap edit to drive this output</span>{/if}
+            </div>
+            {#key mode}
+              <Sparkline value={mode === 'amps' ? (o.current ?? 0) : (o.state === 'On' || o.state === 'Warning' || o.state === 'OpenLoad' ? 1 : 0)} win={graphWin}
+                tick={t.canTotal} color={o.state === 'Fault' ? '#d23b3b' : '#594ae2'} />
+            {/key}
+            <div class="spark-tog" role="group" aria-label="Graph mode">
+              <span role="button" tabindex="0" use:clickable aria-pressed={mode === 'amps'} class:on={mode === 'amps'} onclick={(e) => { e.stopPropagation(); setMode(current.guid + ':' + o.number, 'amps') }}>Amps</span>
+              <span role="button" tabindex="0" use:clickable aria-pressed={mode === 'trig'} class:on={mode === 'trig'} onclick={(e) => { e.stopPropagation(); setMode(current.guid + ':' + o.number, 'trig') }}>Trigger</span>
+            </div>
+            <div class="ft">
+              {#if followsO == null}<span class="tag">{driverTag(o.input)}</span>{/if}
+              {#if rating}<span class="tag" style={(o.currentLimit ?? 0) > rating ? 'color:var(--err);border-color:var(--err)' : ''} title={`OUT${o.number} hardware channel rating is ${rating} A` + ((o.currentLimit ?? 0) > rating ? ` — your ${o.currentLimit} A trip is above it (allowed; size the wiring & load to suit)` : '')}>rated {rating} A</span>{/if}
+              {#if o.enabled && ovr}<span class="tag" title={`Gauge set for this output (recommended ≥ ${wire?.mm2} mm²)`}>{awgForMm2(o.wireGaugeMm2)} AWG · {o.wireGaugeMm2} mm²</span>
+              {:else if o.enabled && wire}<span class="tag" title={`Min wire for a ${o.currentLimit} A trip (short automotive run; step up for long runs)`}>≥ {wire.awg} AWG · {wire.mm2} mm²</span>{/if}
+              {#if o.wireColor}<span class="tag" title={'Wire colour: ' + o.wireColor + (o.wireStripe ? ' / ' + o.wireStripe + ' stripe' : '')} style="display:inline-flex;align-items:center;gap:5px"><span style="width:11px;height:11px;border-radius:50%;border:1px solid var(--line-2);display:inline-block;background:{o.wireStripe ? `repeating-linear-gradient(135deg, ${o.wireColor} 0 3px, ${o.wireStripe} 3px 5px)` : o.wireColor}"></span>wire</span>{/if}
+              {#if o.resetCount > 0}<span class="tag">{o.resetCount} resets</span>{/if}
+              {#if drivesOuts.length}<span class="tag pair" title={`Paired — O${drivesOuts.join(', O')} follow this output`}>🔗 drives O{drivesOuts.join(', O')}</span>{/if}
+              <span class="edit-hint" use:clickable onclick={(e) => { e.stopPropagation(); editNum = o.number }}>edit →</span>
+            </div>
+          </div>
+        {/snippet}
+        {@const outGroups = (() => {
+          const outs = current.outputs ?? []
+          const isFollower = (o) => o.primaryOutput >= 0 && outs.some((p) => p.number === o.primaryOutput + 1)
+          const gs = []
+          for (const o of outs) {
+            if (isFollower(o)) continue   // pulled in next to its primary
+            const followers = outs.filter((x) => x.primaryOutput === o.number - 1)
+            gs.push(followers.length
+              ? { paired: true, key: 'p' + o.number, members: [o, ...followers] }   // primary first, then follower(s)
+              : { paired: false, key: 'o' + o.number, members: [o] })
+          }
+          return gs
+        })()}
+        <div class="grid">
+          {#each outGroups as g (g.key)}
+            {#if g.paired}
+              <div class="pair-group" title="Paired outputs — they switch together">
+                {#each g.members as o (o.number)}{@render outputCard(o)}{/each}
+              </div>
+            {:else}
+              {@render outputCard(g.members[0])}
+            {/if}
           {/each}
           <div class="card add-card" use:clickable onclick={() => (editNum = current.outputs[0]?.number)}>+ configure outputs</div>
         </div>
@@ -673,7 +706,7 @@
     {:else if view === 'dashboard'}
       <Dashboard {current} />
     {:else if view === 'system'}
-      <SystemView {devices} connected={t.connected} pick={pickModule} {addModule} remove={removeByGuid} />
+      <SystemView {devices} connected={t.connected} adapter={t.adapter} pick={pickModule} {addModule} remove={removeByGuid} />
     {:else if view === 'signals'}
       {#if isDbcDev}
         <DeviceTypeView device={current} />
@@ -706,7 +739,7 @@
 
   {#if editNum != null && current}
     {@const eo = current.outputs.find((o) => o.number === editNum)}
-    {#if eo}<OutputDrawer output={eo} guid={current.guid} connected={current.connected} deviceType={current.type} onclose={() => (editNum = null)} />{/if}
+    {#if eo}<OutputDrawer output={eo} outputs={current.outputs} guid={current.guid} connected={current.connected} deviceType={current.type} onclose={() => (editNum = null)} />{/if}
   {/if}
 
   {#if dialog === 'add' || dialog === 'modify'}
@@ -747,18 +780,6 @@
           <button class="btn ghost" onclick={() => (dialog = null)}>Cancel</button>
           <button class="btn primary" onclick={saveDialog}>{dialog === 'add' ? 'Create' : 'Save'}</button>
         </div>
-      </div>
-    </div>
-  {:else if dialog === 'settings'}
-    <div class="modal-scrim show" onclick={() => (dialog = null)}>
-      <div class="modal" use:dlg={{ onclose: () => (dialog = null) }} onclick={(e) => e.stopPropagation()}>
-        <div class="mh2">Settings</div>
-        <div class="mb2">
-          <div class="opts" style="margin-top:0">
-            <div class="opt"><span class="sw" class:on={dark} role="switch" tabindex="0" aria-checked={dark} aria-label="Dark theme" use:clickable onclick={() => (dark = !dark)}></span> Dark theme</div>
-          </div>
-        </div>
-        <div class="mf2"><button class="btn primary" onclick={() => (dialog = null)}>Done</button></div>
       </div>
     </div>
   {/if}

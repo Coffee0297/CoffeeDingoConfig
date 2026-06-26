@@ -71,6 +71,9 @@
   const hex = (n) => '0x' + (n ?? 0).toString(16).toUpperCase()
   const opTxt = ['=', '≠', '>', '<', '≥', '≤', '&', '!&']
   const condTxt = ['AND', 'OR', 'NOR']
+  const edgeTxt = ['Rising', 'Falling', 'Both']   // InputEdge enum order
+  const wiperModeTxt = ['Digital inputs', 'Intermittent input', 'Mixed']   // WiperMode enum order
+  const wiperSpeedTxt = ['Park', 'Slow', 'Fast', 'Inter 1', 'Inter 2', 'Inter 3', 'Inter 4', 'Inter 5', 'Inter 6']   // WiperSpeed enum order
 
   // Every editable kind. `arr` is its key on /functions; only kinds whose array is present
   // for the current device render. `physical` kinds are fixed channels (show all, no wizard).
@@ -88,6 +91,8 @@
     { key: 'flasher', arr: 'flashers', icon: '💡', label: 'Flasher', tile: 'Flasher', desc: 'a blink pattern', addable: true, group: 'Logic & messaging' },
     { key: 'counter', arr: 'counters', icon: '⏱', label: 'Counter', tile: 'Counter', desc: 'count events', addable: true, group: 'Logic & messaging' },
     { key: 'canoutput', arr: 'canOutputs', icon: '📤', label: 'CAN output', tile: 'CAN output', desc: 'transmit a variable on CAN', addable: true, group: 'Logic & messaging' },
+    // wiper is a SINGLETON function (one per device), exposed by /functions as `wiper` (object, not list)
+    { key: 'wiper', arr: 'wiper', icon: '🌧', label: 'Wiper', tile: 'Wiper', desc: 'wiper control: slow/fast/intermittent, wash, park', addable: true, singleton: true, group: 'Logic & messaging' },
     // physical outputs (CANBoard) — shown as cards on the Outputs tab, not in this list
     { key: 'digitaloutput', arr: 'digitalOut', icon: '⭘', label: 'Digital output', physical: true, group: 'Outputs' },
   ]
@@ -97,7 +102,9 @@
   let outRows = $derived(funcs?.digitalOut ?? [])
   const meta = (k) => ALLKINDS.find((x) => x.key === k)
   const labelFor = (k) => meta(k)?.label ?? (k === 'keypad' ? 'Keypad' : k === 'keypadbutton' ? 'Button' : k)
-  const list = (kd) => funcs?.[kd.arr] ?? []
+  // Singleton functions (wiper) come back as a single object, not a list — normalise to a 1-element
+  // array (with a synthetic number:1) so they slot into the same row/edit machinery as the rest.
+  const list = (kd) => kd.singleton ? (funcs?.[kd.arr] ? [{ number: 1, ...funcs[kd.arr] }] : []) : (funcs?.[kd.arr] ?? [])
   const rowsFor = (kd) => kd.physical ? list(kd) : list(kd).filter((x) => x.enabled)
   const varName = (idx) => inputsAll.find((v) => v.index === idx)?.name ?? (idx ? `#${idx}` : '—')
 
@@ -313,6 +320,7 @@
   }
 
   function openNew(kd) {
+    if (kd.singleton) { const cur = list(kd)[0]; seed(kd.key, cur ?? { number: 1 }, !cur?.enabled); return }
     const slot = list(kd).find((x) => !x.enabled)
     if (!slot) { toast(`All ${kd.label.toLowerCase()} slots are in use.`, 'error'); return }
     seed(kd.key, slot, true)
@@ -337,6 +345,12 @@
     }
     if (kind === 'condition') f._hyst = (f.argOff != null && f.argOff !== f.arg)   // show hysteresis fields if a release point is set
     if (kind === 'digitaloutput') { dutyFull = (f.dutyCycleDenominator || 1) * 100; freqFull = (f.freqInputDenom || 1) * 400 }
+    if (kind === 'wiper') {
+      // ensure the editable arrays exist + copy them so drawer edits don't mutate the shared object
+      f.speedMap = Array.isArray(row.speedMap) && row.speedMap.length === 8 ? [...row.speedMap] : [3, 4, 5, 6, 7, 8, 1, 2]  // Inter1..6, Slow, Fast
+      f.intermitTime = Array.isArray(row.intermitTime) && row.intermitTime.length === 6 ? [...row.intermitTime] : [1000, 2000, 3000, 4000, 5000, 6000]
+      if (!f.name) f.name = 'Wiper'
+    }
     drawer = true
   }
   function close() { drawer = false; editing = null; driverReturn = null }
@@ -395,6 +409,39 @@
       // firmware reads nothing on this channel unless it's enabled
       if (mp.on || sc.on || f.switch.enabled) body.enabled = true
     }
+    // PWM bounds for a CANBoard digital output: fixed freq 15–400 Hz, duty/min-duty 0–100 with minDuty ≤ duty.
+    if (editing.kind === 'digitaloutput' && f.pwmEnabled) {
+      if (!f.variableFreq) {
+        const fr = Math.round(+f.frequency || 0)
+        if (fr < 15 || fr > 400) { toast('PWM frequency must be 15–400 Hz.', 'error'); return }
+        body.frequency = fr
+      }
+      const minD = Math.round(+f.minDutyCycle || 0)
+      if (minD < 0 || minD > 100) { toast('Min duty must be 0–100%.', 'error'); return }
+      body.minDutyCycle = minD
+      if (!f.variableDutyCycle) {
+        const duty = Math.round(+f.fixedDutyCycle || 0)
+        if (duty < 0 || duty > 100) { toast('Duty must be 0–100%.', 'error'); return }
+        if (duty < minD) { toast(`Duty (${duty}%) can't be below the min duty (${minD}%).`, 'error'); return }
+        body.fixedDutyCycle = duty
+      }
+    }
+    // Wiper: the speedMap selects + intermit times are arrays; coerce to ints so the enum[]/int[]
+    // backend binding gets numbers (a <select> value can arrive as a string).
+    if (editing.kind === 'wiper') {
+      body.speedMap = (f.speedMap ?? []).map((v) => Number(v) || 0)
+      body.intermitTime = (f.intermitTime ?? []).map((v) => Math.max(0, Math.round(+v || 0)))
+      body.washWipeCycles = Math.max(0, Math.round(+f.washWipeCycles || 0))
+    }
+    // Keypad master: node ID is a CANopen node (1–127); brightness fields clamp to the 0–63 hardware range.
+    if (editing.kind === 'keypad') {
+      const node = Math.trunc(+f.id)
+      if (!Number.isInteger(node) || node < 1 || node > 127) { toast('Keypad node ID must be 1–127.', 'error'); return }
+      body.id = node
+      const cl = (v) => Math.min(63, Math.max(0, Math.round(+v || 0)))
+      body.backlightBrightness = cl(f.backlightBrightness); body.dimBacklightBrightness = cl(f.dimBacklightBrightness)
+      body.buttonBrightness = cl(f.buttonBrightness); body.dimButtonBrightness = cl(f.dimButtonBrightness)
+    }
     // Only CAN kinds carry a hex frame id; keypad master's id is a plain decimal node id.
     if (editing.kind === 'caninput' || editing.kind === 'canoutput') {
       const id = parseInt(String(idHex).replace(/^0x/i, ''), 16)
@@ -402,6 +449,11 @@
       const max = f.ide ? 0x1FFFFFFF : 0x7FF
       if (id > max) { toast(`CAN ID 0x${id.toString(16).toUpperCase()} exceeds the ${f.ide ? '29' : '11'}-bit max (0x${max.toString(16).toUpperCase()}). ${id > 0x7FF ? 'Set Frame = Extended.' : ''}`, 'error'); return }
       body.id = id
+      // Validate the bit layout — start 0–63, length 1…(64−start) so the field stays inside the 8-byte frame.
+      const sb = Math.trunc(+f.startBit), bl = Math.trunc(+f.bitLength)
+      if (!Number.isInteger(sb) || sb < 0 || sb > 63) { toast('Start bit must be 0–63.', 'error'); return }
+      if (!Number.isInteger(bl) || bl < 1 || bl > 64 - sb) { toast(`Length must be 1–${64 - sb} for a start bit of ${sb}.`, 'error'); return }
+      body.startBit = sb; body.bitLength = bl
     }
     // Record/clear the cross-module link (feature B). Client-side only — this is what lets a
     // base-ID change later flag which CAN inputs need re-applying.
@@ -515,9 +567,13 @@
     f = { ...m, enabled: m.enabled }
     drawer = true
   }
+  // Pad a per-state LED array to exactly 4 entries so all 4 state rows bind cleanly.
+  const pad4 = (a, fill) => { const out = Array.isArray(a) ? a.slice(0, 4) : []; while (out.length < 4) out.push(fill); return out }
   function openButton(ki, b, isNew) {
     editing = { kind: 'keypadbutton', number: ki * 32 + b.number, isNew }
     f = JSON.parse(JSON.stringify({ ...b, enabled: true }))   // deep copy so array edits don't touch live state
+    f.valColors = pad4(f.valColors, 0); f.valVars = pad4(f.valVars, 0)
+    f.valBlink = pad4(f.valBlink, false); f.blinkColors = pad4(f.blinkColors, 0)
     drawer = true
   }
   function addButton(ki) {
@@ -552,7 +608,7 @@
           <div class="num">DO{o.number}</div>
           <div class="top">
             <span class="state {on ? 'on' : 'off'}" style={live ? '' : 'opacity:.65'}><span class="ic"></span>{on ? (o.pwmEnabled ? `ON · ${lv?.value ?? 0}%` : 'ON') : 'OFF'}</span>
-            <span class="nm">{o.name}{#if !o.enabled} <span class="muted" style="font-weight:400">· off</span>{/if}</span>
+            <span class="nm">{o.name}{#if !o.enabled}<span class="muted" style="font-weight:400">&nbsp;· off</span>{/if}</span>
           </div>
           <div class="rule-txt">
             {#if drv && drv !== '—' && drv !== 'None'}<span class="kw">ON when</span> <span class="sig">{drv}</span>{:else}<span class="muted">No driver set — tap to choose what switches it</span>{/if}
@@ -723,15 +779,25 @@
           <div class="field"><label>Frame</label><select bind:value={f.ide}><option value={false}>Standard (11-bit)</option><option value={true}>Extended (29-bit)</option></select></div>
         </div>
         <div class="f3">
-          <div class="field"><label>Start bit</label><input type="number" bind:value={f.startBit} /></div>
-          <div class="field"><label>Length</label><input type="number" bind:value={f.bitLength} /></div>
-          <div class="field"><label>Byte order</label><select bind:value={f.byteOrder}><option value={0}>Little-endian</option><option value={1}>Big-endian</option></select></div>
+          <div class="field"><label>Start bit</label><input type="number" min="0" max="63" bind:value={f.startBit} /></div>
+          <div class="field"><label>Length</label><input type="number" min="1" max="64" bind:value={f.bitLength} /></div>
+          <div class="field"><label>Byte order</label><select bind:value={f.byteOrder}><option value={0}>Little-endian (Intel)</option><option value={1}>Big-endian (Motorola)</option></select></div>
         </div>
         <div class="f3">
           <div class="field"><label>Factor</label><input type="number" step="any" bind:value={f.factor} /></div>
           <div class="field"><label>Offset</label><input type="number" step="any" bind:value={f.offset} /></div>
           <div class="field"><label>Signed</label><select bind:value={f.signed}><option value={false}>No</option><option value={true}>Yes</option></select></div>
         </div>
+        <p class="lbl" style="margin-top:14px">On/off output</p>
+        <div class="f3">
+          <div class="field"><label>Operator</label>
+            <select bind:value={f.operator}>{#each opTxt as o, i}<option value={i}>{o}</option>{/each}</select></div>
+          <div class="field"><label>Compare to</label><input type="number" step="any" bind:value={f.operand} /></div>
+          <div class="field"><label>Mode</label><select bind:value={f.mode}><option value={0}>Momentary</option><option value={1}>Latched</option></select></div>
+        </div>
+        <p class="hint">The signal's decoded value vs <b>Compare to</b> drives this CAN input's on/off output (use it anywhere as "{f.name || 'this input'}"). Latched holds on until re-triggered.</p>
+        <label class="chk"><input type="checkbox" bind:checked={f.timeoutEnabled} /> Fault if the frame stops arriving</label>
+        {#if f.timeoutEnabled}<div class="field" style="max-width:230px"><label>Timeout (ms)</label><input type="number" min="0" bind:value={f.timeout} /></div>{/if}
       {:else if editing.kind === 'input'}
         <label class="opt" style="border:0;padding-top:0"><input type="checkbox" bind:checked={f.enabled} /> Input enabled</label>
         <div class="field"><label>Name</label><input bind:value={f.name} /></div>
@@ -739,7 +805,7 @@
           <div class="field"><label>Mode</label><select bind:value={f.mode}><option value={0}>Momentary</option><option value={1}>Latched</option></select></div>
           <div class="field"><label>Pull resistor</label><select bind:value={f.pull}><option value={0}>None</option><option value={1}>Pull-up</option><option value={2}>Pull-down</option></select></div>
         </div>
-        <div class="field" style="max-width:230px"><label>Debounce (ms)</label><input type="number" bind:value={f.debounceTime} /></div>
+        <div class="field" style="max-width:230px"><label>Debounce (ms)</label><input type="number" min="0" bind:value={f.debounceTime} /></div>
         <label class="chk"><input type="checkbox" bind:checked={f.invert} /> Invert (treat low as "on")</label>
       {:else if editing.kind === 'condition'}
         <div class="field"><label>Name</label><input bind:value={f.name} /></div>
@@ -773,8 +839,8 @@
         <div class="field"><label>Driven by</label>
           <SearchSelect options={ssOpts(inputsBool, true)} bind:value={f.input} placeholder="Search signal…" onpick={(v) => enableSourceVar(v)} /></div>
         <div class="f2">
-          <div class="field"><label>On time (ms)</label><input type="number" bind:value={f.onTime} /></div>
-          <div class="field"><label>Off time (ms)</label><input type="number" bind:value={f.offTime} /></div>
+          <div class="field"><label>On time (ms)</label><input type="number" min="0" bind:value={f.onTime} /></div>
+          <div class="field"><label>Off time (ms)</label><input type="number" min="0" bind:value={f.offTime} /></div>
         </div>
         <label class="chk"><input type="checkbox" bind:checked={f.single} /> Single shot (one blink per trigger)</label>
       {:else if editing.kind === 'counter'}
@@ -785,10 +851,17 @@
           <div class="field"><label>Reset on</label><SearchSelect options={ssOpts(inputsBool, true)} bind:value={f.resetInput} placeholder="Search…" onpick={(v) => enableSourceVar(v)} /></div>
         </div>
         <div class="f3">
+          <div class="field"><label>Up edge</label><select bind:value={f.incEdge}>{#each edgeTxt as e, i}<option value={i}>{e}</option>{/each}</select></div>
+          <div class="field"><label>Down edge</label><select bind:value={f.decEdge}>{#each edgeTxt as e, i}<option value={i}>{e}</option>{/each}</select></div>
+          <div class="field"><label>Reset edge</label><select bind:value={f.resetEdge}>{#each edgeTxt as e, i}<option value={i}>{e}</option>{/each}</select></div>
+        </div>
+        <div class="f3">
           <div class="field"><label>Min</label><input type="number" bind:value={f.minCount} /></div>
           <div class="field"><label>Max</label><input type="number" bind:value={f.maxCount} /></div>
           <label class="chk" style="align-self:end"><input type="checkbox" bind:checked={f.wrapAround} /> Wrap</label>
         </div>
+        <label class="chk"><input type="checkbox" bind:checked={f.holdToReset} /> Hold to reset <span class="desc">reset only after the reset input is held</span></label>
+        {#if f.holdToReset}<div class="field" style="max-width:230px"><label>Hold time (ms)</label><input type="number" min="0" bind:value={f.resetTime} /></div>{/if}
       {:else if editing.kind === 'canoutput'}
         <div class="field"><label>Name</label><input bind:value={f.name} /></div>
         <div class="field"><label>Variable to send</label>
@@ -801,15 +874,58 @@
           <p class="hint" style="color:var(--warn)">⚠ CAN ID {idHex}{f.ide ? ' (ext)' : ''} is already transmitted by: <b>{idOwners.join('; ')}</b>. Two transmitters on one ID collide on the bus — pick a free ID.</p>
         {/if}
         <div class="f3">
-          <div class="field"><label>Start bit</label><input type="number" bind:value={f.startBit} /></div>
-          <div class="field"><label>Length</label><input type="number" bind:value={f.bitLength} /></div>
-          <div class="field"><label>Byte order</label><select bind:value={f.byteOrder}><option value={0}>Little-endian</option><option value={1}>Big-endian</option></select></div>
+          <div class="field"><label>Start bit</label><input type="number" min="0" max="63" bind:value={f.startBit} /></div>
+          <div class="field"><label>Length</label><input type="number" min="1" max="64" bind:value={f.bitLength} /></div>
+          <div class="field"><label>Byte order</label><select bind:value={f.byteOrder}><option value={0}>Little-endian (Intel)</option><option value={1}>Big-endian (Motorola)</option></select></div>
         </div>
         <div class="f3">
           <div class="field"><label>Factor</label><input type="number" step="any" bind:value={f.factor} /></div>
           <div class="field"><label>Offset</label><input type="number" step="any" bind:value={f.offset} /></div>
-          <div class="field"><label>Interval (ms)</label><input type="number" bind:value={f.interval} /></div>
+          <div class="field"><label>Signed</label><select bind:value={f.signed}><option value={false}>No</option><option value={true}>Yes</option></select></div>
         </div>
+        <div class="field" style="max-width:230px"><label>Interval (ms)</label><input type="number" min="0" bind:value={f.interval} /></div>
+      {:else if editing.kind === 'wiper'}
+        <label class="opt" style="border:0;padding-top:0"><input type="checkbox" bind:checked={f.enabled} /> Wiper enabled</label>
+        <div class="field"><label>Name</label><input bind:value={f.name} /></div>
+        <div class="field" style="max-width:260px"><label>Control mode</label>
+          <select bind:value={f.mode}>{#each wiperModeTxt as m, i}<option value={i}>{m}</option>{/each}</select></div>
+        <p class="hint" style="margin-top:-4px">Digital inputs = discrete slow/fast/inter lines; Intermittent input = one speed selector; Mixed = both.</p>
+
+        <p class="lbl" style="margin-top:14px">Drive inputs</p>
+        <div class="f3">
+          <div class="field"><label>On</label><SearchSelect options={ssOpts(inputsBool, true)} bind:value={f.onInput} placeholder="Search…" onpick={(v) => enableSourceVar(v)} /></div>
+          <div class="field"><label>Slow</label><SearchSelect options={ssOpts(inputsBool, true)} bind:value={f.slowInput} placeholder="Search…" onpick={(v) => enableSourceVar(v)} /></div>
+          <div class="field"><label>Fast</label><SearchSelect options={ssOpts(inputsBool, true)} bind:value={f.fastInput} placeholder="Search…" onpick={(v) => enableSourceVar(v)} /></div>
+        </div>
+        <div class="f3">
+          <div class="field"><label>Intermittent</label><SearchSelect options={ssOpts(inputsBool, true)} bind:value={f.interInput} placeholder="Search…" onpick={(v) => enableSourceVar(v)} /></div>
+          <div class="field"><label>Speed selector</label><SearchSelect options={ssOpts(inputsAll, true)} bind:value={f.speedInput} placeholder="Search value…" onpick={(v) => enableSourceVar(v)} /></div>
+          <div class="field"><label>Swipe (single)</label><SearchSelect options={ssOpts(inputsBool, true)} bind:value={f.swipeInput} placeholder="Search…" onpick={(v) => enableSourceVar(v)} /></div>
+        </div>
+
+        <p class="lbl" style="margin-top:14px">Park &amp; wash</p>
+        <div class="f3">
+          <div class="field"><label>Park signal</label><SearchSelect options={ssOpts(inputsBool, true)} bind:value={f.parkInput} placeholder="Search…" onpick={(v) => enableSourceVar(v)} /></div>
+          <div class="field"><label>Wash</label><SearchSelect options={ssOpts(inputsBool, true)} bind:value={f.washInput} placeholder="Search…" onpick={(v) => enableSourceVar(v)} /></div>
+          <div class="field"><label>Wash-wipe cycles</label><input type="number" min="0" max="20" bind:value={f.washWipeCycles} /></div>
+        </div>
+        <label class="chk"><input type="checkbox" bind:checked={f.parkStopLevel} /> Park stop on HIGH level <span class="desc">otherwise parks on the low edge of the park signal</span></label>
+
+        <p class="lbl" style="margin-top:14px">Intermittent dwell times (ms)</p>
+        <div class="f3">
+          {#each [0, 1, 2, 3, 4, 5] as i}
+            <div class="field"><label>Inter {i + 1}</label><input type="number" min="0" bind:value={f.intermitTime[i]} /></div>
+          {/each}
+        </div>
+
+        <p class="lbl" style="margin-top:14px">Speed map <span style="text-transform:none;letter-spacing:0;font-weight:500;color:var(--muted)">— the wiper speed each selector position commands</span></p>
+        <div class="f3">
+          {#each [0, 1, 2, 3, 4, 5, 6, 7] as i}
+            <div class="field"><label>Pos {i}</label>
+              <select bind:value={f.speedMap[i]}>{#each wiperSpeedTxt as s, si}<option value={si}>{s}</option>{/each}</select></div>
+          {/each}
+        </div>
+        <p class="hint">Positions 0–7 of the speed selector map to these wiper speeds. The intermittent positions use the dwell times above.</p>
       {:else if editing.kind === 'digitaloutput'}
         <label class="opt" style="border:0;padding-top:0"><input type="checkbox" bind:checked={f.enabled} /> Output enabled</label>
         <div class="field"><label>Name</label><input bind:value={f.name} /></div>
@@ -831,15 +947,15 @@
               <div class="field"><label>Freq source</label>
                 <SearchSelect options={ssOpts(inputsNum, true)} bind:value={f.freqInput} placeholder="Search value…" onpick={(v) => { autoEnableOutput(); enableSourceVar(v) }} /></div>
             {:else}
-              <div class="field"><label>Freq (Hz)</label><input type="number" bind:value={f.frequency} /></div>
+              <div class="field"><label>Freq (Hz)</label><input type="number" min="15" max="400" bind:value={f.frequency} title="PWM frequency, 15–400 Hz. For dimming lights, 100–500 Hz is flicker-free (200 Hz is a good all-rounder for LED and incandescent). Below 15 Hz the output stops; above 400 Hz the firmware ignores the change." /></div>
             {/if}
             {#if f.variableDutyCycle}
               <div class="field"><label>Duty source</label>
                 <SearchSelect options={ssOpts(inputsNum, true)} bind:value={f.dutyCycleInput} placeholder="Search value…" onpick={(v) => { autoEnableOutput(); enableSourceVar(v) }} /></div>
             {:else}
-              <div class="field"><label>Duty (%)</label><input type="number" bind:value={f.fixedDutyCycle} /></div>
+              <div class="field"><label>Duty (%)</label><input type="number" min="0" max="100" bind:value={f.fixedDutyCycle} /></div>
             {/if}
-            <div class="field"><label>Min duty (%)</label><input type="number" bind:value={f.minDutyCycle} /></div>
+            <div class="field"><label>Min duty (%)</label><input type="number" min="0" max="100" bind:value={f.minDutyCycle} /></div>
           </div>
           {#if f.variableDutyCycle}
             <div class="field" style="max-width:260px"><label>Signal value at 100% duty</label>
@@ -854,7 +970,7 @@
           {/if}
         {/if}
         <label class="opt"><input type="checkbox" bind:checked={f.softStartEnabled} /> Soft start <span class="desc">ramp up on turn-on</span></label>
-        <div class="field" style="max-width:230px"><label>Soft-start ramp (ms)</label><input type="number" bind:value={f.softStartRampTime} /></div>
+        <div class="field" style="max-width:230px"><label>Soft-start ramp (ms)</label><input type="number" min="0" bind:value={f.softStartRampTime} /></div>
         {#if f.softStartEnabled && f.variableDutyCycle}
           <label class="opt"><input type="checkbox" bind:checked={f.rampDutyChanges} /> Ramp duty changes <span class="desc">slew on every change, not just turn-on — a full 0–100% takes the soft-start ramp time</span></label>
         {/if}
@@ -964,7 +1080,7 @@
         <div class="field"><label>Name</label><input bind:value={f.name} /></div>
         <div class="f2">
           <div class="field"><label>Model</label><select bind:value={f.model}>{#each MODELS as [v, l]}<option value={v}>{l}</option>{/each}</select></div>
-          <div class="field"><label>Keypad node ID</label><input type="number" bind:value={f.id} /></div>
+          <div class="field"><label>Keypad node ID</label><input type="number" min="1" max="127" bind:value={f.id} /></div>
         </div>
 
         <p class="lbl" style="margin-top:14px">Backlight &amp; LEDs</p>
@@ -989,12 +1105,28 @@
       {:else if editing.kind === 'keypadbutton'}
         <div class="field"><label>Name</label><input bind:value={f.name} /></div>
         <div class="field"><label>Action</label><select bind:value={f.mode}><option value={0}>Momentary</option><option value={1}>Latched</option></select></div>
-        <div class="f2">
-          <div class="field"><label>LED colour</label><select bind:value={f.valColors[0]}>{#each COLORS as c, i}<option value={i}>{c}</option>{/each}</select></div>
-          <div class="field"><label>LED shows</label><select bind:value={f.valVars[0]}><option value={0}>—</option>{#each inputsBool as v}<option value={v.index}>{v.name}</option>{/each}</select></div>
+        <p class="lbl" style="margin-top:14px">LED states <span style="text-transform:none;letter-spacing:0;font-weight:500;color:var(--muted)">— up to 4 prioritised states; the first whose signal is true wins</span></p>
+        {#each [0, 1, 2, 3] as i}
+          <div class="f3" style="align-items:end;margin-bottom:6px">
+            <div class="field" style="margin:0"><label>State {i} colour</label>
+              <select bind:value={f.valColors[i]}>{#each COLORS as c, ci}<option value={ci}>{c}</option>{/each}</select></div>
+            <div class="field" style="margin:0"><label>Shows</label>
+              <select bind:value={f.valVars[i]}><option value={0}>—</option>{#each inputsBool as v}<option value={v.index}>{v.name}</option>{/each}</select></div>
+            <div class="field" style="margin:0"><label>Blink</label>
+              <div style="display:flex;align-items:center;gap:8px">
+                <input type="checkbox" bind:checked={f.valBlink[i]} aria-label={`State ${i} blink`} />
+                <select bind:value={f.blinkColors[i]} disabled={!f.valBlink[i]} title={f.valBlink[i] ? 'Alternate (blink) colour' : 'Enable blink first'} style="flex:1;min-width:0">{#each COLORS as c, ci}<option value={ci}>{c}</option>{/each}</select>
+              </div></div>
+          </div>
+        {/each}
+        <p class="lbl" style="margin-top:14px">Fault LED</p>
+        <div class="f3" style="align-items:end">
+          <div class="field" style="margin:0"><label>Fault colour</label><select bind:value={f.faultColor}>{#each COLORS as c, i}<option value={i}>{c}</option>{/each}</select></div>
+          <div class="field" style="margin:0"><label>Fault blink</label>
+            <div style="display:flex;align-items:center;gap:8px;padding-top:8px"><input type="checkbox" bind:checked={f.faultBlink} aria-label="Fault blink" /></div></div>
+          <div class="field" style="margin:0"><label>Fault blink colour</label><select bind:value={f.faultBlinkColor} disabled={!f.faultBlink} title={f.faultBlink ? '' : 'Enable fault blink first'}>{#each COLORS as c, i}<option value={i}>{c}</option>{/each}</select></div>
         </div>
-        <div class="field"><label>Fault colour</label><select bind:value={f.faultColor}>{#each COLORS as c, i}<option value={i}>{c}</option>{/each}</select></div>
-        <p class="hint">The button is usable as an input anywhere (Outputs, Conditions) under its name. The LED mirrors the "LED shows" signal in the chosen colour.</p>
+        <p class="hint">The button is usable as an input anywhere (Outputs, Conditions) under its name. When blink is on, the LED alternates the state colour with its blink colour. State 0 is the default; 1–3 take priority in order.</p>
       {/if}
 
       {#if editing && hasLua && editing.kind !== 'keypad' && editing.kind !== 'keypadbutton'}
@@ -1021,7 +1153,9 @@
   table.ladder { width: 100%; border-collapse: collapse; margin: 10px 0; font-size: 13px; }
   table.ladder th, table.ladder td { text-align: left; padding: 4px 6px; border-bottom: 1px solid var(--line-2, #e0e0e8); }
   table.ladder th { color: var(--muted); font-weight: 600; }
-  table.ladder input { width: 90px; }
+  /* Numeric columns (everything past the first label column) right-align with tabular figures. */
+  table.ladder th:not(:first-child), table.ladder td:not(:first-child) { text-align: right; font-variant-numeric: tabular-nums; }
+  table.ladder input { width: 90px; text-align: right; font-variant-numeric: tabular-nums; }
   .hint.warn { color: var(--err, #d32f2f); font-weight: 500; }
   tr.activepos td { background: color-mix(in srgb, var(--ok, #2a9d8f) 18%, transparent); font-weight: 600; }
   tr.calrow td { background: color-mix(in srgb, var(--accent, #594ae2) 16%, transparent); }

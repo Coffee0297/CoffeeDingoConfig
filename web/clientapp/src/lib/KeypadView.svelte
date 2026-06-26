@@ -4,7 +4,7 @@
   import { dialog, labelFields, clickable } from './a11y.js'
   let { device, devices = [] } = $props()
 
-  const hex = (n) => '0x' + (n ?? 0).toString(16).toUpperCase()
+  const hex = (n) => '0x' + (n ?? 0).toString(16).toUpperCase().padStart(3, '0')
   const COLORS = ['Off', 'Red', 'Green', 'Orange', 'Blue', 'Violet', 'Cyan', 'White']
   const swatch = ['#37474f', '#d32f2f', '#2e7d32', '#ff9800', '#1565c0', '#7e57c2', '#26c6da', '#eceff1']
   // button count per keypad model id (from the original GetDimensionsForModel)
@@ -46,7 +46,14 @@
 
   // editor
   let editing = $state(null), f = $state({}), saving = $state(false)
-  function edit(b) { editing = b; f = JSON.parse(JSON.stringify(b)); }
+  // Normalise a per-state array to exactly 4 entries so the 4 LED-state rows always bind cleanly.
+  const pad4 = (a, fill) => { const out = Array.isArray(a) ? a.slice(0, 4) : []; while (out.length < 4) out.push(fill); return out }
+  function edit(b) {
+    editing = b
+    f = JSON.parse(JSON.stringify(b))
+    f.valColors = pad4(f.valColors, 0); f.valVars = pad4(f.valVars, 0)
+    f.valBlink = pad4(f.valBlink, false); f.blinkColors = pad4(f.blinkColors, 0)
+  }
   const varName = (idx) => inputsBool.find((v) => v.index === idx)?.name ?? (idx ? `#${idx}` : '—')
   async function save() {
     if (!ctrl || !editing) return
@@ -97,10 +104,15 @@
     const max = size >= 4 ? 0xFFFFFFFF : (2 ** (size * 8) - 1)
     if (v > max) { sdoMsg = `${v} doesn't fit in ${size} byte${size > 1 ? 's' : ''} (max ${max}). Pick a larger size or a smaller value.`; return }
     if (!confirm(`Write ${v} (0x${v.toString(16).toUpperCase()}, ${size} byte${size > 1 ? 's' : ''}) to ${exIdx}:${exSub} on node ${node}? Wrong object-dictionary writes can change the keypad's node id or baud rate.`)) return
+    const idx = parseInt(String(exIdx).replace(/^0x/i, ''), 16)
+    // Blink Marine PKP node-id (0x2110) / bitrate (0x2111) — changing these re-homes the keypad on
+    // the bus, so `node` (derived from device.baseId) goes stale and later SDOs target the old node.
+    const reHomes = idx === 0x2110 || idx === 0x2111
     sdoBusy = true; sdoMsg = ''
     try {
-      const r = await api.sdoWrite(node, parseInt(String(exIdx).replace(/^0x/i, ''), 16), Number(exSub), v >>> 0, size)
+      const r = await api.sdoWrite(node, idx, Number(exSub), v >>> 0, size)
       sdoMsg = r.ok ? 'Write OK' : ('Write failed: ' + (r.error || 'abort 0x' + (r.abort >>> 0).toString(16)))
+      if (r.ok && reHomes) toast('Node ID / baud changed — rediscover the keypad so later writes target the new node.', 'info', 8000)
     } catch (e) { sdoMsg = 'Write failed: ' + e.message }
     finally { sdoBusy = false }
   }
@@ -196,12 +208,29 @@
       <label class="opt" style="border:0;padding-top:0"><input type="checkbox" bind:checked={f.enabled} /> Button enabled <span class="desc">usable as an input under its name</span></label>
       <div class="field"><label>Name</label><input bind:value={f.name} /></div>
       <div class="field"><label>Action</label><select bind:value={f.mode}><option value={0}>Momentary</option><option value={1}>Toggle</option></select></div>
-      <p class="lbl" style="margin-top:14px">LED (output)</p>
-      <div class="f2">
-        <div class="field"><label>Colour</label><select bind:value={f.valColors[0]}>{#each COLORS as c, i}<option value={i}>{c}</option>{/each}</select></div>
-        <div class="field"><label>Shows</label><select bind:value={f.valVars[0]}><option value={0}>—</option>{#each inputsBool as v}<option value={v.index}>{v.name}</option>{/each}</select></div>
+      <p class="lbl" style="margin-top:14px">LED states <span style="text-transform:none;letter-spacing:0;font-weight:500;color:var(--muted)">— up to 4 prioritised states; the first whose signal is true wins</span></p>
+      {#each [0, 1, 2, 3] as i}
+        <div class="f3" style="align-items:end;margin-bottom:6px">
+          <div class="field" style="margin:0"><label>State {i} colour</label>
+            <select bind:value={f.valColors[i]}>{#each COLORS as c, ci}<option value={ci}>{c}</option>{/each}</select></div>
+          <div class="field" style="margin:0"><label>Shows</label>
+            <select bind:value={f.valVars[i]}><option value={0}>—</option>{#each inputsBool as v}<option value={v.index}>{v.name}</option>{/each}</select></div>
+          <div class="field" style="margin:0"><label>Blink</label>
+            <div style="display:flex;align-items:center;gap:8px">
+              <input type="checkbox" bind:checked={f.valBlink[i]} aria-label={`State ${i} blink`} />
+              <select bind:value={f.blinkColors[i]} disabled={!f.valBlink[i]} title={f.valBlink[i] ? 'Alternate (blink) colour' : 'Enable blink first'} style="flex:1;min-width:0">{#each COLORS as c, ci}<option value={ci}>{c}</option>{/each}</select>
+            </div></div>
+        </div>
+      {/each}
+      <p class="hint" style="margin-top:0">When blink is on, the LED alternates between the state colour and the blink colour. State 0 is the default; states 1–3 take priority in order when their signals are true.</p>
+
+      <p class="lbl" style="margin-top:14px">Fault LED</p>
+      <div class="f3" style="align-items:end">
+        <div class="field" style="margin:0"><label>Fault colour</label><select bind:value={f.faultColor}>{#each COLORS as c, i}<option value={i}>{c}</option>{/each}</select></div>
+        <div class="field" style="margin:0"><label>Fault blink</label>
+          <div style="display:flex;align-items:center;gap:8px;padding-top:8px"><input type="checkbox" bind:checked={f.faultBlink} aria-label="Fault blink" /></div></div>
+        <div class="field" style="margin:0"><label>Fault blink colour</label><select bind:value={f.faultBlinkColor} disabled={!f.faultBlink} title={f.faultBlink ? '' : 'Enable fault blink first'}>{#each COLORS as c, i}<option value={i}>{c}</option>{/each}</select></div>
       </div>
-      <div class="field"><label>Fault colour</label><select bind:value={f.faultColor}>{#each COLORS as c, i}<option value={i}>{c}</option>{/each}</select></div>
       <p class="hint">Saved to {ctrl?.name}'s keypad map. Press <b>Burn</b> on the PDM to persist.</p>
     </div>
     <div class="dfoot"><span class="res">button {editing.number}</span><span style="margin-left:auto"></span>
