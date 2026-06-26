@@ -32,6 +32,7 @@
     condition: { input: 'In', out: 'Output' },
     counter: { incInput: 'Count +', decInput: 'Count −', resetInput: 'Reset', out: 'Count' },
     flasher: { input: 'Trigger', out: 'Output' }, canoutput: { input: 'Value' },
+    analogin: { value: 'Raw ADC', mv: 'mV', pos: 'Position', switch: 'Switch', scaled: 'Scaled' },
     digin: { out: 'State' }, sys: { out: '' }, lua: { out: 'Out' },
     kpbtn: { out: 'Pressed' }, kpdial: { out: 'Value' }, kpain: { out: 'Value' }, remote: { out: 'Signal' },
   }
@@ -62,7 +63,7 @@
     P('sys:0', 'out', 'None'); P('sys:1', 'out', 'Always On'); P('sys:2', 'out', 'State')
     ;diginArr().forEach((c, k) => P('digin:' + (k + 1), 'out', c.name))
     ;(funcs?.analogIn ?? []).forEach((c, k) => { const id = 'analogin:' + (k + 1), n = c.name
-      P(id, 'value', n + ' Value'); P(id, 'mv', n + ' Value Millivolts'); P(id, 'pos', n + ' Rotary Position'); P(id, 'switch', n + ' Switch Value'); P(id, 'scaled', n + ' Scaled Value') })
+      P(id, 'value', n + ' Raw ADC'); P(id, 'mv', n + ' Millivolts'); P(id, 'pos', n + ' Rotary Position'); P(id, 'switch', n + ' Switch Value'); P(id, 'scaled', n + ' Scaled Value') })
     ;(device?.outputs ?? []).forEach((o) => P('output:' + o.number, 'on', o.name?.trim() ? o.name : 'output' + o.number))
     ;(funcs?.canInputs ?? []).forEach((c, k) => { const id = 'caninput:' + (k + 1); P(id, 'state', c.name); P(id, 'value', c.name + ' Value') })
     ;(funcs?.virtualInputs ?? []).forEach((c, k) => P('virtualinput:' + (k + 1), 'out', c.name))

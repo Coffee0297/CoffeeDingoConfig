@@ -434,7 +434,7 @@ public class CanboardDevice : IDeviceConfigurable
                 VarMap.Add(new DeviceVariable
                 {
                     GetName  = () => AnalogInputs[num].Name,
-                    PropertyName = "Value",
+                    PropertyName = "Raw ADC",
                     DataType = "float",
                     VariableIndex = index++,
                     SingleVariable = false
@@ -442,7 +442,7 @@ public class CanboardDevice : IDeviceConfigurable
                 VarMap.Add(new DeviceVariable
                 {
                     GetName  = () => AnalogInputs[num].Name,
-                    PropertyName = "Value Millivolts",
+                    PropertyName = "Millivolts",
                     DataType = "float",
                     VariableIndex = index++,
                     SingleVariable = false
