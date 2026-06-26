@@ -297,12 +297,19 @@
     try { await api.remove(g); if (scopeGuid === g) scopeGuid = null } catch (e) { toast(e.message, 'error') }
   }
   // Burn permanently writes the in-app config to the module's flash — confirm + feedback.
+  // It first deploys (writes) the in-app config so what you see is what gets persisted: a 'burn'
+  // alone only saves whatever is currently in the module's RAM, which would drop edits you never
+  // pressed Deploy for. write-then-burn makes Burn a safe one-click "save permanently".
   let burning = $state(false)
   async function burn() {
     if (!current || burning) return
-    if (!confirm(`Burn the current config to "${current.name}"? This writes it permanently to the module's flash.`)) return
+    if (!confirm(`Burn the current config to "${current.name}"? This deploys your changes, then writes them permanently to the module's flash.`)) return
     burning = true
-    try { await api.action(current.guid, 'burn'); toast(`Burned to ${current.name}`, 'ok') }
+    try {
+      await api.action(current.guid, 'write')   // deploy in-app config first so the burn captures it
+      await api.action(current.guid, 'burn')
+      toast(`Deployed & burned to ${current.name}`, 'ok')
+    }
     catch (e) { toast('Burn failed: ' + e.message, 'error') } finally { burning = false }
   }
   // 'read'/'write' = bulk modified-param sync (one fast burst, CRC-checked) — the proven
