@@ -194,7 +194,7 @@ public static class DingoMap
         if (d is PdmDevice p)
         {
             var outs = p.Outputs.Select(o => new OutputDto(
-                o.Number, o.Name, o.State.ToString(), o.Current, o.ResetCount, o.CurrentDutyCycle, InputLabel(p, o.Input), o.CurrentLimit,
+                o.Number, o.Name, o.State.ToString(), o.Current, o.ResetCount, Math.Clamp(o.CurrentDutyCycle, 0, 100), InputLabel(p, o.Input), o.CurrentLimit,
                 o.Enabled, o.Input, o.InrushCurrentLimit, o.InrushTime, (int)o.ResetMode, o.ResetTime, o.ResetCountLimit,
                 o.PwmEnabled, o.Frequency, o.FixedDutyCycle, o.MinDutyCycle, o.SoftStartEnabled, o.SoftStartRampTime,
                 o.WarnLimit, o.OpenLoadLimit, o.OpenLoadTime, o.WireColor, o.WireStripe, o.WireLength, o.WireGaugeMm2)).ToArray();
@@ -974,7 +974,9 @@ public static class LiveApi
                     s.Add(new("Analog switch", a.Name + " Switch", a.Switch.State ? "on" : "off", a.Switch.State));
                 }
                 foreach (var i in cb.DigitalInputs) s.Add(new("Digital input", i.Name, i.State ? "on" : "off", i.State));
-                foreach (var o in cb.DigitalOutputs) s.Add(new("Digital output", o.Name, o.State ? "on" : "off", o.State));
+                // PWM outputs report their live duty as the value (so the UI can show "ON · 45%");
+                // plain on/off outputs keep the textual state.
+                foreach (var o in cb.DigitalOutputs) s.Add(new("Digital output", o.Name, o.PwmEnabled ? Math.Clamp((int)o.CurrentDutyCycle, 0, 100).ToString() : (o.State ? "on" : "off"), o.State));
                 foreach (var c in cb.CanInputs) s.Add(new("CAN input", c.Name, c.Value.ToString(), c.Value != 0));
                 foreach (var v in cb.VirtualInputs) s.Add(new("Virtual input", v.Name, v.Value ? "on" : "off", v.Value));
                 foreach (var c in cb.Conditions) s.Add(new("Condition", c.Name, c.Value.ToString(), c.Value != 0));

@@ -493,7 +493,7 @@
             <div class="card" use:clickable aria-label={'Configure ' + (o.name?.trim() ? o.name : 'output ' + o.number)} onclick={() => (editNum = o.number)}>
               <div class="num">O{o.number}</div>
               <div class="top">
-                <span class="state {sc(o.state)}"><span class="ic"></span>{stT(o.state)}</span>
+                <span class="state {sc(o.state)}"><span class="ic"></span>{stT(o.state)}{#if o.pwmEnabled && o.state === 'On'} · {o.duty}%{/if}</span>
                 <span class="nm">{o.name?.trim() ? o.name : 'Output ' + o.number}</span>
                 <span class="amp">{(o.current ?? 0).toFixed(1)} <span class="amp-lim">/ {o.currentLimit} A</span></span>
               </div>

@@ -134,9 +134,17 @@
     const ci = id.indexOf(':'); const kind = ci < 0 ? id : id.slice(0, ci); const k1 = parseInt(id.slice(ci + 1), 10) || 0
     if (kind === 'output') {
       const o = (device?.outputs ?? []).find((x) => x.number === k1)
-      if (!o) return { values: {}, status: null }
-      return { status: { text: String(o.state ?? '').toUpperCase(), tone: o.state },
-        values: { on: String(o.state ?? ''), current: (o.current ?? 0).toFixed(1) } }   // unit lives in the label "Current (A)"
+      if (o) {   // PDM smart output — state + current from device telemetry
+        const pwm = o.pwmEnabled && o.state === 'On'
+        return { status: { text: String(o.state ?? '').toUpperCase() + (pwm ? ` · ${o.duty}%` : ''), tone: o.state },
+          values: { on: String(o.state ?? ''), current: (o.current ?? 0).toFixed(1) } }   // unit lives in the label "Current (A)"
+      }
+      // CANBoard low-side output — live state (and PWM duty) come from the named signal poll.
+      const cfg = funcs?.digitalOut?.[k1 - 1]; const s = cfg ? liveSig[cfg.name] : null
+      if (!s) return { values: {}, status: null }
+      const dutyTxt = cfg.pwmEnabled ? ` · ${s.value}%` : ''
+      return { status: { text: (s.on ? 'ON' : 'OFF') + (s.on ? dutyTxt : ''), tone: s.on ? 'On' : '' },
+        values: { on: s.on ? 'on' : 'off' } }
     }
     if (kind === 'digin') {
       const nm = diginArr()[k1 - 1]?.name; const s = nm ? liveSig[nm] : null

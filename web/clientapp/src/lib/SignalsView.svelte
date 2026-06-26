@@ -300,6 +300,33 @@
   }
   function close() { drawer = false; editing = null; driverReturn = null }
 
+  // Auto-enable the output being edited as soon as its settings are configured (toast on the flip).
+  function autoEnableOutput() {
+    if ((editing?.kind === 'output' || editing?.kind === 'digitaloutput') && f.enabled === false) {
+      f.enabled = true
+      toast(`Output ${editing.number} enabled — you configured it`, 'ok')
+    }
+  }
+  // A chosen source produces nothing if its function is disabled — enable it (+ toast). Maps the
+  // chosen VarMap index back to its function by matching the var label to a function name.
+  const SRC_ARRS = [['inputs', 'input'], ['digitalIn', 'input'], ['analogIn', 'analoginput'], ['canInputs', 'caninput'], ['virtualInputs', 'virtualinput'], ['conditions', 'condition'], ['counters', 'counter'], ['flashers', 'flasher']]
+  async function enableSourceVar(idx) {
+    idx = Number(idx)
+    if (!idx || !current) return
+    const label = inputsAll.find((v) => v.index === idx)?.name
+    if (!label) return
+    for (const [arr, kind] of SRC_ARRS) {
+      const fn = (funcs?.[arr] ?? []).find((x) => label === x.name || label.startsWith(x.name + ' '))
+      if (fn) {
+        if (fn.enabled === false) {
+          try { await api.setFunction(current.guid, kind, fn.number, { enabled: true }); fn.enabled = true; toast(`Enabled "${fn.name}" — it was off`, 'ok') }
+          catch (e) { toast('Could not enable source: ' + e.message, 'error') }
+        }
+        return
+      }
+    }
+  }
+
   // ---- "Build a rule" from an output's Driven-by ----
   // Open the full Condition / Virtual-input editor, then return to the output and point it at the
   // new logic var. driverReturn stashes the in-progress output edit so the detour doesn't lose it.
@@ -483,7 +510,7 @@
         <div class="card" use:clickable aria-label={'Configure ' + o.name} onclick={() => openEdit(meta('digitaloutput'), o)}>
           <div class="num">DO{o.number}</div>
           <div class="top">
-            <span class="state {on ? 'on' : 'off'}" style={live ? '' : 'opacity:.65'}><span class="ic"></span>{on ? 'ON' : 'OFF'}</span>
+            <span class="state {on ? 'on' : 'off'}" style={live ? '' : 'opacity:.65'}><span class="ic"></span>{on ? (o.pwmEnabled ? `ON · ${lv?.value ?? 0}%` : 'ON') : 'OFF'}</span>
             <span class="nm">{o.name}{#if !o.enabled} <span class="muted" style="font-weight:400">· off</span>{/if}</span>
           </div>
           <div class="rule-txt">
@@ -657,7 +684,7 @@
       {:else if editing.kind === 'condition'}
         <div class="field"><label>Name</label><input bind:value={f.name} /></div>
         <div class="field"><label>Signal</label>
-          <select bind:value={f.input}>{#each inputsAll as v}<option value={v.index}>{v.name}</option>{/each}</select></div>
+          <select bind:value={f.input} onchange={() => enableSourceVar(f.input)}>{#each inputsAll as v}<option value={v.index}>{v.name}</option>{/each}</select></div>
         <div class="f2">
           <div class="field"><label>Operator</label>
             <select bind:value={f.operator}>{#each opTxt as o, i}<option value={i}>{o}</option>{/each}</select></div>
@@ -677,14 +704,14 @@
           <div class="f3" style="align-items:end">
             <label class="chk"><input type="checkbox" bind:checked={f['not' + i]} /> NOT</label>
             <div class="field"><label>Signal {i + 1}</label>
-              <select bind:value={f['var' + i]}><option value={0}>—</option>{#each inputsBool as v}<option value={v.index}>{v.name}</option>{/each}</select></div>
+              <select bind:value={f['var' + i]} onchange={() => enableSourceVar(f['var' + i])}><option value={0}>—</option>{#each inputsBool as v}<option value={v.index}>{v.name}</option>{/each}</select></div>
             {#if i < 2}<div class="field"><label>Join</label><select bind:value={f['cond' + i]}>{#each condTxt as c, ci}<option value={ci}>{c}</option>{/each}</select></div>{:else}<div></div>{/if}
           </div>
         {/each}
       {:else if editing.kind === 'flasher'}
         <div class="field"><label>Name</label><input bind:value={f.name} /></div>
         <div class="field"><label>Driven by</label>
-          <select bind:value={f.input}><option value={0}>—</option>{#each inputsBool as v}<option value={v.index}>{v.name}</option>{/each}</select></div>
+          <select bind:value={f.input} onchange={() => enableSourceVar(f.input)}><option value={0}>—</option>{#each inputsBool as v}<option value={v.index}>{v.name}</option>{/each}</select></div>
         <div class="f2">
           <div class="field"><label>On time (ms)</label><input type="number" bind:value={f.onTime} /></div>
           <div class="field"><label>Off time (ms)</label><input type="number" bind:value={f.offTime} /></div>
@@ -693,9 +720,9 @@
       {:else if editing.kind === 'counter'}
         <div class="field"><label>Name</label><input bind:value={f.name} /></div>
         <div class="f3">
-          <div class="field"><label>Count up on</label><select bind:value={f.incInput}><option value={0}>—</option>{#each inputsBool as v}<option value={v.index}>{v.name}</option>{/each}</select></div>
-          <div class="field"><label>Count down on</label><select bind:value={f.decInput}><option value={0}>—</option>{#each inputsBool as v}<option value={v.index}>{v.name}</option>{/each}</select></div>
-          <div class="field"><label>Reset on</label><select bind:value={f.resetInput}><option value={0}>—</option>{#each inputsBool as v}<option value={v.index}>{v.name}</option>{/each}</select></div>
+          <div class="field"><label>Count up on</label><select bind:value={f.incInput} onchange={() => enableSourceVar(f.incInput)}><option value={0}>—</option>{#each inputsBool as v}<option value={v.index}>{v.name}</option>{/each}</select></div>
+          <div class="field"><label>Count down on</label><select bind:value={f.decInput} onchange={() => enableSourceVar(f.decInput)}><option value={0}>—</option>{#each inputsBool as v}<option value={v.index}>{v.name}</option>{/each}</select></div>
+          <div class="field"><label>Reset on</label><select bind:value={f.resetInput} onchange={() => enableSourceVar(f.resetInput)}><option value={0}>—</option>{#each inputsBool as v}<option value={v.index}>{v.name}</option>{/each}</select></div>
         </div>
         <div class="f3">
           <div class="field"><label>Min</label><input type="number" bind:value={f.minCount} /></div>
@@ -705,7 +732,7 @@
       {:else if editing.kind === 'canoutput'}
         <div class="field"><label>Name</label><input bind:value={f.name} /></div>
         <div class="field"><label>Variable to send</label>
-          <select bind:value={f.input}>{#each inputsAll as v}<option value={v.index}>{v.name}</option>{/each}</select></div>
+          <select bind:value={f.input} onchange={() => enableSourceVar(f.input)}>{#each inputsAll as v}<option value={v.index}>{v.name}</option>{/each}</select></div>
         <div class="f2">
           <div class="field"><label>CAN ID</label><input bind:value={idHex} /></div>
           <div class="field"><label>Frame</label><select bind:value={f.ide}><option value={false}>Standard</option><option value={true}>Extended</option></select></div>
@@ -724,7 +751,7 @@
         <label class="opt" style="border:0;padding-top:0"><input type="checkbox" bind:checked={f.enabled} /> Output enabled</label>
         <div class="field"><label>Name</label><input bind:value={f.name} /></div>
         <div class="field"><label>Driven by</label>
-          <select bind:value={f.input}><option value={0}>—</option>{#each inputsBool as v}<option value={v.index}>{v.name}</option>{/each}</select></div>
+          <select bind:value={f.input} onchange={() => { autoEnableOutput(); enableSourceVar(f.input) }}><option value={0}>—</option>{#each inputsBool as v}<option value={v.index}>{v.name}</option>{/each}</select></div>
         <div style="display:flex;gap:14px;margin:-2px 0 2px">
           {#if funcs?.conditions}<button type="button" class="linkbtn" onclick={() => buildRule('condition')}>＋ Comparison (analog &gt; value)</button>{/if}
           {#if funcs?.virtualInputs}<button type="button" class="linkbtn" onclick={() => buildRule('virtualinput')}>＋ Combination (A AND B)</button>{/if}
@@ -732,20 +759,20 @@
         <p class="hint">Pick a signal above, or build a rule: a <b>Comparison</b> turns on when a signal crosses a value; a <b>Combination</b> ANDs/ORs several signals. Either becomes a new source you can drive this output from.</p>
         <p class="hint"><b>Low-side (ground) switch.</b> Wire the load between +12&nbsp;V and this output terminal — the board switches its ground when the driving signal is true.</p>
         <p class="lbl" style="margin-top:18px">PWM / dimming</p>
-        <label class="opt" style="border:0;padding-top:0"><input type="checkbox" bind:checked={f.pwmEnabled} /> PWM enabled <span class="desc">duty instead of on/off</span></label>
+        <label class="opt" style="border:0;padding-top:0"><input type="checkbox" bind:checked={f.pwmEnabled} onchange={autoEnableOutput} /> PWM enabled <span class="desc">duty instead of on/off</span></label>
         {#if f.pwmEnabled}
-          <label class="chk"><input type="checkbox" bind:checked={f.variableDutyCycle} /> Duty follows a signal <span class="desc">analog dimming — from a CAN value or an analog input</span></label>
-          <label class="chk"><input type="checkbox" bind:checked={f.variableFreq} /> Freq follows a signal <span class="desc">PWM frequency from an analog/CAN value</span></label>
+          <label class="chk"><input type="checkbox" bind:checked={f.variableDutyCycle} onchange={autoEnableOutput} /> Duty follows a signal <span class="desc">analog dimming — from a CAN value or an analog input</span></label>
+          <label class="chk"><input type="checkbox" bind:checked={f.variableFreq} onchange={autoEnableOutput} /> Freq follows a signal <span class="desc">PWM frequency from an analog/CAN value</span></label>
           <div class="f3">
             {#if f.variableFreq}
               <div class="field"><label>Freq source</label>
-                <select bind:value={f.freqInput}><option value={0}>—</option>{#each inputsNum as v}<option value={v.index}>{v.name}</option>{/each}</select></div>
+                <select bind:value={f.freqInput} onchange={() => { autoEnableOutput(); enableSourceVar(f.freqInput) }}><option value={0}>—</option>{#each inputsNum as v}<option value={v.index}>{v.name}</option>{/each}</select></div>
             {:else}
               <div class="field"><label>Freq (Hz)</label><input type="number" bind:value={f.frequency} /></div>
             {/if}
             {#if f.variableDutyCycle}
               <div class="field"><label>Duty source</label>
-                <select bind:value={f.dutyCycleInput}><option value={0}>—</option>{#each inputsNum as v}<option value={v.index}>{v.name}</option>{/each}</select></div>
+                <select bind:value={f.dutyCycleInput} onchange={() => { autoEnableOutput(); enableSourceVar(f.dutyCycleInput) }}><option value={0}>—</option>{#each inputsNum as v}<option value={v.index}>{v.name}</option>{/each}</select></div>
             {:else}
               <div class="field"><label>Duty (%)</label><input type="number" bind:value={f.fixedDutyCycle} /></div>
             {/if}

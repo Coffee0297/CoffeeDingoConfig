@@ -121,6 +121,25 @@
     } catch (e) { toast('Save failed: ' + e.message, 'error') }
     finally { saving = false }
   }
+
+  // When the operator configures an output that's still disabled, flip it on — a configured-but-off
+  // channel is almost always a mistake. Toast so it's not silent.
+  function autoEnableOutput() {
+    if (f.enabled === false) { f.enabled = true; toast(`Output ${output.number} enabled — you configured it`, 'ok') }
+  }
+
+  // Picking a source that points at a disabled function won't drive anything — enable that source too.
+  let _funcs = $state(null)
+  const SRC_ARRS = [['inputs','input'],['canInputs','caninput'],['virtualInputs','virtualinput'],['conditions','condition'],['counters','counter'],['flashers','flasher']]
+  async function enableSourceVar(idx) {
+    idx = Number(idx); if (!idx) return
+    const label = inputs.find((v) => v.index === idx)?.name; if (!label) return
+    if (!_funcs) { try { _funcs = await api.functions(guid) } catch { return } }
+    for (const [arr, kind] of SRC_ARRS) {
+      const fn = (_funcs?.[arr] ?? []).find((x) => label === x.name || label.startsWith(x.name + ' '))
+      if (fn) { if (fn.enabled === false) { try { await api.setFunction(guid, kind, fn.number, { enabled: true }); fn.enabled = true; toast(`Enabled "${fn.name}" — it was off`, 'ok') } catch (e) { toast('Could not enable source: ' + e.message, 'error') } } return }
+    }
+  }
 </script>
 
 <div class="scrim show" onclick={onclose}></div>
@@ -147,7 +166,7 @@
       <label class="opt" style="border:0;padding-top:0"><input type="checkbox" bind:checked={f.enabled} /> Output enabled <span class="desc">master on/off for this channel</span></label>
       <p class="lbl">Turn ON when this source is true</p>
       <div class="field"><label>Driving input</label>
-        <select bind:value={f.input}>
+        <select bind:value={f.input} onchange={() => { autoEnableOutput(); enableSourceVar(f.input) }}>
           {#each inputs as i}<option value={i.index}>{i.name}</option>{/each}
           {#if inputs.length === 0}<option value={output.inputVal}>{output.input}</option>{/if}
         </select></div>
@@ -190,7 +209,7 @@
         <div class="field"><label>Retry interval (ms)</label><input type="number" bind:value={f.resetTime} /></div>
       </div>
       <p class="lbl" style="margin-top:18px">PWM / dimming</p>
-      <label class="opt" style="border:0;padding-top:0"><input type="checkbox" bind:checked={f.pwmEnabled} /> PWM enabled <span class="desc">duty instead of on/off</span></label>
+      <label class="opt" style="border:0;padding-top:0"><input type="checkbox" bind:checked={f.pwmEnabled} onchange={autoEnableOutput} /> PWM enabled <span class="desc">duty instead of on/off</span></label>
       <div class="f3">
         <div class="field"><label>Freq (Hz)</label><input type="number" min="15" max="400" bind:value={f.freq} title="PWM frequency, 15–400 Hz. For dimming lights, 100–500 Hz is flicker-free (200 Hz is a good all-rounder for LED and incandescent). Below 15 Hz the output stops; above 400 Hz the firmware ignores the change." /></div>
         <div class="field"><label>Duty (%)</label><input type="number" bind:value={f.fixedDuty} /></div>

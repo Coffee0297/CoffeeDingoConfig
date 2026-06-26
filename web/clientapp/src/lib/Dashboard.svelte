@@ -106,7 +106,7 @@
     <div class="statusgrid">
       {#each outs as o}
         <div class="sc"><span class="scn">O{o.number} {o.name?.trim() ? o.name : ''}</span>
-          <span class="state {sc(o.state)}" style="padding:1px 7px"><span class="ic"></span>{o.state === 'On' ? `ON · ${o.current.toFixed(1)}A` : o.state.toUpperCase()}</span></div>
+          <span class="state {sc(o.state)}" style="padding:1px 7px"><span class="ic"></span>{o.state === 'On' ? (o.pwmEnabled ? `ON · ${o.duty}% · ${o.current.toFixed(1)}A` : `ON · ${o.current.toFixed(1)}A`) : o.state.toUpperCase()}</span></div>
       {/each}
     </div>
   {/if}
