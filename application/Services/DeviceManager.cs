@@ -13,7 +13,9 @@ namespace application.Services;
 
 public class DeviceManager(ILogger<DeviceManager> logger, ILoggerFactory loggerFactory, SystemLogger systemLogger, DeviceDefinitionManager deviceDefinitionManager)
 {
-    private readonly Dictionary<Guid, IDevice> _devices = new();
+    // Concurrent: the telemetry broadcaster enumerates this 10x/s while API/frame threads add &
+    // remove devices (scan, flash reboot) — a plain Dictionary threw "Collection was modified".
+    private readonly ConcurrentDictionary<Guid, IDevice> _devices = new();
     private ConcurrentDictionary<(int BaseId, int Index, int SubIndex), DeviceCanFrame> _requestQueue = new();
 
     private Action<List<DeviceCanFrame>>? _batchTransmitCallback;
@@ -168,13 +170,14 @@ public class DeviceManager(ILogger<DeviceManager> logger, ILoggerFactory loggerF
     /// </summary>
     public IEnumerable<IDevice> GetAllDevices()
     {
-        foreach (var device in _devices.Values)
+        var snapshot = _devices.Values.ToArray();   // stable copy — callers enumerate while devices mutate
+        foreach (var device in snapshot)
         {
             if(device.UpdateIsConnected())
-                CheckConfig(device.Guid); 
+                CheckConfig(device.Guid);
         }
 
-        return _devices.Values;
+        return snapshot;
     }
 
     /// <summary>
@@ -199,7 +202,7 @@ public class DeviceManager(ILogger<DeviceManager> logger, ILoggerFactory loggerF
     {
         RemoveCyclicTimer(deviceId);
 
-        if (_devices.Remove(deviceId, out var device))
+        if (_devices.TryRemove(deviceId, out var device))
         {
             logger.LogInformation("Device removed: {Name} (Guid: {Guid})", device.Name, deviceId);
 

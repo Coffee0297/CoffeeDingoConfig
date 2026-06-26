@@ -248,6 +248,8 @@ public class TelemetryBroadcaster(
         {
             while (!ct.IsCancellationRequested)
             {
+              try
+              {
                 var now = DateTime.Now;
                 if ((now - _rateStamp).TotalMilliseconds >= 1000)
                 { _rate = _total - _rateBase; _rateBase = _total; _rateStamp = now; }
@@ -272,7 +274,10 @@ public class TelemetryBroadcaster(
                 var dto = new TelemetryDto(status.isConnected, status.activeAdapter, _total, _rate, ids, devices);
 
                 await hub.Clients.All.SendAsync("telemetry", dto, ct);
-                await Task.Delay(100, ct); // 10 Hz
+              }
+              catch (OperationCanceledException) { throw; }
+              catch (Exception ex) { logger.LogWarning(ex, "telemetry tick failed — skipping"); }   // never let one tick stop the host
+              await Task.Delay(100, ct); // 10 Hz
             }
         }
         catch (OperationCanceledException) { }
