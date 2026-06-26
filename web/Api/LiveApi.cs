@@ -331,6 +331,14 @@ public static class LiveApi
     {
         var api = app.MapGroup("/api");
 
+        // App version for the UI footer — single source of truth is web.csproj <Version>,
+        // read from the assembly name (Major.Minor.Build, e.g. 0.6.2).
+        api.MapGet("/version", () =>
+        {
+            var v = typeof(LiveApi).Assembly.GetName().Version;
+            return Results.Ok(new { version = v is null ? "0.0.0" : $"{v.Major}.{v.Minor}.{v.Build}" });
+        });
+
         api.MapGet("/adapters", (ICommsAdapterManager m) =>
         {
             var (adapters, ports) = m.GetAvailable();

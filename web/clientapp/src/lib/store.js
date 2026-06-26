@@ -72,6 +72,7 @@ async function j(method, url, body, timeoutMs = 15000) {
 }
 
 export const api = {
+  version: () => j('GET', '/api/version'),
   adapters: () => j('GET', '/api/adapters'),
   connect: (Adapter, Port, Bitrate) => j('POST', '/api/connect', { Adapter, Port, Bitrate }),
   disconnect: () => j('POST', '/api/disconnect'),

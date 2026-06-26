@@ -29,6 +29,9 @@
   let newBaseId = $state('0x7CE')
   let editBaseId = $state('0x7CE')
   let busy = $state(false)
+  // App version for the footer — fetched once from the backend (source: web.csproj <Version>).
+  let appVersion = $state('')
+  $effect(() => { api.version().then((r) => (appVersion = r?.version ?? '')).catch(() => {}) })
   let switchOpen = $state(false)
   let readOpen = $state(false)
   let deployOpen = $state(false)
@@ -650,12 +653,13 @@
               {#if followsO != null}<span class="kw">Follows</span> <span class="sig">output{followsO}</span> <span class="muted">— mirrors its state, ignores its own rule</span>{:else if rule}<span class="kw">ON when</span> <span class="sig">{rule}</span>{:else}<span class="muted">No rule set — tap edit to drive this output</span>{/if}
             </div>
             {#key mode}
-              <Sparkline value={mode === 'amps' ? (o.current ?? 0) : (o.state === 'On' || o.state === 'Warning' || o.state === 'OpenLoad' ? 1 : 0)} win={graphWin}
+              <Sparkline value={mode === 'amps' ? (o.current ?? 0) : mode === 'duty' ? (o.duty ?? 0) : (o.state === 'On' || o.state === 'Warning' || o.state === 'OpenLoad' ? 1 : 0)} win={graphWin}
                 tick={t.canTotal} color={o.state === 'Fault' ? '#d23b3b' : '#594ae2'} />
             {/key}
             <div class="spark-tog" role="group" aria-label="Graph mode">
               <span role="button" tabindex="0" use:clickable aria-pressed={mode === 'amps'} class:on={mode === 'amps'} onclick={(e) => { e.stopPropagation(); setMode(current.guid + ':' + o.number, 'amps') }}>Amps</span>
               <span role="button" tabindex="0" use:clickable aria-pressed={mode === 'trig'} class:on={mode === 'trig'} onclick={(e) => { e.stopPropagation(); setMode(current.guid + ':' + o.number, 'trig') }}>Trigger</span>
+              {#if o.pwmEnabled}<span role="button" tabindex="0" use:clickable aria-pressed={mode === 'duty'} class:on={mode === 'duty'} onclick={(e) => { e.stopPropagation(); setMode(current.guid + ':' + o.number, 'duty') }}>Duty</span>{/if}
             </div>
             <div class="ft">
               {#if followsO == null}<span class="tag">{driverTag(o.input)}</span>{/if}
@@ -848,4 +852,6 @@
       </div>
     {/each}
   </div>
+
+  <footer class="app-ver">dingoConfig{appVersion ? ' v' + appVersion : ''}</footer>
 </div>

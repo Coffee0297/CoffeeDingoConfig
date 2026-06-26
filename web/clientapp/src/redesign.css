@@ -92,6 +92,8 @@ html{background:#14141b}
   background:color-mix(in srgb,var(--accent) 7%,transparent)}
 .rx .pair-group .card{flex:1 1 270px;min-width:0;box-shadow:none}
 .rx .tag.pair{color:var(--accent-text);border-color:var(--accent);font-weight:600}
+/* app version footer */
+.rx .app-ver{text-align:center;color:var(--faint);font-size:11px;padding:18px 0 26px;letter-spacing:.02em}
 .rx .add-card{border:1.5px dashed var(--line-2);background:transparent;box-shadow:none;
   display:grid;place-items:center;color:var(--muted);min-height:118px;font-weight:600}
 .rx .add-card:hover{border-color:var(--accent);color:var(--accent);transform:none}
