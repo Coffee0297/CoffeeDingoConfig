@@ -23,6 +23,30 @@ public class SimPlayback(ILogger<SimPlayback> logger)
 
     public string? CurrentFileName { get; private set; }
 
+    // True when the loaded log had no usable timestamps and frames are spaced at a chosen rate instead.
+    public bool SyntheticTiming { get; private set; }
+    public int Fps { get; private set; } = 1000;
+    private static TimeSpan FpsGap(int fps) => TimeSpan.FromTicks((long)(TimeSpan.TicksPerSecond / (double)Math.Clamp(fps, 1, 1_000_000)));
+
+    /// <summary>Set the replay rate (msg/s) for a no-timestamp log; re-spaces frames live, even while playing.</summary>
+    public Task SetRate(int fps)
+    {
+        lock (_stateLock)
+        {
+            Fps = Math.Clamp(fps, 1, 1_000_000);
+            if (!SyntheticTiming || _messages.Count == 0) return Task.CompletedTask;
+            var gap = FpsGap(Fps);
+            for (int k = 0; k < _messages.Count; k++) _messages[k].RelativeTime = gap * k;
+            if (State == PlaybackState.Playing)
+            {
+                _playCts?.Cancel();
+                _playCts = new CancellationTokenSource();
+                _ = PlaybackLoop(_playCts.Token);   // re-anchor timing at the new rate from the current index
+            }
+        }
+        return Task.CompletedTask;
+    }
+
     public event Action<CanFrame, DataDirection>? MessageReady;
 
     public async Task<(bool success, string? error)> LoadFile(string filePath)
@@ -34,88 +58,114 @@ public class SimPlayback(ILogger<SimPlayback> logger)
                 return (false, "File not found");
             }
 
-            var lines = await File.ReadAllLinesAsync(filePath);
-            if (lines.Length < 2)
-            {
-                return (false, "File is empty or invalid");
-            }
-
             var messages = new List<PlaybackMessage>();
-            DateTime? firstTimestamp = null;
+            // Stream the file line-by-line (never the whole file in memory at once) so an extreme log
+            // doesn't blow up — only the parsed message list is held.
+            using var reader = new StreamReader(filePath);
+            var headerLine = await reader.ReadLineAsync();
+            if (headerLine == null) return (false, "File is empty");
 
-            // Skip header row
-            for (int i = 1; i < lines.Length; i++)
+            // Auto-detect the column layout from the header so common loggers (SavvyCAN, the app's own
+            // export, …) all work. Look up columns by name; fall back to the app's positional format.
+            var cols = headerLine.Split(',').Select(c => c.Trim().ToLowerInvariant()).ToArray();
+            int Idx(params string[] names) { foreach (var n in names) { var i = Array.IndexOf(cols, n); if (i >= 0) return i; } return -1; }
+            int ciTs = Idx("time stamp", "timestamp", "time"), ciId = Idx("id", "can id", "arbitration id"),
+                ciDir = Idx("dir", "direction"), ciLen = Idx("len", "length", "dlc"),
+                ciData = Idx("data", "data bytes"), ciD1 = Idx("d1", "data0", "byte0", "b0");
+            bool perByte = ciD1 >= 0;
+            bool headerLayout = ciId >= 0;   // recognised headers → use them; else legacy positional
+            // Numeric timestamps: a value with a '.' is seconds; a bare integer is microseconds (SavvyCAN).
+            bool? tsIsSeconds = null;
+
+            DateTime? firstDt = null; double? firstNum = null;
+            string? line; long lineNo = 1; int bad = 0;
+            while ((line = await reader.ReadLineAsync()) != null)
             {
-                var line = lines[i].Trim();
-                if (string.IsNullOrWhiteSpace(line))
-                    continue;
-
-                var parts = line.Split(',');
-                if (parts.Length < 5)
-                    continue;
-
+                lineNo++;
+                if (string.IsNullOrWhiteSpace(line)) continue;
+                var p = line.Split(',');
                 try
                 {
-                    // Parse timestamp
-                    var timestamp = DateTime.ParseExact(
-                        parts[0].Trim(),
-                        "yyyy-MM-dd HH:mm:ss.fff",
-                        CultureInfo.InvariantCulture
-                    );
+                    int canId; byte length; byte[] dataBytes; DataDirection direction;
+                    DateTime dt = default; double num = 0; bool isDateTime = false;
 
-                    firstTimestamp ??= timestamp;
-
-                    // Parse direction
-                    var direction = parts[1].Trim().Equals("Rx", StringComparison.OrdinalIgnoreCase)
-                        ? DataDirection.Rx
-                        : DataDirection.Tx;
-
-                    // Parse CAN ID (always hex)
-                    var canIdStr = parts[2].Trim();
-                    var canId = Convert.ToInt32(canIdStr, 16);
-
-                    // Parse length
-                    var length = byte.Parse(parts[3].Trim());
-
-                    // Parse data bytes (always hex)
-                    var dataStr = parts[4].Trim();
-                    var dataBytes = dataStr.Split(' ', StringSplitOptions.RemoveEmptyEntries)
-                        .Select(b => Convert.ToByte(b, 16)).ToArray();
-
-                    // Ensure we have exactly 'length' bytes
-                    if (dataBytes.Length < length)
+                    if (!headerLayout)
                     {
-                        var paddedData = new byte[length];
-                        Array.Copy(dataBytes, paddedData, dataBytes.Length);
-                        dataBytes = paddedData;
+                        // Legacy/app format: timestamp(datetime), Dir, ID(hex), Len, Data(space-separated hex)
+                        if (p.Length < 5) continue;
+                        dt = DateTime.ParseExact(p[0].Trim(), "yyyy-MM-dd HH:mm:ss.fff", CultureInfo.InvariantCulture); isDateTime = true;
+                        direction = p[1].Trim().Equals("Tx", StringComparison.OrdinalIgnoreCase) ? DataDirection.Tx : DataDirection.Rx;
+                        canId = Convert.ToInt32(p[2].Trim(), 16);
+                        length = byte.Parse(p[3].Trim());
+                        dataBytes = p[4].Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries).Select(b => Convert.ToByte(b, 16)).ToArray();
+                    }
+                    else
+                    {
+                        canId = Convert.ToInt32(p[ciId].Trim(), 16);
+                        length = ciLen >= 0 && byte.TryParse(p[ciLen].Trim(), out var l) ? l : (byte)8;
+                        if (length > 8) length = 8;
+                        direction = ciDir >= 0 && p[ciDir].Trim().Equals("Tx", StringComparison.OrdinalIgnoreCase) ? DataDirection.Tx : DataDirection.Rx;
+                        if (perByte)
+                        {
+                            var bl = new List<byte>(length);
+                            for (int k = 0; k < length && ciD1 + k < p.Length; k++)
+                            {
+                                var s = p[ciD1 + k].Trim();
+                                if (s.Length == 0) break;
+                                bl.Add(Convert.ToByte(s, 16));
+                            }
+                            dataBytes = bl.ToArray();
+                        }
+                        else if (ciData >= 0)
+                            dataBytes = p[ciData].Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries).Select(b => Convert.ToByte(b, 16)).ToArray();
+                        else dataBytes = Array.Empty<byte>();
+
+                        if (ciTs >= 0 && ciTs < p.Length)
+                        {
+                            var ts = p[ciTs].Trim();
+                            if (DateTime.TryParseExact(ts, "yyyy-MM-dd HH:mm:ss.fff", CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.None, out dt))
+                                isDateTime = true;
+                            else if (double.TryParse(ts, System.Globalization.NumberStyles.Float, CultureInfo.InvariantCulture, out num))
+                                tsIsSeconds ??= ts.Contains('.');
+                        }
                     }
 
-                    var frame = new CanFrame(
-                        Id: canId,
-                        Len: length,
-                        Payload: dataBytes.Take(length).ToArray()
-                    );
+                    if (dataBytes.Length < length) { var pad = new byte[length]; Array.Copy(dataBytes, pad, dataBytes.Length); dataBytes = pad; }
+                    var frame = new CanFrame(canId, length, dataBytes.Take(length).ToArray());
 
-                    var relativeTime = timestamp - firstTimestamp.Value;
-
-                    messages.Add(new PlaybackMessage
+                    TimeSpan rel;
+                    if (isDateTime) { firstDt ??= dt; rel = dt - firstDt.Value; }
+                    else
                     {
-                        Frame = frame,
-                        RelativeTime = relativeTime,
-                        Direction = direction
-                    });
+                        firstNum ??= num;
+                        var delta = num - firstNum.Value;
+                        rel = (tsIsSeconds ?? false) ? TimeSpan.FromSeconds(delta) : TimeSpan.FromMicroseconds(delta);
+                    }
+
+                    messages.Add(new PlaybackMessage { Frame = frame, RelativeTime = rel, Direction = direction });
                 }
-                catch (Exception ex)
+                catch
                 {
-                    logger.LogError("Cancelling file read, invalid line {LineNumber}: {Error}", i + 1, ex.Message);
-                    //Don't keep reading if there is a bad line, logs will be flooded
-                    break;
+                    // Skip a malformed line rather than aborting the whole import on one glitch; bail only
+                    // if nothing parses at all early on (wrong format), so we don't spin through a huge file.
+                    if (++bad > 100 && messages.Count == 0)
+                        return (false, $"Could not parse this CSV — check the column layout (failed by line {lineNo}).");
                 }
             }
 
             if (messages.Count == 0)
             {
                 return (false, "No valid CAN messages found in file");
+            }
+
+            // Some logs have no usable timestamps (all zero / identical) — playback would fire the whole
+            // file at once. Flag it so the UI offers a msg/s rate, and space frames at the chosen Fps.
+            SyntheticTiming = messages.Count > 1 && messages[^1].RelativeTime <= TimeSpan.FromMilliseconds(1);
+            if (SyntheticTiming)
+            {
+                var gap = FpsGap(Fps);
+                for (int k = 0; k < messages.Count; k++) messages[k].RelativeTime = gap * k;
+                logger.LogInformation("Log has no usable timestamps — replaying at {Fps} msg/s", Fps);
             }
 
             lock (_stateLock)
@@ -273,7 +323,7 @@ public class SimPlayback(ILogger<SimPlayback> logger)
     private class PlaybackMessage
     {
         public required CanFrame Frame { get; init; }
-        public required TimeSpan RelativeTime { get; init; }
+        public required TimeSpan RelativeTime { get; set; }   // set: rewritten when a log has no usable timing
         public required DataDirection Direction { get; init; }
     }
 }

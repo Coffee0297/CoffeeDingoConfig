@@ -2,6 +2,7 @@
   // Global plot (#4): chart any signal from any module, live. Show/hide lines, export PNG.
   import { api } from './store.js'
   import { clickable } from './a11y.js'
+  import SearchSelect from './SearchSelect.svelte'
   let { devices = [] } = $props()
 
   const PALETTE = ['#594ae2', '#2a9d8f', '#e07a5f', '#f4a300', '#d62828', '#457b9d', '#b5179e', '#06998b', '#7209b7', '#3a86ff']
@@ -127,11 +128,10 @@
     <select id="plotmod" value={pickGuid} onchange={(e) => loadPickSignals(e.target.value)}>
       {#each devices as d}<option value={d.guid}>{d.name}</option>{/each}
     </select></div>
-  <div class="field" style="margin:0;min-width:200px"><label for="plotsig">Signal</label>
-    <select id="plotsig" bind:value={pickName}>
-      <option value="">—</option>
-      {#each pickSignals as n}<option value={n}>{n}</option>{/each}
-    </select></div>
+  <div class="field" style="margin:0;min-width:300px"><label for="plotsig">Signal</label>
+    <SearchSelect id="plotsig" options={pickSignals} bind:value={pickName}
+      disabled={!pickSignals.length}
+      placeholder={pickSignals.length ? `Search ${pickSignals.length} signals…` : 'pick a module first'} /></div>
   <button class="btn primary" disabled={!pickName} onclick={addSeries}>+ Add to plot</button>
   {#if !devices.length}<span class="muted">No modules — add one in System.</span>{:else if pickErr}<span class="muted" style="color:var(--err)">{pickErr}</span>{/if}
 </div>

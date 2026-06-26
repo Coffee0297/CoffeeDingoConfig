@@ -20,6 +20,11 @@ internal class ParamProtocol(IDeviceConfigurable device, List<DeviceParameter> @
     private readonly CumulativeCrc32 _writeCrc32 =  new();
     private readonly CumulativeCrc32 _readCrc32 =  new();
 
+    // Tracks the device's actual param set during a Read so we can explain a config mismatch:
+    // which params the device returned, and any it sent that this app doesn't know (firmware newer).
+    private readonly HashSet<(int Index, int SubIndex)> _readReceived = new();
+    private readonly List<ConfigDiffEntry> _deviceOnly = new();
+
     public void SetLogger(ILogger logger) => _logger = logger;
 
     public void HandleMessage(
@@ -124,6 +129,8 @@ internal class ParamProtocol(IDeviceConfigurable device, List<DeviceParameter> @
                 subIndex = data[3];
 
                 _readCrc32.Reset();
+                _readReceived.Clear();
+                _deviceOnly.Clear();
 
                 _tempParamValues.Clear();
                 foreach (var param in @params)
@@ -148,10 +155,19 @@ internal class ParamProtocol(IDeviceConfigurable device, List<DeviceParameter> @
                 index = data[2] << 8 | data[1];
                 subIndex = data[3];
 
+                // CRC every received frame (in send order) so the read completes even when the
+                // device's firmware param set differs from this app's — the diff is reported below.
+                _readReceived.Add((index, subIndex));
+                _readCrc32.Update(data.Skip(4).Take(4).ToArray());
+                _readAllCount++;
+
                 matchingParam = @params.FirstOrDefault(p => p.Index == index && p.SubIndex == subIndex);
                 if (matchingParam is null)
                 {
-                    _logger.LogWarning("{Name} ID: {BaseId}, Cannot find param {index}:{subIndex}", name, baseId, index, subIndex);
+                    // The device sent a param this app doesn't know — its firmware is newer than the app.
+                    var devOnly = DbcSignalCodec.ExtractSignal(data, startBit: 32, length: 32);
+                    _deviceOnly.Add(new ConfigDiffEntry($"0x{index:X4}:{subIndex}", index, subIndex, "deviceOnly", null, devOnly.ToString()));
+                    _logger.LogWarning("{Name} ID: {BaseId}, device sent unknown param 0x{index:X4}:{subIndex} (firmware newer than app?)", name, baseId, index, subIndex);
                     break;
                 }
 
@@ -175,10 +191,6 @@ internal class ParamProtocol(IDeviceConfigurable device, List<DeviceParameter> @
 
                 _tempParamValues[(index, subIndex)] = convertedValue;
 
-                _readCrc32.Update(data.Skip(4).Take(4).ToArray());
-                
-                _readAllCount++;
-
                 break;
 
             case MessageCommand.ReadAllComplete:
@@ -189,6 +201,25 @@ internal class ParamProtocol(IDeviceConfigurable device, List<DeviceParameter> @
 
                 if (readAllCrc == _readCrc32.Final)
                 {
+                    // Diff the device's values against the app's CURRENT config BEFORE we overwrite them,
+                    // so we can explain exactly what didn't match (value diffs + params each side is missing).
+                    var diff = new List<ConfigDiffEntry>();
+                    foreach (var param in @params)
+                    {
+                        var paramKey = (param.Index, param.SubIndex);
+                        if (!_readReceived.Contains(paramKey))
+                        {
+                            // App has this param but the device never sent it — device firmware older than the app.
+                            diff.Add(new ConfigDiffEntry(param.Name, param.Index, param.SubIndex, "appOnly", FormatVal(param.GetValue()), null));
+                        }
+                        else if (_tempParamValues.TryGetValue(paramKey, out var dv) && !ValuesEqual(param.GetValue(), dv))
+                        {
+                            diff.Add(new ConfigDiffEntry(param.Name, param.Index, param.SubIndex, "value", FormatVal(param.GetValue()), FormatVal(dv)));
+                        }
+                    }
+                    diff.AddRange(_deviceOnly);
+                    device.LastConfigDiff = diff;
+
                     // End of params, apply all temporary values to actual properties
                     foreach (var param in @params)
                     {
@@ -200,9 +231,19 @@ internal class ParamProtocol(IDeviceConfigurable device, List<DeviceParameter> @
                     }
 
                     _tempParamValues.Clear();
-                    _logger.LogInformation("{Name} ID: {BaseId}, Read All Complete {pdmCrc} = {thisCrc}, {fromPdm}", 
-                        name, baseId, readAllCrc, _readCrc32.Final, readAllCount);
-                    NotifySuccess?.Invoke($"{name}: Read Successful");
+                    // The app now holds the device's config — they're in sync. Remaining entries are
+                    // param-set/version differences, kept for display but no longer a content mismatch.
+                    device.ConfigMismatch = false;
+                    if (diff.Count == 0)
+                        _logger.LogInformation("{Name} ID: {BaseId}, Read complete — config matches ({readAllCount} params)", name, baseId, readAllCount);
+                    else
+                    {
+                        var v = diff.Count(d => d.Kind == "value"); var a = diff.Count(d => d.Kind == "appOnly"); var dz = diff.Count(d => d.Kind == "deviceOnly");
+                        _logger.LogWarning("{Name} ID: {BaseId}, Read complete — {n} config difference(s): {v} value, {a} app-only, {d} device-only", name, baseId, diff.Count, v, a, dz);
+                        foreach (var d in diff.Take(40))
+                            _logger.LogWarning("{Name}: config diff [{kind}] {param} (0x{idx:X4}:{sub}) app='{app}' device='{dev}'", name, d.Kind, d.Name, d.Index, d.SubIndex, d.AppValue ?? "—", d.DeviceValue ?? "—");
+                    }
+                    NotifySuccess?.Invoke(diff.Count == 0 ? $"{name}: Read Successful — config matches" : $"{name}: Read Successful — {diff.Count} difference(s), see Logs");
                 }
                 else
                 {
@@ -227,15 +268,20 @@ internal class ParamProtocol(IDeviceConfigurable device, List<DeviceParameter> @
                 uint checkCrc = (uint)(data[7] << 24 | data[6] << 16 | data[5] << 8 | data[4]);
                 
                 var thisCheck = CalcCrc();
-                
-                device.ConfigMismatch = checkCrc != thisCheck;
-                if (!device.ConfigMismatch)
-                    _logger.LogInformation("{Name} ID: {BaseId}, Config Matches {pdmCrc}", name, baseId, checkCrc);
-                else
+
+                // The full-config CRC can only CONFIRM a match (clear the flag) — it must never raise a
+                // false mismatch. A non-match here is unactionable on its own (it can mean the device's
+                // firmware param set differs from the app's), so the banner is driven by Read/Write sync
+                // instead, and the precise reason is reported by the Read diff above.
+                if (checkCrc == thisCheck)
                 {
-                    _logger.LogWarning("{Name} ID: {BaseId}, Config Does Not Match {pdmCrc} != {thisCrc}", 
-                        name, baseId, checkCrc, thisCheck);
+                    device.ConfigMismatch = false;
+                    device.LastConfigDiff = new List<ConfigDiffEntry>();
+                    _logger.LogInformation("{Name} ID: {BaseId}, Config Matches {pdmCrc}", name, baseId, checkCrc);
                 }
+                else
+                    _logger.LogWarning("{Name} ID: {BaseId}, Config CRC differs {pdmCrc} != {thisCrc} — Read the device to see which params differ",
+                        name, baseId, checkCrc, thisCheck);
 
                 break;
 
@@ -291,7 +337,10 @@ internal class ParamProtocol(IDeviceConfigurable device, List<DeviceParameter> @
 
                 if (writeAllCrc == _writeCrc32.Final)
                 {
-                    _logger.LogInformation("{Name} ID: {BaseId}, Write All Completed {pdmCrc} = {thisCrc}, {fromPdm}", 
+                    // The device acknowledged every param the app sent — they're in sync now.
+                    device.ConfigMismatch = false;
+                    device.LastConfigDiff = new List<ConfigDiffEntry>();
+                    _logger.LogInformation("{Name} ID: {BaseId}, Write All Completed {pdmCrc} = {thisCrc}, {fromPdm}",
                         name, baseId, writeAllCrc, _writeCrc32.Final, writeAllCount);
                     NotifySuccess?.Invoke($"{name}: Write Successful");
                 }
@@ -392,17 +441,43 @@ internal class ParamProtocol(IDeviceConfigurable device, List<DeviceParameter> @
         return msgs;
     }
 
+    // Full-config signature. Hardened to be ORDER-INDEPENDENT and self-describing: each param
+    // contributes a standalone CRC over its identity (index+subindex) AND value, XOR-combined.
+    // XOR is commutative, so the app and firmware no longer have to build their param lists in the
+    // same order to agree — and including the identity bytes means a missing/extra param changes the
+    // signature (so a param-set difference is detected, not silently equal). The firmware computes
+    // the identical value in CheckCrc(). (Param indices are unique, so XOR never self-cancels.)
     private uint CalcCrc()
     {
-        CumulativeCrc32 checkCrc32 =  new();
-        
+        uint acc = 0;
         foreach (var parameter in @params)
         {
-            //Always use all parameters to check CRC
             var data = ParamCodec.ToFrame(MessageCommand.Null, parameter, 0);
-            checkCrc32.Update(data.Payload.Skip(4).Take(4).ToArray());
+            var c = new CumulativeCrc32();
+            c.Update(data.Payload.Skip(1).Take(7).ToArray());   // index(2) + subindex(1) + value(4)
+            acc ^= c.Final;
         }
-        
-        return checkCrc32.Final;
+        return acc;
     }
+
+    // Value comparison for the read diff. Doubles tolerate float round-trip; everything else is exact.
+    private static bool ValuesEqual(object? a, object? b)
+    {
+        if (a is null || b is null) return Equals(a, b);
+        if (a is double or float || b is double or float)
+            return Math.Abs(Convert.ToDouble(a) - Convert.ToDouble(b)) < 1e-4;
+        if (a.GetType().IsEnum) a = Convert.ToInt64(a);
+        if (b.GetType().IsEnum) b = Convert.ToInt64(b);
+        if (a is bool ab && b is bool bb) return ab == bb;
+        try { return Convert.ToInt64(a) == Convert.ToInt64(b); } catch { return Equals(a, b); }
+    }
+
+    private static string FormatVal(object? v) => v switch
+    {
+        null => "—",
+        bool b => b ? "on" : "off",
+        double d => d.ToString("0.###"),
+        float f => f.ToString("0.###"),
+        _ => v.ToString() ?? "—"
+    };
 }

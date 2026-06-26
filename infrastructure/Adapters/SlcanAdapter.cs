@@ -50,14 +50,27 @@ public class SlcanAdapter : ICommsAdapter
     // identify await.
     private volatile int _bridgeBaseId = -1;
 
+    // The id currently pushed to the dingoFW 'X' bridge filter (-2 = never set). Deduped so a chunked
+    // read/write — whose every frame re-arms the config filter — sends 'X' once, not per frame.
+    private volatile int _bridgeFilterId = -2;
+
     public void SetReceiveFilter(int? loId, int? hiId = null)
     {
         _acceptLo = loId ?? -1;
         _acceptHi = hiId ?? loId ?? -1;
-        // NOTE: the dingoFW SLCAN bridge has a firmware 'X' accept-filter command so a dingoPDM acting
-        // as the bridge needn't forward the flood at all. We do NOT push it here — a standalone SLCAN
-        // adapter would mis-handle the unknown command. The reader-side range above already drops the
-        // flood for every adapter; wiring 'X' (gated to a detected dingoPDM by USB VID/PID) is a follow-up.
+        // Also push the dingoFW 'X' bridge accept-filter. The reader-side range above only drops the
+        // flood AFTER it crosses USB — under a real 3000+ msg/s flood the USB/SLCAN link itself
+        // saturates and buries the config/XCP reply. 'X' makes a dingoPDM/CANBoard acting as the bridge
+        // forward ONLY this id over USB, so the flood never crosses the link and the read/write/CRC
+        // exchange always completes. The firmware forwards a single id; we forward the reply id (loId,
+        // = base for config, base+13 for XCP). A standalone SLCAN adapter ignores the unknown 'X'.
+        // Cleared (bare 'X') when the filter lifts. Deduped: only emit on a change.
+        var want = loId ?? -1;
+        if (want != _bridgeFilterId)
+        {
+            _bridgeFilterId = want;
+            SendRaw(want >= 0 ? $"X{want:X3}\r" : "X\r");
+        }
     }
 
     // Fire-and-forget raw SLCAN command line under the shared write lock; swallows any port fault.

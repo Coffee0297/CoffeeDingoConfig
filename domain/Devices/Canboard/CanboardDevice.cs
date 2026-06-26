@@ -37,7 +37,8 @@ public class CanboardDevice : IDeviceConfigurable
     [JsonPropertyName("canboardType")] public int CanboardType { get; set; }
     [JsonIgnore] protected bool CanboardTypeOk;
     [JsonIgnore] public bool ConfigMismatch { get; set; } = true;
-    
+    [JsonIgnore] public List<ConfigDiffEntry> LastConfigDiff { get; set; } = new();
+
     [JsonPropertyName("guid")] public Guid Guid { get; set; }
     [JsonIgnore] public string Type  { get; private set; } = "CANBoard";
     [JsonIgnore] public string Icon { get; private set; } = string.Empty;

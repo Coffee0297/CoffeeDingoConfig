@@ -25,7 +25,7 @@ public record DeviceDto(string Guid, string Name, string Type, int BaseId, bool 
     double Battery, double Current, double Temp, string State, string Version, string Bitrate, OutputDto[] Outputs,
     bool Reading, int ReadDone, int ReadTotal, bool SleepEnabled, int SleepTimeoutMs,
     bool SleepInputEnabled, int SleepInput, bool SleepInputActiveHigh, bool SleepIgnoreAlwaysOn,
-    bool CanBootloader, bool ConfigMismatch = false, bool IsGateway = false);
+    bool CanBootloader, bool ConfigMismatch = false, int ConfigDiffCount = 0, bool IsGateway = false);
 public record AdaptersDto(string[] Adapters, string[] Ports, bool Connected, string? ActiveAdapter, string? ActivePort);
 public record TelemetryDto(bool Connected, string? Adapter, long CanTotal, long CanRate, int[] Ids, DeviceDto[] Devices);
 public record ConnectReq(string Adapter, string Port, string Bitrate);
@@ -186,6 +186,11 @@ public static class DingoMap
         return v == null ? (idx == 0 ? "None" : idx.ToString()) : VarLabel(v);
     }
 
+    // Shared projection of a DBC signal for the /dbc/signals and /dbc/search endpoints.
+    public static object DbcSigDto(DbcSignal s) => new {
+        s.Name, s.Id, ide = s.IsExtended, s.MessageName, s.StartBit, s.Length,
+        byteOrder = (int)s.ByteOrder, s.IsSigned, s.Factor, s.Offset, s.Unit, s.Min, s.Max, s.Value };
+
     public static DeviceDto ToDto(IDevice d, DeviceUiState? ui = null)
     {
         var reading = ui?.Reading ?? false;
@@ -202,7 +207,7 @@ public static class DingoMap
                 p.BatteryVoltage, p.TotalCurrent, p.BoardTempC, p.DeviceState.ToString(),
                 p.Version, BitrateLabel(p.BitRate), outs, reading, readDone, readTotal,
                 p.SleepEnabled, p.SleepTimeoutMs, p.SleepInputEnabled, p.SleepInput, p.SleepInputActiveHigh, p.SleepIgnoreAlwaysOn,
-                p.CanBootloader, p.Connected && p.ConfigMismatch);
+                p.CanBootloader, p.Connected && p.ConfigMismatch, p.LastConfigDiff.Count);
         }
         if (d is domain.Devices.Canboard.CanboardDevice cb)
             // CANBoard has no battery/total-current sensing (those are PDM smart-output features) — leave
@@ -210,7 +215,7 @@ public static class DingoMap
             return new DeviceDto(cb.Guid.ToString(), cb.Name, cb.Type, cb.BaseId, cb.Connected,
                 0, 0, cb.BoardTempC, "", cb.Version, BitrateLabel(cb.BitRate), Array.Empty<OutputDto>(), reading, readDone, readTotal,
                 cb.SleepEnabled, cb.SleepTimeoutMs, cb.SleepInputEnabled, cb.SleepInput, cb.SleepInputActiveHigh, cb.SleepIgnoreAlwaysOn,
-                cb.CanBootloader, cb.Connected && cb.ConfigMismatch);
+                cb.CanBootloader, cb.Connected && cb.ConfigMismatch, cb.LastConfigDiff.Count);
         return new DeviceDto(d.Guid.ToString(), d.Name, d.Type, d.BaseId, d.Connected,
             0, 0, 0, "", "", "", Array.Empty<OutputDto>(), reading, readDone, readTotal, false, 30000, false, 0, false, true,
             (d as IDeviceConfigurable)?.CanBootloader ?? false);
@@ -375,17 +380,19 @@ public static class LiveApi
                 .Select(m => new { id = m.Id, hex = "0x" + m.Id.ToString("X3"), len = m.Len, count = m.Count })
                 .ToArray();
 
-            // CANopen keypads
+            // CANopen keypads. A heartbeat (0x700+node) ALONE isn't enough — a busy ECU bus has frames
+            // all over that range. Require the matching button TPDO (0x180+node) too, which a real
+            // Blink/Grayhill keypad always broadcasts; an ECU won't have that exact pair.
             foreach (var m in rx.Where(m => m.Id is >= 0x701 and <= 0x77F).OrderBy(m => m.Id))
             {
                 int node = m.Id - 0x700;
-                bool hasButtons = rx.Any(x => x.Id == 0x180 + node);
+                if (!rx.Any(x => x.Id == 0x180 + node)) continue;   // heartbeat only → not a confirmed keypad
                 var type = node == 0x0A ? "grayhillkeypad" : "blinkkeypad";
                 found.Add(new {
                     type, baseId = node, hex = "0x" + node.ToString("X2"),
                     label = type == "grayhillkeypad" ? "Grayhill keypad" : "Blink Marine keypad",
-                    confidence = hasButtons ? "high" : "low",
-                    detail = $"CANopen node {node}" + (hasButtons ? " (heartbeat + buttons)" : " (heartbeat only)")
+                    confidence = "high",
+                    detail = $"CANopen node {node} (heartbeat + buttons)"
                 });
                 foreach (var off in new[] { 0x180, 0x280, 0x380, 0x480, 0x580, 0x600, 0x700 }) claimed.Add(off + node);
             }
@@ -412,42 +419,55 @@ public static class LiveApi
                 i = k + 1;
             }
 
-            foreach (var (baseId, runLen, statusId) in candidates)
+            // Active confirm — REQUIRED. A contiguous run of 8-byte cyclic frames is necessary but not
+            // sufficient: a busy ECU bus (or a replayed ECU log) is full of such runs and would otherwise
+            // be mis-reported as dozens of "dingoPDMs". So we only report a device that ANSWERS the dingo
+            // Version probe (sent to base+1, reply with BOARD_ID at base+0) — ECU/sim traffic never does.
+            // Fire every probe first, then wait once, so the scan doesn't take 250ms × candidate count.
+            if (adapter.ActiveAdapter is not null && candidates.Count > 0)
             {
-                // Active confirm: send Version to base+1 (CONFIG_RX_OFFSET), read BOARD_ID from the
-                // reply at base+0. Falls back to the run-length heuristic if the device doesn't reply
-                // with a BOARD_ID (older firmware always replies 0 → treated as PDM).
-                int? boardId = null;
-                if (adapter.ActiveAdapter is not null)
+                // Pre-probe frame counts. A real dingo's base+0 (config-reply id) is SILENT until probed,
+                // so any candidate whose base+0 is already a live frame on the bus is ECU/sim traffic, not
+                // a module — drop it before we even probe (this is what mis-detected the ECU log).
+                // Reject any candidate whose base+0 is a CYCLIC broadcast (an ECU id), not the occasional
+                // config reply a real dingo emits. (count threshold, not >0, so a lingering reply from a
+                // previous scan doesn't disqualify a real module on rescan.)
+                var preCount = rx.GroupBy(m => m.Id).ToDictionary(g2 => g2.Key, g2 => g2.Sum(m => m.Count));
+                var probe = candidates.Where(c => !(preCount.TryGetValue(c.baseId, out var c0) && c0 >= cyclicMinCount)).ToList();
+
+                foreach (var (baseId, _, _) in probe)
                 {
                     try
                     {
                         await adapter.ActiveAdapter.WriteAsync(
                             new CanFrame(baseId + 1, 8, new byte[] { (byte)MessageCommand.Version, 0, 0, 0, 0, 0, 0, 0 }),
                             CancellationToken.None);
-                        await Task.Delay(250);
-                        var reply = log.GetMessageSum().FirstOrDefault(x =>
-                            x.Id == baseId && x.Direction == DataDirection.Rx &&
-                            x.Payload is { Length: >= 2 } p && p[0] == (byte)MessageCommand.Version);
-                        if (reply?.Payload is { Length: >= 2 } pl) boardId = pl[1];
                     }
-                    catch { /* fall through to heuristic */ }
+                    catch { /* ignore — unconfirmed candidates are dropped below */ }
                 }
-
-                var (type, label) = boardId switch
+                await Task.Delay(300);
+                var sum = log.GetMessageSum();
+                foreach (var (baseId, runLen, statusId) in probe)
                 {
-                    2 => ("canboard", "CANBoard"),
-                    1 => ("pdm", "dingoPDM-Max"),
-                    0 => ("pdm", "dingoPDM"),
-                    _ => ("pdm", "dingoPDM"),     // no BOARD_ID reply → default PDM
-                };
-                found.Add(new {
-                    type, baseId, hex = "0x" + baseId.ToString("X3"), label,
-                    confidence = boardId is not null ? "high" : "medium",
-                    detail = boardId is not null
-                        ? $"identified via BOARD_ID {boardId} at 0x{baseId:X3}"
-                        : $"{runLen} status frames at 0x{statusId:X3} — type unconfirmed, set below"
-                });
+                    // Confirm: a genuine Version reply appeared at the (previously silent) base+0, echoing
+                    // the Version command with a valid BOARD_ID (0=PDM, 1=Max, 2=CANBoard). ECU/sim traffic
+                    // can't produce this — there's no device to answer our probe.
+                    var reply = sum.FirstOrDefault(x =>
+                        x.Id == baseId && x.Direction == DataDirection.Rx &&
+                        x.Payload is { Length: >= 2 } p && p[0] == (byte)MessageCommand.Version);
+                    if (reply?.Payload is not { Length: >= 2 } pl || pl[1] > 2) continue;
+                    int boardId = pl[1];
+                    var (type, label) = boardId switch
+                    {
+                        2 => ("canboard", "CANBoard"),
+                        1 => ("pdm", "dingoPDM-Max"),
+                        _ => ("pdm", "dingoPDM"),
+                    };
+                    found.Add(new {
+                        type, baseId, hex = "0x" + baseId.ToString("X3"), label, confidence = "high",
+                        detail = $"identified via BOARD_ID {boardId} at 0x{baseId:X3} ({runLen} status frames)"
+                    });
+                }
             }
             return Results.Ok(new { found, seen });
         });
@@ -473,7 +493,9 @@ public static class LiveApi
         api.MapPost("/devices", (AddDeviceReq r, DeviceManager dm) =>
         {
             var id = DingoMap.ParseId(r.BaseId);
-            if (id <= 0) return Results.BadRequest(new { ok = false, error = "Invalid base ID" });
+            // A DBC/ECU device has no base id (its ids come from the DBC's messages), so 0 is allowed.
+            var isDbc = r.Type?.StartsWith("dbc", StringComparison.OrdinalIgnoreCase) ?? false;
+            if (id < 0 || (id == 0 && !isDbc)) return Results.BadRequest(new { ok = false, error = "Invalid base ID" });
             dm.AddDevice(r.Type, string.IsNullOrWhiteSpace(r.Name) ? r.Type : r.Name, id);
             return Results.Ok(new { ok = true });
         });
@@ -783,12 +805,49 @@ public static class LiveApi
         });
 
         // ---- DBC device: open a .dbc, add custom signals, read live decoded values ----
-        api.MapGet("/devices/{guid}/dbc/signals", (string guid, DeviceManager dm) =>
+        // Big ECU DBCs run to tens of thousands of signals, so the full dump is CAPPED (the UI uses
+        // /dbc/search). count = the true total; items = the first `limit`.
+        api.MapGet("/devices/{guid}/dbc/signals", (string guid, int? limit, DeviceManager dm) =>
         {
-            if (!Guid.TryParse(guid, out var g) || dm.GetDevice(g) is not DbcDevice d) return Results.Ok(Array.Empty<object>());
-            return Results.Ok(d.DbcSignals.Select(s => new {
-                s.Name, s.Id, s.IsExtended, s.MessageName, s.StartBit, s.Length, byteOrder = (int)s.ByteOrder, s.IsSigned,
-                s.Factor, s.Offset, s.Unit, s.Min, s.Max, s.Value }).ToArray());
+            if (!Guid.TryParse(guid, out var g) || dm.GetDevice(g) is not DbcDevice d) return Results.Ok(new { count = 0, items = Array.Empty<object>() });
+            var lim = Math.Clamp(limit ?? 500, 1, 2000);
+            return Results.Ok(new { count = d.DbcSignals.Count, items = d.DbcSignals.Take(lim).Select(DingoMap.DbcSigDto).ToArray() });
+        });
+
+        // Server-side signal search for big DBCs — substring match on signal OR message name, capped.
+        // Returns the absolute id + bit layout so a consumer can fill a CAN input directly (no name
+        // round-trip; GM DBCs reuse signal names across messages so name alone isn't unique).
+        api.MapGet("/devices/{guid}/dbc/search", (string guid, string? q, int? limit, DeviceManager dm) =>
+        {
+            if (!Guid.TryParse(guid, out var g) || dm.GetDevice(g) is not DbcDevice d) return Results.Ok(new { count = 0, items = Array.Empty<object>() });
+            var lim = Math.Clamp(limit ?? 100, 1, 500);
+            IEnumerable<DbcSignal> hits = d.DbcSignals;
+            if (!string.IsNullOrWhiteSpace(q))
+            {
+                var needle = q.Trim();
+                hits = hits.Where(s => s.Name.Contains(needle, StringComparison.OrdinalIgnoreCase)
+                                    || (s.MessageName ?? "").Contains(needle, StringComparison.OrdinalIgnoreCase));
+            }
+            var list = hits.OrderBy(s => s.Name, StringComparer.OrdinalIgnoreCase).Take(lim + 1).ToList();
+            return Results.Ok(new { total = d.DbcSignals.Count, more = list.Count > lim, items = list.Take(lim).Select(DingoMap.DbcSigDto).ToArray() });
+        });
+
+        // One-step ECU import: create a DBC device and parse the uploaded .dbc into it in a single call,
+        // returning the new device's guid so the UI can bind it. (Saves the add-then-find-then-open dance.)
+        api.MapPost("/devices/dbc-import", async (string? name, int? @base, bool? rebase, HttpRequest req, DeviceManager dm) =>
+        {
+            using var reader = new StreamReader(req.Body);
+            var text = await reader.ReadToEndAsync();
+            // base 0 = a base-less ECU (absolute message ids). base > 0 = a base-addressed module (e.g. a
+            // CANBoard described by its DBC); with rebase the DBC's messages are shifted onto that base.
+            var b = @base ?? 0;
+            var dev = new DbcDevice(string.IsNullOrWhiteSpace(name) ? "ECU" : name.Trim(), b);
+            dm.AddDevices(new List<IDevice> { dev });   // sets the device logger before we parse (parse logs)
+            var tmp = Path.Combine(Path.GetTempPath(), $"dingo_{Guid.NewGuid():N}.dbc");
+            try { await File.WriteAllTextAsync(tmp, text); await dev.ParseDbcFile(tmp); }
+            finally { try { File.Delete(tmp); } catch { } }
+            if (b > 0 && (rebase ?? false)) dev.RebaseTo(b);
+            return Results.Ok(new { ok = true, guid = dev.Guid.ToString(), count = dev.DbcSignals.Count });
         });
 
         // Upload the raw .dbc text; parsed via DbcParser (writes to a temp file it owns).
@@ -842,6 +901,87 @@ public static class LiveApi
                 .OrderBy(s => s.offset).ThenBy(s => s.startBit)
                 .ToList();
             return Results.Ok(sigs);
+        });
+
+        // Duplicate CAN-id guard. Builds the map of who TRANSMITS each id across every device (dingo
+        // broadcast frames + user CAN outputs, and an imported DBC/ECU's message ids), then reports
+        // collisions (an id transmitted by more than one device) and base-id block overlaps. Listening
+        // (CAN inputs) is intentionally NOT a conflict — reading an ECU frame is the whole point.
+        api.MapGet("/can-id-map", (DeviceManager dm) =>
+        {
+            var owners = new Dictionary<(int Id, bool Ide), List<string>>();
+            void Claim(int id, bool ide, string who)
+            {
+                var k = (id, ide);
+                if (!owners.TryGetValue(k, out var l)) owners[k] = l = new();
+                if (!l.Contains(who)) l.Add(who);
+            }
+            var ranges = new List<(string Name, int Lo, int Hi)>();
+            foreach (var d in dm.GetAllDevices())
+            {
+                var isDbc = d is DbcDevice;
+                foreach (var (mid, sig) in d.GetStatusSigs())
+                    Claim(mid, sig.IsExtended, $"{d.Name}: {(isDbc ? "ECU " + (string.IsNullOrEmpty(sig.MessageName) ? "msg" : sig.MessageName) : "broadcast")}");
+                var couts = d switch { PdmDevice p => p.CanOutputs, CanboardDevice c => c.CanOutputs, _ => (IEnumerable<domain.Devices.Functions.CanOutput>?)null };
+                if (couts != null)
+                    foreach (var co in couts.Where(x => x.Enabled))
+                        Claim(co.Id, co.Ide, $"{d.Name}: CAN out '{co.Name}'");
+                if (!isDbc && d is IDeviceConfigurable) ranges.Add((d.Name, d.BaseId, d.BaseId + 15));
+            }
+            var collisions = owners.Where(kv => kv.Value.Count > 1)
+                .Select(kv => new { id = kv.Key.Id, hex = "0x" + kv.Key.Id.ToString("X"), ide = kv.Key.Ide, owners = kv.Value })
+                .OrderBy(c => c.id).ToList();
+            var overlaps = new List<object>();
+            for (int i = 0; i < ranges.Count; i++)
+                for (int j = i + 1; j < ranges.Count; j++)
+                    if (ranges[i].Lo <= ranges[j].Hi && ranges[j].Lo <= ranges[i].Hi)
+                        overlaps.Add(new { a = ranges[i].Name, b = ranges[j].Name,
+                            aRange = $"0x{ranges[i].Lo:X}–0x{ranges[i].Hi:X}", bRange = $"0x{ranges[j].Lo:X}–0x{ranges[j].Hi:X}" });
+            // id -> owners, keyed by hex (with an 'x' prefix for extended) so the editor can check one id cheaply.
+            var claimed = owners.ToDictionary(kv => (kv.Key.Ide ? "x" : "") + kv.Key.Id.ToString("X"), kv => kv.Value);
+            return Results.Ok(new { collisions, overlaps, claimed });
+        });
+
+        // ---- Sim playback: replay a CAN-log CSV onto the simulated bus (connect the "Sim" adapter).
+        // CSV format is the app's own CAN-log export: header row, then
+        //   timestamp(yyyy-MM-dd HH:mm:ss.fff), Rx|Tx, id(hex), length, data(space-separated hex bytes)
+        api.MapPost("/sim/load", async (HttpRequest req, application.Services.SimPlayback pb) =>
+        {
+            // No upload size limit — replay logs can be hundreds of MB. Stream straight to a temp file
+            // (never the whole body in memory), then stream-parse it.
+            var feat = req.HttpContext.Features.Get<Microsoft.AspNetCore.Http.Features.IHttpMaxRequestBodySizeFeature>();
+            if (feat is { IsReadOnly: false }) feat.MaxRequestBodySize = null;
+            var tmp = Path.Combine(Path.GetTempPath(), $"dingo_sim_{Guid.NewGuid():N}.csv");
+            try
+            {
+                await using (var fs = File.Create(tmp))
+                    await req.Body.CopyToAsync(fs);
+                var (ok, err) = await pb.LoadFile(tmp);
+                return ok ? Results.Ok(new { ok, total = pb.TotalMessages, fileName = pb.CurrentFileName })
+                          : Results.BadRequest(new { ok, error = err });
+            }
+            finally { try { File.Delete(tmp); } catch { } }
+        });
+        api.MapPost("/sim/play", async (application.Services.SimPlayback pb) => { await pb.Play(); return Results.Ok(new { ok = true }); });
+        api.MapPost("/sim/pause", async (application.Services.SimPlayback pb) => { await pb.Pause(); return Results.Ok(new { ok = true }); });
+        api.MapPost("/sim/reset", async (application.Services.SimPlayback pb) => { await pb.Reset(); return Results.Ok(new { ok = true }); });
+        api.MapPost("/sim/loop", (bool on, application.Services.SimPlayback pb) => { pb.Loop = on; return Results.Ok(new { ok = true, loop = pb.Loop }); });
+        api.MapPost("/sim/rate", async (int fps, application.Services.SimPlayback pb) => { await pb.SetRate(fps); return Results.Ok(new { ok = true, fps = pb.Fps }); });
+        api.MapGet("/sim/status", (application.Services.SimPlayback pb) => Results.Ok(new
+        {
+            state = pb.State.ToString(), fileName = pb.CurrentFileName,
+            current = pb.CurrentMessageIndex, total = pb.TotalMessages, loop = pb.Loop,
+            timeMs = (int)pb.CurrentTime.TotalMilliseconds,
+            syntheticTiming = pb.SyntheticTiming, fps = pb.Fps,
+        }));
+
+        // Per-param diff from the last Read — explains WHY a device's config didn't match the app's
+        // (value differences, and params each side is missing because of a firmware/app version gap).
+        api.MapGet("/devices/{guid}/config-diff", (string guid, DeviceManager dm) =>
+        {
+            if (!Guid.TryParse(guid, out var g) || dm.GetDevice(g) is not IDeviceConfigurable d)
+                return Results.NotFound();
+            return Results.Ok(d.LastConfigDiff);
         });
 
         // Cross-module IO picker (feature B), server-side: point a consumer module's CAN input at a
@@ -982,6 +1122,17 @@ public static class LiveApi
                 foreach (var c in cb.Conditions) s.Add(new("Condition", c.Name, c.Value.ToString(), c.Value != 0));
                 foreach (var c in cb.Counters) s.Add(new("Counter", c.Name, c.Value.ToString(), c.Value != 0));
                 foreach (var f in cb.Flashers) s.Add(new("Flasher", f.Name, f.Value ? "on" : "off", f.Value));
+            }
+            else if (dm.GetDevice(g) is DbcDevice dbc)
+            {
+                // An ECU/DBC device's live decoded signals, so the Plot view (and anything using /signals)
+                // can chart them. Message-qualified names disambiguate signals that share a name across
+                // messages; values are invariant 3-decimal so the plot's parseFloat reads them.
+                foreach (var sig in dbc.DbcSignals)
+                {
+                    var name = string.IsNullOrEmpty(sig.MessageName) ? sig.Name : $"{sig.MessageName}.{sig.Name}";
+                    s.Add(new("DBC", name, sig.Value.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture), sig.Value != 0));
+                }
             }
             return Results.Ok(s.ToArray());
         });

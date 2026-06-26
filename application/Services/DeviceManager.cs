@@ -258,8 +258,11 @@ public class DeviceManager(ILogger<DeviceManager> logger, ILoggerFactory loggerF
     public void CheckConfig(Guid deviceId)
     {
         var device = GetDevice(deviceId);
-        if (device is not IDeviceConfigurable) return;
-        var deviceConfigurable = (IDeviceConfigurable)device;
+        if (device is not IDeviceConfigurable deviceConfigurable) return;
+        // Called only on the connect edge: assume out-of-sync until a Read/Write (or CRC match)
+        // confirms otherwise, so the UI prompts the operator to Read the device before editing.
+        deviceConfigurable.ConfigMismatch = true;
+        deviceConfigurable.LastConfigDiff = new List<domain.Models.ConfigDiffEntry>();
         var msg = deviceConfigurable.GetCheckMsg();
         QueueMessage(msg);
     }

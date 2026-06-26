@@ -167,6 +167,23 @@ public class DbcDevice : IDevice
         MaxId = DbcSignals.Max(p => p.Id);
     }
 
+    /// <summary>
+    /// Re-address a base-relative (module) DBC so its lowest message id lands on <paramref name="newBase"/>.
+    /// A CANBoard/dingoPDM DBC is authored at the module's default base; shifting every message by the
+    /// delta lets the same DBC describe that module wherever its base is actually set. ECU DBCs (absolute
+    /// ids) are imported without rebasing.
+    /// </summary>
+    public void RebaseTo(int newBase)
+    {
+        if (DbcSignals.Count == 0) return;
+        var delta = newBase - DbcSignals.Min(s => s.Id);
+        if (delta != 0)
+            foreach (var s in DbcSignals) s.Id += delta;
+        BaseId = newBase;
+        RebuildIndex();
+        UpdateIdRange();
+    }
+
     public IEnumerable<(int MessageId, DbcSignal Signal)> GetStatusSigs()
     {
         // DbcSignals already have Id populated from DBC file

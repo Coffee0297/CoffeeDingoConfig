@@ -116,8 +116,28 @@ export const api = {
   sdoRead: (Node, Index, Sub) => j('POST', '/api/sdo/read', { Node, Index, Sub }),
   sdoWrite: (Node, Index, Sub, Value, Size) => j('POST', '/api/sdo/write', { Node, Index, Sub, Value, Size }),
   sdoStore: (Node) => j('POST', '/api/sdo/store', { Node }),
-  dbcSignals: (guid) => j('GET', `/api/devices/${guid}/dbc/signals`),
+  configDiff: (guid) => j('GET', `/api/devices/${guid}/config-diff`),
+  canIdMap: () => j('GET', '/api/can-id-map'),
+  simStatus: () => j('GET', '/api/sim/status'),
+  simPlay: () => j('POST', '/api/sim/play'),
+  simPause: () => j('POST', '/api/sim/pause'),
+  simReset: () => j('POST', '/api/sim/reset'),
+  simLoop: (on) => j('POST', `/api/sim/loop?on=${on ? 'true' : 'false'}`),
+  simRate: (fps) => j('POST', `/api/sim/rate?fps=${fps}`),
+  async simLoad(body) {
+    // body is a File/Blob — the browser streams it, so even a huge log isn't held as a JS string.
+    const r = await fetch('/api/sim/load', { method: 'POST', headers: { 'Content-Type': 'text/csv' }, body })
+    if (!r.ok) throw new Error(await r.text())
+    return r.json()
+  },
+  dbcSignals: (guid, limit) => j('GET', `/api/devices/${guid}/dbc/signals${limit ? `?limit=${limit}` : ''}`),
+  dbcSearch: (guid, q, limit = 100) => j('GET', `/api/devices/${guid}/dbc/search?q=${encodeURIComponent(q ?? '')}&limit=${limit}`),
   dbcAddSignal: (guid, body) => j('POST', `/api/devices/${guid}/dbc/signal`, body),
+  async dbcImport(name, text, base = 0, rebase = false) {
+    const r = await fetch(`/api/devices/dbc-import?name=${encodeURIComponent(name)}&base=${base}&rebase=${rebase}`, { method: 'POST', headers: { 'Content-Type': 'text/plain' }, body: text })
+    if (!r.ok) throw new Error(await r.text())
+    return r.json()
+  },
   async dbcOpen(guid, text) {
     const r = await fetch(`/api/devices/${guid}/dbc/open`, { method: 'POST', headers: { 'Content-Type': 'text/plain' }, body: text })
     if (!r.ok) throw new Error(await r.text())

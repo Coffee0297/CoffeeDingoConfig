@@ -3,6 +3,7 @@
   import { toast } from './toast.js'
   import { dialog, labelFields, clickable } from './a11y.js'
   import LuaEditor from './LuaEditor.svelte'
+  import SearchSelect from './SearchSelect.svelte'
   let { output, guid, connected = false, deviceType = '', onclose } = $props()
   let tab = $state('rule')
 
@@ -166,10 +167,9 @@
       <label class="opt" style="border:0;padding-top:0"><input type="checkbox" bind:checked={f.enabled} /> Output enabled <span class="desc">master on/off for this channel</span></label>
       <p class="lbl">Turn ON when this source is true</p>
       <div class="field"><label>Driving input</label>
-        <select bind:value={f.input} onchange={() => { autoEnableOutput(); enableSourceVar(f.input) }}>
-          {#each inputs as i}<option value={i.index}>{i.name}</option>{/each}
-          {#if inputs.length === 0}<option value={output.inputVal}>{output.input}</option>{/if}
-        </select></div>
+        <SearchSelect placeholder="Search input…"
+          options={inputs.length ? inputs.map((i) => ({ value: i.index, label: i.name })) : [{ value: output.inputVal, label: output.input }]}
+          bind:value={f.input} onpick={(v) => { autoEnableOutput(); enableSourceVar(v) }} /></div>
       <div class="preview">⚡ Right now this output is <b class="big">{output.state}</b></div>
       <p class="hint">The dingoPDM drives each output from one source (a digital input, CAN signal, virtual
         input, condition, flasher, …). Pick a virtual input or condition to combine several signals —

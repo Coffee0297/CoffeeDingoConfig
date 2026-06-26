@@ -5,6 +5,9 @@
   import { dialog, labelFields, clickable } from './a11y.js'
   import LuaEditor from './LuaEditor.svelte'
   import Sparkline from './Sparkline.svelte'
+  import SearchSelect from './SearchSelect.svelte'
+  // Build SearchSelect options from a VarMap list ({index,name}); `none` prepends a "— (0)" entry.
+  const ssOpts = (arr, none = false) => (none ? [{ value: 0, label: '—' }] : []).concat((arr ?? []).map((v) => ({ value: v.index, label: v.name })))
   let { current, ids = [], mode = 'all', openTarget = null } = $props()  // 'all' = full signals list; 'outputs' = digital-output cards only
   // openTarget {kind, number, n}: auto-open an item's editor (from the Wiring graph's gear button).
   // Writes/uploads only reach hardware when the module is live on the bus; config edits still
@@ -184,6 +187,44 @@
     toast(`Filled from ${src.name} · ${prettySig(sig.name)} → ${idHex}. Save to apply.`, 'info')
   }
   function clearRemote() { remoteSrc = ''; remoteSel = ''; delete f._remote; f = { ...f } }
+
+  // ---- ECU / DBC signal picker: fill this CAN input from an imported DBC's named signal (e.g. "Ecu-CoolantTmp").
+  // Big ECU DBCs have tens of thousands of signals, so this searches server-side and fills the input
+  // with the signal's absolute id + extended flag + bit layout (no name round-trip — GM DBCs reuse names).
+  let dbcSources = $derived(allDevices.filter((d) => /dbc/i.test(d.type)))
+  let dbcSrc = $state(''), dbcQ = $state(''), dbcHits = $state([]), dbcMore = $state(false), dbcBusy = $state(false)
+  $effect(() => {
+    const g = dbcSrc, q = dbcQ
+    if (!g) { dbcHits = []; dbcMore = false; return }
+    let alive = true; dbcBusy = true
+    api.dbcSearch(g, q, 60)
+      .then((r) => { if (alive) { dbcHits = r.items ?? []; dbcMore = !!r.more; dbcBusy = false } })
+      .catch(() => { if (alive) { dbcHits = []; dbcBusy = false } })
+    return () => { alive = false }
+  })
+  function applyDbcSig(s) {
+    idHex = hex(s.id); f.ide = !!s.ide
+    f.startBit = s.startBit; f.bitLength = s.length
+    f.byteOrder = s.byteOrder; f.factor = s.factor; f.offset = s.offset; f.signed = s.isSigned
+    if (!f.name || /^canInput\d+$/i.test(f.name)) f.name = s.name
+    delete f._remote                       // DBC fill is an absolute id, not a module-relative remote link
+    f = { ...f }
+    toast(`Filled from ${s.messageName || 'DBC'} · ${s.name} → ${hex(s.id)}${s.ide ? ' (ext)' : ''}. Save to apply.`, 'info')
+  }
+
+  // ---- Duplicate CAN-id guard: warn when a CAN OUTPUT's transmit id is already claimed elsewhere
+  // (another module's broadcast/output, or an imported ECU's message id). Listening (CAN input) to a
+  // claimed id is fine, so we only warn on outputs. Map refreshed whenever the editor opens.
+  let idMap = $state(null)
+  $effect(() => { if (drawer) api.canIdMap().then((m) => (idMap = m)).catch(() => (idMap = null)) })
+  let idOwners = $derived((() => {
+    if (!idMap?.claimed) return []
+    const id = parseInt(String(idHex).replace(/^0x/i, ''), 16)
+    if (!Number.isInteger(id)) return []
+    const key = (f.ide ? 'x' : '') + id.toString(16).toUpperCase()
+    const self = `${current?.name}: CAN out '${f.name}'`
+    return (idMap.claimed[key] ?? []).filter((o) => o !== self)
+  })())
 
   // ---- multi-position switch designer (analog input → firmware RotarySwitch) ----
   // FW decodes pos = clamp(floor((mV-offset)/step), 0, maxPos). This panel picks resistor
@@ -652,6 +693,25 @@
           {#if remoteSrc && !remoteBusy && remoteSigs.length === 0}<p class="hint">No signals are wired up on <b>{devName(remoteSrc)}</b> yet — enable an input / output / logic block there first, or use manual entry.</p>{/if}
           {#if f._remote}<p class="hint">Linked to <b>{devName(f._remote.sourceGuid)}</b> · {f._remote.label} (base+{f._remote.offset}). The fields below are filled from its broadcast frame; re-basing that module flags this input for re-save. <button type="button" class="linkbtn" onclick={clearRemote}>unlink</button></p>{/if}
         {/if}
+        {#if dbcSources.length}
+          <p class="lbl" style="margin-top:12px">🚗 Pull from an ECU / DBC signal (optional)</p>
+          <div class="f2">
+            <div class="field"><label>ECU (DBC)</label>
+              <select bind:value={dbcSrc}><option value="">— none —</option>{#each dbcSources as d}<option value={d.guid}>{d.name}</option>{/each}</select></div>
+            <div class="field"><label>Search signal{#if dbcBusy} …{/if}</label><input bind:value={dbcQ} disabled={!dbcSrc} placeholder="e.g. coolant, rpm, speed" /></div>
+          </div>
+          {#if dbcSrc}
+            <div class="bus"><div class="bh">{dbcHits.length}{dbcMore ? '+' : ''} match{dbcHits.length === 1 ? '' : 'es'} — click to fill</div>
+              <div class="scroll">
+                {#each dbcHits as s}
+                  <div class="r" style="cursor:pointer" use:clickable onclick={() => applyDbcSig(s)} title={s.messageName}>
+                    <span class="id">{s.name}</span><span class="dat">{hex(s.id)}{s.ide ? 'x' : ''} · {s.unit || s.length + 'b'} · use</span></div>
+                {/each}
+                {#if !dbcBusy && dbcHits.length === 0}<div class="r"><span class="dat">{dbcQ ? 'no match' : 'type to search'}</span></div>{/if}
+              </div></div>
+            {#if dbcMore}<p class="hint">Showing the first 60 matches — narrow the search to see more.</p>{/if}
+          {/if}
+        {/if}
         <p class="lbl">IDs seen on the bus</p>
         <div class="bus"><div class="bh"><span class="pulse" style="background:var(--ok);border-radius:50%"></span> live</div>
           <div class="scroll">
@@ -684,7 +744,7 @@
       {:else if editing.kind === 'condition'}
         <div class="field"><label>Name</label><input bind:value={f.name} /></div>
         <div class="field"><label>Signal</label>
-          <select bind:value={f.input} onchange={() => enableSourceVar(f.input)}>{#each inputsAll as v}<option value={v.index}>{v.name}</option>{/each}</select></div>
+          <SearchSelect options={ssOpts(inputsAll)} bind:value={f.input} placeholder="Search signal…" onpick={(v) => enableSourceVar(v)} /></div>
         <div class="f2">
           <div class="field"><label>Operator</label>
             <select bind:value={f.operator}>{#each opTxt as o, i}<option value={i}>{o}</option>{/each}</select></div>
@@ -704,14 +764,14 @@
           <div class="f3" style="align-items:end">
             <label class="chk"><input type="checkbox" bind:checked={f['not' + i]} /> NOT</label>
             <div class="field"><label>Signal {i + 1}</label>
-              <select bind:value={f['var' + i]} onchange={() => enableSourceVar(f['var' + i])}><option value={0}>—</option>{#each inputsBool as v}<option value={v.index}>{v.name}</option>{/each}</select></div>
+              <SearchSelect options={ssOpts(inputsBool, true)} bind:value={f['var' + i]} placeholder="Search signal…" onpick={(v) => enableSourceVar(v)} /></div>
             {#if i < 2}<div class="field"><label>Join</label><select bind:value={f['cond' + i]}>{#each condTxt as c, ci}<option value={ci}>{c}</option>{/each}</select></div>{:else}<div></div>{/if}
           </div>
         {/each}
       {:else if editing.kind === 'flasher'}
         <div class="field"><label>Name</label><input bind:value={f.name} /></div>
         <div class="field"><label>Driven by</label>
-          <select bind:value={f.input} onchange={() => enableSourceVar(f.input)}><option value={0}>—</option>{#each inputsBool as v}<option value={v.index}>{v.name}</option>{/each}</select></div>
+          <SearchSelect options={ssOpts(inputsBool, true)} bind:value={f.input} placeholder="Search signal…" onpick={(v) => enableSourceVar(v)} /></div>
         <div class="f2">
           <div class="field"><label>On time (ms)</label><input type="number" bind:value={f.onTime} /></div>
           <div class="field"><label>Off time (ms)</label><input type="number" bind:value={f.offTime} /></div>
@@ -720,9 +780,9 @@
       {:else if editing.kind === 'counter'}
         <div class="field"><label>Name</label><input bind:value={f.name} /></div>
         <div class="f3">
-          <div class="field"><label>Count up on</label><select bind:value={f.incInput} onchange={() => enableSourceVar(f.incInput)}><option value={0}>—</option>{#each inputsBool as v}<option value={v.index}>{v.name}</option>{/each}</select></div>
-          <div class="field"><label>Count down on</label><select bind:value={f.decInput} onchange={() => enableSourceVar(f.decInput)}><option value={0}>—</option>{#each inputsBool as v}<option value={v.index}>{v.name}</option>{/each}</select></div>
-          <div class="field"><label>Reset on</label><select bind:value={f.resetInput} onchange={() => enableSourceVar(f.resetInput)}><option value={0}>—</option>{#each inputsBool as v}<option value={v.index}>{v.name}</option>{/each}</select></div>
+          <div class="field"><label>Count up on</label><SearchSelect options={ssOpts(inputsBool, true)} bind:value={f.incInput} placeholder="Search…" onpick={(v) => enableSourceVar(v)} /></div>
+          <div class="field"><label>Count down on</label><SearchSelect options={ssOpts(inputsBool, true)} bind:value={f.decInput} placeholder="Search…" onpick={(v) => enableSourceVar(v)} /></div>
+          <div class="field"><label>Reset on</label><SearchSelect options={ssOpts(inputsBool, true)} bind:value={f.resetInput} placeholder="Search…" onpick={(v) => enableSourceVar(v)} /></div>
         </div>
         <div class="f3">
           <div class="field"><label>Min</label><input type="number" bind:value={f.minCount} /></div>
@@ -732,11 +792,14 @@
       {:else if editing.kind === 'canoutput'}
         <div class="field"><label>Name</label><input bind:value={f.name} /></div>
         <div class="field"><label>Variable to send</label>
-          <select bind:value={f.input} onchange={() => enableSourceVar(f.input)}>{#each inputsAll as v}<option value={v.index}>{v.name}</option>{/each}</select></div>
+          <SearchSelect options={ssOpts(inputsAll)} bind:value={f.input} placeholder="Search signal…" onpick={(v) => enableSourceVar(v)} /></div>
         <div class="f2">
           <div class="field"><label>CAN ID</label><input bind:value={idHex} /></div>
           <div class="field"><label>Frame</label><select bind:value={f.ide}><option value={false}>Standard</option><option value={true}>Extended</option></select></div>
         </div>
+        {#if idOwners.length}
+          <p class="hint" style="color:var(--warn)">⚠ CAN ID {idHex}{f.ide ? ' (ext)' : ''} is already transmitted by: <b>{idOwners.join('; ')}</b>. Two transmitters on one ID collide on the bus — pick a free ID.</p>
+        {/if}
         <div class="f3">
           <div class="field"><label>Start bit</label><input type="number" bind:value={f.startBit} /></div>
           <div class="field"><label>Length</label><input type="number" bind:value={f.bitLength} /></div>
@@ -751,7 +814,7 @@
         <label class="opt" style="border:0;padding-top:0"><input type="checkbox" bind:checked={f.enabled} /> Output enabled</label>
         <div class="field"><label>Name</label><input bind:value={f.name} /></div>
         <div class="field"><label>Driven by</label>
-          <select bind:value={f.input} onchange={() => { autoEnableOutput(); enableSourceVar(f.input) }}><option value={0}>—</option>{#each inputsBool as v}<option value={v.index}>{v.name}</option>{/each}</select></div>
+          <SearchSelect options={ssOpts(inputsBool, true)} bind:value={f.input} placeholder="Search signal…" onpick={(v) => { autoEnableOutput(); enableSourceVar(v) }} /></div>
         <div style="display:flex;gap:14px;margin:-2px 0 2px">
           {#if funcs?.conditions}<button type="button" class="linkbtn" onclick={() => buildRule('condition')}>＋ Comparison (analog &gt; value)</button>{/if}
           {#if funcs?.virtualInputs}<button type="button" class="linkbtn" onclick={() => buildRule('virtualinput')}>＋ Combination (A AND B)</button>{/if}
@@ -766,13 +829,13 @@
           <div class="f3">
             {#if f.variableFreq}
               <div class="field"><label>Freq source</label>
-                <select bind:value={f.freqInput} onchange={() => { autoEnableOutput(); enableSourceVar(f.freqInput) }}><option value={0}>—</option>{#each inputsNum as v}<option value={v.index}>{v.name}</option>{/each}</select></div>
+                <SearchSelect options={ssOpts(inputsNum, true)} bind:value={f.freqInput} placeholder="Search value…" onpick={(v) => { autoEnableOutput(); enableSourceVar(v) }} /></div>
             {:else}
               <div class="field"><label>Freq (Hz)</label><input type="number" bind:value={f.frequency} /></div>
             {/if}
             {#if f.variableDutyCycle}
               <div class="field"><label>Duty source</label>
-                <select bind:value={f.dutyCycleInput} onchange={() => { autoEnableOutput(); enableSourceVar(f.dutyCycleInput) }}><option value={0}>—</option>{#each inputsNum as v}<option value={v.index}>{v.name}</option>{/each}</select></div>
+                <SearchSelect options={ssOpts(inputsNum, true)} bind:value={f.dutyCycleInput} placeholder="Search value…" onpick={(v) => { autoEnableOutput(); enableSourceVar(v) }} /></div>
             {:else}
               <div class="field"><label>Duty (%)</label><input type="number" bind:value={f.fixedDutyCycle} /></div>
             {/if}
