@@ -102,6 +102,15 @@
   let drawer = $state(false)
   let editing = $state(null)   // { kind, number, isNew }
   let f = $state({})
+  // "Signal value at full" fields for the variable duty/freq inputs — free-typing local state,
+  // seeded on open; the firmware denominators are derived one-way (a controlled input that
+  // recomputed the denom on every keystroke snapped the value back and blocked multi-digit typing).
+  let dutyFull = $state(100), freqFull = $state(400)
+  $effect(() => {
+    if (editing?.kind !== 'digitaloutput') return
+    f.dutyCycleDenominator = Math.max(1, Math.round((+dutyFull || 0) / 100))
+    f.freqInputDenom = Math.max(1, Math.round((+freqFull || 0) / 400))
+  })
   let idHex = $state('0x100')
   let saving = $state(false)
 
@@ -286,6 +295,7 @@
       if (lk) f._remote = { ...lk }
     }
     if (kind === 'condition') f._hyst = (f.argOff != null && f.argOff !== f.arg)   // show hysteresis fields if a release point is set
+    if (kind === 'digitaloutput') { dutyFull = (f.dutyCycleDenominator || 1) * 100; freqFull = (f.freqInputDenom || 1) * 400 }
     drawer = true
   }
   function close() { drawer = false; editing = null; driverReturn = null }
@@ -743,15 +753,13 @@
           </div>
           {#if f.variableDutyCycle}
             <div class="field" style="max-width:260px"><label>Signal value at 100% duty</label>
-              <input type="number" min="1" value={(f.dutyCycleDenominator || 1) * 100}
-                oninput={(e) => (f.dutyCycleDenominator = Math.max(1, Math.round((+e.target.value || 0) / 100)))} /></div>
+              <input type="number" min="1" bind:value={dutyFull} /></div>
             <p class="hint">Duty tracks the source: <b>duty% = signal ÷ {f.dutyCycleDenominator || 1}</b>, clamped 0–100 then held at the min-duty floor.
               Set the value above to whatever the signal reads at full brightness (e.g. a 0–5000&nbsp;mV analog → 5000). Any numeric signal works — CAN or CANBoard.</p>
           {/if}
           {#if f.variableFreq}
             <div class="field" style="max-width:260px"><label>Signal value at 400 Hz</label>
-              <input type="number" min="1" value={(f.freqInputDenom || 1) * 400}
-                oninput={(e) => (f.freqInputDenom = Math.max(1, Math.round((+e.target.value || 0) / 400)))} /></div>
+              <input type="number" min="1" bind:value={freqFull} /></div>
             <p class="hint"><b>Freq = signal ÷ {f.freqInputDenom || 1}</b>, clamped to 15–400 Hz. Set the value above to the signal reading that should give full 400 Hz.</p>
           {/if}
         {/if}
