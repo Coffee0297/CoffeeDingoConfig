@@ -25,7 +25,7 @@ public record DeviceDto(string Guid, string Name, string Type, int BaseId, bool 
     double Battery, double Current, double Temp, string State, string Version, string Bitrate, OutputDto[] Outputs,
     bool Reading, int ReadDone, int ReadTotal, bool SleepEnabled, int SleepTimeoutMs,
     bool SleepInputEnabled, int SleepInput, bool SleepInputActiveHigh, bool SleepIgnoreAlwaysOn,
-    bool CanBootloader, bool IsGateway = false);
+    bool CanBootloader, bool ConfigMismatch = false, bool IsGateway = false);
 public record AdaptersDto(string[] Adapters, string[] Ports, bool Connected, string? ActiveAdapter, string? ActivePort);
 public record TelemetryDto(bool Connected, string? Adapter, long CanTotal, long CanRate, int[] Ids, DeviceDto[] Devices);
 public record ConnectReq(string Adapter, string Port, string Bitrate);
@@ -202,7 +202,7 @@ public static class DingoMap
                 p.BatteryVoltage, p.TotalCurrent, p.BoardTempC, p.DeviceState.ToString(),
                 p.Version, BitrateLabel(p.BitRate), outs, reading, readDone, readTotal,
                 p.SleepEnabled, p.SleepTimeoutMs, p.SleepInputEnabled, p.SleepInput, p.SleepInputActiveHigh, p.SleepIgnoreAlwaysOn,
-                p.CanBootloader);
+                p.CanBootloader, p.Connected && p.ConfigMismatch);
         }
         if (d is domain.Devices.Canboard.CanboardDevice cb)
             // CANBoard has no battery/total-current sensing (those are PDM smart-output features) — leave
@@ -210,7 +210,7 @@ public static class DingoMap
             return new DeviceDto(cb.Guid.ToString(), cb.Name, cb.Type, cb.BaseId, cb.Connected,
                 0, 0, cb.BoardTempC, "", cb.Version, BitrateLabel(cb.BitRate), Array.Empty<OutputDto>(), reading, readDone, readTotal,
                 cb.SleepEnabled, cb.SleepTimeoutMs, cb.SleepInputEnabled, cb.SleepInput, cb.SleepInputActiveHigh, cb.SleepIgnoreAlwaysOn,
-                cb.CanBootloader);
+                cb.CanBootloader, cb.Connected && cb.ConfigMismatch);
         return new DeviceDto(d.Guid.ToString(), d.Name, d.Type, d.BaseId, d.Connected,
             0, 0, 0, "", "", "", Array.Empty<OutputDto>(), reading, readDone, readTotal, false, 30000, false, 0, false, true,
             (d as IDeviceConfigurable)?.CanBootloader ?? false);

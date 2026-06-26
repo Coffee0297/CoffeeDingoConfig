@@ -454,6 +454,14 @@
     </div>
   {/if}
 
+  {#if current?.connected && current?.configMismatch}
+    <div class="hub-banner" style="top:{$hubState !== 'live' ? 96 : 58}px">
+      ⚠ The config on <b>&nbsp;{current.name}&nbsp;</b> differs from what's loaded here — you may be editing a stale config.
+      <b>&nbsp;Read from the device</b>&nbsp;to pull its real config in, or Deploy to overwrite the module with yours.
+      <button class="btn ghost" style="padding:2px 10px;margin-left:8px" disabled={scopeBusy} onclick={() => readScope(false)}>{scopeBusy ? 'Reading…' : 'Read from device'}</button>
+    </div>
+  {/if}
+
   <main class="wrap">
     {#if view === 'outputs'}
       {#if !current || isPdm}
