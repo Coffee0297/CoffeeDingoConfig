@@ -4,8 +4,9 @@
   import FnNode from './FnNode.svelte'
   import { writable } from 'svelte/store'
   import { dialog, labelFields, clickable } from './a11y.js'
-  import { api, varMapSources, applyGraphConnection, enableFunction, bridgeRemoteSignal, NODE_INPUTS, SYS_VARS } from './store.js'
+  import { api, varMapSources, applyGraphConnection, enableFunction, bridgeRemoteSignal, addCanInputFromDbc, NODE_INPUTS, SYS_VARS } from './store.js'
   import { toast } from './toast.js'
+  import RemoteSourceAdd from './RemoteSourceAdd.svelte'
 
   let { device, devices = [], onOpenSettings } = $props()
   // graph kind -> the editor kind to open (Signals & logic editors, or the Outputs tab for outputs)
@@ -91,7 +92,11 @@
   let msg = $state('')
   let funcs = null
   let remotes = $state([])              // [{ srcGuid, srcVar, label, devName }]
-  let remoteOpen = $state(false), remoteDev = $state(''), remoteSearch = $state(''), remoteSignals = $state([])
+  let remoteOpen = $state(false), remoteDev = $state(''), remoteSearch = $state(''), remoteSignals = $state([]), dbcMore = $state(false)
+  // A DBC/ECU source isn't a configurable module (no varmap/functions) — it already transmits its
+  // frames, so we list its DBC signals and decode them directly into a local CAN input (no bridge).
+  const remoteIsDbc = $derived(/dbc/i.test(devices.find((d) => d.guid === remoteDev)?.type || ''))
+  const hex = (n) => '0x' + (n ?? 0).toString(16).toUpperCase()
 
   const posKey = () => 'dingoGraphPos:' + device?.guid
   const remKey = () => 'dingoGraphRemotes:' + device?.guid
@@ -234,10 +239,15 @@
     try { remotes = JSON.parse(localStorage.getItem(remKey()) || '[]') } catch { remotes = [] }
     try {
       ;[funcs, vmap] = await Promise.all([api.functions(device.guid), api.inputs(device.guid).catch(() => [])])
-      boolSrc = await api.inputs(device.guid, 'bool').catch(() => [])
-      numSrc = [...await api.inputs(device.guid, 'float').catch(() => []), ...await api.inputs(device.guid, 'int').catch(() => [])]
+      await loadSrcLists()
       build()
     } catch (e) { msg = 'load failed: ' + e.message }
+  }
+  // Typed source lists for the circuit builder pickers — refreshed on load and after a remote/ECU
+  // signal is pulled in (so the new CAN input shows a label, not a bare index).
+  async function loadSrcLists() {
+    boolSrc = await api.inputs(device.guid, 'bool').catch(() => [])
+    numSrc = [...await api.inputs(device.guid, 'float').catch(() => []), ...await api.inputs(device.guid, 'int').catch(() => [])]
   }
   $effect(() => { if (device?.guid) load() })
 
@@ -328,12 +338,32 @@
     catch (e) { msg = 'add failed: ' + e.message; toast(msg, 'error') }
   }
 
-  async function openRemote() { remoteOpen = true; remoteDev = devices.find((d) => d.guid !== device.guid)?.guid ?? ''; if (remoteDev) loadRemoteSignals(remoteDev) }
-  async function loadRemoteSignals(g) { try { remoteSignals = await api.inputs(g) } catch { remoteSignals = [] } }
+  function openRemote() { remoteOpen = true; remoteSearch = ''; remoteDev = devices.find((d) => d.guid !== device.guid)?.guid ?? '' }
+  // Load the chosen source's signals: a DBC/ECU searches server-side (huge counts); a module lists its
+  // varmap (which the grab then bridges over CAN). Reactive on the module + the DBC search term.
+  $effect(() => {
+    if (!remoteOpen || !remoteDev) { remoteSignals = []; return }
+    const dbc = remoteIsDbc, g = remoteDev, term = remoteSearch
+    let alive = true
+    if (dbc) api.dbcSearch(g, term, 100).then((r) => { if (alive) { remoteSignals = r.items ?? []; dbcMore = !!r.more } }).catch(() => { if (alive) remoteSignals = [] })
+    else api.inputs(g).then((s) => { if (alive) remoteSignals = s }).catch(() => { if (alive) remoteSignals = [] })
+    return () => { alive = false }
+  })
   function grabRemote(sig) {
     if (remotes.some((r) => r.srcGuid === remoteDev && r.srcVar === sig.index)) { remoteOpen = false; return }
     remotes = [...remotes, { srcGuid: remoteDev, srcVar: sig.index, label: sig.name, devName: dName(remoteDev) }]
     saveRemotes(); build(); remoteOpen = false
+  }
+  // ECU/DBC source: decode the chosen signal straight into a local CAN input (it already broadcasts),
+  // then reload so the new CAN-input node appears in the graph, ready to wire to a target.
+  async function grabDbc(sig) {
+    try {
+      const r = await addCanInputFromDbc(device.guid, sig)
+      remoteOpen = false; remoteSearch = ''
+      await load()
+      msg = live ? `added CAN input “${r.name}” decoding ${hex(sig.id)} — drag it to a target, then Burn`
+                 : `added CAN input “${r.name}” — saved to the project; connect + Deploy to apply`
+    } catch (e) { msg = 'add failed: ' + e.message; toast(msg, 'error') }
   }
 
   // ===== Circuit Builders =====================================================================
@@ -473,22 +503,29 @@
 {#if remoteOpen}
   <div class="scrim show" onclick={() => (remoteOpen = false)}></div>
   <aside class="drawer show" use:dialog={{ onclose: () => (remoteOpen = false) }}>
-    <div class="dh"><div><div class="nm">Grab a signal from another module</div>
-      <div class="meta">It's bridged over CAN (auto CAN-out on the source + CAN-in here)</div></div>
+    <div class="dh"><div><div class="nm">Grab a signal from another module or ECU</div>
+      <div class="meta">{remoteIsDbc ? 'Decodes the ECU frame into a CAN input here' : "It's bridged over CAN (auto CAN-out on the source + CAN-in here)"}</div></div>
       <button class="x" aria-label="Close" onclick={() => (remoteOpen = false)}>✕</button></div>
     <div class="dbody" use:labelFields>
-      <div class="field"><label>Module</label>
-        <select bind:value={remoteDev} onchange={() => loadRemoteSignals(remoteDev)}>
-          {#each devices.filter((d) => d.guid !== device.guid) as d}<option value={d.guid}>{d.name}</option>{/each}
+      <div class="field"><label>Source</label>
+        <select bind:value={remoteDev}>
+          {#each devices.filter((d) => d.guid !== device.guid) as d}<option value={d.guid}>{d.name}{d.type && /dbc/i.test(d.type) ? ' (ECU)' : ''}</option>{/each}
         </select></div>
-      <div class="field"><label>Signal</label><input placeholder="filter…" bind:value={remoteSearch} /></div>
+      <div class="field"><label>Signal</label><input placeholder={remoteIsDbc ? 'search ECU signal…' : 'filter…'} bind:value={remoteSearch} /></div>
       <div style="max-height:340px;overflow:auto;border:1px solid var(--line);border-radius:8px">
-        {#each remoteSignals.filter((s) => s.index > 0 && (!remoteSearch || s.name.toLowerCase().includes(remoteSearch.toLowerCase()))).slice(0, 200) as s (s.index)}
-          <div use:clickable onclick={() => grabRemote(s)} style="padding:5px 9px;cursor:pointer;font-size:13px;border-bottom:1px solid var(--line)">{s.name} <span class="muted" style="font-size:11px">#{s.index}</span></div>
-        {/each}
+        {#if remoteIsDbc}
+          {#each remoteSignals as s (s.name + s.id + s.startBit)}
+            <div use:clickable onclick={() => grabDbc(s)} style="padding:5px 9px;cursor:pointer;font-size:13px;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;gap:8px"><span>{s.name}</span><span class="muted" style="font-size:11px;white-space:nowrap">{hex(s.id)} · {s.length}b{s.unit ? ' · ' + s.unit : ''}</span></div>
+          {/each}
+          {#if !remoteSignals.length}<div class="muted" style="padding:6px 9px;font-size:12px">{remoteSearch ? 'no match' : 'type to search'}</div>{/if}
+        {:else}
+          {#each remoteSignals.filter((s) => s.index > 0 && (!remoteSearch || s.name.toLowerCase().includes(remoteSearch.toLowerCase()))).slice(0, 200) as s (s.index)}
+            <div use:clickable onclick={() => grabRemote(s)} style="padding:5px 9px;cursor:pointer;font-size:13px;border-bottom:1px solid var(--line)">{s.name} <span class="muted" style="font-size:11px">#{s.index}</span></div>
+          {/each}
+        {/if}
       </div>
-      <p class="hint">Pick a signal (e.g. a switch or output state). It appears as a remote node — wire it to a local input
-        and the tool auto-creates the CAN broadcast on “{dName(remoteDev)}” and the CAN receive here. Deploy/Burn both modules.</p>
+      <p class="hint">{#if remoteIsDbc}Pick an ECU signal — it becomes a CAN input on this module that decodes the frame at its message ID, ready to wire. Burn to keep.{:else}Pick a signal (e.g. a switch or output state). It appears as a remote node — wire it to a local input
+        and the tool auto-creates the CAN broadcast on “{dName(remoteDev)}” and the CAN receive here. Deploy/Burn both modules.{/if}</p>
     </div>
   </aside>
 {/if}
@@ -507,8 +544,10 @@
         <div class="field"><label>{f.label}{#if f.opt}<span class="muted">&nbsp;(optional)</span>{/if}</label>
           {#if f.t === 'bool'}
             <select bind:value={bSel[f.k]}><option value="">{f.opt ? '— none —' : 'Choose…'}</option>{#each boolSrc as v}<option value={v.index}>{v.name}</option>{/each}</select>
+            <RemoteSourceAdd guid={device.guid} {devices} kind="bool" onadded={(idx) => loadSrcLists().then(() => bSel[f.k] = idx)} />
           {:else if f.t === 'num'}
             <select bind:value={bSel[f.k]}><option value="">Choose…</option>{#each numSrc as v}<option value={v.index}>{v.name}</option>{/each}</select>
+            <RemoteSourceAdd guid={device.guid} {devices} kind="num" onadded={(idx) => loadSrcLists().then(() => bSel[f.k] = idx)} />
           {:else if f.t === 'out'}
             <select bind:value={bSel[f.k]}><option value="">Choose…</option>{#each builderOutputs as o}<option value={o.number}>{'O' + o.number}{o.name?.trim() ? ' · ' + o.name : ''}</option>{/each}</select>
           {:else if f.t === 'op'}

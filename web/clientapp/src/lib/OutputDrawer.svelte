@@ -4,7 +4,8 @@
   import { dialog, labelFields, clickable } from './a11y.js'
   import LuaEditor from './LuaEditor.svelte'
   import SearchSelect from './SearchSelect.svelte'
-  let { output, outputs = [], guid, connected = false, deviceType = '', onclose } = $props()
+  import RemoteSourceAdd from './RemoteSourceAdd.svelte'
+  let { output, outputs = [], guid, connected = false, deviceType = '', devices = [], onclose } = $props()
   // Other outputs on this module, for the "Paired output" picker (-1 = none).
   let otherOutputs = $derived((outputs ?? []).filter((o) => o.number !== output.number))
   // Outputs that follow THIS one (the link is stored on the follower as a 0-based index).
@@ -341,7 +342,8 @@
       <div class="field"><label>Driving input</label>
         <SearchSelect placeholder="Search boolean source…"
           options={driverOpts}
-          bind:value={f.input} onpick={(v) => { autoEnableOutput(); enableSourceVar(v) }} /></div>
+          bind:value={f.input} onpick={(v) => { autoEnableOutput(); enableSourceVar(v) }} />
+        <RemoteSourceAdd {guid} {devices} kind="bool" onadded={(idx) => loadInputs().then(() => { f.input = idx; autoEnableOutput() })} /></div>
       <div style="display:flex;gap:14px;margin:-2px 0 2px">
         <button type="button" class="linkbtn" onclick={openComparison}>＋ Comparison (analog &gt; value)</button>
         <button type="button" class="linkbtn" onclick={openCombination}>＋ Combination (A AND B)</button>
@@ -352,7 +354,8 @@
           <p class="lbl" style="margin-top:0">New comparison</p>
           <div class="field"><label>Name (optional)</label><input bind:value={cmp.name} placeholder="e.g. Engine hot" /></div>
           <div class="field"><label>Signal</label>
-            <SearchSelect options={ssOpts(inputsNum, true)} bind:value={cmp.input} placeholder="Search value…" onpick={(v) => enableSourceVar(v)} /></div>
+            <SearchSelect options={ssOpts(inputsNum, true)} bind:value={cmp.input} placeholder="Search value…" onpick={(v) => enableSourceVar(v)} />
+            <RemoteSourceAdd {guid} {devices} kind="num" onadded={(idx) => loadInputs().then(() => { cmp.input = idx })} /></div>
           <div class="f2">
             <div class="field"><label>Operator</label>
               <select bind:value={cmp.operator}>{#each opTxt as o, i}<option value={i}>{o}</option>{/each}</select></div>
@@ -381,7 +384,8 @@
             <div class="f3" style="align-items:end">
               <label class="chk"><input type="checkbox" bind:checked={comb['not' + i]} /> NOT</label>
               <div class="field"><label>Signal {i + 1}</label>
-                <SearchSelect options={ssOpts(inputsBool, true)} bind:value={comb['var' + i]} placeholder="Search signal…" onpick={(v) => enableSourceVar(v)} /></div>
+                <SearchSelect options={ssOpts(inputsBool, true)} bind:value={comb['var' + i]} placeholder="Search signal…" onpick={(v) => enableSourceVar(v)} />
+                <RemoteSourceAdd {guid} {devices} kind="bool" onadded={(idx) => loadInputs().then(() => { comb['var' + i] = idx })} /></div>
               {#if i < 2}<div class="field"><label>Join</label><select bind:value={comb['cond' + i]}>{#each condTxt as c, ci}<option value={ci}>{c}</option>{/each}</select></div>{:else}<div></div>{/if}
             </div>
           {/each}

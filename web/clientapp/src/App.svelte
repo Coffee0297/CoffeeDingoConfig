@@ -743,7 +743,7 @@
 
   {#if editNum != null && current}
     {@const eo = current.outputs.find((o) => o.number === editNum)}
-    {#if eo}<OutputDrawer output={eo} outputs={current.outputs} guid={current.guid} connected={current.connected} deviceType={current.type} onclose={() => (editNum = null)} />{/if}
+    {#if eo}<OutputDrawer output={eo} outputs={current.outputs} guid={current.guid} connected={current.connected} deviceType={current.type} {devices} onclose={() => (editNum = null)} />{/if}
   {/if}
 
   {#if dialog === 'add' || dialog === 'modify'}

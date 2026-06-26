@@ -343,6 +343,45 @@ export async function bridgeRemoteSignal(localGuid, srcGuid, srcVar, devices) {
   return srcToIdx['caninput:' + ci.number + '|state']
 }
 
+// ---- Pull a signal off the bus onto a consumer module: claim a free CAN input and fill it so it
+// decodes a CAN frame (absolute id + bit layout). The frame is one another device already transmits
+// — an ECU/DBC message, or another module's broadcast — so NOTHING is written to the source; we just
+// decode it locally. Returns the new caninput number + the varmap indices of its decoded ports:
+// valueIndex (analog, float) and stateIndex (the 1-bit boolean). ----
+// `frame` = {name, id, ide, startBit, length, byteOrder, factor, offset, isSigned}.
+async function addCanInputFromFrame(consumerGuid, frame) {
+  const f = await api.functions(consumerGuid)
+  const free = (f?.canInputs ?? []).find((x) => !x.enabled)
+  if (!free) throw new Error('this module has no free CAN input slot — free one in Signals & logic')
+  const name = (frame.name || ('dbc' + free.number)).slice(0, 32)
+  // `id` BEFORE `ide`: CanInput.Id's setter forces Ide from the value (>2047), so send the source's
+  // own ide flag afterwards to honour an extended-frame signal whose id happens to be ≤ 2047.
+  await api.setFunction(consumerGuid, 'caninput', free.number, {
+    enabled: true, id: frame.id, ide: !!frame.ide,
+    startBit: frame.startBit, bitLength: frame.length, byteOrder: frame.byteOrder,
+    factor: frame.factor, offset: frame.offset, signed: frame.isSigned, mode: 0, name,
+  })
+  // Resolve the new input's varmap indices by VarLabel (State → name, Value → "name Value").
+  const ins = await api.inputs(consumerGuid).catch(() => [])
+  return {
+    number: free.number, name,
+    stateIndex: ins.find((x) => x.name === name)?.index ?? null,
+    valueIndex: ins.find((x) => x.name === name + ' Value')?.index ?? null,
+  }
+}
+
+// From a /dbc/search or /dbc/signals hit (absolute id): {name,id,ide,startBit,length,byteOrder,isSigned,factor,offset}.
+export const addCanInputFromDbc = (consumerGuid, sig) => addCanInputFromFrame(consumerGuid, sig)
+
+// From a /broadcast-signals entry of another module. That DTO is base-ID-relative (offset, valueOffset,
+// bitLength), so resolve the absolute id off the source's current base. Native broadcast frames are
+// 11-bit standard (ide=false). `source` is the source device record (needs baseId).
+export const addCanInputFromBroadcast = (consumerGuid, source, sig) => addCanInputFromFrame(consumerGuid, {
+  name: sig.name, id: (source?.baseId ?? 0) + sig.offset, ide: false,
+  startBit: sig.startBit, length: sig.bitLength, byteOrder: sig.byteOrder,
+  factor: sig.factor, offset: sig.valueOffset, isSigned: sig.signed,
+})
+
 // ---- Lua snippets (authored per-function in the tool; the device stores one
 // assembled program). Persisted to localStorage, keyed by device guid then a
 // slot key ('global', 'out1'.. etc). ----
