@@ -10,7 +10,7 @@ namespace application.Services;
 /// In-app firmware flashing over USB DFU. Commands the device into its DFU bootloader,
 /// releases the serial port, waits for the STM32 ROM DFU device (0483:df11), and runs
 /// dfu-util to write the uploaded binary. Works too if the board is already in DFU.
-/// dfu-util path: env var DINGO_DFU_UTIL, else the known dingo-tools location, else PATH.
+/// dfu-util path: env var DINGO_DFU_UTIL, else tools/dfu-util next to the app, else PATH.
 /// Live progress is exposed via <see cref="Status"/> (polled by the UI during a flash).
 /// </summary>
 public partial class FirmwareFlashService(
@@ -35,9 +35,10 @@ public partial class FirmwareFlashService(
     {
         var env = Environment.GetEnvironmentVariable("DINGO_DFU_UTIL");
         if (!string.IsNullOrWhiteSpace(env) && File.Exists(env)) return env;
-        var known = @"C:\dingo-tools\dfu-util\dfu-util-0.11-binaries\win64\dfu-util.exe";
-        if (File.Exists(known)) return known;
-        return OperatingSystem.IsWindows() ? "dfu-util.exe" : "dfu-util";   // assume on PATH
+        var exe = OperatingSystem.IsWindows() ? "dfu-util.exe" : "dfu-util";
+        var bundled = Path.Combine(AppContext.BaseDirectory, "tools", "dfu-util", exe);   // shipped next to the app
+        if (File.Exists(bundled)) return bundled;
+        return exe;   // assume on PATH
     }
 
     /// <param name="flashAddr">
