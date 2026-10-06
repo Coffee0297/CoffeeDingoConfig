@@ -15,7 +15,8 @@ public class AnalogSwitch(int number, string name) : IDeviceFunction
     [JsonPropertyName("enabled")] public bool Enabled { get; set; }
     [JsonPropertyName("mode")] public InputMode Mode { get; set; } = InputMode.Momentary;
     [JsonPropertyName("invert")] public bool Invert { get; set; }
-    [JsonPropertyName("threshold")] public int Threshold { get; set; }
+    // mV, 0 … 5000 (ANALOG_INPUT_PARAMS sub 4) — the firmware silently rejects an out-of-range write.
+    [JsonPropertyName("threshold")] public int Threshold { get => field; set => field = Math.Clamp(value, 0, 5000); }
     
     [JsonIgnore][Plotable(displayName:"InState")] public bool State { get; set; }
     

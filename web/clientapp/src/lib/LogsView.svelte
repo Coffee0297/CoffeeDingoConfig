@@ -2,6 +2,7 @@
   import { api, telemetry } from './store.js'
   import { clickable } from './a11y.js'
   import { toast } from './toast.js'
+  import { tripReason } from './trip.js'
   let tab = $state('can')
 
   // Overload (trip) log — read on demand from the device (it records trips autonomously).
@@ -21,10 +22,17 @@
     try {
       const dev = ovlDevices.find((d) => d.guid === ovlDev)
       const r = await api.overloads(ovlDev)
-      evts = (r.events ?? []).map((e, k) => ({
-        id: k, dev: dev?.name ?? '', num: e.output, name: '', state: e.state,
-        maxA: e.peakA, limit: e.limitA, samples: e.samples, done: true,
-      }))
+      evts = (r.events ?? []).map((e, k) => {
+        // The device logs the STEADY limit; a trip inside the inrush window was judged against the inrush
+        // limit, so show the limit that actually fired (lib/trip.js).
+        const out = dev?.outputs?.find((o) => o.number === e.output)
+        const why = tripReason(e, out)
+        return {
+          id: k, dev: dev?.name ?? '', num: e.output, name: out?.name ?? '', state: e.state,
+          maxA: e.peakA, limit: why.limitA, limitKind: why.kind, why: why.text, clears: why.clears,
+          samples: e.samples, done: true,
+        }
+      })
       ovlMsg = evts.length ? `${evts.length} event${evts.length > 1 ? 's' : ''}` : 'No trips logged on the device.'
     } catch (e) { ovlMsg = 'Read failed: ' + e.message }
     finally { ovlBusy = false }
@@ -159,14 +167,15 @@
         <div style="display:flex;gap:14px;align-items:baseline;margin-bottom:6px">
           <b>{sel.dev} · O{sel.num} {sel.name?.trim() ? sel.name : ''}</b>
           <span class="lvl {sel.state === 'Fault' ? 'e' : 'w'}">{sel.state}</span>
-          <span class="muted">peak <b style="color:var(--err)">{sel.maxA?.toFixed(1)} A</b> · limit {sel.limit} A</span>
+          <span class="muted">peak <b style="color:var(--err)">{sel.maxA?.toFixed(1)} A</b> · {sel.limitKind === 'inrush' ? 'inrush limit' : 'limit'} {sel.limit} A</span>
           {#if !sel.done}<span class="muted">capturing… (waiting for +3 s)</span>{/if}
         </div>
+        {#if sel.why}<div style="margin-bottom:8px">{sel.why}{#if sel.clears}<span class="muted"> · {sel.clears}</span>{/if}</div>{/if}
         {#if sel.samples?.length}
           <svg viewBox="0 0 {W} {H}" style="width:100%;height:auto;background:var(--surface);border:1px solid var(--line);border-radius:8px">
             <!-- limit line -->
             <line x1={PAD} y1={yPix(sel.limit, sel)} x2={W - PAD} y2={yPix(sel.limit, sel)} stroke="#c77700" stroke-dasharray="4 3" />
-            <text x={W - PAD} y={yPix(sel.limit, sel) - 4} text-anchor="end" font-size="10" fill="#c77700">limit {sel.limit} A</text>
+            <text x={W - PAD} y={yPix(sel.limit, sel) - 4} text-anchor="end" font-size="10" fill="#c77700">{sel.limitKind === 'inrush' ? 'inrush limit' : 'limit'} {sel.limit} A</text>
             <!-- trip marker at dt=0 -->
             <line x1={xPix(0)} y1={PAD} x2={xPix(0)} y2={H - PAD} stroke="#d23b3b" stroke-dasharray="3 3" />
             <text x={xPix(0) + 3} y={PAD + 10} font-size="10" fill="#d23b3b">trip</text>
@@ -187,7 +196,7 @@
           <tr style="cursor:pointer" use:clickable class:dir-rx={e.id === sel?.id} onclick={() => (ovlSel = e.id)}>
             <td>{e.dev}</td><td>O{e.num} {e.name?.trim() ? e.name : ''}</td>
             <td><span class="lvl {e.state === 'Fault' ? 'e' : 'w'}">{e.state}</span></td>
-            <td><b>{e.maxA?.toFixed(1)}</b></td><td>{e.limit}</td></tr>
+            <td><b>{e.maxA?.toFixed(1)}</b></td><td>{e.limit}{#if e.limitKind === 'inrush'} <span class="muted">(inrush)</span>{/if}</td></tr>
         {/each}
       </tbody>
     </table></div>

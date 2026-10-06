@@ -37,4 +37,8 @@ public enum MessageCommand
     OvlHeader = 45,         // [cmd, idx] -> [cmd, idx, outNum(0xFF=invalid), state, peakLo, peakHi, limitLo, limitHi] (0.1A)
     OvlData = 46,           // [cmd, idx, offHi, offLo] -> [cmd, idx, offHi, offLo, b0..b3] (samples @ 0.5A)
     OvlClear = 47,          // [cmd] -> clear
+
+    // Output bench test (firmware ≥ 5.5.107): [cmd, out (0-based), mode 0 off / 1 on / 2 pwm, duty %, freqLo, freqHi, holdSec, 0]
+    // -> reply echoes bytes 0-6, [7] = accepted. The module releases on its own after holdSec.
+    OutputTest = 48,
 }

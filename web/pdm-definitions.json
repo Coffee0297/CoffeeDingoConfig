@@ -12,10 +12,12 @@
       "numFlashers": 4,
       "numCounters": 4,
       "numConditions": 32,
+      "numTimers": 8,
+      "numTables": 2,
       "numKeypads": 2,
       "minMajorVersion": 5,
       "minMinorVersion": 5,
-      "minBuildVersion": 102,
+      "minBuildVersion": 107,
       "outputCurrentRatings": [14, 14, 8, 8, 8, 8, 8, 8]
     },
     {
@@ -30,10 +32,12 @@
       "numFlashers": 4,
       "numCounters": 4,
       "numConditions": 32,
+      "numTimers": 8,
+      "numTables": 2,
       "numKeypads": 2,
       "minMajorVersion": 5,
       "minMinorVersion": 5,
-      "minBuildVersion": 102,
+      "minBuildVersion": 107,
       "outputCurrentRatings": [26, 26, 26, 26]
     },
     {
@@ -48,10 +52,12 @@
       "numFlashers": 4,
       "numCounters": 4,
       "numConditions": 32,
+      "numTimers": 8,
+      "numTables": 2,
       "numKeypads": 2,
       "minMajorVersion": 5,
       "minMinorVersion": 5,
-      "minBuildVersion": 102,
+      "minBuildVersion": 107,
       "outputCurrentRatings": null
     }
   ],
@@ -69,9 +75,10 @@
       "numFlashers": 4,
       "numCounters": 4,
       "numConditions": 8,
+      "numTimers": 4,
       "minMajorVersion": 5,
       "minMinorVersion": 5,
-      "minBuildVersion": 102,
+      "minBuildVersion": 107,
       "outputCurrentRatings": null
     }
   ]

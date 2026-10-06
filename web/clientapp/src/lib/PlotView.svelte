@@ -22,7 +22,7 @@
 
   async function loadPickSignals(g) {
     pickGuid = g; pickName = ''
-    try { pickSignals = (await api.signals(g)).map((s) => s.name); pickErr = '' } catch (e) { pickSignals = []; pickErr = 'Couldn’t read signals — is the adapter connected?' }
+    try { pickSignals = (await api.signals(g)).filter((s) => s.enabled !== false).map((s) => s.name); pickErr = '' } catch (e) { pickSignals = []; pickErr = 'Couldn’t read signals — is the adapter connected?' }
   }
   $effect(() => { if (!pickGuid && devices.length) loadPickSignals(devices[0].guid) })
 

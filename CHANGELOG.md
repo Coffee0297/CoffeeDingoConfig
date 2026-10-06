@@ -3,6 +3,175 @@
 All notable changes to **dingoConfig** are recorded here. Versions follow [SemVer](https://semver.org/);
 `-rc.N` tags are prereleases (feature-complete but not field-validated).
 
+## [Unreleased]
+
+### Added
+- SLCAN adapter accepts `tcp://host:port` (CoffeeDingoSim bridge); a **Sim** button next to the port box
+  fills in `tcp://127.0.0.1:7778`.
+- A faulted / over-current output card says **why** it tripped (peak vs the limit that fired, read from the
+  module's trip log) and how it clears (latched until power cycle, or the retry schedule).
+- Logs ▸ Overloads shows the limit that actually fired: a trip inside the inrush window is judged against
+  the inrush limit, which the firmware does not log (`lib/trip.js`, worked out from the stored waveform).
+
+### Changed
+- CAN-ID guard: an id sent only by Lua `txCan` calls on several modules (a master/backup failover) is listed
+  as a **shared Lua ID**, not a conflict; any other owner on the same id still collides.
+
+## [0.7.0] — 2026-10-05
+
+Timers, 2-axis lookup tables, the expanded sleep model from upstream dingoFW #52, the upstream flow-editor
+ideas folded into the Wiring graph, and the CAN-input operand fix (upstream dingoConfig #59). Pairs with
+**CoffeeDingoFW v5.5.107** (`CONFIG_VERSION` 0x000F); minimum firmware is now **5.5.107**. Build- and
+API-verified (unit tests + an end-to-end API smoke run), **not yet exercised on hardware**.
+
+### Added
+- **Shutdown & sleep sequence designer** (System ▸ ⚙ Settings) — describe the sleep in plain terms and see it
+  as a timeline: an **ignition signal**, *sleep N s after ignition off*, *quiet on CAN at M s*, *hold these
+  outputs for H s* (dash stays lit after the key), and for a **master** a *shutdown frame* (CAN ID, byte 0 = 1,
+  sent G s after ignition off). **Roles**: Standalone / Master / Follower — applying Master enrols every other
+  module as a follower automatically (its trigger becomes the master's frame, sleeping 10 s after it, quiet at
+  8 s), after a confirm that lists them; a follower's Settings shows which master it follows. Everything
+  compiles onto existing primitives — Timers named “Sleep · …”, the force-sleep / mute-TX inputs, a CAN
+  output / CAN input for the frame — so it reads back from the module, works offline (Deploy later) and shows
+  up on the Wiring canvas. The raw signal pickers moved under *Advanced*.
+- **The module block takes wires too** — on the Wiring canvas the device node now has **Force sleep** (boards
+  that sleep) and **Mute CAN TX** input ports, so a Timer, digital input or CAN input can be wired straight
+  into the module like any other block (parity with upstream's flow editor, which gained the same two handles
+  in dingoConfig `cf23651`). Wires persist offline and write params 0x0000:10/11 when live; the module's own
+  always-true signals are refused as sources, and deleting a source clears these inputs like any consumer.
+  `POST /api/devices/{guid}/device-inputs` `{ forceSleepInput?, muteTxInput? }`; `/functions` now carries a
+  `device` block with the current values.
+- **Output bench test** — in the Outputs editor (and a ⚡ test link on each card while the module is live):
+  force an output **on**, or run **PWM at a chosen duty and frequency**, to check wiring and loads without
+  touching its rule. The module holds the test for 5 s per command and the editor re-sends while it runs,
+  so Stop, closing the panel or losing the link releases the output by itself; on a PDM the current limits
+  and fault handling stay active, and a disabled output is refused (enable it and set its limit first).
+  Works for PDM/-Max outputs and CANBoard digital outputs (incl. PWM).
+  `POST /api/devices/{guid}/output/{n}/test` `{ mode: on|pwm|off, duty, freq, hold }`; needs firmware
+  ≥ 5.5.107 (MsgCmd 48).
+- **Timer function** (upstream dingoFW #61) — a new logic block in Signals & logic and on the Wiring
+  canvas: driven by any on/off signal, with **on-delay / off-delay / pulse** modes, a preset in ms and a
+  selectable active level (run while the input is *on* or *off*). 8 per PDM, 4 per CANBoard. The output
+  is a normal signal — drive an output, a Condition, a CAN output, or the module's force-sleep input.
+- **Lookup table function** (upstream dingoConfig #58) — a 2-axis map (up to 8×8) with bilinear
+  interpolation, edited as a grid (X breakpoints across, Y down, "space axes evenly"), with a **live
+  preview** of the interpolated result from the current X/Y and the value the module reports. One row =
+  a 1-D curve (fan duty vs temperature); the output is a numeric signal (e.g. an output's duty source).
+  PDM/-Max only (the CANBoard config sector has no room). Axes are validated ascending before save.
+- **Expanded sleep settings** (System ▸ ⚙ Settings): a **force-sleep** signal picker (ignition input, a
+  CAN "sleep now" input, a Timer…), a **mute CAN broadcasts** signal picker, and **wake sources** — a
+  checkbox per digital input plus "CAN traffic" (USB always wakes). Replaces the digital-input-only
+  sleep trigger of 0.6.x. Exposed to agents as `device.forceSleepInput`, `device.muteTxInput`,
+  `device.wakeDigInputMask`, `device.wakeOnCan` (sub 10–13; the old sub 6–8 params are gone).
+  Field-safety guards: always-true signals ("Always On", "State") are kept out of both pickers and
+  refused on Save (they would park the module 1 s after every boot with only USB able to wake it); a
+  configuration with **no** wake source is refused while sleep is possible; a new force-sleep signal is
+  confirmed by name. Save writes **only the fields you changed** (an unread module's other values are
+  the project record, and a banner says so), and the sleep blocks are hidden on a CANBoard, whose
+  firmware never sleeps — only the mute-TX input applies there.
+- `/api/devices/{guid}/inputs` entries now carry their owner (`kind`, `number`, `prop`), so the UI
+  resolves a var-map index to its function exactly instead of reconstructing names (a CAN input and a
+  table both called "Fan" no longer collide); pickers hide a function's own output, and disabling a
+  block from Signals & logic warns which inputs still read it.
+- `set_function` / the function endpoint now **refuse** a field the model can't take (an undefined enum
+  value, a non-numeric) with a 400 naming it, instead of silently dropping it and reporting "saved";
+  fractional numbers for integer fields are rounded. Timer preset, flasher on/off time and table sizes
+  are clamped to the firmware ranges in the model, and the circuit builders validate their ms fields.
+- The CANBoard/PDM **DBC** float signals (`SIG_VALTYPE_`) are now honoured when a module DBC is
+  imported as an ECU device, so `Table_1` decodes as a float, not a huge integer.
+- The Dashboard only shows configured flasher / timer / table slots (the API's `SignalDto` carries
+  `enabled`), and the Signals-list poll, Wiring poll and Dashboard poll now depend on the module id,
+  not the telemetry object — the 10 Hz push was re-running them (≈50 requests/s idle).
+- **Wiring graph, upstream flow-editor ideas**: handles are **coloured by data type** (bool / int /
+  real) and a wire only lands where the type fits (while you drag, the dot under the cursor rings green
+  if the types fit, red if not); wires **glow green while their signal is on**; the gear on a block
+  opens its editor **inline below the canvas**
+  (the graph stays visible — PDM smart outputs still open the Outputs drawer); one **device node**
+  carries Always On / State / Temperature / Battery; the Add menu shows **free slot counts** and opens
+  the new block's editor; deleting a block that other inputs still use asks first and tells you how
+  many wires go; PDM outputs expose **Duty source / Freq source** ports (wiring one switches the output
+  to variable PWM); **CANBoard digital outputs now appear** on the canvas and wire like PDM outputs.
+- Circuit builders: **After-run** (output holds for N s after its trigger drops — fan/turbo cooling,
+  courtesy light) via an off-delay Timer; the Fuel-pump prime is now a Timer pulse instead of a
+  10-minute flasher.
+- `tests/LookupTableTests.cs` + `web/clientapp/src/lib/table.test.js` mirror the firmware's host
+  self-test cases, so the three interpolation implementations can't drift apart.
+
+### Fixed
+- **Full review against a 7-module project (5 PDM + 2 CANBoard)** — every function slot round-tripped through the
+  API, every view and editor driven headlessly, models compared with the firmware param tables. Fixed:
+  - wiper and starter-disable configuration was **dropped on project load** (non-public setters), so the next Write
+    pushed defaults; a dingoPDM-Max loaded from a project kept an 8-output starter-disable the firmware rejected whole;
+  - output label params (name, wire colour/stripe/length/gauge) leaked into the CAN param protocol: bulk WriteAll and
+    the CRC check threw, and a Read wiped the wire labels and counted them as 40 "differences";
+  - `ApplyJson` rejected `string[]` and nested collections, so **every CANBoard analog-input save and every keypad save
+    returned 400**; it also applied the accepted fields before refusing ("nothing was written" was false) — now two-pass;
+  - `set_output_config` / `/outputconfig` with a partial body zeroed the omitted fields — now a merge;
+  - the CAN input/output `Id` setter cleared an explicit extended-frame flag for ids ≤ 0x7FF; keypad model and
+    message-source enums drifted from the firmware; `keypaddial` was unreachable via the function API/MCP;
+  - firmware-bounded params (bit lengths, rotary positions, counters, PWM frequency/denominators/duty, times, reset
+    limit, currents, node id, brightness, sleep timeout, primary output) had no clamps via API/MCP — the firmware
+    dropped the write silently and the app reported "No reply";
+  - table outputs were advertised as int32 to the cross-module picker (a firmware CAN input cannot decode a float32 —
+    they are now marked and refused); `/can-id-map` used a 16-id span for every module (now +29 PDM / +13 CANBoard) and
+    ignored Lua `txCan` transmissions; the CANBoard board temperature was discarded ("no sensor");
+  - `/signals` hard-coded `enabled` for digital inputs/outputs and analog inputs, so the Dashboard and Plot listed every
+    unused slot; the Plot picker, Dashboard and the Condition / CAN-output / wiper pickers now show configured signals only.
+- **Lua slot lint**: uploading a program now warns when `setLuaOut(n)` writes a slot nothing reads, or an output is bound
+  to a "Lua Out" the program never writes — and names the classic off-by-one (slots are 0-based: `setLuaOut(0)` drives
+  "Lua Out 1"). A reviewed project had every call one slot high, so each output ran its neighbour's rule.
+- UI: keypad save sent the nested button/dial arrays and bound the backlight colour to the button-colour enum (wrong
+  labels for values 3–6, Amber/YellowGreen unselectable); the keypad model list covered 6 of 15 models and the Keypad view
+  ignored "Button enabled"; live readouts were keyed by signal name alone (a CAN input and an output both called "Horn"
+  showed the output's state on the CAN block); duplicate "—"/"None" zero rows in every picker; the SearchSelect ▾ chevron
+  did nothing; disabled PDM outputs were indistinguishable from unruled ones and flagged "rated N A" in red; a CANBoard
+  Wiring canvas opened with the top row clipped and Fit view could not zoom out; the cross-module pull inside Signals &
+  logic showed frame-map names, listed disabled timers and left the on/off port reading inverted; the Wiring "+ Remote
+  signal" list offered every var of any type and the auto bridge ids sat in the CANopen SDO-response range (keypads
+  reply there) — moved to 0x101–0x13F (cross-module functions to 0x140+), configured module spans are skipped;
+  rotary **position names** have an editor; with no adapter connected every programming button blamed the Sim adapter
+  and "Change base ID" was disabled although it is a project edit; the Outputs base-ID "Set" had no range/overlap guard;
+  System cards could stay on "acquiring…" forever and three effects re-ran on every telemetry push; a follower could not
+  type a shutdown-frame ID by hand; several hints claimed "Save writes to the device" offline, the analog hints named
+  labels that don't exist, the per-view help was stale (no MCP entry), and success toasts said "burned" for queued actions.
+- **Signal pickers listed every var-map slot** — `digitalInput2`, `canInput7`, `condition19`… 200+ unnamed entries
+  per module, whether configured or not. Every picker (outputs, logic blocks, builders, settings, the sleep
+  designer) now offers only configured signals: the module's own system signals, enabled inputs and functions,
+  and Lua outs when a program is stored (`/inputs?inUse=true`). The Wiring canvas and index resolution keep
+  the full map, and a currently selected signal stays visible even if its function was disabled.
+- **Another module's inputs were unfindable in the cross-module pickers**: the “＋ from another module” list
+  showed frame-map names (`DigitalInput1.State`), so a CANBoard input you had named “ignition” never matched.
+  The list now shows the function's own name, lists only configured signals, and names the CAN input it
+  creates after it, and pulling the same signal again reuses that CAN input instead of adding another (the
+  lists filled with “ignition” ×5). The sleep designer's ignition picker offers the same “from another module” pull.
+- **Cross-module functions: “Add function” did nothing** when the Name field was empty — the save returned silently.
+  An unnamed function is now saved as “Function N” (rename it from its card).
+- **CAN input operand vs value** (upstream dingoConfig #59): the live CAN-input value is now decoded with
+  the input's factor/offset (and as signed), so it is the same **scaled** number the firmware compares
+  against **Compare to** — the editor labels the field "Compare to (scaled)", shows the scaling and the
+  live value next to it. Previously the live readout was the raw bus integer while the operand was
+  scaled, so "30" and "3000" looked like a mismatch.
+- **Bridged / auto-created CAN inputs read inverted**: a CAN input created by the Wiring graph's remote
+  bridge, the cross-module native rules, or an ECU/broadcast pick left the slot's default comparison
+  (`== 0`), so its on/off State was the opposite of the bit. They now set `!= 0`. (If you deployed a
+  cross-module rule with 0.6.x, re-deploy it.)
+- Bridging a remote signal onto a **CANBoard** resolved the CAN input's var-map index from a stale PDM
+  layout; it is now looked up by name on the real var map.
+- The PDM CAN-ID footprint is `base…+29` everywhere it's checked (System overlap check, Suggest-base,
+  `tools/canfree.py`, the frame map) to include the new table frame.
+- Wiring graph: PDM output **Current / Overcurrent / Fault**, **wiper**, **keypad** and **Lua Out** sources
+  are back in the source catalog (they had no var-map match, so an output driven by Lua or a wiper
+  rendered with no wire and those handles accepted a drag that wrote nothing); a port with no var-map
+  entry now says so instead of silently dropping the wire; a failed write drops its optimistic wire;
+  deleting a block no longer closes an unrelated open editor; wiring a Duty/Freq source confirms the
+  switch to PWM and unwiring returns the output to on/off.
+- Firmware 5.5.107 re-broadcasts CAN-input values **always little-endian** (a Motorola input's value was
+  undecodable before), so the live value is right for every byte order.
+
+### Changed
+- Minimum firmware **5.5.107**; `pdm-definitions.json` carries `numTimers` / `numTables` per model.
+- `docs/can-frame-map.md` documents the Timer bits, PDM Msg 27 and the raw-vs-scaled CAN value rule.
+
 ## [0.6.0] — 2026-06-25
 
 Flash firmware over CAN + bus-load-resilient comms, Kvaser support, smarter flash routing, CANBoard

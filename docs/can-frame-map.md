@@ -35,6 +35,26 @@ inclusive; a 16-bit field at "bits 16–31" = bytes 2–3.
 A frame is sent only when its **send condition** holds (always, or "any of its sources enabled").
 A consumer should not assume a frame appears every cycle unless it says *always*.
 
+### Device params (`0x0000`) — this fork vs upstream
+
+Both firmwares expose the force-sleep / mute-TX signals as device params, at different sub-indices: this
+fork kept its numbering and added per-input wake masks; upstream `development` renumbered in its
+`CONFIG_VERSION 0x0007`. A tool built for one does not configure the other's sleep inputs.
+
+| Sub | this fork (CoffeeDingoFW ≥ 5.5.107, `CONFIG_VERSION` 0x000F) | upstream dingoFW `development` (0x0007) |
+|-----|---------------------------------------------------------------|------------------------------------------|
+| 0–3 | baseId, canSpeed, sleepEnabled, canFiltersEnabled             | same                                     |
+| 4   | connectUsbToCan                                               | disableDigInWake (bool)                  |
+| 5   | sleepTimeoutMs                                                | disableCanWake (bool)                    |
+| 6   | — (retired)                                                   | connectUsbToCan                          |
+| 7   | — (retired)                                                   | muteCanTxInput (var-map index)           |
+| 8   | — (retired)                                                   | forceSleepInput (var-map index)          |
+| 9   | sleepIgnoreAlwaysOn                                           | —                                        |
+| 10  | forceSleepInput (var-map index)                               | —                                        |
+| 11  | muteTxInput (var-map index)                                   | —                                        |
+| 12  | wakeDigInputMask (one bit per digital input)                  | —                                        |
+| 13  | wakeOnCan                                                     | —                                        |
+
 ---
 
 ## dingoPDM (and -Max / PT-DPDM)
@@ -47,8 +67,8 @@ Variants share one layout; they differ only in channel **counts** (`web/pdm-defi
 | dingoPDM-Max | 1    | 4       | 2      | outputs 5–8 absent → those fields read 0         |
 | PT-DPDM      | 2    | 4       | 4      | not in this firmware tree; same PDM frame layout |
 
-CAN inputs 32, CAN outputs 32, virtual inputs 16, flashers 4, counters 4, conditions 32, keypads 2.
-**27 cyclic messages, offsets +2 … +28.**
+CAN inputs 32, CAN outputs 32, virtual inputs 16, flashers 4, counters 4, conditions 32, timers 8,
+lookup tables 2, keypads 2. **28 cyclic messages, offsets +2 … +29** (firmware ≥ 5.5.107; 27 / +2 … +28 before).
 
 ### Msg 0 — `base+2` — Status — *always sent*
 | Bits  | Field            | Notes                                              |
@@ -83,6 +103,7 @@ Bytes 0–1/2–3/4–5/6–7 = Output 5/6/7/8 current, u16, 0.1 A/bit.
 | 40–43 | WiperSpeed           | 0 Park · 1 Slow · 2 Fast · 3–8 intermittent    |
 | 44–47 | WiperState           | 0 Park · 1 Parking · 2 Slow · 3 Fast · 4 Int-Pause · 5 Int-On · 6 Wash · 7 Swipe |
 | 48–51 | Flasher 1–4          | bit 48 = F1 … bit 51 = F4                       |
+| 56–63 | Timer 1–8            | bit 56 = T1 … bit 63 = T8 (firmware ≥ 5.5.107; 0 before) |
 
 ### Msg 4 — `base+6` — Output reset (overcurrent) counts — *always sent*
 Bytes 0…7 = Output 1…8 reset count, u8 each.
@@ -106,8 +127,8 @@ Bytes 0…7 = Output 1…8 reset count, u8 each.
 Message `7+k` carries CAN input values `2k+1` and `2k+2` (k = 0…15), so values **1–32**:
 | Bits  | Field                    | Notes                                             |
 |-------|--------------------------|---------------------------------------------------|
-| 0–31  | CANInputValue (odd)      | bytes 0–3, 32-bit; scaling/byte-order per that input's config |
-| 32–63 | CANInputValue (even)     | bytes 4–7, 32-bit; scaling/byte-order per that input's config |
+| 0–31  | CANInputValue (odd)      | bytes 0–3, int32 LE; raw value, scaling per that input's config |
+| 32–63 | CANInputValue (even)     | bytes 4–7, int32 LE; raw value, scaling per that input's config |
 
 ### Msg 23 — `base+25` — Output duty cycle — *sent if any output PWM enabled*
 Bytes 0…7 = Output 1…8 duty %, u8 each.
@@ -124,13 +145,19 @@ Bytes 0–1/2–3/4–5/6–7 = dial 1/2/3/4, u16 each.
 ### Msg 26 — `base+28` — Keypad 2 dials — *sent if keypad 2 (index 1) enabled*
 Bytes 0–1/2–3/4–5/6–7 = dial 1/2/3/4, u16 each.
 
+### Msg 27 — `base+29` — Lookup table outputs — *sent if any table enabled* (firmware ≥ 5.5.107)
+| Bits  | Field          | Notes                                             |
+|-------|----------------|---------------------------------------------------|
+| 0–31  | Table 1 value  | IEEE-754 float32, little-endian                   |
+| 32–63 | Table 2 value  | IEEE-754 float32, little-endian                   |
+
 ---
 
 ## CANBoard (type 0)
 
 5 analog inputs (each also usable as rotary switch or on/off switch), 8 digital inputs,
-4 low-side digital outputs, 8 CAN inputs, 8 virtual inputs, 4 flashers, 4 counters, 8 conditions.
-**10 cyclic messages, offsets +2 … +11.**
+4 low-side digital outputs, 8 CAN inputs, 8 virtual inputs, 4 flashers, 4 counters, 8 conditions,
+4 timers (no lookup tables — its 2 KB config sector has no room). **10 cyclic messages, offsets +2 … +11.**
 
 ### Msg 0 — `base+2` — Analog inputs 1–4 (mV) — *always sent*
 Bytes 0–1/2–3/4–5/6–7 = AnalogInput 1/2/3/4 millivolts, u16, **1 mV/bit**.
@@ -140,7 +167,7 @@ Bytes 0–1/2–3/4–5/6–7 = AnalogInput 1/2/3/4 millivolts, u16, **1 mV/bit*
 |-------|------------------|------------------------------------|
 | 0–15  | AnalogInput 5 mV | u16, 1 mV/bit                      |
 | 16–47 | (reserved, 0)    |                                    |
-| 48–63 | BoardTemp        | u16; tool decodes ×0.01 °C         |
+| 48–63 | BoardTemp        | u16, integer °C (factor 1, firmware `GetBoardTemp()`) — shown as the module temperature |
 
 ### Msg 2 — `base+4` — Rotary switches / inputs / switches / outputs / heartbeat — *always sent*
 **This is the "rotary switch" frame.** Each rotary position is a 4-bit value (0–15):
@@ -152,6 +179,7 @@ Bytes 0–1/2–3/4–5/6–7 = AnalogInput 1/2/3/4 millivolts, u16, **1 mV/bit*
 | 12–15 | RotarySwitch 4 pos     |                                                |
 | 16–19 | RotarySwitch 5 pos     |                                                |
 | 24–27 | Flasher 1–4            | bit 24 = F1 … bit 27 = F4                       |
+| 28–31 | Timer 1–4              | bit 28 = T1 … bit 31 = T4 (firmware ≥ 5.5.107)  |
 | 32–39 | DigitalInput 1–8       | bit 32 = DI1 … bit 39 = DI8                     |
 | 40–44 | AnalogSwitch 1–5       | analog input *n* decoded as on/off; bit 40 = AI1 … bit 44 = AI5 |
 | 48–51 | DigitalOutput 1–4      | low-side outputs; bit 48 = DO1 … bit 51 = DO4   |
@@ -176,8 +204,8 @@ Bytes 0–1/2–3/4–5/6–7 = AnalogInput 1/2/3/4 millivolts, u16, **1 mV/bit*
 Message `5+k` carries CAN input values `2k+1` and `2k+2` (k = 0…3), so values **1–8**:
 | Bits  | Field                | Notes                                             |
 |-------|----------------------|---------------------------------------------------|
-| 0–31  | CANInputValue (odd)  | bytes 0–3, 32-bit; scaling/byte-order per that input's config |
-| 32–63 | CANInputValue (even) | bytes 4–7, 32-bit; scaling/byte-order per that input's config |
+| 0–31  | CANInputValue (odd)  | bytes 0–3, int32 LE; raw value, scaling per that input's config |
+| 32–63 | CANInputValue (even) | bytes 4–7, int32 LE; raw value, scaling per that input's config |
 
 ### Msg 9 — `base+11` — Digital output duty cycle — *sent if any DO PWM enabled*
 Bytes 0–3 = DigitalOutput 1–4 duty %, u8 each (bytes 4–7 reserved, 0). Mirrors the PDM's Msg 23.
@@ -187,18 +215,23 @@ On/off state stays in Msg 2 (bits 48–51); this frame carries the live PWM duty
 
 ## Notes
 
-- **Firmware version.** This map reflects firmware **≥ v5.5.103** and the matching `*_0.5.1.dbc`
-  (mirrored in this repo's `dbc/`). 5.5.103 added the CANBoard digital-output **PWM duty** frame
-  (Msg 9, `base+11`) — absent on older firmware. Two wire-format fixes landed in 5.5.102 — decode
-  older firmware accordingly:
+- **Firmware version.** This map reflects firmware **≥ v5.5.107** and the matching `*_0.5.1.dbc`
+  (mirrored in this repo's `dbc/`). 5.5.107 added the **Timer** bits (PDM Msg 3 byte 7, CANBoard
+  Msg 2 bits 28–31) and the PDM **lookup-table** frame (Msg 27, `base+29`) — the PDM span grew to
+  `base+29`. 5.5.103 added the CANBoard digital-output **PWM duty** frame (Msg 9, `base+11`) — absent
+  on older firmware. Two wire-format fixes landed in 5.5.102 — decode older firmware accordingly:
   - The **second CAN-input *value*** in each value-pair frame moved from bit 33 to **bit 32**
     (bytes 4–7). Firmware ≤ 5.5.101 encoded it one bit high (`EncodeLE(... 33, 32)`), so on the
     wire it sat at bits 33–63 with its MSB truncated. The odd value (bit 0) was always fine.
   - **Total/Output current** went to **0.1 A/bit** (was 1 A/bit). The DBCs were always 0.1; the
     fix made the firmware and tool agree. Battery (0.1 V) and temperature (0.1 °C) were always 0.1.
-- **CAN input *values*** carry user-configured scaling (factor/offset) and byte order per input;
-  the 32-bit field is just the container. CAN input *states* (the 1-bit on/off in Msg 5 / CANBoard
-  Msg 3) are independent and were always correct.
+- **CAN input *values*** are the *raw* (unscaled, signed) integer the module received, re-encoded with
+  the input's user-configured factor/offset into a **32-bit little-endian** container — always LE from
+  firmware 5.5.107, whatever byte order the input itself listens with (≤ 5.5.106 re-used the input's
+  byte order, which made a Motorola input's re-broadcast undecodable). dingoConfig ≥ 0.7.0 applies the
+  input's factor/offset when it displays it, so the live value is the same scaled number the module
+  compares against the input's **Compare to** operand (dingoConfig #59). CAN input *states* (the 1-bit
+  on/off in Msg 5 / CANBoard Msg 3) are independent and were always correct.
 - **Keypad re-broadcast** (PDM Msg 24–26, offsets +26…+28) is the PDM repeating the keypad state it
   received. The config tool reads keypad state from the keypad node directly and does **not** decode
   these frames, but they still occupy +26…+28 and count toward the device's CAN ID range.

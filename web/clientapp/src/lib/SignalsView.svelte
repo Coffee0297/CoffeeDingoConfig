@@ -1,14 +1,20 @@
 <script>
   import { api, luaGet, luaSet, luaAssemble, luaReadToTabs, luaSnippets, deviceHasLua, telemetry, remoteLinks, remoteLinkFor, setRemoteLink, clearRemoteLink } from './store.js'
   import { recommendResistors, deriveBands, nodeVoltageMv, resistorForMv, nearestStandard, recommendPullup, supplyCurrentMa, ocVoltageMv, autoTolerance, decodePoints, R_IN } from './ladder.js'
+  import { interpolate, spreadAxis, firstNonAscending, AXIS_MAX } from './table.js'
+  import { untrack } from 'svelte'
   import { toast } from './toast.js'
   import { dialog, labelFields, clickable } from './a11y.js'
   import LuaEditor from './LuaEditor.svelte'
+  import OutputTest from './OutputTest.svelte'
   import Sparkline from './Sparkline.svelte'
   import SearchSelect from './SearchSelect.svelte'
   // Build SearchSelect options from a VarMap list ({index,name}); `none` prepends a "— (0)" entry.
-  const ssOpts = (arr, none = false) => (none ? [{ value: 0, label: '—' }] : []).concat((arr ?? []).map((v) => ({ value: v.index, label: v.name })))
-  let { current, ids = [], mode = 'all', openTarget = null } = $props()  // 'all' = full signals list; 'outputs' = digital-output cards only
+  // `none` prepends a “—” zero row; the lists already carry the var map's own “None” (index 0), so drop that to avoid two zero rows.
+  const ssOpts = (arr, none = false) => (none ? [{ value: 0, label: '—' }] : []).concat((arr ?? []).filter((v) => !(none && v.index === 0)).map((v) => ({ value: v.index, label: v.name })))
+  // mode: 'all' = full signals list; 'outputs' = digital-output cards only; 'editor' = ONLY the editor
+  // drawer (hosted by the Wiring graph — nothing else renders, `onclose` fires when it closes).
+  let { current, ids = [], mode = 'all', openTarget = null, onclose = null } = $props()
   // openTarget {kind, number, n}: auto-open an item's editor (from the Wiring graph's gear button).
   // Writes/uploads only reach hardware when the module is live on the bus; config edits still
   // persist to the project offline. Read-backs (Lua read, error check) need a live module.
@@ -16,12 +22,17 @@
   // Only PDMs run Lua — the CANBoard has no engine. Hide every Lua affordance on boards without it.
   let hasLua = $derived(deviceHasLua(current?.type))
 
+  // Depend on the guid, not the `current` object: telemetry re-materialises `current` 10×/s, which
+  // would re-run these effects (and reset their poll intervals) on every push.
+  let curGuid = $derived(current?.guid)
+
   // ---- Live values for per-function mini charts (#17) ----
   let liveByName = $state({})   // name -> { value:number, on:bool }
   let liveTick = $state(0)
   $effect(() => {
-    const g = current?.guid
-    if (!g) { liveByName = {}; return }
+    const g = curGuid
+    // in editor mode the host graph already polls; only poll while a drawer actually needs live values
+    if (!g || (mode === 'editor' && !drawer)) { liveByName = {}; return }
     let alive = true
     const load = async () => {
       try {
@@ -39,7 +50,10 @@
   // Config arrays (editable). Reloaded on device change + after every save.
   let funcs = $state(null)
   let inputsBool = $state([])   // bool-typed VarMap entries (edges, on/off sources)
-  let inputsAll = $state([])    // every VarMap entry (values to compare / send)
+  let inputsAll = $state([])    // every VarMap entry (values to compare / send) — index→name lookups
+  let inputsUse = $state([])    // every data type, configured functions only — what the any-signal pickers offer
+  // Picker list = configured signals, plus the current pick even if its function got disabled (never lose a binding from view).
+  const withCur = (list, idx) => { const i = Number(idx) || 0; if (!i || list.some((v) => v.index === i)) return list; const cur = inputsAll.find((v) => v.index === i); return cur ? [...list, cur] : list }
   let inputsNum = $state([])    // numeric VarMap entries (analog/CAN values) — for variable PWM duty
 
   let loadErr = $state('')
@@ -50,19 +64,20 @@
       funcs = await api.functions(g)
       inputsBool = await api.inputs(g, 'bool')
       inputsAll = await api.inputs(g)
+      inputsUse = await api.inputsInUse(g)
       // numeric value sources (analog input, CAN value, scaled value, counter…) for variable PWM duty
       inputsNum = [...await api.inputs(g, 'float'), ...await api.inputs(g, 'int')]
       loadErr = ''
     } catch (e) { loadErr = 'Could not load this module’s signals — ' + e.message }
   }
-  $effect(() => { current?.guid; reload() })
+  $effect(() => { curGuid; untrack(reload) })   // once per module, not once per telemetry push
 
   // Auto-open an item's editor when navigated here from the Wiring graph (gear button).
   let seededTarget = $state(0)
   $effect(() => {
     const t = openTarget
     if (!t || !funcs || t.n === seededTarget) return
-    const ARR = { input: funcs.inputs ?? funcs.digitalIn, analoginput: funcs.analogIn, caninput: funcs.canInputs, virtualinput: funcs.virtualInputs, condition: funcs.conditions, counter: funcs.counters, flasher: funcs.flashers, canoutput: funcs.canOutputs, digitaloutput: funcs.digitalOut }
+    const ARR = { input: funcs.inputs ?? funcs.digitalIn, analoginput: funcs.analogIn, caninput: funcs.canInputs, virtualinput: funcs.virtualInputs, condition: funcs.conditions, counter: funcs.counters, flasher: funcs.flashers, timer: funcs.timers, table: funcs.tables, canoutput: funcs.canOutputs, digitaloutput: funcs.digitalOut }
     const arr = ARR[t.kind]
     const row = arr?.find((x) => x.number === t.number) ?? arr?.[t.number - 1]
     if (row) { seededTarget = t.n; seed(t.kind, row, false) }
@@ -72,6 +87,12 @@
   const opTxt = ['=', '≠', '>', '<', '≥', '≤', '&', '!&']
   const condTxt = ['AND', 'OR', 'NOR']
   const edgeTxt = ['Rising', 'Falling', 'Both']   // InputEdge enum order
+  const timerModeTxt = ['On-delay', 'Off-delay', 'Pulse']   // TimerMode enum order
+  const timerHint = [
+    'On-delay (TON): the output turns ON once the input has stayed active for the preset, and OFF the moment the input isn’t.',
+    'Off-delay (TOF): the output follows the input ON, then stays ON for the preset after the input drops — fan after-run, courtesy light.',
+    'Pulse (TP): one ON pulse of the preset length each time the input becomes active; a new activation restarts it.',
+  ]
   const wiperModeTxt = ['Digital inputs', 'Intermittent input', 'Mixed']   // WiperMode enum order
   const wiperSpeedTxt = ['Park', 'Slow', 'Fast', 'Inter 1', 'Inter 2', 'Inter 3', 'Inter 4', 'Inter 5', 'Inter 6']   // WiperSpeed enum order
 
@@ -90,6 +111,8 @@
     { key: 'virtualinput', arr: 'virtualInputs', icon: '🧩', label: 'Virtual input', tile: 'Combination', desc: 'AND/OR up to 3 signals', addable: true, group: 'Logic & messaging' },
     { key: 'flasher', arr: 'flashers', icon: '💡', label: 'Flasher', tile: 'Flasher', desc: 'a blink pattern', addable: true, group: 'Logic & messaging' },
     { key: 'counter', arr: 'counters', icon: '⏱', label: 'Counter', tile: 'Counter', desc: 'count events', addable: true, group: 'Logic & messaging' },
+    { key: 'timer', arr: 'timers', icon: '⌛', label: 'Timer', tile: 'Timer', desc: 'on-delay, off-delay or a pulse', addable: true, group: 'Logic & messaging' },
+    { key: 'table', arr: 'tables', icon: '🗺', label: 'Lookup table', tile: 'Lookup table', desc: '2-axis map, interpolated (fan duty vs temp…)', addable: true, group: 'Logic & messaging' },
     { key: 'canoutput', arr: 'canOutputs', icon: '📤', label: 'CAN output', tile: 'CAN output', desc: 'transmit a variable on CAN', addable: true, group: 'Logic & messaging' },
     // wiper is a SINGLETON function (one per device), exposed by /functions as `wiper` (object, not list)
     { key: 'wiper', arr: 'wiper', icon: '🌧', label: 'Wiper', tile: 'Wiper', desc: 'wiper control: slow/fast/intermittent, wash, park', addable: true, singleton: true, group: 'Logic & messaging' },
@@ -100,13 +123,16 @@
   // The full-signals list shows everything except the physical outputs (those live on the Outputs tab).
   let visibleKinds = $derived(KINDS.filter((k) => k.group !== 'Outputs'))
   let outRows = $derived(funcs?.digitalOut ?? [])
-  const meta = (k) => ALLKINDS.find((x) => x.key === k)
+  const meta = (k) => ALLKINDS.filter((x) => x.key === k).find((x) => funcs?.[x.arr] != null) ?? ALLKINDS.find((x) => x.key === k)   // 'input' exists twice (CANBoard digitalIn / PDM inputs)
   const labelFor = (k) => meta(k)?.label ?? (k === 'keypad' ? 'Keypad' : k === 'keypadbutton' ? 'Button' : k)
   // Singleton functions (wiper) come back as a single object, not a list — normalise to a 1-element
   // array (with a synthetic number:1) so they slot into the same row/edit machinery as the rest.
   const list = (kd) => kd.singleton ? (funcs?.[kd.arr] ? [{ number: 1, ...funcs[kd.arr] }] : []) : (funcs?.[kd.arr] ?? [])
   const rowsFor = (kd) => kd.physical ? list(kd) : list(kd).filter((x) => x.enabled)
   const varName = (idx) => inputsAll.find((v) => v.index === idx)?.name ?? (idx ? `#${idx}` : '—')
+  // Source pickers never offer the function's OWN output (a timer driving itself, a table fed by its
+  // own value) — the var-map entries carry their owner kind/number, so this is exact, not by name.
+  const srcOpts = (arr, none = false) => ssOpts((arr ?? []).filter((v) => !(editing && v.kind === editing.kind && v.number === editing.number)), none)
 
   // ---- editor drawer ----
   let drawer = $state(false)
@@ -176,7 +202,7 @@
   let remoteSrcDev = $derived(allDevices.find((d) => d.guid === remoteSrc) ?? null)
   let remoteSigs = $derived(remoteSigsRaw.filter((s) => signalInUse(s.name, remoteFuncs, remoteSrcDev)))
   let remoteSigsFiltered = $derived(remoteSearch
-    ? remoteSigs.filter((s) => (s.name + ' ' + (s.unit || '')).toLowerCase().includes(remoteSearch.toLowerCase()))
+    ? remoteSigs.filter((s) => ((s.label ?? '') + ' ' + s.name + ' ' + (s.unit || '')).toLowerCase().includes(remoteSearch.toLowerCase()))
     : remoteSigs)
   function applyRemote() {
     const src = allDevices.find((d) => d.guid === remoteSrc)
@@ -186,7 +212,8 @@
     f.ide = false                                   // native broadcast frames are 11-bit standard
     f.startBit = sig.startBit; f.bitLength = sig.bitLength
     f.byteOrder = sig.byteOrder; f.factor = sig.factor; f.offset = sig.valueOffset; f.signed = sig.signed
-    if (!f.name || /^canInput\d+$/i.test(f.name)) f.name = `${src.name} ${sig.name}`
+    f.operator = 1; f.operand = 0   // State = (value != 0); a fresh slot's default “== 0” reads inverted
+    if (!f.name || /^canInput\d+$/i.test(f.name)) f.name = sig.label ? `${src.name} ${sig.label}` : `${src.name} ${sig.name}`
     f._remote = { sourceGuid: src.guid, signal: sig.name, label: prettySig(sig.name), offset: sig.offset,
       startBit: sig.startBit, bitLength: sig.bitLength, factor: sig.factor, valueOffset: sig.valueOffset,
       byteOrder: sig.byteOrder, signed: sig.signed }
@@ -213,6 +240,7 @@
     idHex = hex(s.id); f.ide = !!s.ide
     f.startBit = s.startBit; f.bitLength = s.length
     f.byteOrder = s.byteOrder; f.factor = s.factor; f.offset = s.offset; f.signed = s.isSigned
+    f.operator = 1; f.operand = 0   // State = (value != 0), not the slot default “== 0”
     if (!f.name || /^canInput\d+$/i.test(f.name)) f.name = s.name
     delete f._remote                       // DBC fill is an absolute id, not a module-relative remote link
     f = { ...f }
@@ -344,6 +372,18 @@
       if (lk) f._remote = { ...lk }
     }
     if (kind === 'condition') f._hyst = (f.argOff != null && f.argOff !== f.arg)   // show hysteresis fields if a release point is set
+    if (kind === 'table') {
+      // fixed-size arrays (8 / 8 / 64) copied so grid edits don't touch the shared list; sizes clamped 1..8
+      f.xAxis = Array.from({ length: AXIS_MAX }, (_, k) => +(row.xAxis?.[k] ?? 0))
+      f.yAxis = Array.from({ length: AXIS_MAX }, (_, k) => +(row.yAxis?.[k] ?? 0))
+      f.cells = Array.from({ length: AXIS_MAX * AXIS_MAX }, (_, k) => +(row.cells?.[k] ?? 0))
+      f.xSize = Math.min(AXIS_MAX, Math.max(1, +row.xSize || 2)); f.ySize = Math.min(AXIS_MAX, Math.max(1, +row.ySize || 1))
+      // A fresh slot comes back all-zero, which is not an ascending axis (Save would refuse it and
+      // "space evenly" has nothing to spread). Seed 0…100 breakpoints so the grid is usable at once.
+      if (f.xAxis.every((v) => v === 0)) f.xAxis = f.xAxis.map((_, k) => (k * 100) / (AXIS_MAX - 1))
+      if (f.yAxis.every((v) => v === 0)) f.yAxis = f.yAxis.map((_, k) => (k * 100) / (AXIS_MAX - 1))
+      tblTryX = ''; tblTryY = ''
+    }
     if (kind === 'digitaloutput') { dutyFull = (f.dutyCycleDenominator || 1) * 100; freqFull = (f.freqInputDenom || 1) * 400 }
     if (kind === 'wiper') {
       // ensure the editable arrays exist + copy them so drawer edits don't mutate the shared object
@@ -353,7 +393,31 @@
     }
     drawer = true
   }
-  function close() { drawer = false; editing = null; driverReturn = null }
+  function close() { drawer = false; editing = null; driverReturn = null; onclose?.() }
+
+  // ---- lookup table editor helpers: sizes, axis spreading, preview ----
+  let tblX = $derived(editing?.kind === 'table' ? Math.min(AXIS_MAX, Math.max(1, (+f.xSize | 0) || 1)) : 1)
+  let tblY = $derived(editing?.kind === 'table' ? Math.min(AXIS_MAX, Math.max(1, (+f.ySize | 0) || 1)) : 1)
+  // Breakpoint counts commit on change (blur / Enter), not per keystroke — typing "1" on the way to "10"
+  // would otherwise collapse the grid to one column mid-edit.
+  const setSize = (axis, v) => { f[axis] = Math.min(AXIS_MAX, Math.max(1, Math.round(+v) || 1)); f = { ...f } }
+  let canSpread = $derived(editing?.kind === 'table' && !!f.xAxis && ((+f.xAxis[0] !== +f.xAxis[tblX - 1]) || (tblY > 1 && +f.yAxis[0] !== +f.yAxis[tblY - 1])))
+  function spreadAxes() { f.xAxis = spreadAxis(f.xAxis, tblX); if (tblY > 1) f.yAxis = spreadAxis(f.yAxis, tblY); f = { ...f } }
+  // Live value of a var-map source for the preview. /signals is keyed by the function's bare name and
+  // only covers digital/CAN/virtual inputs, conditions, counters, flashers, timers, tables and outputs —
+  // so a battery-voltage, temperature, output-current or Lua source has no live value here (undefined).
+  const liveOf = (idx) => { if (!idx) return undefined; const lbl = varName(idx); return (liveByName[lbl] ?? liveByName[lbl.replace(/ (Value|State)$/, '')])?.value }
+  // Trial inputs: type an X (and Y) to see the interpolated result without a live module — the maths
+  // is the same as the firmware's. Empty = use the live value when there is one.
+  let tblTryX = $state(''), tblTryY = $state('')
+  let tblPreview = $derived.by(() => {
+    if (editing?.kind !== 'table' || !f.xAxis) return null
+    const lx = liveOf(f.xInput), ly = tblY > 1 ? liveOf(f.yInput) : 0
+    const xv = tblTryX !== '' ? +tblTryX : lx, yv = tblY > 1 ? (tblTryY !== '' ? +tblTryY : ly) : 0
+    const src = tblTryX !== '' || (tblY > 1 && tblTryY !== '') ? 'trial' : 'live'
+    if (xv == null || !Number.isFinite(+xv) || (tblY > 1 && (yv == null || !Number.isFinite(+yv)))) return { none: true, liveX: lx, liveY: ly }
+    return { xv: +xv, yv: +yv, src, out: interpolate(tblX, tblY, f.xAxis, f.yAxis, f.cells, +xv, +yv) }
+  })
 
   // Auto-enable the output being edited as soon as its settings are configured (toast on the flip).
   function autoEnableOutput() {
@@ -362,24 +426,32 @@
       toast(`Output ${editing.number} enabled — you configured it`, 'ok')
     }
   }
-  // A chosen source produces nothing if its function is disabled — enable it (+ toast). Maps the
-  // chosen VarMap index back to its function by matching the var label to a function name.
-  const SRC_ARRS = [['inputs', 'input'], ['digitalIn', 'input'], ['analogIn', 'analoginput'], ['canInputs', 'caninput'], ['virtualInputs', 'virtualinput'], ['conditions', 'condition'], ['counters', 'counter'], ['flashers', 'flasher']]
+  // A chosen source produces nothing if its function is disabled — enable it (+ toast). The var-map
+  // entry names its owner (kind + slot number), so this never guesses a function by name.
+  const KIND_ARR = { input: funcs?.inputs ? 'inputs' : 'digitalIn', analoginput: 'analogIn', caninput: 'canInputs', virtualinput: 'virtualInputs', condition: 'conditions', counter: 'counters', flasher: 'flashers', timer: 'timers', table: 'tables', digitaloutput: 'digitalOut' }
   async function enableSourceVar(idx) {
     idx = Number(idx)
     if (!idx || !current) return
-    const label = inputsAll.find((v) => v.index === idx)?.name
-    if (!label) return
-    for (const [arr, kind] of SRC_ARRS) {
-      const fn = (funcs?.[arr] ?? []).find((x) => label === x.name || label.startsWith(x.name + ' '))
-      if (fn) {
-        if (fn.enabled === false) {
-          try { await api.setFunction(current.guid, kind, fn.number, { enabled: true }); fn.enabled = true; toast(`Enabled "${fn.name}" — it was off`, 'ok') }
-          catch (e) { toast('Could not enable source: ' + e.message, 'error') }
-        }
-        return
-      }
+    const v = inputsAll.find((x) => x.index === idx)
+    const arr = v?.kind === 'input' ? (funcs?.inputs ? 'inputs' : 'digitalIn') : KIND_ARR[v?.kind]
+    if (!v || !arr) return
+    const fn = (funcs?.[arr] ?? []).find((x) => x.number === v.number)
+    if (fn && fn.enabled === false) {
+      try { await api.setFunction(current.guid, v.kind, fn.number, { enabled: true }); fn.enabled = true; toast(`Enabled "${fn.name}" — it was off`, 'ok') }
+      catch (e) { toast('Could not enable source: ' + e.message, 'error') }
     }
+  }
+
+  // Inputs on other functions that read one of this function's outputs — so disabling it can warn
+  // "N wire(s) will be left dangling" (the Wiring graph's ✕ does the same).
+  function consumersOf(kind, number) {
+    const mine = new Set(inputsAll.filter((v) => v.kind === kind && v.number === number).map((v) => v.index))
+    if (!mine.size) return []
+    const FIELDS = { canOutputs: ['input'], conditions: ['input'], flashers: ['input'], timers: ['input'], tables: ['xInput', 'yInput'], virtualInputs: ['var0', 'var1', 'var2'], counters: ['incInput', 'decInput', 'resetInput'], digitalOut: ['input', 'dutyCycleInput', 'freqInput'] }
+    const hits = []
+    for (const [arr, fields] of Object.entries(FIELDS)) for (const x of (funcs?.[arr] ?? [])) if (x.enabled !== false) for (const fl of fields) if (mine.has(x[fl])) hits.push(x.name)
+    for (const o of (current?.outputs ?? [])) if (o.enabled) for (const fl of ['inputVal', 'dutyCycleInput', 'freqInput']) if (mine.has(o[fl])) hits.push(o.name || 'output' + o.number)
+    return hits
   }
 
   // ---- "Build a rule" from an output's Driven-by ----
@@ -398,7 +470,34 @@
     if (!current || !editing) return
     const body = { ...f }
     delete body._remote   // client-only metadata; never sent to the device
+    if (editing.kind === 'keypad') { delete body.buttons; delete body.dials }   // edited through their own kinds; the API ignores them, don't send them
+    if (editing.kind === 'flasher') {
+      for (const k of ['onTime', 'offTime']) { const v = Math.round(+f[k] || 0); if (v < 0 || v > 5000) { toast('On/off time must be 0–5000 ms.', 'error'); return } body[k] = v }
+    }
+    if (editing.kind === 'digitaloutput') {
+      // the firmware stores whole denominators (signal ÷ denom = %, ÷ denom = Hz): a “full” value that isn't a multiple is rounded — say so
+      if (f.variableDutyCycle && (+dutyFull || 0) % 100) toast(`Duty: the signal value at 100 % was rounded to ${f.dutyCycleDenominator * 100} (whole multiples of 100 only).`, 'info')
+      if (f.variableFreq && (+freqFull || 0) % 400) toast(`Frequency: the signal value at 400 Hz was rounded to ${f.freqInputDenom * 400} (whole multiples of 400 only).`, 'info')
+    }
+    // Two configured signals with one name collide in every picker and live readout (a CAN input and an output both called
+    // “Horn” showed the output's state on the CAN block). Warn, don't block — the firmware doesn't care.
+    { const nm = (body.name ?? '').trim(); const clash = nm && inputsAll.find((v) => (v.name === nm || v.name.startsWith(nm + ' ')) && !(v.kind === editing.kind && v.number === editing.number) && v.kind !== 'sys')
+      if (clash) toast(`Another signal on this module is already called “${nm}” — pickers and readouts will show two of them. Consider a distinct name.`, 'info') }
     if (editing.kind === 'condition') { if (!f._hyst) body.argOff = f.arg; delete body._hyst }   // no hysteresis → release == set
+    if (editing.kind === 'timer') {
+      const ms = Math.round(+f.preset || 0)
+      if (ms < 0 || ms > 3600000) { toast('Preset must be 0–3 600 000 ms (1 hour).', 'error'); return }
+      body.preset = ms; body.mode = Number(f.mode) || 0; body.edge = Number(f.edge) || 0
+    }
+    if (editing.kind === 'table') {
+      // the firmware walks each axis assuming ascending breakpoints — refuse a table it would mis-read
+      body.xSize = tblX; body.ySize = tblY
+      body.xAxis = f.xAxis.map((v) => +v || 0); body.yAxis = f.yAxis.map((v) => +v || 0); body.cells = f.cells.map((v) => +v || 0)
+      const bx = firstNonAscending(body.xAxis, tblX), by = tblY > 1 ? firstNonAscending(body.yAxis, tblY) : -1
+      if (bx >= 0) { toast(`X axis must increase left to right — breakpoint ${bx + 1} isn't above breakpoint ${bx}.`, 'error'); return }
+      if (by >= 0) { toast(`Y axis must increase top to bottom — breakpoint ${by + 1} isn't above breakpoint ${by}.`, 'error'); return }
+      if (tblY <= 1) body.yInput = 0   // a 1-D curve ignores Y; don't leave a stale binding behind
+    }
     // Multi-position switch: write the derived bands onto the analog input's RotarySwitch.
     if (editing.kind === 'analoginput') {
       body.rotary = { ...f.rotary, enabled: mp.on, invert: mp.invert,
@@ -465,8 +564,10 @@
     try {
       const r = await api.setFunction(current.guid, editing.kind, editing.number, body)
       await reload()
+      // A table is 85 CAN parameter writes, paced on the backend — the request returns before they finish.
+      const slow = editing.kind === 'table' && r?.written ? ' (85 parameters — allow a few seconds before you Burn)' : ''
       toast(r?.written
-        ? `Saved ${labelFor(editing.kind)} ${editing.number} to device`
+        ? `Saved ${labelFor(editing.kind)} ${editing.number} to device${slow}`
         : `Saved ${labelFor(editing.kind)} ${editing.number} to the project — module offline; Deploy when connected`, r?.written ? 'ok' : 'info')
       if (editing.kind === 'analoginput' && mp.burn && r?.written) {
         try { await api.action(current.guid, 'burn'); toast('Burned to flash — persists across reboot', 'ok') }
@@ -475,7 +576,7 @@
       // Built a rule from an output's Driven-by? Hop back to the output and select the new logic var.
       if (driverReturn && (editing.kind === 'condition' || editing.kind === 'virtualinput')) {
         // VarMap labels append the property (e.g. "condition1 Value"); the bare name is "condition1".
-        const newVar = inputsBool.find((v) => v.name === body.name || v.name.startsWith(body.name + ' '))
+        const newVar = inputsBool.find((v) => v.kind === editing.kind && v.number === editing.number) ?? inputsBool.find((v) => v.name === body.name || v.name.startsWith(body.name + ' '))   // owner tags first: two “Fan”s would bind the wrong one by name
         const ret = driverReturn; driverReturn = null
         const outRow = list(meta('digitaloutput')).find((x) => x.number === ret.number)
         if (newVar && outRow) {
@@ -490,7 +591,10 @@
   }
   async function remove(kind, row) {
     if (!current) return
-    try { await api.setFunction(current.guid, kind, row.number, { ...row, enabled: false }); await reload() }
+    // Same guard as the Wiring graph's ✕: say what else still reads this block before disabling it.
+    const used = consumersOf(kind, row.number)
+    if (!confirm(`Disable "${row.name}"?` + (used.length ? ` ${used.length} input(s) still use it (${[...new Set(used)].slice(0, 4).join(', ')}${used.length > 4 ? ', …' : ''}) and will read 0.` : ''))) return
+    try { const { buttons, dials, ...rest } = row; await api.setFunction(current.guid, kind, row.number, { ...rest, enabled: false }); await reload() }
     catch (e) { toast(e.message, 'error') }
   }
 
@@ -513,7 +617,7 @@
   })
   let luaBusy = $state(false), luaMsg = $state(''), luaTab = $state('global')
   // persist global edits + a reactive read-only view of the full assembled program
-  $effect(() => { if (current && luaSeededFor === current.guid) luaSet(current.guid, 'global', luaSrc) })
+  $effect(() => { const g = curGuid; if (g && luaSeededFor === g) luaSet(g, 'global', luaSrc) })   // keyed on the guid, not the prop object (which changes every push)
   let assembled = $derived.by(() => { $luaSnippets; return current ? luaAssemble(current.guid) : '' })
 
   // per-function Lua snippet (shown in the function editor drawer)
@@ -524,13 +628,14 @@
       if (k !== fnLuaSeeded) { fnLua = luaGet(current.guid, k); fnLuaSeeded = k }
     } else { fnLuaSeeded = null }
   })
-  $effect(() => { if (editing && current && (editing.kind + editing.number) === fnLuaSeeded) luaSet(current.guid, fnLuaSeeded, fnLua) })
+  $effect(() => { const g = curGuid; if (editing && g && (editing.kind + editing.number) === fnLuaSeeded) luaSet(g, fnLuaSeeded, fnLua) })
   async function uploadLua() {
     if (!current) return
     luaSet(current.guid, 'global', luaSrc)
     luaBusy = true; luaMsg = ''
     try {
-      await api.luaUpload(current.guid, luaAssemble(current.guid))
+      const up = await api.luaUpload(current.guid, luaAssemble(current.guid))
+      for (const w of up?.warnings ?? []) toast('Lua: ' + w, 'error')
       luaMsg = 'Uploaded ✓ — Burn to keep across reboot'
       luaDevErr = ''
       setTimeout(checkLuaError, 1000)   // let it run a couple ticks, then pull any runtime error
@@ -556,9 +661,12 @@
   }
 
   // ---- keypad config (PDM keypad masters: buttons → LED colour / drives) ----
-  const COLORS = ['Off', 'Red', 'Green', 'Orange', 'Blue', 'Violet', 'Cyan', 'White']
+  const COLORS = ['Off', 'Red', 'Green', 'Orange', 'Blue', 'Violet', 'Cyan', 'White']                          // BlinkMarineButtonColor
+  const BACKLIGHT = ['Off', 'Red', 'Green', 'Blue', 'Yellow', 'Cyan', 'Violet', 'White', 'Amber', 'Yellow-green']   // BlinkMarineBacklightColor (0..9) — a different enum
   const swatch = ['#37474f', '#d32f2f', '#2e7d32', '#ff9800', '#1565c0', '#7e57c2', '#26c6da', '#eceff1']
-  const MODELS = [[6, 'Blink 12-key'], [7, 'Blink 15-key'], [4, 'Blink 8-key'], [3, 'Blink 6-key'], [22, 'Grayhill 12-key'], [24, 'Grayhill 20-key']]
+  // Mirrors the firmware KeypadModel enum exactly (9 and 11–19 unassigned); the value goes over CAN as keypad.model.
+  const MODELS = [[0, 'Blink 2-key'], [1, 'Blink 4-key'], [2, 'Blink 5-key'], [3, 'Blink 6-key'], [4, 'Blink 8-key'], [5, 'Blink 10-key'], [6, 'Blink 12-key'], [7, 'Blink 15-key'], [8, 'Blink 15-key + 2 dials'],
+    [10, 'Grayhill 1-key'], [20, 'Grayhill 6-key'], [21, 'Grayhill 8-key'], [22, 'Grayhill 12-key'], [23, 'Grayhill 15-key'], [24, 'Grayhill 20-key']]
   const keypads = () => funcs?.keypads ?? []
 
   function openKeypad(ki) {
@@ -583,11 +691,12 @@
   }
 </script>
 
+{#if mode !== 'editor'}
 <div class="h-row">
   <div><h1>{current ? current.name : '—'} · {mode === 'outputs' ? 'Outputs' : 'Signals & logic'}</h1>
     <p class="sub">{mode === 'outputs'
       ? "The board's digital outputs — each switches on when the signal driving it is true. Click one to choose its driver."
-      : "The device's inputs and logic blocks — physical pins, CAN messages, and logic built from them. Edit a row or define a new one; Save writes to the device, Burn persists."}</p></div>
+      : "The device's inputs and logic blocks — physical pins, CAN messages, and logic built from them. Edit a row or define a new one; " + (current?.connected ? 'Save writes to the device, Burn persists.' : 'the module is offline — Save keeps it in the project; connect + Deploy to apply.')}</p></div>
   {#if mode !== 'outputs'}<button class="btn primary" disabled={!current} onclick={() => { editing = null; drawer = true }}>+ Define new signal</button>{/if}
 </div>
 
@@ -615,7 +724,8 @@
           </div>
           <Sparkline value={lv?.value ?? 0} win={30} tick={liveTick} color="#2a9d8f" />
           <div class="ft">
-            <span class="tag" title="Low-side (ground) switch: wire the load between +12 V and this terminal — the board switches its ground. On/off only — no PWM, soft-start, or current sensing (those are PDM smart-output features).">low-side · on/off</span>
+            <span class="tag" title="Low-side (ground) switch: wire the load between +12 V and this terminal — the board switches its ground. No current sensing or trip protection (those are PDM smart-output features).">low-side · {o.pwmEnabled ? 'PWM' : 'on/off'}</span>
+            {#if live}<span class="edit-hint" title="Bench test — force this output on / PWM from the editor">⚡ test</span>{/if}
             <span class="edit-hint">edit →</span>
           </div>
         </div>
@@ -676,6 +786,8 @@
             {:else if k.key === 'virtualinput'}{s.not0 ? '!' : ''}{varName(s.var0)} {condTxt[s.cond0]} {s.not1 ? '!' : ''}{varName(s.var1)}
             {:else if k.key === 'flasher'}{s.onTime}ms on / {s.offTime}ms off
             {:else if k.key === 'counter'}+{varName(s.incInput)} · max {s.maxCount}
+            {:else if k.key === 'timer'}{timerModeTxt[s.mode] ?? ''} {((s.preset ?? 0) / 1000).toFixed(1)} s · {varName(s.input)}{s.edge === 1 ? ' (while off)' : ''}
+            {:else if k.key === 'table'}{s.xSize}×{s.ySize} · X {varName(s.xInput)}{#if (s.ySize ?? 1) > 1} · Y {varName(s.yInput)}{/if}
             {:else if k.key === 'canoutput'}send {varName(s.input)} → {hex(s.id)} every {s.interval}ms
             {:else if k.key === 'digitaloutput'}driven by {varName(s.input)}
             {:else if k.key === 'input'}{s.mode === 1 ? 'latched' : 'momentary'}{s.invert ? ' · inverted' : ''}
@@ -684,7 +796,7 @@
         </div>
         {#if liveByName[s.name]}
           <div class="minichart" style={live ? '' : 'opacity:.4'} onclick={(e) => e.stopPropagation()} title={live ? `live (${liveByName[s.name].value})` : `module offline — last value (${liveByName[s.name].value}), not live`}>
-            <Sparkline value={liveByName[s.name].value} tick={liveTick} win={30} color={['caninput', 'condition', 'counter'].includes(k.key) ? '#594ae2' : '#2a9d8f'} />
+            <Sparkline value={liveByName[s.name].value} tick={liveTick} win={30} color={['caninput', 'condition', 'counter', 'table'].includes(k.key) ? '#594ae2' : '#2a9d8f'} />
           </div>
         {/if}
         {#if !k.physical}<button class="rm" title="Disable" onclick={(e) => { e.stopPropagation(); remove(k.key, s) }}>✕</button>{/if}
@@ -712,6 +824,7 @@
   {/each}
   {/if}
 {/if}
+{/if}
 
 {#if drawer}
   <div class="scrim show" onclick={close}></div>
@@ -738,7 +851,7 @@
             <div class="field"><label>Source module</label>
               <select bind:value={remoteSrc}><option value="">— manual entry —</option>{#each sources as d}<option value={d.guid}>{d.name} ({hex(d.baseId)})</option>{/each}</select></div>
             <div class="field"><label>Signal{#if remoteBusy} …{/if}</label>
-              <select bind:value={remoteSel} disabled={!remoteSrc}><option value="">— pick a broadcast signal —</option>{#each remoteSigsFiltered as s}<option value={s.name}>{prettySig(s.name)}{s.unit ? ' (' + s.unit + ')' : ''} · {s.kind}</option>{/each}</select></div>
+              <select bind:value={remoteSel} disabled={!remoteSrc}><option value="">— pick a broadcast signal —</option>{#each remoteSigsFiltered as s}<option value={s.name} disabled={!!s.isFloat} title={s.isFloat ? 'float32 — a CAN input cannot decode this; use a Lua program' : ''}>{s.label ?? prettySig(s.name)}{s.label ? ' (' + prettySig(s.name) + ')' : ''}{s.unit ? ' · ' + s.unit : ''} · {s.isFloat ? 'float — not decodable' : s.kind}</option>{/each}</select></div>
           </div>
           {#if remoteSrc}
             <div class="f2">
@@ -769,7 +882,7 @@
           {/if}
         {/if}
         <p class="lbl">IDs seen on the bus</p>
-        <div class="bus"><div class="bh"><span class="pulse" style="background:var(--ok);border-radius:50%"></span> live</div>
+        <div class="bus"><div class="bh">{#if live}<span class="pulse" style="background:var(--ok);border-radius:50%"></span> live{:else}<span class="muted">offline — connect an adapter to see traffic</span>{/if}</div>
           <div class="scroll">
             {#each ids as id}<div class="r" style="cursor:pointer" use:clickable onclick={() => (idHex = hex(id))}><span class="id">{hex(id)}</span><span class="dat">use</span></div>{/each}
             {#if ids.length === 0}<div class="r"><span class="dat">No CAN traffic</span></div>{/if}
@@ -781,7 +894,7 @@
         <div class="f3">
           <div class="field"><label>Start bit</label><input type="number" min="0" max="63" bind:value={f.startBit} /></div>
           <div class="field"><label>Length</label><input type="number" min="1" max="64" bind:value={f.bitLength} /></div>
-          <div class="field"><label>Byte order</label><select bind:value={f.byteOrder}><option value={0}>Little-endian (Intel)</option><option value={1}>Big-endian (Motorola)</option></select></div>
+          <div class="field"><label>Byte order</label><select bind:value={f.byteOrder}><option value={0}>Little-endian</option><option value={1}>Big-endian</option></select></div>
         </div>
         <div class="f3">
           <div class="field"><label>Factor</label><input type="number" step="any" bind:value={f.factor} /></div>
@@ -792,10 +905,10 @@
         <div class="f3">
           <div class="field"><label>Operator</label>
             <select bind:value={f.operator}>{#each opTxt as o, i}<option value={i}>{o}</option>{/each}</select></div>
-          <div class="field"><label>Compare to</label><input type="number" step="any" bind:value={f.operand} /></div>
+          <div class="field"><label>Compare to (scaled)</label><input type="number" step="any" bind:value={f.operand} /></div>
           <div class="field"><label>Mode</label><select bind:value={f.mode}><option value={0}>Momentary</option><option value={1}>Latched</option></select></div>
         </div>
-        <p class="hint">The signal's decoded value vs <b>Compare to</b> drives this CAN input's on/off output (use it anywhere as "{f.name || 'this input'}"). Latched holds on until re-triggered.</p>
+        <p class="hint">Compares the <b>scaled</b> value — raw × {f.factor ?? 1}{#if +f.offset} + {f.offset}{/if}, the number this input reads everywhere else — against <b>Compare to</b>{#if live && liveByName[f.name]} · live now <b>{liveByName[f.name].value}</b>{/if}. The result is this CAN input's on/off output ("{f.name || 'this input'}"). Latched holds on until re-triggered.</p>
         <label class="chk"><input type="checkbox" bind:checked={f.timeoutEnabled} /> Fault if the frame stops arriving</label>
         {#if f.timeoutEnabled}<div class="field" style="max-width:230px"><label>Timeout (ms)</label><input type="number" min="0" bind:value={f.timeout} /></div>{/if}
       {:else if editing.kind === 'input'}
@@ -810,7 +923,7 @@
       {:else if editing.kind === 'condition'}
         <div class="field"><label>Name</label><input bind:value={f.name} /></div>
         <div class="field"><label>Signal</label>
-          <SearchSelect options={ssOpts(inputsAll)} bind:value={f.input} placeholder="Search signal…" onpick={(v) => enableSourceVar(v)} /></div>
+          <SearchSelect options={srcOpts(withCur(inputsUse, f.input))} bind:value={f.input} placeholder="Search signal…" onpick={(v) => enableSourceVar(v)} /></div>
         <div class="f2">
           <div class="field"><label>Operator</label>
             <select bind:value={f.operator}>{#each opTxt as o, i}<option value={i}>{o}</option>{/each}</select></div>
@@ -830,25 +943,25 @@
           <div class="f3" style="align-items:end">
             <label class="chk"><input type="checkbox" bind:checked={f['not' + i]} /> NOT</label>
             <div class="field"><label>Signal {i + 1}</label>
-              <SearchSelect options={ssOpts(inputsBool, true)} bind:value={f['var' + i]} placeholder="Search signal…" onpick={(v) => enableSourceVar(v)} /></div>
+              <SearchSelect options={srcOpts(inputsBool, true)} bind:value={f['var' + i]} placeholder="Search signal…" onpick={(v) => enableSourceVar(v)} /></div>
             {#if i < 2}<div class="field"><label>Join</label><select bind:value={f['cond' + i]}>{#each condTxt as c, ci}<option value={ci}>{c}</option>{/each}</select></div>{:else}<div></div>{/if}
           </div>
         {/each}
       {:else if editing.kind === 'flasher'}
         <div class="field"><label>Name</label><input bind:value={f.name} /></div>
         <div class="field"><label>Driven by</label>
-          <SearchSelect options={ssOpts(inputsBool, true)} bind:value={f.input} placeholder="Search signal…" onpick={(v) => enableSourceVar(v)} /></div>
+          <SearchSelect options={srcOpts(inputsBool, true)} bind:value={f.input} placeholder="Search signal…" onpick={(v) => enableSourceVar(v)} /></div>
         <div class="f2">
-          <div class="field"><label>On time (ms)</label><input type="number" min="0" bind:value={f.onTime} /></div>
-          <div class="field"><label>Off time (ms)</label><input type="number" min="0" bind:value={f.offTime} /></div>
+          <div class="field"><label>On time (ms)</label><input type="number" min="0" max="5000" bind:value={f.onTime} /></div>
+          <div class="field"><label>Off time (ms)</label><input type="number" min="0" max="5000" bind:value={f.offTime} /></div>
         </div>
         <label class="chk"><input type="checkbox" bind:checked={f.single} /> Single shot (one blink per trigger)</label>
       {:else if editing.kind === 'counter'}
         <div class="field"><label>Name</label><input bind:value={f.name} /></div>
         <div class="f3">
-          <div class="field"><label>Count up on</label><SearchSelect options={ssOpts(inputsBool, true)} bind:value={f.incInput} placeholder="Search…" onpick={(v) => enableSourceVar(v)} /></div>
-          <div class="field"><label>Count down on</label><SearchSelect options={ssOpts(inputsBool, true)} bind:value={f.decInput} placeholder="Search…" onpick={(v) => enableSourceVar(v)} /></div>
-          <div class="field"><label>Reset on</label><SearchSelect options={ssOpts(inputsBool, true)} bind:value={f.resetInput} placeholder="Search…" onpick={(v) => enableSourceVar(v)} /></div>
+          <div class="field"><label>Count up on</label><SearchSelect options={srcOpts(inputsBool, true)} bind:value={f.incInput} placeholder="Search…" onpick={(v) => enableSourceVar(v)} /></div>
+          <div class="field"><label>Count down on</label><SearchSelect options={srcOpts(inputsBool, true)} bind:value={f.decInput} placeholder="Search…" onpick={(v) => enableSourceVar(v)} /></div>
+          <div class="field"><label>Reset on</label><SearchSelect options={srcOpts(inputsBool, true)} bind:value={f.resetInput} placeholder="Search…" onpick={(v) => enableSourceVar(v)} /></div>
         </div>
         <div class="f3">
           <div class="field"><label>Up edge</label><select bind:value={f.incEdge}>{#each edgeTxt as e, i}<option value={i}>{e}</option>{/each}</select></div>
@@ -862,10 +975,56 @@
         </div>
         <label class="chk"><input type="checkbox" bind:checked={f.holdToReset} /> Hold to reset <span class="desc">reset only after the reset input is held</span></label>
         {#if f.holdToReset}<div class="field" style="max-width:230px"><label>Hold time (ms)</label><input type="number" min="0" bind:value={f.resetTime} /></div>{/if}
+      {:else if editing.kind === 'timer'}
+        <div class="field"><label>Name</label><input bind:value={f.name} /></div>
+        <div class="field"><label>Driven by</label>
+          <SearchSelect options={srcOpts(inputsBool, true)} bind:value={f.input} placeholder="Search signal…" onpick={(v) => enableSourceVar(v)} /></div>
+        <div class="f3">
+          <div class="field"><label>Mode</label><select bind:value={f.mode}>{#each timerModeTxt as m, i}<option value={i}>{m}</option>{/each}</select></div>
+          <div class="field"><label>Active while the input is</label><select bind:value={f.edge}><option value={0}>On (high)</option><option value={1}>Off (low)</option></select></div>
+          <div class="field"><label>Preset (ms)</label><input type="number" min="0" max="3600000" step="100" bind:value={f.preset} /></div>
+        </div>
+        <p class="hint">{timerHint[Number(f.mode) || 0]} Preset <b>{((+f.preset || 0) / 1000).toFixed(1)} s</b>.{#if live && liveByName[f.name]} Live: <b>{liveByName[f.name].on ? 'ON' : 'OFF'}</b>.{/if}</p>
+        <p class="hint">Use the output anywhere as “{f.name || 'this timer'}” — drive an output, feed a Condition, or pick it as the module's <b>force-sleep</b> signal (System ▸ ⚙ Settings) to power down N seconds after the ignition goes off.</p>
+      {:else if editing.kind === 'table'}
+        <div class="field"><label>Name</label><input bind:value={f.name} /></div>
+        <div class="f2">
+          <div class="field"><label>X input (columns)</label>
+            <SearchSelect options={srcOpts(inputsNum, true)} bind:value={f.xInput} placeholder="Search value…" onpick={(v) => enableSourceVar(v)} /></div>
+          <div class="field"><label>Y input (rows) <span class="desc">— leave 1 row for a 1-D curve</span></label>
+            <SearchSelect options={srcOpts(inputsNum, true)} bind:value={f.yInput} placeholder="Search value…" onpick={(v) => enableSourceVar(v)} /></div>
+        </div>
+        <div class="f3" style="align-items:end">
+          <div class="field"><label>X breakpoints (1–8)</label><input type="number" min="1" max={AXIS_MAX} value={f.xSize} onchange={(e) => setSize('xSize', e.target.value)} /></div>
+          <div class="field"><label>Y breakpoints (1–8)</label><input type="number" min="1" max={AXIS_MAX} value={f.ySize} onchange={(e) => setSize('ySize', e.target.value)} /></div>
+          <div style="padding-bottom:10px"><button class="btn ghost" type="button" onclick={spreadAxes} disabled={!canSpread} title={canSpread ? 'Space each axis evenly between its first and last breakpoint' : 'Set the first and last breakpoint of an axis to different values first'}>↔ Space axes evenly</button></div>
+        </div>
+        <div class="tscroll">
+          <table class="ladder tbl">
+            <thead><tr><th class="corner">{tblY > 1 ? 'Y ╲ X' : 'X →'}</th>{#each Array.from({ length: tblX }) as _, c}<th><input type="number" step="any" bind:value={f.xAxis[c]} aria-label={'X breakpoint ' + (c + 1)} /></th>{/each}</tr></thead>
+            <tbody>
+              {#each Array.from({ length: tblY }) as _, r}
+                <tr>
+                  <th>{#if tblY > 1}<input type="number" step="any" bind:value={f.yAxis[r]} aria-label={'Y breakpoint ' + (r + 1)} />{:else}<span class="muted">out</span>{/if}</th>
+                  {#each Array.from({ length: tblX }) as _, c}<td><input type="number" step="any" class="cell" bind:value={f.cells[r * AXIS_MAX + c]} aria-label={`cell row ${r + 1} col ${c + 1}`} /></td>{/each}
+                </tr>
+              {/each}
+            </tbody>
+          </table>
+        </div>
+        <p class="hint">Header row = X breakpoints (ascending), first column = Y breakpoints (ascending), body = the output at each (X, Y). Between breakpoints the module interpolates linearly on both axes; outside the range it holds the edge value.</p>
+        <div class="f3" style="align-items:end">
+          <div class="field"><label>Try X{#if tblPreview?.liveX != null} <span class="desc">live {(+tblPreview.liveX).toFixed(1)}</span>{/if}</label><input type="number" step="any" bind:value={tblTryX} placeholder={tblPreview?.liveX != null ? 'live' : 'type a value'} /></div>
+          {#if tblY > 1}<div class="field"><label>Try Y{#if tblPreview?.liveY != null} <span class="desc">live {(+tblPreview.liveY).toFixed(1)}</span>{/if}</label><input type="number" step="any" bind:value={tblTryY} placeholder={tblPreview?.liveY != null ? 'live' : 'type a value'} /></div>{:else}<div></div>{/if}
+          <div class="field"><label>Result</label><div class="livepos" class:on={tblPreview && !tblPreview.none} style="margin:0">
+            {#if tblPreview && !tblPreview.none}<b>{tblPreview.out.toFixed(2)}</b>&nbsp;<span class="muted">({tblPreview.src}{#if live && liveByName[f.name]} · module reports {liveByName[f.name].value}{/if})</span>
+            {:else}<span class="muted">no live value for this source — type a trial X{tblY > 1 ? '/Y' : ''}</span>{/if}</div></div>
+        </div>
+        <p class="hint">Typical uses: fan duty vs coolant temperature (1-D), fuel-pump duty vs RPM × load (2-D), dash brightness vs ambient light. Read the result anywhere as “<b>{f.name || 'this table'} Value</b>” — e.g. an output's <b>duty source</b> or a Condition's signal.</p>
       {:else if editing.kind === 'canoutput'}
         <div class="field"><label>Name</label><input bind:value={f.name} /></div>
         <div class="field"><label>Variable to send</label>
-          <SearchSelect options={ssOpts(inputsAll)} bind:value={f.input} placeholder="Search signal…" onpick={(v) => enableSourceVar(v)} /></div>
+          <SearchSelect options={srcOpts(withCur(inputsUse, f.input))} bind:value={f.input} placeholder="Search signal…" onpick={(v) => enableSourceVar(v)} /></div>
         <div class="f2">
           <div class="field"><label>CAN ID</label><input bind:value={idHex} /></div>
           <div class="field"><label>Frame</label><select bind:value={f.ide}><option value={false}>Standard</option><option value={true}>Extended</option></select></div>
@@ -876,7 +1035,7 @@
         <div class="f3">
           <div class="field"><label>Start bit</label><input type="number" min="0" max="63" bind:value={f.startBit} /></div>
           <div class="field"><label>Length</label><input type="number" min="1" max="64" bind:value={f.bitLength} /></div>
-          <div class="field"><label>Byte order</label><select bind:value={f.byteOrder}><option value={0}>Little-endian (Intel)</option><option value={1}>Big-endian (Motorola)</option></select></div>
+          <div class="field"><label>Byte order</label><select bind:value={f.byteOrder}><option value={0}>Little-endian</option><option value={1}>Big-endian</option></select></div>
         </div>
         <div class="f3">
           <div class="field"><label>Factor</label><input type="number" step="any" bind:value={f.factor} /></div>
@@ -893,20 +1052,20 @@
 
         <p class="lbl" style="margin-top:14px">Drive inputs</p>
         <div class="f3">
-          <div class="field"><label>On</label><SearchSelect options={ssOpts(inputsBool, true)} bind:value={f.onInput} placeholder="Search…" onpick={(v) => enableSourceVar(v)} /></div>
-          <div class="field"><label>Slow</label><SearchSelect options={ssOpts(inputsBool, true)} bind:value={f.slowInput} placeholder="Search…" onpick={(v) => enableSourceVar(v)} /></div>
-          <div class="field"><label>Fast</label><SearchSelect options={ssOpts(inputsBool, true)} bind:value={f.fastInput} placeholder="Search…" onpick={(v) => enableSourceVar(v)} /></div>
+          <div class="field"><label>On</label><SearchSelect options={srcOpts(inputsBool, true)} bind:value={f.onInput} placeholder="Search…" onpick={(v) => enableSourceVar(v)} /></div>
+          <div class="field"><label>Slow</label><SearchSelect options={srcOpts(inputsBool, true)} bind:value={f.slowInput} placeholder="Search…" onpick={(v) => enableSourceVar(v)} /></div>
+          <div class="field"><label>Fast</label><SearchSelect options={srcOpts(inputsBool, true)} bind:value={f.fastInput} placeholder="Search…" onpick={(v) => enableSourceVar(v)} /></div>
         </div>
         <div class="f3">
-          <div class="field"><label>Intermittent</label><SearchSelect options={ssOpts(inputsBool, true)} bind:value={f.interInput} placeholder="Search…" onpick={(v) => enableSourceVar(v)} /></div>
-          <div class="field"><label>Speed selector</label><SearchSelect options={ssOpts(inputsAll, true)} bind:value={f.speedInput} placeholder="Search value…" onpick={(v) => enableSourceVar(v)} /></div>
-          <div class="field"><label>Swipe (single)</label><SearchSelect options={ssOpts(inputsBool, true)} bind:value={f.swipeInput} placeholder="Search…" onpick={(v) => enableSourceVar(v)} /></div>
+          <div class="field"><label>Intermittent</label><SearchSelect options={srcOpts(inputsBool, true)} bind:value={f.interInput} placeholder="Search…" onpick={(v) => enableSourceVar(v)} /></div>
+          <div class="field"><label>Speed selector</label><SearchSelect options={srcOpts(withCur(inputsUse, f.speedInput), true)} bind:value={f.speedInput} placeholder="Search value…" onpick={(v) => enableSourceVar(v)} /></div>
+          <div class="field"><label>Swipe (single)</label><SearchSelect options={srcOpts(inputsBool, true)} bind:value={f.swipeInput} placeholder="Search…" onpick={(v) => enableSourceVar(v)} /></div>
         </div>
 
         <p class="lbl" style="margin-top:14px">Park &amp; wash</p>
         <div class="f3">
-          <div class="field"><label>Park signal</label><SearchSelect options={ssOpts(inputsBool, true)} bind:value={f.parkInput} placeholder="Search…" onpick={(v) => enableSourceVar(v)} /></div>
-          <div class="field"><label>Wash</label><SearchSelect options={ssOpts(inputsBool, true)} bind:value={f.washInput} placeholder="Search…" onpick={(v) => enableSourceVar(v)} /></div>
+          <div class="field"><label>Park signal</label><SearchSelect options={srcOpts(inputsBool, true)} bind:value={f.parkInput} placeholder="Search…" onpick={(v) => enableSourceVar(v)} /></div>
+          <div class="field"><label>Wash</label><SearchSelect options={srcOpts(inputsBool, true)} bind:value={f.washInput} placeholder="Search…" onpick={(v) => enableSourceVar(v)} /></div>
           <div class="field"><label>Wash-wipe cycles</label><input type="number" min="0" max="20" bind:value={f.washWipeCycles} /></div>
         </div>
         <label class="chk"><input type="checkbox" bind:checked={f.parkStopLevel} /> Park stop on HIGH level <span class="desc">otherwise parks on the low edge of the park signal</span></label>
@@ -927,10 +1086,14 @@
         </div>
         <p class="hint">Positions 0–7 of the speed selector map to these wiper speeds. The intermittent positions use the dwell times above.</p>
       {:else if editing.kind === 'digitaloutput'}
+        {@const savedOut = outRows.find((o) => o.number === editing.number)}
+        {@const outLv = liveByName[savedOut?.name]}
+        <OutputTest guid={current?.guid} number={editing.number} connected={!!current?.connected} enabled={!!savedOut?.enabled}
+          pwmEnabled={!!savedOut?.pwmEnabled} status={outLv?.on ? 'On' : 'Off'} duty={outLv?.value} />
         <label class="opt" style="border:0;padding-top:0"><input type="checkbox" bind:checked={f.enabled} /> Output enabled</label>
         <div class="field"><label>Name</label><input bind:value={f.name} /></div>
         <div class="field"><label>Driven by</label>
-          <SearchSelect options={ssOpts(inputsBool, true)} bind:value={f.input} placeholder="Search signal…" onpick={(v) => { autoEnableOutput(); enableSourceVar(v) }} /></div>
+          <SearchSelect options={srcOpts(inputsBool, true)} bind:value={f.input} placeholder="Search signal…" onpick={(v) => { autoEnableOutput(); enableSourceVar(v) }} /></div>
         <div style="display:flex;gap:14px;margin:-2px 0 2px">
           {#if funcs?.conditions}<button type="button" class="linkbtn" onclick={() => buildRule('condition')}>＋ Comparison (analog &gt; value)</button>{/if}
           {#if funcs?.virtualInputs}<button type="button" class="linkbtn" onclick={() => buildRule('virtualinput')}>＋ Combination (A AND B)</button>{/if}
@@ -945,13 +1108,13 @@
           <div class="f3">
             {#if f.variableFreq}
               <div class="field"><label>Freq source</label>
-                <SearchSelect options={ssOpts(inputsNum, true)} bind:value={f.freqInput} placeholder="Search value…" onpick={(v) => { autoEnableOutput(); enableSourceVar(v) }} /></div>
+                <SearchSelect options={srcOpts(inputsNum, true)} bind:value={f.freqInput} placeholder="Search value…" onpick={(v) => { autoEnableOutput(); enableSourceVar(v) }} /></div>
             {:else}
               <div class="field"><label>Freq (Hz)</label><input type="number" min="15" max="400" bind:value={f.frequency} title="PWM frequency, 15–400 Hz. For dimming lights, 100–500 Hz is flicker-free (200 Hz is a good all-rounder for LED and incandescent). Below 15 Hz the output stops; above 400 Hz the firmware ignores the change." /></div>
             {/if}
             {#if f.variableDutyCycle}
               <div class="field"><label>Duty source</label>
-                <SearchSelect options={ssOpts(inputsNum, true)} bind:value={f.dutyCycleInput} placeholder="Search value…" onpick={(v) => { autoEnableOutput(); enableSourceVar(v) }} /></div>
+                <SearchSelect options={srcOpts(inputsNum, true)} bind:value={f.dutyCycleInput} placeholder="Search value…" onpick={(v) => { autoEnableOutput(); enableSourceVar(v) }} /></div>
             {:else}
               <div class="field"><label>Duty (%)</label><input type="number" min="0" max="100" bind:value={f.fixedDutyCycle} /></div>
             {/if}
@@ -974,7 +1137,7 @@
         {#if f.softStartEnabled && f.variableDutyCycle}
           <label class="opt"><input type="checkbox" bind:checked={f.rampDutyChanges} /> Ramp duty changes <span class="desc">slew on every change, not just turn-on — a full 0–100% takes the soft-start ramp time</span></label>
         {/if}
-        <p class="hint">No current sensing on these outputs (that's a PDM smart-output feature). Save writes to the device; <b>Burn</b> persists to flash.</p>
+        <p class="hint">No current sensing on these outputs (that's a PDM smart-output feature). {current?.connected ? 'Save writes to the device; ' : 'Offline: Save keeps it in the project; '}<b>Burn</b> persists to flash.</p>
       {:else if editing.kind === 'analoginput'}
         <label class="opt" style="border:0;padding-top:0"><input type="checkbox" bind:checked={f.enabled} /> Input enabled</label>
         <div class="field"><label>Name</label><input bind:value={f.name} /></div>
@@ -987,7 +1150,7 @@
             <div class="field"><label>Mode</label><select bind:value={f.switch.mode}><option value={0}>Momentary</option><option value={1}>Latched</option></select></div>
             <label class="chk" style="align-self:end"><input type="checkbox" bind:checked={f.switch.invert} /> Invert</label>
           </div>
-          <p class="hint">On when the voltage is {f.switch.invert ? 'below' : 'above'} {f.switch.threshold || 0} mV{#if live} · live {Math.round(liveByName[f.name]?.value ?? 0)} mV → <b>{liveByName[f.name + ' Switch']?.on ? 'ON' : 'OFF'}</b>{/if}. Use it anywhere as “{f.name} Switch”.</p>
+          <p class="hint">On when the voltage is {f.switch.invert ? 'below' : 'above'} {f.switch.threshold || 0} mV{#if live} · live {Math.round(liveByName[f.name]?.value ?? 0)} mV → <b>{(liveByName[f.name + ' Switch'] ?? liveByName[f.name + ' Switch Value'])?.on ? 'ON' : 'OFF'}</b>{/if}. Use it anywhere as “{f.name} Switch”.</p>
         {/if}
 
         <p class="lbl" style="margin-top:14px">🎚 Multi-position switch</p>
@@ -1049,8 +1212,10 @@
             {:else if !ptsInfo.ok}⚠ Some positions are too close to tell apart at ±{mp.tolerance} mV. Lower the sensing window or spread the positions.
             {:else}Decodes {mp.rows.length} calibrated positions · sensing ±{mp.tolerance} mV · tightest gap {ptsInfo.minGap} mV. A reading outside every window reports “no position”.{/if}
           </p>
-          <p class="hint">Pull-up {mp.rpu}Ω{#if mp.autoRpu} (auto — open top detent reads the 4.85&nbsp;V max){/if} draws up to <b>{peakMa.toFixed(1)} mA</b> from the 5&nbsp;V supply (worst case, lowest position){#if peakMa > 25} — high{/if}.{#if !mp.autoRpu} <button type="button" class="linkbtn" onclick={autoPullup}>Auto-size pull-up</button> to put the open detent at 4.85&nbsp;V.{/if}</p>
+          <p class="hint">Pull-up {mp.rpu} Ω{#if mp.autoRpu} (auto — open top detent reads the 4.85&nbsp;V max){/if} draws up to <b>{peakMa.toFixed(1)} mA</b> from the 5&nbsp;V supply (worst case, lowest position){#if peakMa > 25} — high{/if}.{#if !mp.autoRpu} <button type="button" class="linkbtn" onclick={autoPullup}>Auto-size pull-up</button> to put the open detent at 4.85&nbsp;V.{/if}</p>
           <label class="chk"><input type="checkbox" bind:checked={mp.invert} /> Invert (reverse position order)</label>
+          <div class="field"><label>Position names <span class="desc">comma-separated, position 0 first — shown on the Dashboard and in Conditions</span></label>
+            <input value={(f.rotary.positionNames ?? []).join(', ').replace(/(, )+$/, '')} placeholder="OFF, Park, Low, High" oninput={(e) => (f.rotary.positionNames = e.target.value.split(',').map((x) => x.trim()))} /></div>
           <label class="chk"><input type="checkbox" bind:checked={mp.burn} /> Burn to flash on save (persist across reboot)</label>
           <p class="hint">Wire the 5&nbsp;V supply —[pull-up {mp.rpu}Ω]— input pin; the switch grounds the pin through the listed resistor at each position — the top detent leaves it open (reads the pull-up max). The board's own {(R_IN / 1000)}kΩ to GND is already included. Read the position anywhere as “{f.name}” — a Condition, an output's driver, or a CAN output.</p>
         {:else}
@@ -1060,7 +1225,7 @@
         <p class="lbl" style="margin-top:14px">📈 Linear scaling (sensor)</p>
         <label class="chk"><input type="checkbox" bind:checked={sc.on} onchange={() => { if (sc.on) { f.switch.enabled = false; mp.on = false } }} /> Scale this input to engineering units (pressure, temperature, …)</label>
         {#if sc.on}
-          <p class="hint">Enter two points from the sensor's datasheet (input voltage → reading). The tool sends gain &amp; offset; the module publishes “{f.name}” in your units for use in Conditions, outputs and CAN.</p>
+          <p class="hint">Enter two points from the sensor's datasheet (input voltage → reading). The tool sends gain &amp; offset; the module publishes “{f.name} Scaled Value” in your units for use in Conditions, outputs and CAN.</p>
           <div class="f3" style="margin-top:6px">
             <div class="field"><label>Units</label><input bind:value={sc.units} placeholder="bar, °C, psi…" /></div>
             <div class="field"></div><div class="field"></div>
@@ -1085,7 +1250,7 @@
 
         <p class="lbl" style="margin-top:14px">Backlight &amp; LEDs</p>
         <div class="f2">
-          <div class="field"><label>Backlight colour</label><select bind:value={f.backlightButtonColor}>{#each COLORS as c, i}<option value={i}>{c}</option>{/each}</select></div>
+          <div class="field"><label>Backlight colour</label><select bind:value={f.backlightButtonColor}>{#each BACKLIGHT as c, i}<option value={i}>{c}</option>{/each}</select></div>
           <div class="field"><label>Dim source (signal)</label>
             <select bind:value={f.dimmingVar}><option value={0}>— always full</option>{#each inputsBool as v}<option value={v.index}>{v.name}</option>{/each}</select></div>
         </div>
@@ -1156,6 +1321,12 @@
   /* Numeric columns (everything past the first label column) right-align with tabular figures. */
   table.ladder th:not(:first-child), table.ladder td:not(:first-child) { text-align: right; font-variant-numeric: tabular-nums; }
   table.ladder input { width: 90px; text-align: right; font-variant-numeric: tabular-nums; }
+  /* lookup-table grid: compact cells, axis inputs in the header row / first column */
+  table.tbl th, table.tbl td { padding: 2px 3px; }
+  table.tbl th.corner { text-align: center; color: var(--muted); font-weight: 600; white-space: nowrap; }
+  table.tbl thead th input, table.tbl tbody th input { width: 72px; font-weight: 600; background: var(--surface-2, #f6f6fa); }
+  table.tbl input.cell { width: 72px; }
+  .tscroll { overflow-x: auto; }
   .hint.warn { color: var(--err, #d32f2f); font-weight: 500; }
   tr.activepos td { background: color-mix(in srgb, var(--ok, #2a9d8f) 18%, transparent); font-weight: 600; }
   tr.calrow td { background: color-mix(in srgb, var(--accent, #594ae2) 16%, transparent); }

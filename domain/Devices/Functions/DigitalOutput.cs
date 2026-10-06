@@ -19,14 +19,16 @@ public class DigitalOutput : IDeviceFunction
     [JsonPropertyName("softStartEnabled")] public bool SoftStartEnabled { get; set; }
     [JsonPropertyName("variableDutyCycle")] public bool VariableDutyCycle { get; set; }
     [JsonPropertyName("dutyCycleInput")] public int DutyCycleInput { get; set; }
-    [JsonPropertyName("fixedDutyCycle")] public int FixedDutyCycle { get; set; } = 100;
-    [JsonPropertyName("frequency")] public int Frequency { get; set; } = 100;
-    [JsonPropertyName("softStartRampTime")] public int SoftStartRampTime { get; set; }
-    [JsonPropertyName("dutyCycleDenominator")] public int DutyCycleDenominator { get; set; } = 100;
-    [JsonPropertyName("minDutyCycle")] public int MinDutyCycle { get; set; }
+    // Clamped to the firmware's DIGITAL_OUTPUT_PARAMS ranges (same numbers as the PDM's OUTPUT_PARAMS);
+    // an out-of-range write is silently rejected and shows up as "No reply from module".
+    [JsonPropertyName("fixedDutyCycle")] public int FixedDutyCycle { get => field; set => field = Math.Clamp(value, 0, 100); } = 100;
+    [JsonPropertyName("frequency")] public int Frequency { get => field; set => field = Math.Clamp(value, 0, 400); } = 100;
+    [JsonPropertyName("softStartRampTime")] public int SoftStartRampTime { get => field; set => field = Math.Clamp(value, 0, 10000); }
+    [JsonPropertyName("dutyCycleDenominator")] public int DutyCycleDenominator { get => field; set => field = Math.Clamp(value, 1, 5000); } = 100;
+    [JsonPropertyName("minDutyCycle")] public int MinDutyCycle { get => field; set => field = Math.Clamp(value, 0, 100); }
     [JsonPropertyName("variableFreq")] public bool VariableFreq { get; set; }
     [JsonPropertyName("freqInput")] public int FreqInput { get; set; }
-    [JsonPropertyName("freqInputDenom")] public int FreqInputDenom { get; set; } = 1;
+    [JsonPropertyName("freqInputDenom")] public int FreqInputDenom { get => field; set => field = Math.Clamp(value, 1, 5000); } = 1;
     [JsonPropertyName("rampDutyChanges")] public bool RampDutyChanges { get; set; }
 
     [JsonIgnore][Plotable(displayName:"State")] public bool State { get; set; }

@@ -3,6 +3,10 @@
   // short lists; type-to-filter once a list is long. options = array of strings/numbers OR {value,label}.
   import { clickable } from './a11y.js'
   let { options = [], value = $bindable(), placeholder = 'Search…', disabled = false, id = undefined, onpick = undefined } = $props()
+  // ids for the ARIA combobox wiring (input ↔ listbox ↔ active option)
+  const uid = 'ss' + Math.random().toString(36).slice(2, 8)
+  const listId = uid + '-list'
+  const optId = (i) => `${uid}-opt-${i}`
 
   let norm = $derived((options ?? []).map((o) => (o && typeof o === 'object') ? o : { value: o, label: String(o) }))
   let open = $state(false)
@@ -37,16 +41,18 @@
 
 <div class="ss" bind:this={root} style="position:relative">
   <input {id} class="ss-in" {disabled} autocomplete="off"
-    value={open ? q : (sel?.label ?? '')}
+    role="combobox" aria-expanded={open && !disabled} aria-controls={listId} aria-autocomplete="list" aria-haspopup="listbox"
+    aria-activedescendant={open && shown.length ? optId(Math.min(active, shown.length - 1)) : undefined}
+    value={open ? q : (sel?.label ?? (value ? `#${value}` : ''))}
     placeholder={placeholder}
     onmousedown={(e) => { e.preventDefault(); e.target.focus(); toggle() }}
     oninput={(e) => { q = e.target.value; open = true; active = 0 }}
     onkeydown={onKey} />
-  <span class="ss-chev" class:open use:clickable={toggle} aria-hidden="true">▾</span>
+  <span class="ss-chev" class:open aria-hidden="true" onmousedown={(e) => { e.preventDefault(); toggle() }}>▾</span>
   {#if open && !disabled}
-    <div class="ss-list">
+    <div class="ss-list" id={listId} role="listbox">
       {#each shown as o, i (i)}
-        <div class="ss-opt" class:sel={o.value === value} class:active={i === active} role="option" aria-selected={o.value === value} tabindex="0" use:clickable onclick={() => pick(o)} onmousemove={() => (active = i)}>{o.label}</div>
+        <div class="ss-opt" id={optId(i)} class:sel={o.value === value} class:active={i === active} role="option" aria-selected={o.value === value} tabindex="-1" use:clickable onclick={() => pick(o)} onmousemove={() => (active = i)}>{o.label}</div>
       {/each}
       {#if filtered.length === 0}<div class="ss-empty">no match</div>{/if}
       {#if filtered.length > CAP}<div class="ss-empty">…and {filtered.length - CAP} more — keep typing to narrow</div>{/if}

@@ -873,6 +873,25 @@ public class DeviceManager(ILogger<DeviceManager> logger, ILoggerFactory loggerF
         return true;
     }
 
+    /// <summary>Bench test an output (firmware ≥ 5.5.107, MsgCmd 48): mode 0 release, 1 on, 2 PWM at duty/freq, held
+    /// for holdSec. PDM Profet outputs and CANBoard digital outputs answer the same command at base+1. Send-only —
+    /// the module releases by itself when the hold expires.</summary>
+    public bool TestOutput(Guid deviceId, int number, int mode, int duty, int freq, int holdSec)
+    {
+        var dev = GetDevice(deviceId);
+        if (dev is not (PdmDevice or CanboardDevice)) return false;
+        QueueMessage(new DeviceCanFrame
+        {
+            SendOnly = true,
+            DeviceBaseId = dev.BaseId,
+            Frame = new CanFrame(dev.BaseId + PdmDevice.ConfigTxOffset, 8,
+                [Convert.ToByte(domain.Enums.MessageCommand.OutputTest), (byte)(number - 1), (byte)mode, (byte)duty,
+                 (byte)(freq & 0xFF), (byte)(freq >> 8), (byte)holdSec, 0]),
+            Name = $"Test output {number}"
+        });
+        return true;
+    }
+
     /// <summary>
     /// Upload one assembled Lua program to the device, chunked (5 source bytes per
     /// frame) and paced so the device's RX mailbox can't overflow. The firmware

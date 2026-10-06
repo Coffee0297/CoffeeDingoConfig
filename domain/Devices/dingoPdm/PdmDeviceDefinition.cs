@@ -18,5 +18,8 @@ public record PdmDeviceDefinition(
     int MinBuildVersion,
     // Per-output continuous current rating (A), indexed by output number (OUT1 = index 0).
     // null/empty = unknown (the UI then shows no rating for that model).
-    int[]? OutputCurrentRatings = null
+    int[]? OutputCurrentRatings = null,
+    // Timer / lookup-table function slots (firmware >= 5.5.107). Defaults match dingoFW's PDM boards.
+    int NumTimers = 8,
+    int NumTables = 2
     );

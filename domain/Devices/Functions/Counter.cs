@@ -15,14 +15,16 @@ public class Counter : IDeviceFunction
     [JsonPropertyName("incInput")] public int IncInput { get; set; }
     [JsonPropertyName("decInput")] public int DecInput { get; set; }
     [JsonPropertyName("resetInput")] public  int ResetInput { get; set; }
-    [JsonPropertyName("minCount")] public int  MinCount {get; set;}
-    [JsonPropertyName("maxCount")] public int MaxCount { get; set; } = 10;
+    // uint8 on the device (COUNTER_PARAMS 0 … 255) — it silently rejects an out-of-range write.
+    [JsonPropertyName("minCount")] public int MinCount { get => field; set => field = Math.Clamp(value, 0, 255); }
+    [JsonPropertyName("maxCount")] public int MaxCount { get => field; set => field = Math.Clamp(value, 0, 255); } = 10;
     [JsonPropertyName("incEdge")] public InputEdge IncEdge {get; set;} =  InputEdge.Rising;
     [JsonPropertyName("decEdge")] public InputEdge DecEdge {get; set;} =  InputEdge.Rising;
     [JsonPropertyName("resetEdge")] public InputEdge ResetEdge {get; set;} = InputEdge.Rising;
     [JsonPropertyName("wrapAround")] public bool WrapAround {get; set;}
     [JsonPropertyName("holdToReset")] public bool HoldToReset {get; set;}
-    [JsonPropertyName("resetTime")] public int ResetTime { get; set; } = 2000;
+    // ms, 0 … 10000 (COUNTER_PARAMS sub 11).
+    [JsonPropertyName("resetTime")] public int ResetTime { get => field; set => field = Math.Clamp(value, 0, 10000); } = 2000;
     
     [JsonIgnore][Plotable(displayName:"State")] public int Value {get; set;}
 

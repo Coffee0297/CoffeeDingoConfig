@@ -5,6 +5,7 @@
   import LuaEditor from './LuaEditor.svelte'
   import SearchSelect from './SearchSelect.svelte'
   import RemoteSourceAdd from './RemoteSourceAdd.svelte'
+  import OutputTest from './OutputTest.svelte'
   let { output, outputs = [], guid, connected = false, deviceType = '', devices = [], onclose } = $props()
   // Other outputs on this module, for the "Paired output" picker (-1 = none).
   let otherOutputs = $derived((outputs ?? []).filter((o) => o.number !== output.number))
@@ -59,7 +60,8 @@
     luaSet(guid, luaKey, luaText)
     luaBusy = true; luaMsg = ''
     try {
-      await api.luaUpload(guid, luaAssemble(guid))
+      const up = await api.luaUpload(guid, luaAssemble(guid))
+      for (const w of up?.warnings ?? []) toast('Lua: ' + w, 'error')
       // A per-output snippet drives the output by writing its Lua slot (setLuaOut).
       // For that to actually turn the output on, its Rule input must point at that slot.
       // Auto-bind it here — but only if no rule is set yet, so we never clobber a real one.
@@ -105,7 +107,7 @@
     return opts
   })())
   // Build SearchSelect options from a VarMap list; `none` prepends a "— (0)" entry.
-  const ssOpts = (arr, none = false) => (none ? [{ value: 0, label: '—' }] : []).concat((arr ?? []).map((v) => ({ value: v.index, label: v.name })))
+  const ssOpts = (arr, none = false) => (none ? [{ value: 0, label: '—' }] : []).concat((arr ?? []).filter((v) => !(none && v.index === 0)).map((v) => ({ value: v.index, label: v.name })))   // one zero row, not “—” + “None”
   // "Signal value at full" fields for the variable duty/freq denominators (free-typing local state,
   // seeded on open; the firmware denominators are derived one-way to avoid snapping while typing).
   let dutyFull = $state(100), freqFull = $state(400)
@@ -164,6 +166,9 @@
 
   let saving = $state(false), saved = $state(false), savedToDevice = $state(false)
   async function save() {
+    // Two configured signals with one name collide in every picker/readout — warn, don't block.
+    { const nm = (f.name ?? '').trim(); const clash = nm && inputs.find((v) => (v.name === nm || v.name.startsWith(nm + ' ')) && !(v.kind === 'output' && v.number === output.number) && v.kind !== 'sys')
+      if (clash) toast(`Another signal on this module is already called “${nm}” — pickers and readouts will show two of them.`, 'info') }
     // PWM bounds. When a source drives freq/duty the fixed numeric inputs are hidden, so only
     // validate the fixed value that's actually in use. Min-duty (0–100, ≤ fixed duty) always applies.
     if (f.pwmEnabled) {
@@ -235,15 +240,18 @@
   }
 
   // Picking a source that points at a disabled function won't drive anything — enable that source too.
+  // The var-map entry names its owner (kind + slot number), so this never guesses by name.
   let _funcs = $state(null)
-  const SRC_ARRS = [['inputs','input'],['canInputs','caninput'],['virtualInputs','virtualinput'],['conditions','condition'],['counters','counter'],['flashers','flasher']]
+  const KIND_ARR = { input: 'inputs', caninput: 'canInputs', virtualinput: 'virtualInputs', condition: 'conditions', counter: 'counters', flasher: 'flashers', timer: 'timers', table: 'tables' }
   async function enableSourceVar(idx) {
     idx = Number(idx); if (!idx) return
-    const label = inputs.find((v) => v.index === idx)?.name; if (!label) return
+    const v = inputs.find((x) => x.index === idx); const arr = KIND_ARR[v?.kind]
+    if (!v || !arr) return
     if (!_funcs) { try { _funcs = await api.functions(guid) } catch { return } }
-    for (const [arr, kind] of SRC_ARRS) {
-      const fn = (_funcs?.[arr] ?? []).find((x) => label === x.name || label.startsWith(x.name + ' '))
-      if (fn) { if (fn.enabled === false) { try { await api.setFunction(guid, kind, fn.number, { enabled: true }); fn.enabled = true; toast(`Enabled "${fn.name}" — it was off`, 'ok') } catch (e) { toast('Could not enable source: ' + e.message, 'error') } } return }
+    const fn = (_funcs?.[arr] ?? []).find((x) => x.number === v.number)
+    if (fn && fn.enabled === false) {
+      try { await api.setFunction(guid, v.kind, fn.number, { enabled: true }); fn.enabled = true; toast(`Enabled "${fn.name}" — it was off`, 'ok') }
+      catch (e) { toast('Could not enable source: ' + e.message, 'error') }
     }
   }
 
@@ -272,10 +280,11 @@
     return slot
   }
   // After writing a function, resolve its new bool VarMap entry by name and bind this output to it.
-  async function bindNewDriver(matchName, writtenFlag) {
+  async function bindNewDriver(matchName, writtenFlag, kind = null, number = 0) {
     inputsBool = await api.inputs(guid, 'bool').catch(() => inputsBool)
     inputs = await api.inputs(guid).catch(() => inputs)
-    const v = inputsBool.find((x) => x.name === matchName || x.name.startsWith(matchName + ' '))
+    // owner tags first (two “Fan”s would bind the wrong one by name); name is the fallback
+    const v = (kind && inputsBool.find((x) => x.kind === kind && x.number === number)) || inputsBool.find((x) => x.name === matchName || x.name.startsWith(matchName + ' '))
     if (v) { f.input = v.index; autoEnableOutput() }
     builder = null
     toast(v
@@ -293,7 +302,7 @@
       const argOff = cmp.hyst ? Number(cmp.argOff) : Number(cmp.arg)
       const r = await api.setFunction(guid, 'condition', slot.number,
         { enabled: true, name, input: Number(cmp.input), operator: Number(cmp.operator), arg: Number(cmp.arg), argOff })
-      await bindNewDriver(name, !!r?.written)
+      await bindNewDriver(name, !!r?.written, 'condition', slot.number)
     } catch (e) { toast('Build failed: ' + e.message, 'error') }
     finally { builderBusy = false }
   }
@@ -310,10 +319,11 @@
         not1: !!comb.not1, var1: Number(comb.var1), cond1: Number(comb.cond1),
         not2: !!comb.not2, var2: Number(comb.var2),
       })
-      await bindNewDriver(name, !!r?.written)
+      await bindNewDriver(name, !!r?.written, 'virtualinput', slot.number)
     } catch (e) { toast('Build failed: ' + e.message, 'error') }
     finally { builderBusy = false }
   }
+
 </script>
 
 <div class="scrim show" onclick={onclose}></div>
@@ -326,6 +336,9 @@
     </div>
     <button class="x" aria-label="Close" onclick={onclose}>✕</button>
   </div>
+
+  <div style="padding:0 18px"><OutputTest {guid} number={output.number} {connected} enabled={output.enabled} pwmEnabled={output.pwmEnabled}
+    status={output.state} amps={output.current ?? 0} duty={output.duty} /></div>
 
   <div class="tabs" role="tablist">
     <span class="t" role="tab" tabindex="0" aria-selected={tab === 'rule'} use:clickable class:active={tab === 'rule'} onclick={() => (tab = 'rule')}>Rule</span>
@@ -399,7 +412,7 @@
       <div class="preview">⚡ Right now this output is <b class="big">{output.state}</b></div>
       <p class="hint">Pick a <b>boolean</b> source (a digital input, condition, virtual input, flasher, …) — the output is on
         whenever it's true. A raw analog value (e.g. battery voltage) can't drive on/off directly, so build a
-        <b>Comparison</b> to threshold it, or a <b>Combination</b> to AND/OR several signals. Save writes to the device;
+        <b>Comparison</b> to threshold it, or a <b>Combination</b> to AND/OR several signals. {connected ? 'Save writes to the device;' : 'Offline — Save keeps it in the project, Deploy applies it;'}
         <b>Burn</b> persists to flash.</p>
 
       <p class="lbl" style="margin-top:18px">PWM / dimming</p>
@@ -426,7 +439,7 @@
           <div class="field" style="max-width:260px"><label>Signal value at 100% duty</label>
             <input type="number" min="1" bind:value={dutyFull} /></div>
           <p class="hint">Duty tracks the source: <b>duty% = signal ÷ {f.dutyCycleDenom || 1}</b>, clamped 0–100 then held at the min-duty floor.
-            Set the value above to whatever the signal reads at full brightness (e.g. a 0–5000&nbsp;mV analog → 5000). Any numeric signal works — CAN or analog.</p>
+            Set the value above to whatever the signal reads at full brightness (e.g. a 0–100 % lookup-table output → 100, a CAN temperature in °C → the temperature that means full fan). Any numeric signal works — a CAN input value, a <b>lookup table</b> (map a sensor to duty with a curve), a counter, or a CANBoard analog input bridged over CAN.</p>
         {/if}
         {#if f.variableFreq}
           <div class="field" style="max-width:260px"><label>Signal value at 400 Hz</label>
@@ -491,7 +504,7 @@
         {/if}
       {/if}
 
-      <p class="hint">Live current now: <b>{(output.current ?? 0).toFixed(1)} A</b>. Save writes to the device; click <b>Burn</b> to persist to flash.</p>
+      <p class="hint">{#if connected}Live current now: <b>{(output.current ?? 0).toFixed(1)} A</b>. Save writes to the device; {:else}Module offline — Save keeps this in the project; {/if}click <b>Burn</b> to persist to flash.</p>
     </div>
   {:else if tab === 'wiring'}
     {@const wire = awgFor(f.currentLimit)}
@@ -571,3 +584,4 @@
     {/if}
   </div>
 </aside>
+

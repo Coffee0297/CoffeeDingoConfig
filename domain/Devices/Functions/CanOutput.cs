@@ -13,22 +13,27 @@ public class CanOutput : IDeviceFunction
     [JsonPropertyName("enabled")] public bool Enabled {get; set;}
     [JsonPropertyName("input")] public int Input {get; set;}
     [JsonPropertyName("ide")] public bool Ide {get; set;}
-    [JsonPropertyName("startBit")] public int StartBit {get; set;}
-    [JsonPropertyName("bitLength")] public int BitLength { get; set; } = 8;
+    // Clamped to the firmware's CAN_OUTPUT_PARAMS ranges — it silently drops an out-of-range write,
+    // which the app then reports as "No reply from module".
+    [JsonPropertyName("startBit")] public int StartBit { get => field; set => field = Math.Clamp(value, 0, 63); }
+    [JsonPropertyName("bitLength")] public int BitLength { get => field; set => field = Math.Clamp(value, 1, 32); } = 8;
     [JsonPropertyName("factor")] public double Factor { get; set; } = 1.0;
     [JsonPropertyName("offset")] public double Offset {get; set;}
     [JsonPropertyName("byteOrder")] public ByteOrder ByteOrder {get; set;} =  ByteOrder.LittleEndian;
     [JsonPropertyName("signed")] public bool Signed {get; set;}
-    [JsonPropertyName("interval")] public int Interval { get; set; } = 1000;
-    
+    [JsonPropertyName("interval")] public int Interval { get => field; set => field = Math.Clamp(value, 0, 60000); } = 1000;
+
     [JsonPropertyName("id")]
     public int Id
     {
         get;
         set
         {
-            field = value;
-            Ide = (field > 2047);
+            // 29-bit max (firmware 0..0x1FFFFFFF). An id above 11 bits can only be an extended
+            // frame, so force IDE on — but never force it OFF: a small id with ide=true is a valid
+            // extended frame, and JSON may well set "ide" before "id".
+            field = Math.Clamp(value, 0, 0x1FFFFFFF);
+            if (field > 0x7FF) Ide = true;
         }
     }
 

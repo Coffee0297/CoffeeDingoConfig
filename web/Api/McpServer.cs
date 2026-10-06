@@ -317,7 +317,7 @@ public static class McpServer
             _ => new(GET, "/api/adapters", null)),
 
         new("connect", "Open the CAN link. Bitrate is a string like '500K'.",
-            Schema("""{"type":"object","properties":{"adapter":{"type":"string","description":"SLCAN | PCAN | SocketCAN | Sim"},"port":{"type":"string","description":"e.g. COM3"},"bitrate":{"type":"string","enum":["1000K","500K","250K","125K","100K"]}},"required":["adapter","port","bitrate"]}"""),
+            Schema("""{"type":"object","properties":{"adapter":{"type":"string","description":"SLCAN | PCAN | SocketCAN | Sim"},"port":{"type":"string","description":"e.g. COM3, or tcp://127.0.0.1:7778 for the CoffeeDingoSim bridge"},"bitrate":{"type":"string","enum":["1000K","500K","250K","125K","100K"]}},"required":["adapter","port","bitrate"]}"""),
             a => new(POST, "/api/connect", Json(new { Adapter = Str(a, "adapter"), Port = Str(a, "port"), Bitrate = Str(a, "bitrate") }))),
 
         new("disconnect", "Close the CAN link.",
@@ -403,7 +403,7 @@ public static class McpServer
             Schema("""{"type":"object","properties":{"guid":{"type":"string"},"number":{"type":"integer"},"currentLimit":{"type":"number"}},"required":["guid","number","currentLimit"]}"""),
             a => new(POST, $"/api/devices/{Str(a, "guid")}/output", Json(new { Number = Num(a, "number"), CurrentLimit = NumOpt(a, "currentLimit", 0) }))),
 
-        new("set_output_config", "Write a full output configuration. Pass an OutputConfigReq object under 'config' (Number, Enabled, Input, CurrentLimit, InrushLimit, InrushTime, ResetMode, ResetTime, ResetCountLimit, PwmEnabled, Freq, FixedDuty, MinDuty, SoftStart, SoftStartRamp, ...).",
+        new("set_output_config", "Write an output's configuration. Pass an OutputConfigReq object under 'config' (Number, Enabled, Input, CurrentLimit, InrushLimit, InrushTime, ResetMode, ResetTime, ResetCountLimit, PwmEnabled, Freq, FixedDuty, MinDuty, SoftStart, SoftStartRamp, ...). Only Number is required — a field left out keeps the output's current value, so a partial body merges rather than resetting the rest.",
             Schema("""{"type":"object","properties":{"guid":{"type":"string"},"config":{"type":"object"}},"required":["guid","config"]}"""),
             a => new(POST, $"/api/devices/{Str(a, "guid")}/outputconfig", JsonRaw(ObjArg(a, "config")))),
 
@@ -433,7 +433,7 @@ public static class McpServer
             Schema("""{"type":"object","properties":{"guid":{"type":"string"}},"required":["guid"]}"""),
             a => new(GET, $"/api/devices/{Str(a, "guid")}/functions", null)),
 
-        new("set_function", "Set a function. kind/number identify the slot; pass the function params object under 'params'.",
+        new("set_function", "Set a function. kind/number identify the slot; pass the function params object under 'params'. Kinds: input, caninput, virtualinput, condition, counter, flasher, timer (input, edge 0=Rising/1=Falling, mode 0=OnDelay/1=OffDelay/2=Pulse, preset ms), table (xInput, yInput, xSize, ySize, xAxis[8], yAxis[8], cells[64] row-major; PDM only), canoutput, wiper, starterdisable, keypad, keypadbutton, keypaddial; CANBoard also analoginput, digitaloutput. keypadbutton / keypaddial encode keypad + slot in one number: number = (keypad-1)*32 + slot (button 1..20, dial 1..2) — e.g. keypad 2 button 3 = 35, keypad 1 dial 2 = 2; they edit get_functions' keypads[keypad-1].buttons[slot-1] / .dials[slot-1]. A keypad's own buttons/dials arrays are ignored by set_function keypad — use those kinds.",
             Schema("""{"type":"object","properties":{"guid":{"type":"string"},"kind":{"type":"string"},"number":{"type":"integer"},"params":{"type":"object"}},"required":["guid","kind","number","params"]}"""),
             a => new(POST, $"/api/devices/{Str(a, "guid")}/function/{Str(a, "kind")}/{Num(a, "number")}", JsonRaw(ObjArg(a, "params")))),
 
@@ -788,8 +788,9 @@ public static class McpServer
             """
             # Skill: CAN addressing & frame map
 
-            - **Footprint:** a module owns `baseId .. baseId + span`, matching firmware NUM_TX_MSGS —
-              **CANBoard `base..+11`**, **dingoPDM/-Max `base..+28`** (config at +0/+1, cyclic from +2).
+            - **Footprint:** a module owns `baseId .. baseId + span` — config at +0/+1, then NUM_TX_MSGS cyclic
+              frames from +2: **dingoPDM/-Max `base..+29`** (28 cyclic, firmware ≥ 5.5.107), **CANBoard
+              `base..+13`** (10 cyclic to +11, plus the OpenBLT bootloader ids at +12/+13).
               Two modules clash if these ranges overlap; space them apart accordingly.
             - `get_definitions` — per-model channel counts + output current ratings (before `add_device`).
             - `get_frame_map` — the address-agnostic map: which `base + offset` and bits carry each

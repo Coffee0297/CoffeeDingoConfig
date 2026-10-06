@@ -18,5 +18,7 @@ public record CanboardDeviceDefinition(
     int MinBuildVersion,
     // Per-output continuous current rating (A), indexed by output number (OUT1 = index 0).
     // null/empty = unknown (the UI then shows no rating).
-    int[]? OutputCurrentRatings = null
+    int[]? OutputCurrentRatings = null,
+    // Timer function slots (firmware >= 5.5.107). The CANBoard has no lookup tables (2 KB config sector).
+    int NumTimers = 4
 );

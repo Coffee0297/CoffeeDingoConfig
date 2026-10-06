@@ -1,0 +1,50 @@
+- generic [ref=e3]:
+  - banner [ref=e4]:
+    - generic [ref=e5]: dingoConfig
+    - button "Module — ▾" [ref=e7] [cursor=pointer]:
+      - generic [ref=e8]: Module
+      - generic [ref=e9]: —
+      - text: ▾
+    - generic [ref=e10]:
+      - button "System" [active] [ref=e11] [cursor=pointer]
+      - button "Dashboard" [ref=e12] [cursor=pointer]
+      - button "Outputs" [ref=e13] [cursor=pointer]
+      - button "Signals & logic" [ref=e14] [cursor=pointer]
+      - button "Wiring" [ref=e15] [cursor=pointer]
+      - button "Plot" [ref=e16] [cursor=pointer]
+      - button "Logs" [ref=e17] [cursor=pointer]
+    - button "Help for this view" [ref=e18] [cursor=pointer]: "?"
+    - generic [ref=e19]: Disconnected
+    - combobox "CAN adapter" [ref=e21]:
+      - option "USB" [selected]
+      - option "SLCAN"
+      - option "PCAN"
+      - option "Sim"
+    - combobox "Serial port" [ref=e22]:
+      - option "(no ports)" [selected]
+    - combobox "CAN bitrate" [ref=e23]:
+      - option "1000K"
+      - option "500K" [selected]
+      - option "250K"
+      - option "125K"
+      - option "100K"
+    - button "Connect" [ref=e24] [cursor=pointer]
+    - button "Settings" [ref=e25] [cursor=pointer]: ⚙
+    - button "Toggle dark theme" [pressed] [ref=e26] [cursor=pointer]: ☀
+  - main [ref=e27]:
+    - generic [ref=e45]:
+      - heading "System — 0 modules" [level=1] [ref=e46]
+      - paragraph [ref=e47]: All modules on the CAN bus. Click a module to open it; drag a pin to match your install.
+    - generic [ref=e48]: Modules
+    - button "+ Add module" [ref=e51] [cursor=pointer]
+    - generic [ref=e52]:
+      - text: Cross-module functions
+      - generic [ref=e53]: — define once; rule = native wiring, Lua = written in Lua
+    - button "+ New cross-module function" [ref=e56] [cursor=pointer]
+    - paragraph [ref=e57]: "Tip: cross-module functions shine with 2+ modules. A rule compiles to native CAN-input/flasher/output wiring (no Lua); switch to Lua to write it yourself — needed for backup-clock failover."
+    - generic [ref=e58]: Car layout
+    - generic [ref=e60]:
+      - img [ref=e62]:
+        - generic [ref=e75]: FRONT
+        - generic [ref=e76]: REAR
+      - generic [ref=e77]: Drag a pin to where the module sits · double-click to open it.

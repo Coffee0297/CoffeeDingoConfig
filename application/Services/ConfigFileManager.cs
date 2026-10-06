@@ -82,11 +82,13 @@ public class ConfigFileManager(ILogger<ConfigFileManager> logger, DeviceDefiniti
         var list = devices.ToList();
         var config = new ConfigFile
         {
-            PdmDevices = list.OfType<PdmDevice>().ToList(),
-            CanboardDevices = list.Where(d => d.GetType() == typeof(CanboardDevice)).Cast<CanboardDevice>().ToList(),
-            DbcDevices = list.Where(d => d.GetType() == typeof(DbcDevice)).Cast<DbcDevice>().ToList(),
-            BlinkMarineKeypads = list.OfType<BlinkMarineKeypadDevice>().ToList(),
-            GrayhillKeypads = list.OfType<GrayhillKeypadDevice>().ToList()
+            // Deterministic order (base ID, then name): the device manager keeps devices in a dictionary, so a
+            // plain ToList() reshuffled the file on every save and made project diffs unreadable.
+            PdmDevices = list.OfType<PdmDevice>().OrderBy(d => d.BaseId).ThenBy(d => d.Name).ToList(),
+            CanboardDevices = list.Where(d => d.GetType() == typeof(CanboardDevice)).Cast<CanboardDevice>().OrderBy(d => d.BaseId).ThenBy(d => d.Name).ToList(),
+            DbcDevices = list.Where(d => d.GetType() == typeof(DbcDevice)).Cast<DbcDevice>().OrderBy(d => d.BaseId).ThenBy(d => d.Name).ToList(),
+            BlinkMarineKeypads = list.OfType<BlinkMarineKeypadDevice>().OrderBy(d => d.BaseId).ThenBy(d => d.Name).ToList(),
+            GrayhillKeypads = list.OfType<GrayhillKeypadDevice>().OrderBy(d => d.BaseId).ThenBy(d => d.Name).ToList()
         };
         return JsonSerializer.Serialize(config, _options);
     }
@@ -103,6 +105,8 @@ public class ConfigFileManager(ILogger<ConfigFileManager> logger, DeviceDefiniti
         foreach (var device in config.CanboardDevices)
             device.ApplyDefinition(deviceDefinitionManager.GetByCanboardType(device.CanboardType) ?? DeviceDefinitionManager.DefaultCanboard);
 
+        MigrateLegacySleep(jsonString, config);
+
         var allDevices = new List<IDevice>();
         allDevices.AddRange(config.PdmDevices);
         allDevices.AddRange(config.CanboardDevices);
@@ -110,6 +114,45 @@ public class ConfigFileManager(ILogger<ConfigFileManager> logger, DeviceDefiniti
         allDevices.AddRange(config.BlinkMarineKeypads);
         allDevices.AddRange(config.GrayhillKeypads);
         return allDevices;
+    }
+
+    /// <summary>0.6.x files carried `sleepInputEnabled` / `sleepInput` / `sleepInputActiveHigh` (a digital-input-only sleep
+    /// trigger). The models no longer have those properties, so they were dropped without a word. An active-high trigger
+    /// is exactly the new force-sleep input; an active-low one has no direct equivalent (the input would need inverting),
+    /// so it is reported in the log instead of being guessed.</summary>
+    private void MigrateLegacySleep(string jsonString, ConfigFile config)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(jsonString);
+            foreach (var key in new[] { "PdmDevices", "CanboardDevices" })
+            {
+                if (!doc.RootElement.TryGetProperty(key, out var arr) || arr.ValueKind != JsonValueKind.Array) continue;
+                foreach (var el in arr.EnumerateArray())
+                {
+                    if (!el.TryGetProperty("sleepInputEnabled", out var en) || en.ValueKind != JsonValueKind.True) continue;
+                    var input = el.TryGetProperty("sleepInput", out var si) && si.TryGetInt32(out var n) ? n : 0;
+                    var activeHigh = !el.TryGetProperty("sleepInputActiveHigh", out var ah) || ah.ValueKind != JsonValueKind.False;
+                    var name = el.TryGetProperty("name", out var nm) ? nm.GetString() : "?";
+                    var guid = el.TryGetProperty("guid", out var gd) && Guid.TryParse(gd.GetString(), out var gg) ? gg : Guid.Empty;
+                    IDevice? dev = key == "PdmDevices" ? config.PdmDevices.FirstOrDefault(d => d.Guid == guid) : config.CanboardDevices.FirstOrDefault(d => d.Guid == guid);
+                    if (dev == null || input <= 0) continue;
+                    if (!activeHigh)
+                    {
+                        logger.LogWarning("{Name}: the old active-LOW sleep input #{Input} has no direct equivalent — set a force-sleep signal (invert the input or use a Timer on it) in System ▸ Settings", name, input);
+                        continue;
+                    }
+                    switch (dev)
+                    {
+                        case PdmDevice p when p.ForceSleepInput == 0: p.ForceSleepInput = input; break;
+                        case CanboardDevice c when c.ForceSleepInput == 0: c.ForceSleepInput = input; break;
+                        default: continue;
+                    }
+                    logger.LogInformation("{Name}: migrated the old sleep input #{Input} to the force-sleep input", name, input);
+                }
+            }
+        }
+        catch (Exception e) { logger.LogWarning("Legacy sleep-input migration skipped: {Message}", e.Message); }
     }
 
     /// <summary>

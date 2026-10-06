@@ -13,8 +13,9 @@ public class Flasher : IDeviceFunction
     [JsonPropertyName("enabled")] public bool Enabled {get; set;}
     [JsonPropertyName("single")] public bool Single {get; set;}
     [JsonPropertyName("input")] public int Input {get; set;}
-    [JsonPropertyName("onTime")] public int OnTime { get; set; } = 500;
-    [JsonPropertyName("offTime")] public int OffTime { get; set; } = 500;
+    // ms, clamped to the firmware's FLASHER_PARAMS range (0 … 5000) — the device NAKs anything above.
+    [JsonPropertyName("onTime")] public int OnTime { get => field; set => field = Math.Clamp(value, 0, 5000); } = 500;
+    [JsonPropertyName("offTime")] public int OffTime { get => field; set => field = Math.Clamp(value, 0, 5000); } = 500;
 
     [JsonIgnore][Plotable(displayName:"State")] public bool Value {get; set;}
 

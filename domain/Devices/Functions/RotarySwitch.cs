@@ -18,8 +18,10 @@ public class RotarySwitch(int number, string name) : IDeviceFunction
     // Calibrated per-position decode (uneven switches): each position has a centre voltage (mV);
     // a position registers within ±tolerance, capped at the midpoint to its neighbours. The point
     // voltages are sent to the firmware PACKED two per 32-bit word (CanBoard flash is tight).
-    [JsonPropertyName("numPos")] public int NumPos { get; set; } = 2;
-    [JsonPropertyName("tolerance")] public int Tolerance { get; set; } = 200;
+    // Firmware ranges (ANALOG_INPUT_PARAMS): 2 … MAX_SWITCH_POS positions, tolerance 0 … 5000 mV;
+    // an out-of-range write is silently rejected.
+    [JsonPropertyName("numPos")] public int NumPos { get => field; set => field = Math.Clamp(value, 2, MaxPositions); } = 2;
+    [JsonPropertyName("tolerance")] public int Tolerance { get => field; set => field = Math.Clamp(value, 0, 5000); } = 200;
     [JsonPropertyName("points")] public int[] Points { get; set; } = new int[MaxPositions];   // mV per position
     // Position labels — project-side only (the firmware doesn't store names); not a device param.
     [JsonPropertyName("positionNames")] public string[] PositionNames { get; set; } = new string[MaxPositions];

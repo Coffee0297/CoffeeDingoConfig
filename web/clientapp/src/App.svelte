@@ -1,6 +1,6 @@
 <script>
   import { telemetry, hubState, reconnectHub, api, luaReadToTabs, awgFor, awgForMm2, outputRatingA, deviceDefs, gatherClientState, restoreClientState, linksForSource } from './lib/store.js'
-  import { suggestBase, usedIds, freeRanges } from './lib/canids.js'
+  import { suggestBase, usedIds, freeRanges, spanAfter, ID_BEFORE, isModule } from './lib/canids.js'
   import { toast, toasts, dismiss } from './lib/toast.js'
   import { clickable, labelFields, dialog as dlg } from './lib/a11y.js'
   import Sparkline from './lib/Sparkline.svelte'
@@ -14,6 +14,7 @@
   import GraphView from './lib/GraphView.svelte'
   import PlotView from './lib/PlotView.svelte'
   import McpView from './lib/McpView.svelte'
+  import { tripReason } from './lib/trip.js'
 
   // Reload resumes where you left off — last view + selected module (System overview on first run).
   let view = $state((() => { try { return localStorage.getItem('dingoView') || 'system' } catch { return 'system' } })())
@@ -24,7 +25,10 @@
   let ports = $state([])
   let adapters = $state(['SLCAN'])
   let adapter = $state('SLCAN')
-  let port = $state('COM3')
+  // Remembered across reloads so a typed tcp://host:port (CoffeeDingoSim bridge) survives a refresh.
+  let port = $state((() => { try { return localStorage.getItem('dingoPort') || 'COM3' } catch { return 'COM3' } })())
+  $effect(() => { try { localStorage.setItem('dingoPort', port) } catch {} })
+  const isTcpPort = (p) => /^\s*tcp:\/\//i.test(p ?? '')
   let bitrate = $state('500K')
   let newBaseId = $state('0x7CE')
   let editBaseId = $state('0x7CE')
@@ -179,37 +183,43 @@
   let helpOpen = $state(false)
   const HELP = {
     outputs: { title: 'Outputs', body: [
-      'Each output is a smart high-side switch with current sensing. Click a card to configure it.',
+      'dingoPDM outputs are smart high-side switches with current sensing; a CANBoard\'s outputs are low-side (ground) switches with PWM but no current sensing. Click a card to configure it.',
       'Input — the signal that turns it on (a pin, CAN signal, condition, or Lua slot).',
       'Current limit / inrush — trips the output off; inrush allows a higher current for the inrush time (bulbs, motors).',
       'Reset mode — none / count (retry N times) / endless. Warn & open-load limits flag a soft over-current or a disconnected load without tripping.',
       'PWM / soft-start — drive the output at a duty cycle or ramp it up.',
-      'Save writes to the device live; Burn keeps it across a reboot.' ] },
+      'Save writes to the device when it is on the bus; offline it is kept in the project and applied by Deploy. Burn keeps it across a reboot.' ] },
     dashboard: { title: 'Dashboard', body: [
       'Live state of the selected module — battery, total current, board temperature, and every output.',
       'Read pulls the full config off the device; Write pushes the in-app config; Burn persists it.',
       'Sleep / Wakeup request the low-power state (sleep is ignored while USB is connected — see System ▸ Settings for the timeout).' ] },
     system: { title: 'System', body: [
       'All modules on the bus. Click a module to open it; drag its pin on the car map to match the install.',
-      '⚙ Settings — auto-sleep enable + timeout, written and burned to the module.',
-      '⬆ Firmware — flash a new .bin over USB DFU. Keep the module powered.',
+      '⚙ Settings — auto-sleep enable + timeout, a force-sleep signal (ignition, CAN input, timer…), a mute-CAN-broadcasts signal, and which inputs / CAN traffic may wake the module. Written and burned to the module.',
+      '⚙ Settings also holds the CAN bitrate, filters, the USB↔CAN bridge switch, the base ID, a profile-to-module flash and the Shutdown & sleep sequence (ignition → quiet → sleep, master/follower).',
+      '⬆ Firmware — flash a .bin over USB DFU, or a .srec over CAN (OpenBLT). Keep the module powered.',
       'Cross-module functions — define a behaviour once (a rule compiles to native CAN wiring; switch to Lua to write it yourself, needed for clock failover), then Deploy to the modules.' ] },
     signals: { title: 'Signals & logic', body: [
       'The module’s inputs and logic blocks: physical pins, CAN messages, and logic built from them.',
-      'CAN input — pull a value/bit out of an incoming frame. Condition — true when a signal crosses a value. Virtual input — AND/OR up to 3 signals. Flasher — a blink pattern. Counter — count events. CAN output — transmit a variable.',
+      'CAN input — pull a value/bit out of an incoming frame. Condition — true when a signal crosses a value. Virtual input — AND/OR up to 3 signals. Flasher — a blink pattern. Counter — count events. Timer — on-delay / off-delay / pulse. Lookup table — a 2-axis map (fan duty vs temperature…) with interpolation. CAN output — transmit a variable.',
       'The mini chart on each row is that signal’s live value (last 30 s).',
-      'Lua — any output / virtual input / CAN output can be driven by a Lua slot. Upload sends the program; Burn keeps it.' ] },
+      'CANBoard analog inputs decode a rotary (multi-position) switch, an on/off threshold or a scaled sensor; the Wiper block and PDM keypads live here too.',
+      '＋ from another module / ECU pulls a signal off the bus as a local CAN input; the list shows the other module\'s own names.',
+      'Lua — any output / virtual input / CAN output can be driven by a Lua slot (setLuaOut(0) drives “Lua Out 1”). Upload sends the program; Burn keeps it.' ] },
     wiring: { title: 'Wiring', body: [
-      'A node-graph of the module’s functions. Drag from a purple output ● (right) to a green input ● (left) to wire one function’s output into another’s input.',
+      'A node-graph of the module’s functions. Drag from an output ● (right) to an input ● (left); dots are coloured by type (green bool, blue int, amber real) and a mismatched wire won’t land.',
       'Delete a block with its ✕ or by selecting it and pressing Delete (the function is disabled on the device).',
       '+ Add node creates a function; + Remote signal grabs a signal from another module over CAN.',
-      'Changes write live — press Burn to keep them.' ] },
+      'The module block takes wires too (Force sleep, Mute CAN TX). Live: changes write to the module — press Burn to keep them. Offline: they save to the project; connect + Deploy to apply.' ] },
     plot: { title: 'Plot', body: [
       'Chart any signal from any module, live. Pick a module + signal and + Add to plot — add as many as you like.',
       'Click a legend chip to show/hide its line; ✕ removes it. Pause freezes sampling; Window sets the visible time span.',
       '⬇ Export PNG saves the current chart as an image.' ] },
     logs: { title: 'Logs', body: [
       'CAN traffic and the system log. Export either to CSV for analysis.' ] },
+    mcp: { title: 'MCP', body: [
+      'Drive the whole tool from an AI agent: the server exposes the modules, outputs, signals, functions and Lua as tools.',
+      'Connect your agent to the endpoint shown here; everything it changes goes through the same API as the UI.' ] },
   }
   const helpFor = () => HELP[view] ?? { title: navs.find((n) => n[0] === view)?.[1] ?? 'Help', body: ['No help for this view yet.'] }
 
@@ -250,7 +260,8 @@
     try {
       const a = await api.adapters(); ports = a.ports ?? []
       if (a.adapters?.length) { adapters = a.adapters; if (!adapters.includes(adapter)) adapter = adapters[0] }
-      if (!ports.includes(port)) port = ports.find((p) => /COM3/i.test(p)) ?? ports[0] ?? ''
+      // A typed tcp://host:port is never in the enumerated list — don't clobber it with COM3.
+      if (!ports.includes(port) && !isTcpPort(port)) port = ports.find((p) => /COM3/i.test(p)) ?? ports[0] ?? ''
     } catch (e) { toast('Could not list adapters: ' + e.message, 'error') }
   }
   loadPorts()
@@ -308,6 +319,12 @@
   }
   async function setBase() {
     if (!current) return
+    // Same guard as System ▸ Settings: 11-bit range and no overlap with another module's frame span.
+    const base = parseInt(String(editBaseId), 16)
+    if (!(base >= 1 && base <= 0x7FF)) { toast('Base ID must be 0x001–0x7FF.', 'error'); return }
+    const after = spanAfter(current.type)
+    const clash = devices.find((x) => x.guid !== current.guid && isModule(x.type) && (x.baseId - ID_BEFORE <= base + after) && (base - ID_BEFORE <= (x.baseId ?? 0) + spanAfter(x.type)))
+    if (clash && !confirm(`0x${base.toString(16).toUpperCase()} overlaps ${clash.name}'s CAN frames (0x${clash.baseId.toString(16).toUpperCase()}…). Two modules on one span collide on the bus. Set it anyway?`)) return
     try {
       await api.modify(current.guid, current.name, editBaseId)
       toast(current.connected ? `Base ID set to ${editBaseId}` : `Base ID set to ${editBaseId} in the project — not applied (module offline); connect to re-address it on the bus`, current.connected ? 'ok' : 'info')
@@ -332,7 +349,7 @@
     try {
       await api.action(current.guid, 'write')   // deploy in-app config first so the burn captures it
       await api.action(current.guid, 'burn')
-      toast(`Deployed & burned to ${current.name}`, 'ok')
+      toast(`Deploy sent to ${current.name} — burn queued; the module's reply shows in the Logs toast`, 'ok')
     }
     catch (e) { toast('Burn failed: ' + e.message, 'error') } finally { burning = false }
   }
@@ -361,12 +378,37 @@
     load(); const id = setInterval(load, 5000)
     return () => { alive = false; clearInterval(id) }
   })
+  // Why an output tripped: when an output of the shown module goes Overcurrent / Fault, read the module's
+  // trip log once (per new set of tripped outputs) and keep the reason per output. Kept after the state
+  // clears on purpose: the log lives in device RAM and the power cycle that clears a Fault erases it.
+  let tripWhy = $state({})            // `${guid}:${output}` -> { text, clears }
+  let tripSig = ''
+  $effect(() => {
+    const d = current
+    if (!d?.connected || !d.outputs) return
+    const bad = d.outputs.filter((o) => o.state === 'Fault' || o.state === 'Overcurrent').map((o) => o.number)
+    const sig = d.guid + ':' + bad.join(',')
+    if (!bad.length || sig === tripSig) return
+    tripSig = sig
+    api.overloads(d.guid).then((r) => {
+      const next = { ...tripWhy }
+      // events come newest first: keep the newest per output
+      for (const e of [...(r.events ?? [])].reverse()) {
+        const o = d.outputs.find((x) => x.number === e.output)
+        const w = tripReason(e, o)
+        next[d.guid + ':' + e.output] = { text: w.text, clears: w.clears }
+      }
+      tripWhy = next
+    }).catch(() => {})
+  })
   let canIdConflicts = $derived((canIdInfo?.collisions?.length ?? 0) + (canIdInfo?.overlaps?.length ?? 0))
 
   // Sim playback: replay a CAN-log CSV when the Sim adapter is the active connection.
   let sim = $state(null), simBusy = $state(false), simFileName = $state(''), simRateInput = $state(1000)
+  // A derived boolean only notifies when it flips — reading `t.connected`/`t.adapter` directly re-ran this on every push.
+  let simOn = $derived(!!t.connected && t.adapter === 'Sim')
   $effect(() => {
-    if (!(t.connected && t.adapter === 'Sim')) { sim = null; return }
+    if (!simOn) { sim = null; return }
     let alive = true
     const load = () => api.simStatus().then((s) => { if (alive) sim = s }).catch(() => {})
     load(); const id = setInterval(load, 500)
@@ -483,10 +525,17 @@
     {#if !t.connected}
       <select class="in" bind:value={adapter} aria-label="CAN adapter">{#each adapters as a}<option value={a}>{a}</option>{/each}</select>
       {#if needsPort}
-        <select class="in" bind:value={port} aria-label="Serial port">
-          {#each ports as p}<option value={p}>{p}</option>{/each}
-          {#if ports.length === 0}<option value="">(no ports)</option>{/if}
-        </select>
+        <!-- Free text so a tcp://host:port (CoffeeDingoSim bridge, default tcp://127.0.0.1:7778) can be typed;
+             the datalist still offers the enumerated COM ports / CAN interfaces as a drop-down. -->
+        <input class="in" list="port-options" bind:value={port} aria-label="Port — COMx or tcp://host:port"
+               placeholder={ports.length ? 'COM3 or tcp://host:port' : 'tcp://127.0.0.1:7778'} spellcheck="false" style="width:12.5em" />
+        <datalist id="port-options">
+          {#each ports as p}<option value={p}></option>{/each}
+          <option value="tcp://127.0.0.1:7778">CoffeeDingoSim bridge</option>
+        </datalist>
+        <!-- A datalist hides suggestions that don't match what is typed, so the simulator gets its own button. -->
+        <button class="btn ghost" style="padding:2px 9px" title="Use the CoffeeDingoSim bridge (tcp://127.0.0.1:7778)"
+                onclick={() => { port = 'tcp://127.0.0.1:7778'; adapter = 'SLCAN' }}>Sim</button>
       {/if}
       <select class="in" bind:value={bitrate} aria-label="CAN bitrate">{#each bitrates as b}<option value={b}>{b}</option>{/each}</select>
       <button class="btn primary" disabled={busy} onclick={connect}>{busy ? 'Connecting…' : 'Connect'}</button>
@@ -597,6 +646,12 @@
         {/if}
       </div>
     {/if}
+    {#if canIdInfo?.shared?.length}
+      <div style="color:var(--muted);font-size:12px;margin:-6px 0 14px" title="Only Lua txCan calls send these ids, on more than one module. That is normal for a master/backup scheme; it is a problem only if both send at the same time.">
+        ⓘ Shared Lua CAN IDs (not counted as conflicts):
+        {#each canIdInfo.shared as c, i}<span style="font-family:var(--mono)">{i ? ' · ' : ' '}<b>{c.hex}</b> {c.owners.map((w) => w.replace(': Lua txCan', '')).join(' + ')}</span>{/each}
+      </div>
+    {/if}
     {#if view === 'outputs'}
       {#if !current || isPdm}
         <div class="h-row">
@@ -646,9 +701,16 @@
             <div class="num">O{o.number}</div>
             <div class="top">
               <span class="state {sc(o.state)}"><span class="ic"></span>{stT(o.state)}{#if o.pwmEnabled && o.state === 'On'} · {o.duty}%{/if}</span>
-              <span class="nm">{o.name?.trim() ? o.name : 'Output ' + o.number}</span>
+              <span class="nm">{o.name?.trim() ? o.name : 'Output ' + o.number}{#if !o.enabled}<span class="muted" style="font-weight:400">&nbsp;· off</span>{/if}</span>
               <span class="amp">{(o.current ?? 0).toFixed(1)} <span class="amp-lim">/ {o.currentLimit} A</span></span>
             </div>
+            {#if o.state === 'Fault' || o.state === 'Overcurrent'}
+              {@const why = tripWhy[current.guid + ':' + o.number]}
+              <div class="rule-txt" style="color:var(--err)" title="From the module's trip log (Logs ▸ Overloads)">
+                {#if why}⚠ {why.text}{:else}⚠ {o.state === 'Fault' ? 'Faulted' : 'Overcurrent'} — reading the trip log…{/if}
+                <div class="muted" style="color:var(--muted)">{why?.clears || (o.state === 'Fault' ? 'Latched — clears only when the module is power-cycled.' : '')}</div>
+              </div>
+            {/if}
             <div class="rule-txt">
               {#if followsO != null}<span class="kw">Follows</span> <span class="sig">output{followsO}</span> <span class="muted">— mirrors its state, ignores its own rule</span>{:else if rule}<span class="kw">ON when</span> <span class="sig">{rule}</span>{:else}<span class="muted">No rule set — tap edit to drive this output</span>{/if}
             </div>
@@ -663,12 +725,13 @@
             </div>
             <div class="ft">
               {#if followsO == null}<span class="tag">{driverTag(o.input)}</span>{/if}
-              {#if rating}<span class="tag" style={(o.currentLimit ?? 0) > rating ? 'color:var(--err);border-color:var(--err)' : ''} title={`OUT${o.number} hardware channel rating is ${rating} A` + ((o.currentLimit ?? 0) > rating ? ` — your ${o.currentLimit} A trip is above it (allowed; size the wiring & load to suit)` : '')}>rated {rating} A</span>{/if}
+              {#if rating}<span class="tag" style={o.enabled && (o.currentLimit ?? 0) > rating ? 'color:var(--err);border-color:var(--err)' : ''} title={`OUT${o.number} hardware channel rating is ${rating} A` + ((o.currentLimit ?? 0) > rating ? ` — your ${o.currentLimit} A trip is above it (allowed; size the wiring & load to suit)` : '')}>rated {rating} A</span>{/if}
               {#if o.enabled && ovr}<span class="tag" title={`Gauge set for this output (recommended ≥ ${wire?.mm2} mm²)`}>{awgForMm2(o.wireGaugeMm2)} AWG · {o.wireGaugeMm2} mm²</span>
               {:else if o.enabled && wire}<span class="tag" title={`Min wire for a ${o.currentLimit} A trip (short automotive run; step up for long runs)`}>≥ {wire.awg} AWG · {wire.mm2} mm²</span>{/if}
               {#if o.wireColor}<span class="tag" title={'Wire colour: ' + o.wireColor + (o.wireStripe ? ' / ' + o.wireStripe + ' stripe' : '')} style="display:inline-flex;align-items:center;gap:5px"><span style="width:11px;height:11px;border-radius:50%;border:1px solid var(--line-2);display:inline-block;background:{o.wireStripe ? `repeating-linear-gradient(135deg, ${o.wireColor} 0 3px, ${o.wireStripe} 3px 5px)` : o.wireColor}"></span>wire</span>{/if}
               {#if o.resetCount > 0}<span class="tag">{o.resetCount} resets</span>{/if}
               {#if drivesOuts.length}<span class="tag pair" title={`Paired — O${drivesOuts.join(', O')} follow this output`}>🔗 drives O{drivesOuts.join(', O')}</span>{/if}
+              {#if current.connected}<span class="edit-hint" use:clickable title="Bench test — force this output on / PWM from the editor" onclick={(e) => { e.stopPropagation(); editNum = o.number }}>⚡ test</span>{/if}
               <span class="edit-hint" use:clickable onclick={(e) => { e.stopPropagation(); editNum = o.number }}>edit →</span>
             </div>
           </div>
@@ -718,7 +781,7 @@
         <SignalsView {current} ids={t.ids} openTarget={signalsTarget} />
       {/if}
     {:else if view === 'wiring'}
-      <GraphView device={current} {devices} onOpenSettings={openItemSettings} />
+      <GraphView device={current} {devices} {dark} onOpenSettings={openItemSettings} />
     {:else if view === 'plot'}
       <PlotView {devices} />
     {:else if view === 'logs'}
@@ -775,7 +838,7 @@
               <div class="hint">A <b>module</b> DBC (e.g. a CANBoard) is authored relative to a base — set the base above and its messages are re-addressed onto it on import, so the same DBC works at whatever base the module runs. It then joins the CAN-ID collision checks like any module.</div>
             {/if}
           {:else}
-            <div class="hint">Each module owns a CAN-ID span from its base — CANboard baseId…+10, dingoPDM baseId…+28 (incl. settings). Keep modules' spans from overlapping.</div>
+            <div class="hint">Each module owns a CAN-ID span from its base — CANboard baseId…+13, dingoPDM baseId…+29 (incl. settings + bootloader). Keep modules' spans from overlapping.</div>
             <label style="display:flex;gap:8px;align-items:center;font-size:13px;margin-top:6px;cursor:pointer"><input type="checkbox" bind:checked={reserveObd} /> Reserve OBD-II diagnostic IDs (0x7DF, 0x7E0–0x7EF, 0x7F1) — uncheck for buses with no OBD</label>
             {#if dlgFree.length}<div class="hint">Free windows (≥16): {dlgFree.map(([a, b]) => `${hex(a)}–${hex(b)}`).join(', ')}{#if freeRanges(dlgUsed, 16).length > 4}, …{/if}</div>{/if}
           {/if}

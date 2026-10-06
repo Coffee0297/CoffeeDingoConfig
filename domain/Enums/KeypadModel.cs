@@ -1,5 +1,7 @@
 namespace domain.Enums;
 
+// Mirrors the firmware's `enum class KeypadModel` (CoffeeDingoFW core/enums.h). The value is what
+// goes over CAN as keypad[n].model, so the numbering must match exactly — 9 is unassigned there.
 public enum KeypadModel
 {
     Blink2Key = 0,
@@ -10,10 +12,9 @@ public enum KeypadModel
     Blink10Key = 5,
     Blink12Key = 6,
     Blink15Key = 7,
-    Blink13Key2Dial = 8,
-    BlinkRacepad = 9,
-    Blink1Key = 10,
-    
+    Blink15Key2Dial = 8,
+    Grayhill1Key = 10,
+
     Grayhill6Key = 20,
     Grayhill8Key = 21,
     Grayhill12Key = 22,

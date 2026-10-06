@@ -18,7 +18,7 @@ public class CanboardDevice : IDeviceConfigurable
 
     [JsonIgnore] protected int MinMajorVersion { get; private set; } = 5;
     [JsonIgnore] protected int MinMinorVersion { get; private set; } = 5;
-    [JsonIgnore] protected int MinBuildVersion { get; private set; } = 102;
+    [JsonIgnore] protected int MinBuildVersion { get; private set; } = 107;
 
     [JsonIgnore] protected int NumAnalogInputs { get; private set; } = 5; //Also serve as rotary switches and analog/dig inputs
     [JsonIgnore] protected int NumDigitalInputs { get; private set; } = 8;
@@ -29,6 +29,7 @@ public class CanboardDevice : IDeviceConfigurable
     [JsonIgnore] protected int NumFlashers { get; private set; } = 4;
     [JsonIgnore] protected int NumCounters { get; private set; } = 4;
     [JsonIgnore] protected int NumConditions { get; private set; } = 8;
+    [JsonIgnore] protected int NumTimers { get; private set; } = 4;
     
     [JsonIgnore] public bool CanSleep { get; } = false;
     [JsonPropertyName("canBootloader")] public bool CanBootloader { get; } = true;   // OpenBLT XCP-over-CAN bootloader
@@ -55,10 +56,11 @@ public class CanboardDevice : IDeviceConfigurable
     [JsonIgnore] public List<DeviceVariable> VarMap { get; set; } = null!;
     [JsonIgnore] public List<DeviceParameter> Params { get; set; } = null!;
     
-    // The CANBoard has no board-temperature sensor — the firmware's Msg 1 temp slot is unpopulated, so it
-    // is neither decoded nor exposed (no [Plotable], not in the dashboard). Kept as a 0 so the shared
-    // DeviceDto.Temp field has a value. (The PDMs DO have a real sensor — see PdmDevice.BoardTempC.)
-    [JsonIgnore] public double BoardTempC => 0;
+    // Board temperature from the MCU's internal sensor. The firmware broadcasts it as a whole °C in
+    // Msg 1 bits 48-63 (boards/canboard_v2/msg.cpp TxMsg1; DBC BoardTemp factor 1, no decimals).
+    [JsonIgnore][Plotable(displayName:"Temperature", unit:"degC")] public double BoardTemp { get; set; }
+    // Same value under the PDM's name so the shared DeviceDto.Temp plumbing works for both device kinds.
+    [JsonIgnore] public double BoardTempC => BoardTemp;
     [JsonIgnore][Plotable(displayName:"Heartbeat", unit:" ")] public int Heartbeat { get; private set; }
     
     [JsonIgnore] public string Version { get; private set; } = "v0.0.0";
@@ -66,11 +68,15 @@ public class CanboardDevice : IDeviceConfigurable
     
     [JsonIgnore] private DateTime LastRxTime { get; set; }
     [JsonPropertyName("sleepEnabled")] public bool SleepEnabled { get; set; }
-    [JsonPropertyName("sleepTimeoutMs")] public int SleepTimeoutMs { get; set; } = 30000;
-    [JsonPropertyName("sleepInputEnabled")] public bool SleepInputEnabled { get; set; }
-    [JsonPropertyName("sleepInput")] public int SleepInput { get; set; }
-    [JsonPropertyName("sleepInputActiveHigh")] public bool SleepInputActiveHigh { get; set; }
+    // ms, clamped to the firmware's DEVICE_CONFIG range (1000 … 60000) — it silently rejects anything outside.
+    [JsonPropertyName("sleepTimeoutMs")] public int SleepTimeoutMs { get => field; set => field = Math.Clamp(value, 1000, 60000); } = 30000;
     [JsonPropertyName("sleepIgnoreAlwaysOn")] public bool SleepIgnoreAlwaysOn { get; set; } = true;
+    // Same device-level sleep params as the PDM (the firmware param map is shared); the CANBoard
+    // doesn't sleep (CAN_SLEEP off) but the mute-TX input works everywhere.
+    [JsonPropertyName("forceSleepInput")] public int ForceSleepInput { get; set; }
+    [JsonPropertyName("muteTxInput")] public int MuteTxInput { get; set; }
+    [JsonPropertyName("wakeDigInputMask")] public int WakeDigInputMask { get; set; } = 0xFF;
+    [JsonPropertyName("wakeOnCan")] public bool WakeOnCan { get; set; } = true;
     [JsonPropertyName("filtersEnabled")] public bool CanFiltersEnabled { get; set; }
     [JsonPropertyName("connectUsbToCan")] public bool ConnectUsbToCan { get; set; } = true;
     [JsonPropertyName("bitrate")] public CanBitRate BitRate { get; set; } = CanBitRate.BitRate500K;
@@ -101,6 +107,7 @@ public class CanboardDevice : IDeviceConfigurable
     [JsonPropertyName("flashers")] public List<Flasher> Flashers { get; init; } = [];
     [JsonPropertyName("counters")] public List<Counter> Counters { get; init; } = [];
     [JsonPropertyName("conditions")] public List<Condition> Conditions { get; init; } = [];
+    [JsonPropertyName("timers")] public List<TimerFunction> Timers { get; init; } = [];
 
     [JsonIgnore] private Dictionary<int, List<(DbcSignal Signal, Action<double> SetValue)>> StatusSigs { get; set; } = null!;
 
@@ -134,6 +141,7 @@ public class CanboardDevice : IDeviceConfigurable
         NumFlashers = definition.NumFlashers;
         NumCounters = definition.NumCounters;
         NumConditions = definition.NumConditions;
+        NumTimers = definition.NumTimers;
 
         InitFunctions();
         ApplyDefinition(definition);
@@ -162,7 +170,8 @@ public class CanboardDevice : IDeviceConfigurable
         NumFlashers = definition.NumFlashers;
         NumCounters = definition.NumCounters;
         NumConditions = definition.NumConditions;
-        
+        NumTimers = Timers.Count;
+
         InitStatusSigs();
         InitVarMap();
         InitParams();
@@ -196,7 +205,10 @@ public class CanboardDevice : IDeviceConfigurable
 
         for (var i = 0; i < NumConditions; i++)
             Conditions.Add(new Condition(i + 1, "condition" + (i + 1)));
-        
+
+        for (var i = 0; i < NumTimers; i++)
+            Timers.Add(new TimerFunction(i + 1, "timer" + (i + 1)));
+
         InitStatusSigs();
     }
 
@@ -219,12 +231,14 @@ public class CanboardDevice : IDeviceConfigurable
 
         cyclicIndex++;
 
-        // Message 1 (BaseId + 3): Analog input 5 millivolts. (The firmware's temp slot at bit 48 is
-        // not populated — the CANBoard has no temperature sensor — so it is not decoded.)
+        // Message 1 (BaseId + 3): Analog input 5 millivolts + board temperature (whole °C at bit 48,
+        // from the MCU's internal sensor — msg.cpp TxMsg1 / DBC BoardTemp).
         StatusSigs[cyclicIndex] =
         [
             (new DbcSignal { Name = "AnalogInput5.Millivolts", StartBit = 0, Length = 16, Unit = "mV"},
-                val => AnalogInputs[4].Millivolts = val)
+                val => AnalogInputs[4].Millivolts = val),
+            (new DbcSignal { Name = "BoardTemp", StartBit = 48, Length = 16, Unit = "°C" },
+                val => BoardTemp = val)
         ];
         cyclicIndex++;
 
@@ -248,6 +262,16 @@ public class CanboardDevice : IDeviceConfigurable
             StatusSigs[cyclicIndex].Add((
                 new DbcSignal { Name = $"Flasher{index + 1}.State", StartBit = 24 + index, Length = 1 },
                 val => Flashers[index].Value = val != 0
+            ));
+        }
+
+        // Timers 1-4 (1-bit each, upper nibble of byte 3: bits 28-31), firmware >= 5.5.107
+        for (var i = 0; i < NumTimers && i < 4; i++)
+        {
+            var index = i;
+            StatusSigs[cyclicIndex].Add((
+                new DbcSignal { Name = $"Timer{index + 1}.State", StartBit = 28 + index, Length = 1 },
+                val => Timers[index].Value = val != 0 && Timers[index].Enabled
             ));
         }
 
@@ -339,9 +363,11 @@ public class CanboardDevice : IDeviceConfigurable
                 var index = (msg - cyclicIndex) * 2 + i;
                 if (index < NumCanInputs)
                 {
+                    // Raw signed integer on the wire → scale by the input's factor/offset so the live
+                    // Value is what the firmware compares against the Operand (dingoConfig #59).
                     StatusSigs[msg].Add((
-                        new DbcSignal { Name = $"CanInput{index + 1}.Value", StartBit = i * 32, Length = 32 },
-                        val => CanInputs[index].Value = (int)val
+                        new DbcSignal { Name = $"CanInput{index + 1}.Value", StartBit = i * 32, Length = 32, IsSigned = true },
+                        val => { var c = CanInputs[index]; c.Value = val * c.Factor + c.Offset; }
                     ));
                 }
             }
@@ -371,6 +397,7 @@ public class CanboardDevice : IDeviceConfigurable
         VarMap.Add(new DeviceVariable
         {
             GetName = () => "None",
+            OwnerKind = "sys", OwnerNumber = 0,
             PropertyName = "Value",
             DataType = "bool",
             VariableIndex = index++,
@@ -380,6 +407,7 @@ public class CanboardDevice : IDeviceConfigurable
         VarMap.Add(new DeviceVariable
         {
             GetName = () => "Always On",
+            OwnerKind = "sys", OwnerNumber = 1,
             PropertyName = "Value",
             DataType = "bool",
             VariableIndex = index++,
@@ -389,6 +417,7 @@ public class CanboardDevice : IDeviceConfigurable
         VarMap.Add(new DeviceVariable
         {
             GetName = () => "State",
+            OwnerKind = "sys", OwnerNumber = 2,
             PropertyName = "State",
             DataType = "int",
             VariableIndex = index++,
@@ -403,6 +432,7 @@ public class CanboardDevice : IDeviceConfigurable
                 VarMap.Add(new DeviceVariable
                 {
                     GetName  = () => DigitalInputs[num].Name,
+                    OwnerKind = "input", OwnerNumber = num + 1,
                     PropertyName = "State",
                     DataType = "bool",
                     VariableIndex = index++,
@@ -419,6 +449,7 @@ public class CanboardDevice : IDeviceConfigurable
                 VarMap.Add(new DeviceVariable
                 {
                     GetName  = () => DigitalOutputs[num].Name,
+                    OwnerKind = "digitaloutput", OwnerNumber = num + 1,
                     PropertyName = "State",
                     DataType = "bool",
                     VariableIndex = index++,
@@ -435,6 +466,7 @@ public class CanboardDevice : IDeviceConfigurable
                 VarMap.Add(new DeviceVariable
                 {
                     GetName  = () => AnalogInputs[num].Name,
+                    OwnerKind = "analoginput", OwnerNumber = num + 1,
                     PropertyName = "Raw ADC",
                     DataType = "float",
                     VariableIndex = index++,
@@ -443,6 +475,7 @@ public class CanboardDevice : IDeviceConfigurable
                 VarMap.Add(new DeviceVariable
                 {
                     GetName  = () => AnalogInputs[num].Name,
+                    OwnerKind = "analoginput", OwnerNumber = num + 1,
                     PropertyName = "Millivolts",
                     DataType = "float",
                     VariableIndex = index++,
@@ -451,6 +484,7 @@ public class CanboardDevice : IDeviceConfigurable
                 VarMap.Add(new DeviceVariable
                 {
                     GetName  = () => AnalogInputs[num].Name,
+                    OwnerKind = "analoginput", OwnerNumber = num + 1,
                     PropertyName = "Rotary Position",
                     DataType = "int",
                     VariableIndex = index++,
@@ -459,6 +493,7 @@ public class CanboardDevice : IDeviceConfigurable
                 VarMap.Add(new DeviceVariable
                 {
                     GetName  = () => AnalogInputs[num].Name,
+                    OwnerKind = "analoginput", OwnerNumber = num + 1,
                     PropertyName = "Switch Value",
                     DataType = "bool",
                     VariableIndex = index++,
@@ -467,6 +502,7 @@ public class CanboardDevice : IDeviceConfigurable
                 VarMap.Add(new DeviceVariable
                 {
                     GetName  = () => AnalogInputs[num].Name,
+                    OwnerKind = "analoginput", OwnerNumber = num + 1,
                     PropertyName = "Scaled Value",
                     DataType = "float",
                     VariableIndex = index++,
@@ -483,6 +519,7 @@ public class CanboardDevice : IDeviceConfigurable
                 VarMap.Add(new DeviceVariable
                 {
                     GetName = () => CanInputs[num].Name,
+                    OwnerKind = "caninput", OwnerNumber = num + 1,
                     PropertyName = "State",
                     DataType = "bool",
                     VariableIndex = index++,
@@ -491,6 +528,7 @@ public class CanboardDevice : IDeviceConfigurable
                 VarMap.Add(new DeviceVariable
                 {
                     GetName = () => CanInputs[num].Name,
+                    OwnerKind = "caninput", OwnerNumber = num + 1,
                     PropertyName = "Value",
                     DataType = "float",
                     VariableIndex = index++,
@@ -507,6 +545,7 @@ public class CanboardDevice : IDeviceConfigurable
                 VarMap.Add(new DeviceVariable
                 {
                     GetName = () => VirtualInputs[num].Name,
+                    OwnerKind = "virtualinput", OwnerNumber = num + 1,
                     PropertyName = "State",
                     DataType = "bool",
                     VariableIndex = index++,
@@ -523,6 +562,7 @@ public class CanboardDevice : IDeviceConfigurable
                 VarMap.Add(new DeviceVariable
                 {
                     GetName = () => Flashers[num].Name,
+                    OwnerKind = "flasher", OwnerNumber = num + 1,
                     PropertyName = "State",
                     DataType = "bool",
                     VariableIndex = index++,
@@ -539,6 +579,7 @@ public class CanboardDevice : IDeviceConfigurable
                 VarMap.Add(new DeviceVariable
                 {
                     GetName = () => Conditions[num].Name,
+                    OwnerKind = "condition", OwnerNumber = num + 1,
                     PropertyName = "Value",
                     DataType = "bool",
                     VariableIndex = index++,
@@ -555,12 +596,28 @@ public class CanboardDevice : IDeviceConfigurable
                 VarMap.Add(new DeviceVariable
                 {
                     GetName = () => Counters[num].Name,
+                    OwnerKind = "counter", OwnerNumber = num + 1,
                     PropertyName = "Value",
                     DataType = "int",
                     VariableIndex = index++,
                     SingleVariable = false
                 });
             }
+        }
+
+        // Timers are appended last, mirroring the firmware var map (no Lua / tables on a CANBoard).
+        for (var i = 0; i < NumTimers; i++)
+        {
+            var num = i;
+            VarMap.Add(new DeviceVariable
+            {
+                GetName = () => Timers[num].Name,
+                OwnerKind = "timer", OwnerNumber = num + 1,
+                PropertyName = "State",
+                DataType = "bool",
+                VariableIndex = index++,
+                SingleVariable = false
+            });
         }
     }
 
@@ -612,38 +669,47 @@ public class CanboardDevice : IDeviceConfigurable
                 ValueType = SleepTimeoutMs.GetType(),
                 DefaultValue = 30000
             },
+            // sub 6-8 (digital-input sleep trigger of firmware 5.5.106) are retired; 9 onwards:
             new DeviceParameter
             {
-                ParentName = Name, Name = "device.sleepInputEnabled", Index = BaseIndex, SubIndex = subIndex++,
-                GetValue = () => SleepInputEnabled, SetValue = val => SleepInputEnabled = (bool)val,
-                ValueType = SleepInputEnabled.GetType(), DefaultValue = false
-            },
-            new DeviceParameter
-            {
-                ParentName = Name, Name = "device.sleepInput", Index = BaseIndex, SubIndex = subIndex++,
-                GetValue = () => SleepInput, SetValue = val => SleepInput = (int)val,
-                ValueType = SleepInput.GetType(), DefaultValue = 0
-            },
-            new DeviceParameter
-            {
-                ParentName = Name, Name = "device.sleepInputActiveHigh", Index = BaseIndex, SubIndex = subIndex++,
-                GetValue = () => SleepInputActiveHigh, SetValue = val => SleepInputActiveHigh = (bool)val,
-                ValueType = SleepInputActiveHigh.GetType(), DefaultValue = false
-            },
-            new DeviceParameter
-            {
-                ParentName = Name, Name = "device.sleepIgnoreAlwaysOn", Index = BaseIndex, SubIndex = subIndex++,
+                ParentName = Name, Name = "device.sleepIgnoreAlwaysOn", Index = BaseIndex, SubIndex = 9,
                 GetValue = () => SleepIgnoreAlwaysOn, SetValue = val => SleepIgnoreAlwaysOn = (bool)val,
                 ValueType = SleepIgnoreAlwaysOn.GetType(), DefaultValue = true
+            },
+            new DeviceParameter
+            {
+                ParentName = Name, Name = "device.forceSleepInput", Index = BaseIndex, SubIndex = 10,
+                GetValue = () => ForceSleepInput, SetValue = val => ForceSleepInput = (int)val,
+                ValueType = ForceSleepInput.GetType(), DefaultValue = 0
+            },
+            new DeviceParameter
+            {
+                ParentName = Name, Name = "device.muteTxInput", Index = BaseIndex, SubIndex = 11,
+                GetValue = () => MuteTxInput, SetValue = val => MuteTxInput = (int)val,
+                ValueType = MuteTxInput.GetType(), DefaultValue = 0
+            },
+            new DeviceParameter
+            {
+                ParentName = Name, Name = "device.wakeDigInputMask", Index = BaseIndex, SubIndex = 12,
+                GetValue = () => WakeDigInputMask, SetValue = val => WakeDigInputMask = (int)val,
+                ValueType = WakeDigInputMask.GetType(), DefaultValue = (1 << NumDigitalInputs) - 1
+            },
+            new DeviceParameter
+            {
+                ParentName = Name, Name = "device.wakeOnCan", Index = BaseIndex, SubIndex = 13,
+                GetValue = () => WakeOnCan, SetValue = val => WakeOnCan = (bool)val,
+                ValueType = WakeOnCan.GetType(), DefaultValue = true
             }
         ]);
-        
+        WakeDigInputMask &= (1 << NumDigitalInputs) - 1;
+
         foreach (var input in DigitalInputs) allParams.AddRange(input.Params);
         foreach (var canInput in CanInputs) allParams.AddRange(canInput.Params);
         foreach (var virtualInput in VirtualInputs) allParams.AddRange(virtualInput.Params);
         foreach (var condition in Conditions) allParams.AddRange(condition.Params);
         foreach (var counter in Counters) allParams.AddRange(counter.Params);
         foreach (var flasher in Flashers) allParams.AddRange(flasher.Params);
+        foreach (var timer in Timers) allParams.AddRange(timer.Params);
         foreach (var canOutput in CanOutputs) allParams.AddRange(canOutput.Params);
         foreach (var digitalOutput in DigitalOutputs) allParams.AddRange(digitalOutput.Params);
         foreach (var analogInput in AnalogInputs) allParams.AddRange(analogInput.Params);
@@ -746,6 +812,7 @@ public class CanboardDevice : IDeviceConfigurable
                     Length = signal.Length,
                     ByteOrder = signal.ByteOrder,
                     IsSigned = signal.IsSigned,
+                    IsFloat = signal.IsFloat,
                     Factor = signal.Factor,
                     Offset = signal.Offset,
                     Unit = signal.Unit,
@@ -985,5 +1052,6 @@ public class CanboardDevice : IDeviceConfigurable
     public IReadOnlyList<Flasher> GetFlashers() => Flashers.AsReadOnly();
     public IReadOnlyList<Counter> GetCounters() => Counters.AsReadOnly();
     public IReadOnlyList<Condition> GetConditions() => Conditions.AsReadOnly();
+    public IReadOnlyList<TimerFunction> GetTimers() => Timers.AsReadOnly();
 
 }

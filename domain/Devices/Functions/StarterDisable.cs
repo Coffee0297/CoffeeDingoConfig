@@ -15,12 +15,34 @@ public class StarterDisable : IDeviceFunction
 
     [JsonIgnore] public List<DeviceParameter> Params { get; }
 
-    [JsonConstructor]
     public StarterDisable(string name, int outputCount)
     {
         Name = name;
         OutputsDisabled = [..new bool[outputCount]];
         Params = InitParams();
+    }
+
+    // Deserialisation path: System.Text.Json requires every constructor parameter to bind to a
+    // property, so the saved per-output list is taken here (sizing the params) instead of a count.
+    [JsonConstructor]
+    public StarterDisable(string name, List<bool>? outputsDisabled)
+    {
+        Name = name;
+        OutputsDisabled = outputsDisabled ?? [];
+        Params = InitParams();
+    }
+
+    // Fit the module's real output count (a project may have been saved with another size, and the
+    // firmware only has 0x1800:2..2+N-1), keeping the flags of the outputs that still exist.
+    public void Resize(int outputCount)
+    {
+        if (OutputsDisabled.Count == outputCount) return;
+        var kept = new List<bool>(new bool[outputCount]);
+        for (var i = 0; i < Math.Min(outputCount, OutputsDisabled.Count); i++)
+            kept[i] = OutputsDisabled[i];
+        OutputsDisabled = kept;
+        Params.Clear();
+        Params.AddRange(InitParams());
     }
 
     private List<DeviceParameter> InitParams()

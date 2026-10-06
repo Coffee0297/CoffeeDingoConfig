@@ -12,9 +12,10 @@ public class Dial : IDeviceFunction
     [JsonPropertyName("keypadNumber")] public int KeypadNumber {get;}
     [JsonPropertyName("number")] public int Number {get;}
     [JsonPropertyName("enabled")] public bool Enabled {get; set;}
-    [JsonPropertyName("minCount")] public int MinCount { get; set; }
-    [JsonPropertyName("maxCount")] public int MaxCount { get; set; } = 16;
-    [JsonPropertyName("ledOffset")] public int LedOffset {get; set; }
+    // Firmware KEYPAD_DIAL_PARAMS range is 0 … 16 (16-LED ring); an out-of-range write is silently rejected.
+    [JsonPropertyName("minCount")] public int MinCount { get => field; set => field = Math.Clamp(value, 0, 16); }
+    [JsonPropertyName("maxCount")] public int MaxCount { get => field; set => field = Math.Clamp(value, 0, 16); } = 16;
+    [JsonPropertyName("ledOffset")] public int LedOffset { get => field; set => field = Math.Clamp(value, 0, 16); }
     [JsonIgnore] public int TopPosition { get; set; } = 8; //Default = 8
     
     [JsonIgnore] public List<DeviceParameter> Params { get; set; } = null!;

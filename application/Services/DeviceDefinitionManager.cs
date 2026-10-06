@@ -31,7 +31,7 @@ public class DeviceDefinitionManager
         NumKeypads: 2,
         MinMajorVersion: 5,
         MinMinorVersion: 5,
-        MinBuildVersion: 100,
+        MinBuildVersion: 107,
         OutputCurrentRatings: [14, 14, 8, 8, 8, 8, 8, 8]);
 
     public static readonly CanboardDeviceDefinition DefaultCanboard = new(
@@ -49,7 +49,7 @@ public class DeviceDefinitionManager
         NumConditions: 8,
         MinMajorVersion: 5,
         MinMinorVersion: 5,
-        MinBuildVersion: 100);
+        MinBuildVersion: 107);
 
     private readonly IReadOnlyList<PdmDeviceDefinition> _pdmDefinitions;
     private readonly IReadOnlyList<CanboardDeviceDefinition> _canboardDefinitions;

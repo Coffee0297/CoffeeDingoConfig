@@ -15,22 +15,24 @@ public class KeypadMaster : IDeviceFunction
     [JsonPropertyName("name")] public string Name {get; set; }
     [JsonPropertyName("number")] public int Number {get;}
     [JsonPropertyName("enabled")] public bool Enabled {get; set;}
-    [JsonPropertyName("id")] public int Id {get; set; }
+    // Ranges are the firmware's KEYPAD_BASE_PARAMS min/max: CANopen node id 0 … 127, brightness
+    // 0 … 63. The device silently rejects an out-of-range write ("No reply from module").
+    [JsonPropertyName("id")] public int Id { get => field; set => field = Math.Clamp(value, 0, 127); }
     [JsonPropertyName("timeoutEnabled")] public bool TimeoutEnabled {get; set;}
-    [JsonPropertyName("timeout")] public int Timeout {get; set;}
+    [JsonPropertyName("timeout")] public int Timeout { get => field; set => field = Math.Clamp(value, 0, 60000); }
     [JsonPropertyName("model")] public KeypadModel Model { get; set; } = KeypadModel.Blink12Key;
 
     [JsonPropertyName("backlightBrightness")]
-    public int BacklightBrightness { get; set; } = 63;
+    public int BacklightBrightness { get => field; set => field = Math.Clamp(value, 0, 63); } = 63;
 
     [JsonPropertyName("dimBacklightBrightness")]
-    public int DimBacklightBrightness { get; set; } = 32;
-    [JsonPropertyName("backlightButtonColor")] public int BacklightColor {get; set;}
+    public int DimBacklightBrightness { get => field; set => field = Math.Clamp(value, 0, 63); } = 32;
+    [JsonPropertyName("backlightButtonColor")] public int BacklightColor { get => field; set => field = Math.Clamp(value, 0, 9); }
     [JsonPropertyName("dimmingVar")] public int DimmingVar {get; set;}
-    [JsonPropertyName("buttonBrightness")] public int ButtonBrightness { get; set; } = 63;
+    [JsonPropertyName("buttonBrightness")] public int ButtonBrightness { get => field; set => field = Math.Clamp(value, 0, 63); } = 63;
 
     [JsonPropertyName("dimButtonBrightness")]
-    public int DimButtonBrightness { get; set; } = 32;
+    public int DimButtonBrightness { get => field; set => field = Math.Clamp(value, 0, 63); } = 32;
     [JsonPropertyName("buttons")] public List<Button> Buttons { get; init; } = [];
     [JsonPropertyName("dials")] public List<Dial> Dials { get; init; } = [];
     
@@ -155,22 +157,21 @@ public class KeypadMaster : IDeviceFunction
 
     public bool IsBlinkMarine()
     {
-        return Model is KeypadModel.Blink2Key or 
-                        KeypadModel.Blink4Key or 
-                        KeypadModel.Blink5Key or 
-                        KeypadModel.Blink6Key or 
-                        KeypadModel.Blink8Key or 
-                        KeypadModel.Blink10Key or 
-                        KeypadModel.Blink12Key or 
-                        KeypadModel.Blink15Key or 
-                        KeypadModel.Blink13Key2Dial or 
-                        KeypadModel.BlinkRacepad or 
-                        KeypadModel.Blink1Key;
+        return Model is KeypadModel.Blink2Key or
+                        KeypadModel.Blink4Key or
+                        KeypadModel.Blink5Key or
+                        KeypadModel.Blink6Key or
+                        KeypadModel.Blink8Key or
+                        KeypadModel.Blink10Key or
+                        KeypadModel.Blink12Key or
+                        KeypadModel.Blink15Key or
+                        KeypadModel.Blink15Key2Dial;
     }
 
     public bool IsGrayhill()
     {
-        return Model is KeypadModel.Grayhill6Key or
+        return Model is KeypadModel.Grayhill1Key or
+                        KeypadModel.Grayhill6Key or
                         KeypadModel.Grayhill8Key or
                         KeypadModel.Grayhill12Key or
                         KeypadModel.Grayhill15Key or

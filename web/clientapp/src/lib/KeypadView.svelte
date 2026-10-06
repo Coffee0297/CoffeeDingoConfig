@@ -1,6 +1,7 @@
 <script>
   import { api } from './store.js'
   import { toast } from './toast.js'
+  import { untrack } from 'svelte'
   import { dialog, labelFields, clickable } from './a11y.js'
   let { device, devices = [] } = $props()
 
@@ -8,7 +9,8 @@
   const COLORS = ['Off', 'Red', 'Green', 'Orange', 'Blue', 'Violet', 'Cyan', 'White']
   const swatch = ['#37474f', '#d32f2f', '#2e7d32', '#ff9800', '#1565c0', '#7e57c2', '#26c6da', '#eceff1']
   // button count per keypad model id (from the original GetDimensionsForModel)
-  const MODEL_BTNS = { 0: 2, 1: 4, 2: 5, 3: 6, 4: 8, 5: 10, 6: 12, 7: 15, 8: 13, 9: 18, 10: 1, 20: 6, 21: 8, 22: 12, 23: 15, 24: 20 }
+  // Firmware KeypadModel: 8 = Blink 15-key + 2 dials, 10 = Grayhill 1-key; 9 and 11–19 don't exist.
+  const MODEL_BTNS = { 0: 2, 1: 4, 2: 5, 3: 6, 4: 8, 5: 10, 6: 12, 7: 15, 8: 15, 10: 1, 20: 6, 21: 8, 22: 12, 23: 15, 24: 20 }
 
   // Candidate controlling PDMs (a keypad's button config lives on a PDM keypad master).
   let pdms = $derived(devices.filter((d) => !/keypad|dbc|canboard|can.?board/i.test(d.type)))
@@ -39,7 +41,9 @@
     ctrl = null; msg = 'Could not read keypad config from a PDM yet.'
   }
   // Re-resolve only on stable changes (not every telemetry tick); skip while editing.
-  $effect(() => { device?.guid; pdms.length; if (!editing) resolve() })
+  // Keyed on the PDM guids (a string), not the derived array — that array is new on every telemetry push.
+  const pdmKey = $derived(pdms.map((d) => d.guid).join(','))
+  $effect(() => { device?.guid; pdmKey; if (!editing) untrack(resolve) })
 
   let btnCount = $derived(ctrl ? (MODEL_BTNS[ctrl.master.model] ?? 12) : 0)
   let buttons = $derived(ctrl ? ctrl.master.buttons.slice(0, btnCount) : [])
@@ -60,7 +64,7 @@
     saving = true
     try {
       const number = ctrl.masterIndex * 32 + editing.number
-      const r = await api.setFunction(ctrl.guid, 'keypadbutton', number, { ...f, enabled: true })
+      const r = await api.setFunction(ctrl.guid, 'keypadbutton', number, { ...f })   // honour the “Button enabled” box
       await resolve()
       toast(r?.written
         ? `Saved button ${editing.number} to ${ctrl.name}`

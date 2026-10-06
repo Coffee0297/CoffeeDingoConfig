@@ -1,21 +1,25 @@
 namespace domain.Enums.dingoPdm;
 
+// Mirrors the firmware's shared `enum class MsgSrc` (CoffeeDingoFW core/enums.h). Only labels
+// info/warn/error log lines, but a wrong label points the user the wrong way.
 public enum MessageSrc
 {
     StateRun = 1,
     StateSleep,
     StateOvertemp,
     StateError,
-    OverCurrent,
-    BatteryVoltage,
-    CAN,
+    Overcurrent,
+    Voltage,
+    CANBus,
     USB,
-    OverTemp,
+    Overtemp,
     Config,
     FRAM,
-    ADC,
+    Analog,
     I2C,
     TempSensor,
-    USBConnected,
-    Init
+    USBConnection,
+    Init,
+    OutputWarning,   // output current above warn limit (below trip)
+    OpenLoad         // output on but current below open-load floor (broken bulb / no load)
 }

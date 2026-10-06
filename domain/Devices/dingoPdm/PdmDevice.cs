@@ -19,7 +19,7 @@ public class PdmDevice : IDeviceConfigurable
 
     [JsonIgnore] protected int MinMajorVersion { get; private set; } = 5;
     [JsonIgnore] protected int MinMinorVersion { get; private set; } = 5;
-    [JsonIgnore] protected int MinBuildVersion { get; private set; } = 102;
+    [JsonIgnore] protected int MinBuildVersion { get; private set; } = 107;
 
     [JsonIgnore] protected int NumDigitalInputs { get; private set; } = 2;
     [JsonIgnore] protected int NumOutputs { get; private set; } = 8;
@@ -29,6 +29,8 @@ public class PdmDevice : IDeviceConfigurable
     [JsonIgnore] protected int NumFlashers { get; private set; } = 4;
     [JsonIgnore] protected int NumCounters { get; private set; } = 4;
     [JsonIgnore] protected int NumConditions { get; private set; } = 32;
+    [JsonIgnore] protected int NumTimers { get; private set; } = 8;
+    [JsonIgnore] protected int NumTables { get; private set; } = 2;
     [JsonIgnore] protected int NumKeypads { get; private set; } = 2;
     [JsonIgnore] protected const int LuaOutputSlots = 32;  // matches firmware NUM_LUA_OUTPUTS
 
@@ -127,11 +129,15 @@ public class PdmDevice : IDeviceConfigurable
     public event Action<string>? SuccessNotification;
     
     [JsonPropertyName("sleepEnabled")] public bool SleepEnabled { get; set; }
-    [JsonPropertyName("sleepTimeoutMs")] public int SleepTimeoutMs { get; set; } = 30000;
-    [JsonPropertyName("sleepInputEnabled")] public bool SleepInputEnabled { get; set; }
-    [JsonPropertyName("sleepInput")] public int SleepInput { get; set; }
-    [JsonPropertyName("sleepInputActiveHigh")] public bool SleepInputActiveHigh { get; set; }
+    // ms, clamped to the firmware's DEVICE_CONFIG range (1000 … 60000) — it silently rejects anything outside.
+    [JsonPropertyName("sleepTimeoutMs")] public int SleepTimeoutMs { get => field; set => field = Math.Clamp(value, 1000, 60000); } = 30000;
     [JsonPropertyName("sleepIgnoreAlwaysOn")] public bool SleepIgnoreAlwaysOn { get; set; } = true;
+    // Expanded sleep (firmware #52): any var-map signal can force sleep / mute the cyclic CAN
+    // broadcasts; the wake sources are a per-digital-input mask + CAN (USB always wakes).
+    [JsonPropertyName("forceSleepInput")] public int ForceSleepInput { get; set; }
+    [JsonPropertyName("muteTxInput")] public int MuteTxInput { get; set; }
+    [JsonPropertyName("wakeDigInputMask")] public int WakeDigInputMask { get; set; } = 0xFF;
+    [JsonPropertyName("wakeOnCan")] public bool WakeOnCan { get; set; } = true;
     [JsonPropertyName("filtersEnabled")] public bool CanFiltersEnabled { get; set; }
     [JsonPropertyName("connectUsbToCan")] public bool ConnectUsbToCan { get; set; } = true;
     // Stored Lua program (the assembled source). Persists in the project JSON so cross-module /
@@ -146,11 +152,15 @@ public class PdmDevice : IDeviceConfigurable
     [JsonPropertyName("canInputs")] public List<CanInput> CanInputs { get; init; } = [];
     [JsonPropertyName("canOutputs")] public List<CanOutput> CanOutputs { get; init; } = [];
     [JsonPropertyName("virtualInputs")] public List<VirtualInput> VirtualInputs { get; init; } = [];
-    [JsonPropertyName("wipers")] public Wiper Wipers { get; protected set; } = null!;
+    // Public setters: System.Text.Json ignores non-public ones, which silently dropped a saved wiper /
+    // starter-disable config on load. ApplyDefinition re-collects Params from the loaded objects.
+    [JsonPropertyName("wipers")] public Wiper Wipers { get; set; } = null!;
     [JsonPropertyName("flashers")] public List<Flasher> Flashers { get; init; } = [];
-    [JsonPropertyName("starterDisable")] public StarterDisable StarterDisable { get; protected set; } = null!;
+    [JsonPropertyName("starterDisable")] public StarterDisable StarterDisable { get; set; } = null!;
     [JsonPropertyName("counters")] public List<Counter> Counters { get; init; } = [];
     [JsonPropertyName("conditions")] public List<Condition> Conditions { get; init; } = [];
+    [JsonPropertyName("timers")] public List<TimerFunction> Timers { get; init; } = [];
+    [JsonPropertyName("tables")] public List<LookupTable> Tables { get; init; } = [];
     [JsonPropertyName("keypads")] public List<KeypadMaster> Keypads { get; init; } = [];
     
     [JsonIgnore] private DateTime LastRxTime { get; set; }
@@ -205,6 +215,8 @@ public class PdmDevice : IDeviceConfigurable
         NumFlashers = definition.NumFlashers;
         NumCounters = definition.NumCounters;
         NumConditions = definition.NumConditions;
+        NumTimers = definition.NumTimers;
+        NumTables = definition.NumTables;
         NumKeypads = definition.NumKeypads;
         InitFunctions();
         ApplyDefinition(definition);
@@ -233,7 +245,13 @@ public class PdmDevice : IDeviceConfigurable
         NumFlashers = Flashers.Count;
         NumCounters = Counters.Count;
         NumConditions = Conditions.Count;
+        NumTimers = Timers.Count;
+        NumTables = Tables.Count;
         NumKeypads = Keypads.Count;
+        // The JsonConstructor sizes the starter-disable for the default 8 outputs before the saved
+        // output list is known, and the firmware only has 0x1800:2..(2+NumOutputs-1) — a surplus
+        // entry makes a dingoPDM-Max NAK the whole WriteAll. Resize to the real count, keeping values.
+        StarterDisable.Resize(NumOutputs);
         InitStatusSigs();
         InitVarMap();
         InitParams();
@@ -264,7 +282,13 @@ public class PdmDevice : IDeviceConfigurable
 
         for (var i = 0; i < NumConditions; i++)
             Conditions.Add(new Condition(i + 1, "condition" + (i + 1)));
-        
+
+        for (var i = 0; i < NumTimers; i++)
+            Timers.Add(new TimerFunction(i + 1, "timer" + (i + 1)));
+
+        for (var i = 0; i < NumTables; i++)
+            Tables.Add(new LookupTable(i + 1, "table" + (i + 1)));
+
         StarterDisable = new StarterDisable("starterDisable", NumOutputs);
 
         Wipers = new Wiper("wiper");
@@ -361,6 +385,15 @@ public class PdmDevice : IDeviceConfigurable
                 val => Flashers[index].Value = val != 0 && Flashers[index].Enabled
             ));
         }
+        // Timer 1-8 outputs in byte 7 (bits 56-63), firmware >= 5.5.107.
+        for (var i = 0; i < NumTimers && i < 8; i++)
+        {
+            var index = i;
+            StatusSigs[cyclicIndex].Add((
+                new DbcSignal { Name = $"Timer{index + 1}", StartBit = 56 + i, Length = 1 },
+                val => Timers[index].Value = val != 0 && Timers[index].Enabled
+            ));
+        }
         cyclicIndex++;
 
         // Message 4: Output reset counts
@@ -428,9 +461,13 @@ public class PdmDevice : IDeviceConfigurable
                 var index = k * 2 + i;
                 if (index < NumCanInputs)
                 {
+                    // The frame carries the RAW signed integer the module received (it re-encodes its
+                    // scaled value with the input's own factor/offset), always little-endian from
+                    // firmware 5.5.107 regardless of the input's byte order. Scale it back so the live
+                    // Value is the number the firmware compares with the input's Operand (#59).
                     StatusSigs[offset].Add((
-                        new DbcSignal { Name = $"CanInput{index + 1}.Value", StartBit = i * 32, Length = 32 },
-                        val => CanInputs[index].Value = (int)val
+                        new DbcSignal { Name = $"CanInput{index + 1}.Value", StartBit = i * 32, Length = 32, IsSigned = true },
+                        val => { var c = CanInputs[index]; c.Value = val * c.Factor + c.Offset; }
                     ));
                 }
             }
@@ -452,7 +489,19 @@ public class PdmDevice : IDeviceConfigurable
         // here: the model has no live keypad button/dial-state storage and the tool reads keypad
         // state from the keypad node directly. They still belong to the device's CAN ID range.
         // ponytail: skip keypad-rebroadcast decode; add Button/Dial live-value fields if ever needed.
-        MaxCyclicId = cyclicIndex + 3; // +28 = keypad-2 dials, highest cyclic offset emitted
+
+        // Msg 27 (offset +29): table 1-2 outputs as IEEE-754 float32 LE (firmware >= 5.5.107).
+        cyclicIndex += 4;
+        StatusSigs[cyclicIndex] = [];
+        for (var i = 0; i < NumTables && i < 2; i++)
+        {
+            var index = i;
+            StatusSigs[cyclicIndex].Add((
+                new DbcSignal { Name = $"Table{index + 1}.Value", StartBit = i * 32, Length = 32, IsSigned = true, IsFloat = true },
+                val => Tables[index].Value = val
+            ));
+        }
+        MaxCyclicId = cyclicIndex; // +29 = table outputs, highest cyclic offset emitted
     }
 
     private void InitVarMap()
@@ -464,6 +513,7 @@ public class PdmDevice : IDeviceConfigurable
         VarMap.Add(new DeviceVariable
         {
             GetName = () => "None",
+            OwnerKind = "sys", OwnerNumber = 0,
             PropertyName = "Value",
             DataType = "bool",
             VariableIndex = index++,
@@ -473,6 +523,7 @@ public class PdmDevice : IDeviceConfigurable
         VarMap.Add(new DeviceVariable
         {
             GetName = () => "Always On",
+            OwnerKind = "sys", OwnerNumber = 1,
             PropertyName = "Value",
             DataType = "bool",
             VariableIndex = index++,
@@ -482,6 +533,7 @@ public class PdmDevice : IDeviceConfigurable
         VarMap.Add(new DeviceVariable
         {
             GetName = () => "State",
+            OwnerKind = "sys", OwnerNumber = 2,
             PropertyName = "Value",
             DataType = "int",
             VariableIndex = index++,
@@ -491,6 +543,7 @@ public class PdmDevice : IDeviceConfigurable
         VarMap.Add(new DeviceVariable
         {
             GetName = () => "Temperature",
+            OwnerKind = "sys", OwnerNumber = 3,
             PropertyName = "Value",
             DataType = "float",
             VariableIndex = index++,
@@ -500,6 +553,7 @@ public class PdmDevice : IDeviceConfigurable
         VarMap.Add(new DeviceVariable
         {
             GetName =  () => "Battery Voltage",
+            OwnerKind = "sys", OwnerNumber = 4,
             PropertyName = "Value",
             DataType = "float",
             VariableIndex = index++,
@@ -514,6 +568,7 @@ public class PdmDevice : IDeviceConfigurable
                 VarMap.Add(new DeviceVariable
                 {
                     GetName  = () => Inputs[num].Name,
+                    OwnerKind = "input", OwnerNumber = num + 1,
                     PropertyName = "State",
                     DataType = "bool",
                     VariableIndex = index++,
@@ -530,6 +585,7 @@ public class PdmDevice : IDeviceConfigurable
                 VarMap.Add(new DeviceVariable
                 {
                     GetName = () => CanInputs[num].Name,
+                    OwnerKind = "caninput", OwnerNumber = num + 1,
                     PropertyName = "State",
                     DataType = "bool",
                     VariableIndex = index++,
@@ -538,6 +594,7 @@ public class PdmDevice : IDeviceConfigurable
                 VarMap.Add(new DeviceVariable
                 {
                     GetName = () => CanInputs[num].Name,
+                    OwnerKind = "caninput", OwnerNumber = num + 1,
                     PropertyName = "Value",
                     DataType = "float",
                     VariableIndex = index++,
@@ -554,6 +611,7 @@ public class PdmDevice : IDeviceConfigurable
                 VarMap.Add(new DeviceVariable
                 {
                     GetName = () => VirtualInputs[num].Name,
+                    OwnerKind = "virtualinput", OwnerNumber = num + 1,
                     PropertyName = "State",
                     DataType = "bool",
                     VariableIndex = index++,
@@ -570,6 +628,7 @@ public class PdmDevice : IDeviceConfigurable
                 VarMap.Add(new DeviceVariable
                 {
                     GetName = () => Outputs[num].Name,
+                    OwnerKind = "output", OwnerNumber = num + 1,
                     PropertyName = "On",
                     DataType = "bool",
                     VariableIndex = index++,
@@ -578,6 +637,7 @@ public class PdmDevice : IDeviceConfigurable
                 VarMap.Add(new DeviceVariable
                 {
                     GetName = () => Outputs[num].Name,
+                    OwnerKind = "output", OwnerNumber = num + 1,
                     PropertyName = "Current",
                     DataType = "float",
                     VariableIndex = index++,
@@ -586,6 +646,7 @@ public class PdmDevice : IDeviceConfigurable
                 VarMap.Add(new DeviceVariable
                 {
                     GetName = () => Outputs[num].Name,
+                    OwnerKind = "output", OwnerNumber = num + 1,
                     PropertyName = "Overcurrent",
                     DataType = "bool",
                     VariableIndex = index++,
@@ -594,6 +655,7 @@ public class PdmDevice : IDeviceConfigurable
                 VarMap.Add(new DeviceVariable
                 {
                     GetName = () => Outputs[num].Name,
+                    OwnerKind = "output", OwnerNumber = num + 1,
                     PropertyName = "Fault",
                     DataType = "bool",
                     VariableIndex = index++,
@@ -610,6 +672,7 @@ public class PdmDevice : IDeviceConfigurable
                 VarMap.Add(new DeviceVariable
                 {
                     GetName = () => Flashers[num].Name,
+                    OwnerKind = "flasher", OwnerNumber = num + 1,
                     PropertyName = "State",
                     DataType = "bool",
                     VariableIndex = index++,
@@ -626,6 +689,7 @@ public class PdmDevice : IDeviceConfigurable
                 VarMap.Add(new DeviceVariable
                 {
                     GetName = () => Conditions[num].Name,
+                    OwnerKind = "condition", OwnerNumber = num + 1,
                     PropertyName = "Value",
                     DataType = "bool",
                     VariableIndex = index++,
@@ -642,6 +706,7 @@ public class PdmDevice : IDeviceConfigurable
                 VarMap.Add(new DeviceVariable
                 {
                     GetName = () => Counters[num].Name,
+                    OwnerKind = "counter", OwnerNumber = num + 1,
                     PropertyName = "Value",
                     DataType = "int",
                     VariableIndex = index++,
@@ -653,55 +718,61 @@ public class PdmDevice : IDeviceConfigurable
         VarMap.Add(new DeviceVariable
         {
             GetName = () => Wipers.Name,
+            OwnerKind = "wiper", OwnerNumber = 1,
             PropertyName = "Slow Output",
             DataType = "bool",
             VariableIndex = index++,
-            SingleVariable = true
+            SingleVariable = false
         });
         
         VarMap.Add(new DeviceVariable
         {
             GetName = () => Wipers.Name,
+            OwnerKind = "wiper", OwnerNumber = 1,
             PropertyName = "Fast Output",
             DataType = "bool",
             VariableIndex = index++,
-            SingleVariable = true
+            SingleVariable = false
         });
         
         VarMap.Add(new DeviceVariable
         {
             GetName = () => Wipers.Name,
+            OwnerKind = "wiper", OwnerNumber = 1,
             PropertyName = "Park Output",
             DataType = "bool",
             VariableIndex = index++,
-            SingleVariable = true
+            SingleVariable = false
         });
         
         VarMap.Add(new DeviceVariable
         {
             GetName = () => Wipers.Name,
+            OwnerKind = "wiper", OwnerNumber = 1,
             PropertyName = "Inter Output",
             DataType = "bool",
             VariableIndex = index++,
-            SingleVariable = true
+            SingleVariable = false
         });
         
         VarMap.Add(new DeviceVariable
         {
             GetName = () => Wipers.Name,
+            OwnerKind = "wiper", OwnerNumber = 1,
             PropertyName = "Wash Output",
             DataType = "bool",
             VariableIndex = index++,
-            SingleVariable = true
+            SingleVariable = false
         });
         
         VarMap.Add(new DeviceVariable
         {
             GetName = () => Wipers.Name,
+            OwnerKind = "wiper", OwnerNumber = 1,
             PropertyName = "Swipe Output",
             DataType = "bool",
             VariableIndex = index++,
-            SingleVariable = true
+            SingleVariable = false
         });
         
         if (NumKeypads > 0)
@@ -715,6 +786,7 @@ public class PdmDevice : IDeviceConfigurable
                     VarMap.Add(new DeviceVariable
                     {
                         GetName = () => $"{Keypads[kp].Name} - {Keypads[kp].Buttons[num].Name}",
+                        OwnerKind = "keypad", OwnerNumber = kp + 1,
                         PropertyName = "State",
                         DataType = "bool",
                         VariableIndex = index++,
@@ -728,6 +800,7 @@ public class PdmDevice : IDeviceConfigurable
                     VarMap.Add(new DeviceVariable
                     {
                         GetName = () => $"{Keypads[kp].Name} - {Keypads[kp].Dials[num].Name}",
+                        OwnerKind = "keypad", OwnerNumber = kp + 1,
                         PropertyName = "Position",
                         DataType = "int",
                         VariableIndex = index++,
@@ -741,6 +814,7 @@ public class PdmDevice : IDeviceConfigurable
                     VarMap.Add(new DeviceVariable
                     {
                         GetName = () => $"{Keypads[kp].Name} - analogIn{num}",
+                        OwnerKind = "keypad", OwnerNumber = kp + 1,
                         PropertyName = "Value",
                         DataType = "float",
                         VariableIndex = index++,
@@ -751,19 +825,51 @@ public class PdmDevice : IDeviceConfigurable
         }
 
         // Lua output slots — written by setLuaOut(n, v) in the device's Lua program.
-        // MUST be last and match the firmware's VAR_MAP layout (NUM_LUA_OUTPUTS). Adding
-        // them here is what lets an output/virtual-input/CAN-output pick "Lua Out N" as its
-        // driving input — i.e. be driven by Lua. (1-based name -> slot N-1.)
+        // Must match the firmware's VAR_MAP layout (NUM_LUA_OUTPUTS). Adding them here is what
+        // lets an output/virtual-input/CAN-output pick "Lua Out N" as its driving input — i.e.
+        // be driven by Lua. (1-based name -> slot N-1.)
         for (var i = 0; i < LuaOutputSlots; i++)
         {
             var slot = i;
             VarMap.Add(new DeviceVariable
             {
                 GetName = () => $"Lua Out {slot + 1}",
+                OwnerKind = "lua", OwnerNumber = slot + 1,
                 PropertyName = "Value",
                 DataType = "float",
                 VariableIndex = index++,
                 SingleVariable = true
+            });
+        }
+
+        // Timers + tables come AFTER the Lua slots, mirroring the firmware (core/device.cpp
+        // InitVarMap): appended at the end so every pre-existing index — including saved
+        // "Lua Out N" output bindings — is unchanged. New blocks go after these.
+        for (var i = 0; i < NumTimers; i++)
+        {
+            var num = i;
+            VarMap.Add(new DeviceVariable
+            {
+                GetName = () => Timers[num].Name,
+                OwnerKind = "timer", OwnerNumber = num + 1,
+                PropertyName = "State",
+                DataType = "bool",
+                VariableIndex = index++,
+                SingleVariable = false
+            });
+        }
+
+        for (var i = 0; i < NumTables; i++)
+        {
+            var num = i;
+            VarMap.Add(new DeviceVariable
+            {
+                GetName = () => Tables[num].Name,
+                OwnerKind = "table", OwnerNumber = num + 1,
+                PropertyName = "Value",
+                DataType = "float",
+                VariableIndex = index++,
+                SingleVariable = false
             });
         }
     }
@@ -816,32 +922,41 @@ public class PdmDevice : IDeviceConfigurable
                 ValueType = SleepTimeoutMs.GetType(),
                 DefaultValue = 30000
             },
+            // sub 6-8 (digital-input sleep trigger of firmware 5.5.106) are retired; 9 onwards:
             new DeviceParameter
             {
-                ParentName = Name, Name = "device.sleepInputEnabled", Index = BaseIndex, SubIndex = subIndex++,
-                GetValue = () => SleepInputEnabled, SetValue = val => SleepInputEnabled = (bool)val,
-                ValueType = SleepInputEnabled.GetType(), DefaultValue = false
-            },
-            new DeviceParameter
-            {
-                ParentName = Name, Name = "device.sleepInput", Index = BaseIndex, SubIndex = subIndex++,
-                GetValue = () => SleepInput, SetValue = val => SleepInput = (int)val,
-                ValueType = SleepInput.GetType(), DefaultValue = 0
-            },
-            new DeviceParameter
-            {
-                ParentName = Name, Name = "device.sleepInputActiveHigh", Index = BaseIndex, SubIndex = subIndex++,
-                GetValue = () => SleepInputActiveHigh, SetValue = val => SleepInputActiveHigh = (bool)val,
-                ValueType = SleepInputActiveHigh.GetType(), DefaultValue = false
-            },
-            new DeviceParameter
-            {
-                ParentName = Name, Name = "device.sleepIgnoreAlwaysOn", Index = BaseIndex, SubIndex = subIndex++,
+                ParentName = Name, Name = "device.sleepIgnoreAlwaysOn", Index = BaseIndex, SubIndex = 9,
                 GetValue = () => SleepIgnoreAlwaysOn, SetValue = val => SleepIgnoreAlwaysOn = (bool)val,
                 ValueType = SleepIgnoreAlwaysOn.GetType(), DefaultValue = true
+            },
+            new DeviceParameter
+            {
+                ParentName = Name, Name = "device.forceSleepInput", Index = BaseIndex, SubIndex = 10,
+                GetValue = () => ForceSleepInput, SetValue = val => ForceSleepInput = (int)val,
+                ValueType = ForceSleepInput.GetType(), DefaultValue = 0
+            },
+            new DeviceParameter
+            {
+                ParentName = Name, Name = "device.muteTxInput", Index = BaseIndex, SubIndex = 11,
+                GetValue = () => MuteTxInput, SetValue = val => MuteTxInput = (int)val,
+                ValueType = MuteTxInput.GetType(), DefaultValue = 0
+            },
+            new DeviceParameter
+            {
+                ParentName = Name, Name = "device.wakeDigInputMask", Index = BaseIndex, SubIndex = 12,
+                GetValue = () => WakeDigInputMask, SetValue = val => WakeDigInputMask = (int)val,
+                ValueType = WakeDigInputMask.GetType(), DefaultValue = (1 << NumDigitalInputs) - 1
+            },
+            new DeviceParameter
+            {
+                ParentName = Name, Name = "device.wakeOnCan", Index = BaseIndex, SubIndex = 13,
+                GetValue = () => WakeOnCan, SetValue = val => WakeOnCan = (bool)val,
+                ValueType = WakeOnCan.GetType(), DefaultValue = true
             }
         ]);
-        
+        // The firmware default = "every digital input wakes"; clamp a fresh/legacy record to the real pin count.
+        WakeDigInputMask &= (1 << NumDigitalInputs) - 1;
+
         foreach (var output in Outputs) allParams.AddRange(output.Params);
         foreach (var input in Inputs) allParams.AddRange(input.Params);
         foreach (var canInput in CanInputs) allParams.AddRange(canInput.Params);
@@ -849,6 +964,8 @@ public class PdmDevice : IDeviceConfigurable
         foreach (var condition in Conditions) allParams.AddRange(condition.Params);
         foreach (var counter in Counters) allParams.AddRange(counter.Params);
         foreach (var flasher in Flashers) allParams.AddRange(flasher.Params);
+        foreach (var table in Tables) allParams.AddRange(table.Params);
+        foreach (var timer in Timers) allParams.AddRange(timer.Params);
         allParams.AddRange(StarterDisable.Params);
         allParams.AddRange(Wipers.Params);
         foreach (var canOutput in CanOutputs) allParams.AddRange(canOutput.Params);
@@ -991,6 +1108,7 @@ public class PdmDevice : IDeviceConfigurable
                     Length = signal.Length,
                     ByteOrder = signal.ByteOrder,
                     IsSigned = signal.IsSigned,
+                    IsFloat = signal.IsFloat,   // table outputs are float32 — without this they advertise as int32
                     Factor = signal.Factor,
                     Offset = signal.Offset,
                     Unit = signal.Unit,
@@ -1153,6 +1271,7 @@ public class PdmDevice : IDeviceConfigurable
         };
     }
 
+
     public DeviceCanFrame GetVersionMsg()
     {
         return new DeviceCanFrame
@@ -1267,6 +1386,8 @@ public class PdmDevice : IDeviceConfigurable
     public IReadOnlyList<Flasher> GetFlashers() => Flashers.AsReadOnly();
     public IReadOnlyList<Counter> GetCounters() => Counters.AsReadOnly();
     public IReadOnlyList<Condition> GetConditions() => Conditions.AsReadOnly();
+    public IReadOnlyList<TimerFunction> GetTimers() => Timers.AsReadOnly();
+    public IReadOnlyList<LookupTable> GetTables() => Tables.AsReadOnly();
     public Wiper GetWipers() => Wipers;
     public StarterDisable GetStarterDisable() => StarterDisable;
     public IReadOnlyList<KeypadMaster> GetKeypads() => Keypads.AsReadOnly();

@@ -7,7 +7,7 @@
   const outPorts = $derived(data.outPorts ?? (data.outs ?? ['out']).map((id) => ({ id, label: id })))
   // Live readouts come from the shared store keyed by node id — updating them never re-renders the
   // node container or its handles, so the dots don't jump while you're wiring.
-  const live = data.fnLive
+  const live = $derived(data.fnLive)
   const lv = $derived(live ? $live?.[id] : null)
   const values = $derived(lv?.values ?? data.values ?? {})
   const status = $derived(lv?.status ?? data.status)
@@ -32,6 +32,11 @@
   // handles are absolute from the node top, so they must clear the header AND the sub-line (if any)
   const handleTop = (i) => HEADER + (data.sub ? SUBH : 0) + PADY + i * ROW + ROW / 2 - 1
   const tyShort = { bool: 'B', int: 'I', real: 'R' }
+  // Width: a row carries an input label on the left and an output label on the right, so the node must be
+  // wide enough for the longest pair plus chips/values — a fixed width made "Force sleep"/"Always On" and
+  // "Duty source"/"Current (A)" collide. ~7 px per 11 px uppercase glyph; outputs reserve room for a value.
+  const span = (p, withVal) => p.label.length * 7 + (p.type ? 19 : 0) + (withVal ? 30 : 0) + 6
+  const nodeW = $derived(Math.max(212, Math.max(0, ...inPorts.map((p) => span(p, false))) + Math.max(0, ...outPorts.map((p) => span(p, true))) + 30))
   const valClass = (v) => { const s = String(v).toLowerCase(); return s === 'on' ? 'on' : s === 'off' ? 'off' : '' }
   const toneClass = (t) => {
     const s = (t || '').toLowerCase()
@@ -47,7 +52,7 @@
   function focusMount(node) { node.focus(); node.select?.() }
 </script>
 
-<div class="fnnode" class:remote={data.remote} style="--c:{data.color}">
+<div class="fnnode" class:remote={data.remote} style="--c:{data.color}; min-width:{nodeW}px">
   <div class="fn-hd" style="background:{data.color}">
     <span class="fn-kind">[{data.kind}]</span>
     {#if editing}
@@ -84,10 +89,10 @@
   {#if showStatus}<div class="fn-status">STATUS <b class={toneClass(status.tone ?? status.text)}>[{status.text || '—'}]</b></div>{/if}
 
   {#each inPorts as p, i}
-    <Handle type="target" position={Position.Left} id={p.id} class="h-in" style="top:{handleTop(i)}px" title={'input: ' + p.label} />
+    <Handle type="target" position={Position.Left} id={p.id} class="h-in t-{p.type ?? 'any'}" style="top:{handleTop(i)}px" title={'input: ' + p.label + (p.type ? ' (' + p.type + ')' : '')} />
   {/each}
   {#each outPorts as p, i}
-    <Handle type="source" position={Position.Right} id={p.id} class="h-out" style="top:{handleTop(i)}px" title={'output: ' + p.label} />
+    <Handle type="source" position={Position.Right} id={p.id} class="h-out t-{p.type ?? 'any'}" style="top:{handleTop(i)}px" title={'output: ' + p.label + (p.type ? ' (' + p.type + ')' : '')} />
   {/each}
 </div>
 
@@ -109,7 +114,7 @@
   .fn-gear:hover, .fn-del:hover { background: rgba(0,0,0,.62); }
   .fn-sub { font-size: 10px; color: var(--muted, #9a9ab0); padding: 3px 9px 0; font-family: var(--mono, monospace); }
   .fn-body { position: relative; }
-  .fn-row { position: absolute; height: 18px; display: flex; align-items: center; gap: 5px; font-size: 11px; line-height: 1; max-width: 62%; }
+  .fn-row { position: absolute; height: 18px; display: flex; align-items: center; gap: 5px; font-size: 11px; line-height: 1; max-width: calc(100% - 20px); }
   .fn-row.l { left: 10px; }
   .fn-row.r { right: 10px; flex-direction: row; justify-content: flex-end; }
   /* force every part onto one centred line — the page's global line-height:1.5 otherwise makes the
@@ -128,8 +133,19 @@
   .fn-status b { color: var(--muted, #9a9ab0); font-family: var(--mono, monospace); }
   .fn-status b.on { color: #2fbf71; } .fn-status b.err { color: #e5484d; } .fn-status b.warn { color: #f5a524; }
   :global(.svelte-flow .fnnode .svelte-flow__handle) { width: 11px; height: 11px; border: 2px solid var(--surface, #14141c); }
-  :global(.svelte-flow .fnnode .svelte-flow__handle.h-in) { background: #2a9d8f; }
-  :global(.svelte-flow .fnnode .svelte-flow__handle.h-out) { background: #594ae2; }
-  /* highlight on hover WITHOUT moving/resizing the dot (scale made it jump under the cursor) */
+  /* dots are coloured by DATA TYPE on both ends (green bool · blue int · amber real), so a matching
+     pair is obvious before you drag. Direction is told by the ring: inputs (left) carry a dark ring,
+     outputs (right) a light one. */
+  :global(.svelte-flow .fnnode .svelte-flow__handle.h-in) { background: #2a9d8f; border-color: #0d0d14; }
+  :global(.svelte-flow .fnnode .svelte-flow__handle.h-out) { background: #594ae2; border-color: #e9edf6; }
+  :global(.svelte-flow .fnnode .svelte-flow__handle.t-bool) { background: #3dc47e; }
+  :global(.svelte-flow .fnnode .svelte-flow__handle.t-int) { background: #4fa3f7; }
+  :global(.svelte-flow .fnnode .svelte-flow__handle.t-real) { background: #f0a033; }
+  /* highlight on hover WITHOUT moving/resizing the dot (scale made it jump under the cursor).
+     Declared BEFORE the connecting rules so those (same specificity) win while a wire is being dragged. */
   :global(.svelte-flow .fnnode .svelte-flow__handle:hover) { box-shadow: 0 0 0 4px rgba(255, 255, 255, .3); }
+  /* while dragging a wire, svelte-flow marks the handle under the cursor `connectingto` and adds `valid`
+     when isValidConnection passes: green ring = the types fit, red ring = they don't */
+  :global(.svelte-flow .fnnode .svelte-flow__handle.connectingto.valid) { box-shadow: 0 0 0 4px rgba(52, 210, 123, .65); }
+  :global(.svelte-flow .fnnode .svelte-flow__handle.connectingto:not(.valid)) { box-shadow: 0 0 0 4px rgba(229, 72, 77, .65); }
 </style>

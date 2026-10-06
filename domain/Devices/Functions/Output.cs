@@ -17,36 +17,40 @@ public class Output : IDeviceFunction
     [JsonPropertyName("wireLength")] public double WireLength { get; set; } = 0.0;   // metres, one-way
     [JsonPropertyName("wireGaugeMm2")] public double WireGaugeMm2 { get; set; } = 0.0; // 0 = auto/recommended
     [JsonPropertyName("number")] public int Number { get; }
-    [JsonPropertyName("currentLimit")] public double CurrentLimit { get; set; } = 20.0;
-    [JsonPropertyName("resetCountLimit")] public int ResetCountLimit { get; set; } = 3;
+    // Ranges below are the firmware's OUTPUT_PARAMS min/max (core/param_defs.h). The device silently
+    // rejects an out-of-range write — which the app then reports as "No reply from module" — so the
+    // model clamps at the source instead.
+    [JsonPropertyName("currentLimit")] public double CurrentLimit { get => field; set => field = Math.Clamp(value, 0.0, 100.0); } = 20.0;
+    [JsonPropertyName("resetCountLimit")] public int ResetCountLimit { get => field; set => field = Math.Clamp(value, 0, 20); } = 3;
     [JsonPropertyName("resetMode")] public ResetMode ResetMode { get; set; } = ResetMode.None;
-    [JsonPropertyName("resetTime")] public int ResetTime { get; set; } = 1000;
+    [JsonPropertyName("resetTime")] public int ResetTime { get => field; set => field = Math.Clamp(value, 0, 60000); } = 1000;
 
     [JsonPropertyName("inrushCurrentLimit")]
-    public double InrushCurrentLimit { get; set; } = 50.0;
+    public double InrushCurrentLimit { get => field; set => field = Math.Clamp(value, 0.0, 100.0); } = 50.0;
 
-    [JsonPropertyName("inrushTime")] public int InrushTime { get; set; } = 1000;
+    [JsonPropertyName("inrushTime")] public int InrushTime { get => field; set => field = Math.Clamp(value, 0, 10000); } = 1000;
     [JsonPropertyName("input")] public int Input { get; set; }
     [JsonPropertyName("pwmEnabled")] public bool PwmEnabled { get; set; }
     [JsonPropertyName("softStartEnabled")] public bool SoftStartEnabled { get; set; }
     [JsonPropertyName("variableDutyCycle")] public bool VariableDutyCycle { get; set; }
     [JsonPropertyName("dutyCycleInput")] public int DutyCycleInput { get; set; }
-    [JsonPropertyName("fixedDutyCycle")] public int FixedDutyCycle { get; set; } = 100;
-    [JsonPropertyName("frequency")] public int Frequency { get; set; } = 100;
-    [JsonPropertyName("softStartRampTime")] public int SoftStartRampTime { get; set; }
+    [JsonPropertyName("fixedDutyCycle")] public int FixedDutyCycle { get => field; set => field = Math.Clamp(value, 0, 100); } = 100;
+    [JsonPropertyName("frequency")] public int Frequency { get => field; set => field = Math.Clamp(value, 0, 400); } = 100;
+    [JsonPropertyName("softStartRampTime")] public int SoftStartRampTime { get => field; set => field = Math.Clamp(value, 0, 10000); }
 
     [JsonPropertyName("dutyCycleDenominator")]
-    public int DutyCycleDenominator { get; set; } = 100;
-    [JsonPropertyName("minDutyCycle")] public  int MinDutyCycle { get; set; } = 0;
+    public int DutyCycleDenominator { get => field; set => field = Math.Clamp(value, 1, 5000); } = 100;
+    [JsonPropertyName("minDutyCycle")] public int MinDutyCycle { get => field; set => field = Math.Clamp(value, 0, 100); } = 0;
     [JsonPropertyName("variableFreq")] public bool VariableFreq { get; set; }
     [JsonPropertyName("freqInput")] public int FreqInput { get; set; }
-    [JsonPropertyName("freqInputDenom")] public int FreqInputDenom { get; set; } = 1;
+    [JsonPropertyName("freqInputDenom")] public int FreqInputDenom { get => field; set => field = Math.Clamp(value, 1, 5000); } = 1;
     [JsonPropertyName("rampDutyChanges")] public bool RampDutyChanges { get; set; }
-    [JsonPropertyName("primaryOutput")] public int PrimaryOutput { get; set; } = -1; //-1 = pairing disabled
+    // -1 = pairing disabled; otherwise a 0-based output index (firmware int8, -1 … NUM_OUTPUTS-1).
+    [JsonPropertyName("primaryOutput")] public int PrimaryOutput { get => field; set => field = Math.Clamp(value, -1, 7); } = -1;
 
-    [JsonPropertyName("warnLimit")] public double WarnLimit { get; set; } = 0.0;        //A, 0 = disabled
-    [JsonPropertyName("openLoadLimit")] public double OpenLoadLimit { get; set; } = 0.0; //A, 0 = disabled
-    [JsonPropertyName("openLoadTime")] public int OpenLoadTime { get; set; } = 1000;     //ms below floor before flagging
+    [JsonPropertyName("warnLimit")] public double WarnLimit { get => field; set => field = Math.Clamp(value, 0.0, 100.0); } = 0.0;        //A, 0 = disabled
+    [JsonPropertyName("openLoadLimit")] public double OpenLoadLimit { get => field; set => field = Math.Clamp(value, 0.0, 100.0); } = 0.0; //A, 0 = disabled
+    [JsonPropertyName("openLoadTime")] public int OpenLoadTime { get => field; set => field = Math.Clamp(value, 0, 60000); } = 1000;     //ms below floor before flagging
     
     [JsonIgnore][Plotable(displayName:"Current", unit:"A")] public double Current { get; set; }
     [JsonIgnore][Plotable(displayName:"State")] public OutState State { get; set; }

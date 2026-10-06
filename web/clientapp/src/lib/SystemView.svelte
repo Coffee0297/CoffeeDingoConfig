@@ -1,15 +1,20 @@
 <script>
   import { onMount } from 'svelte'
-  import { crossFns, deployCrossModule, cmfTrigId, cmfClkId, cmfIsLua, cmfSlotOf, nextCmfSlot, api, luaAssemble, deviceHasLua } from './store.js'
+  import { crossFns, deployCrossModule, cmfTrigId, cmfClkId, cmfIsLua, cmfSlotOf, nextCmfSlot, api, luaAssemble, deviceHasLua, deviceDefs } from './store.js'
   import { conflictPairs, spanAfter, ID_BEFORE, isModule } from './canids.js'
   import { toast } from './toast.js'
+  import { untrack } from 'svelte'
   import { dialog, labelFields, clickable } from './a11y.js'
   import LuaEditor from './LuaEditor.svelte'
+  import SearchSelect from './SearchSelect.svelte'
+  import SleepSequence from './SleepSequence.svelte'
   let { devices = [], connected = false, adapter = '', pick, addModule, remove } = $props()
+  const ssOpts = (arr, none = false) => (none ? [{ value: 0, label: '—' }] : []).concat((arr ?? []).map((v) => ({ value: v.index, label: v.name })))
   // Hardware-programming actions (flash, profile-write, base-ID re-address, deploy) need a real
   // CAN/USB interface — the Sim adapter replays a log and can't touch hardware.
-  let simAdapter = $derived(!adapter || adapter === 'Sim')
-  const PROG_TIP = "Switch to a real CAN/USB interface — Sim can't program hardware"
+  let simAdapter = $derived(!adapter || adapter === 'Sim')   // true = can't program hardware right now (no adapter, or the Sim)
+  // Say which it is: with nothing connected the old tooltip blamed the Sim adapter on every button.
+  let progTip = $derived(!adapter ? 'Connect a CAN/USB interface first — nothing is on the bus' : "Switch to a real CAN/USB interface — Sim can't program hardware")
 
   // Which flash path a module's card offers — exactly one button:
   //  • Offline: USB DFU (the dark-module recovery path; CAN needs a live bus).
@@ -105,7 +110,8 @@
   function outputsOf(guid) { return (devices.find((d) => d.guid === guid)?.outputs ?? []) }
 
   function saveFn() {
-    if (!f.name.trim()) return
+    // An unnamed function used to be dropped silently ("Add function" did nothing). Name it instead.
+    if (!f.name.trim()) f.name = 'Function ' + (editIdx >= 0 ? editIdx + 1 : $crossFns.length + 1)
     flushLua()   // persist the open Lua editor's buffer
     // Written in Lua → deploy as Lua; otherwise it's a native rule.
     f.mode = Object.values(f.luaByModule || {}).some((t) => t && t.trim()) ? 'lua' : 'rule'
@@ -129,7 +135,7 @@
     crossFns.update((list) => list.filter((_, k) => k !== idx))
   }
   async function deploy() {
-    if (simAdapter) { deployMsg = PROG_TIP + '.'; deployErr = true; return }
+    if (simAdapter) { deployMsg = progTip + '.'; deployErr = true; return }
     deploying = true; deployMsg = ''; deployErr = false
     try {
       const res = await deployCrossModule(devices)
@@ -176,7 +182,7 @@
   function onFwFile(e) { fwFile = e.target.files?.[0] ?? null; e.target.value = '' }
   async function doFlash() {
     if (!fwFile || !flashGuid || flashBusy) return
-    if (simAdapter) { flashOk = false; flashPhase = 'Failed'; flashLog = PROG_TIP + '.'; toast(PROG_TIP, 'error'); return }
+    if (simAdapter) { flashOk = false; flashPhase = 'Failed'; flashLog = progTip + '.'; toast(progTip, 'error'); return }
     const can = flashMode === 'can'
     const blank = flashGuid === 'blank'
     const label = blank ? 'a blank module (DFU)' : dName(flashGuid)
@@ -201,8 +207,23 @@
 
   // ---- Device settings (sleep) — writes config params then burns ----
   let setDrawer = $state(false), setGuid = $state(null)
-  let setSleepEnabled = $state(false), setSleepTimeoutS = $state(30)
-  let setInputEnabled = $state(false), setInput = $state(1), setInputSleepHigh = $state(false), setIgnoreAlwaysOn = $state(true)
+  let setSleepEnabled = $state(false), setSleepTimeoutS = $state(30), setIgnoreAlwaysOn = $state(true)
+  // Expanded sleep (firmware #52): a var-map signal that forces sleep, one that mutes the cyclic CAN
+  // broadcasts, and the wake sources (per-digital-input mask + CAN; USB always wakes).
+  let setForceSleep = $state(0), setMuteTx = $state(0), setWakeMask = $state(0xFF), setWakeCan = $state(true)
+  let setBoolInputs = $state([]), setDigInputs = $state([])   // this module's on/off signals + its digital-input rows
+  let setFuncs = $state(null)           // the module's /functions — the sequence designer reads its timers / CAN in-out back from it
+  let setAllVars = $state([])           // the FULL var map (every slot) — index maths for the designer; the pickers use the configured-only list
+  let setSigState = $state('loading')   // 'loading' | 'ok' | 'error' — the signal lists behind the two pickers
+  let setCanSleep = $state(true)        // false on a CANBoard: its firmware has no sleep, only the mute-TX input works
+  let setCfgUnread = $state(false)      // true until the module has been Read/Written — the values shown are the project record
+  let setSeed = $state({})              // what the drawer opened with, so Save writes only what you changed
+  // "Always On", "State" and the like are permanently true — bound to force-sleep they would park the module
+  // 1 s after every boot with only USB able to wake it. Keep system vars out of both pickers.
+  let setSigOpts = $derived(setBoolInputs.filter((v) => v.kind !== 'sys'))
+  const sigName = (idx) => setAllVars.find((v) => v.index === idx)?.name ?? setBoolInputs.find((v) => v.index === idx)?.name ?? `#${idx}`
+  // Digital-input count for the wake mask: the /functions rows, else the model's definition (a dingoPDM has 2, not 8).
+  const digCount = (d) => setDigInputs.length || [...($deviceDefs?.pdms ?? []), ...($deviceDefs?.canboards ?? [])].find((x) => (x.typeName || '').toLowerCase() === (d?.type || '').toLowerCase())?.numDigitalInputs || 2
   // Device-level CAN settings (all persist via writeParam — sub-indices match the firmware param map:
   // 1 = bitrate (CanBitRate enum int), 3 = filters enabled, 4 = connect-USB-to-CAN).
   let setBitrate = $state('500K'), setFiltersEnabled = $state(false), setConnectUsbToCan = $state(true)
@@ -216,13 +237,33 @@
   function openSettings(g) {
     const d = devices.find((x) => x.guid === g)
     setGuid = g; setSleepEnabled = !!d?.sleepEnabled; setSleepTimeoutS = Math.round((d?.sleepTimeoutMs ?? 30000) / 1000)
-    setInputEnabled = !!d?.sleepInputEnabled; setInput = d?.sleepInput || 1
-    setInputSleepHigh = !!d?.sleepInputActiveHigh; setIgnoreAlwaysOn = d?.sleepIgnoreAlwaysOn !== false
+    setIgnoreAlwaysOn = d?.sleepIgnoreAlwaysOn !== false
+    setForceSleep = d?.forceSleepInput || 0; setMuteTx = d?.muteTxInput || 0
+    setWakeMask = d?.wakeDigInputMask ?? 0xFF; setWakeCan = d?.wakeOnCan !== false
+    setCanSleep = d?.canSleep !== false
+    setCfgUnread = !!d?.configMismatch || !d?.connected   // the API only flags a mismatch for a live module; offline the values are the project record too
+    setSeed = { sleepEnabled: setSleepEnabled, timeoutS: setSleepTimeoutS, ignoreAlwaysOn: setIgnoreAlwaysOn, forceSleep: setForceSleep, muteTx: setMuteTx,
+      wakeMask: setWakeMask, wakeCan: setWakeCan, bitrate: BITRATES.includes(d?.bitrate) ? d.bitrate : '500K', filters: !!d?.canFiltersEnabled, usbToCan: d?.connectUsbToCan !== false }
+    setBoolInputs = []; setDigInputs = []; setFuncs = null; setSigState = 'loading'
+    loadSetLists(g)
     setBitrate = BITRATES.includes(d?.bitrate) ? d.bitrate : '500K'
     setFiltersEnabled = !!d?.canFiltersEnabled; setConnectUsbToCan = d?.connectUsbToCan !== false
     setBaseId = hex(d?.baseId ?? 0); baseMsg = ''
     profSrc = ''; profMsg = ''
     setMsg = ''; setDrawer = true
+  }
+  function loadSetLists(g) {
+    return Promise.all([api.inputs(g, 'bool'), api.inputs(g), api.functions(g)])
+      .then(([v, all, fx]) => { if (setGuid !== g) return; setBoolInputs = v ?? []; setAllVars = all ?? []; setDigInputs = fx?.inputs ?? fx?.digitalIn ?? []; setFuncs = fx; setSigState = 'ok' })
+      .catch(() => { if (setGuid === g) setSigState = 'error' })
+  }
+  // The sequence designer wrote the force-sleep / mute-TX inputs itself (function + device-inputs endpoints,
+  // offline-safe) — mirror them into the raw pickers and the seed so Save doesn't write them again.
+  function onSequenceApplied(r) {
+    setForceSleep = r.forceSleep; setMuteTx = r.muteTx
+    setSeed = { ...setSeed, forceSleep: r.forceSleep, muteTx: r.muteTx }
+    if (r.needCanWake) setWakeCan = true   // a follower is woken by the master's traffic
+    return loadSetLists(setGuid)
   }
   // Other configurable modules whose profile could be flashed onto this one.
   let profProfiles = $derived(devices.filter((d) => d.guid !== setGuid && /pdm/i.test(d.type)))
@@ -233,7 +274,7 @@
   // OTHER module may already occupy the selected's CAN span (that just relocates the collision).
   async function flashProfile() {
     if (!setGuid || !profSrc || profBusy) return
-    if (simAdapter) { profMsg = PROG_TIP + '.'; return }
+    if (simAdapter) { profMsg = progTip + '.'; return }
     const src = devices.find((d) => d.guid === profSrc), tgt = devices.find((d) => d.guid === setGuid)
     if (!tgt?.connected) { profMsg = 'Connect the module you opened before flashing a profile onto it.'; return }
     // The target is about to BECOME src (same type + base). Block if any OTHER module's CAN span
@@ -270,7 +311,7 @@
   // the project record. Accepts hex (0xDE00) or decimal.
   async function changeBaseId() {
     if (!setGuid || baseBusy) return
-    if (simAdapter) { baseMsg = PROG_TIP + '.'; return }
+    if (simAdapter) { baseMsg = progTip + '.'; return }
     const d = devices.find((x) => x.guid === setGuid)
     // Parse hex (0xDE / DE) or decimal, enforce the 11-bit standard range.
     const raw = String(setBaseId).trim()
@@ -292,23 +333,37 @@
   async function saveSettings() {
     if (!setGuid || setBusy) return
     if (!setLive) { setMsg = 'Module not on the bus — connect it to write + burn sleep settings.'; return }
+    const d = devices.find((x) => x.guid === setGuid)
+    const nDig = digCount(d)
+    const mask = (setWakeMask | 0) & ((1 << nDig) - 1)                          // only real pins (firmware rejects higher bits)
+    const fs = setForceSleep | 0, mt = setMuteTx | 0
+    // ---- field-safety guards: these configurations leave a module that only USB can recover ----
+    const sysPick = (idx) => idx === 1 || (setAllVars.find((v) => v.index === idx) ?? setBoolInputs.find((v) => v.index === idx))?.kind === 'sys'
+    if (fs && sysPick(fs)) { setMsg = `“${sigName(fs)}” is always true — the module would sleep 1 s after every boot and only USB could wake it. Pick an input, CAN input or timer instead.`; return }
+    if (mt && sysPick(mt)) { setMsg = `“${sigName(mt)}” is always true — the module would never broadcast again. Pick a real signal.`; return }
+    if (setCanSleep && mask === 0 && !setWakeCan && (setSleepEnabled || fs)) { setMsg = 'No wake source: with every input and CAN traffic unticked the module can only be woken over USB. Tick at least one input or “CAN traffic”.'; return }
+    if (fs && fs !== setSeed.forceSleep && !confirm(`Force-sleep on “${sigName(fs)}”: while that signal is on the module sleeps immediately — even with outputs on or a busy bus — and wakes only from the ticked wake sources (or USB). Continue?`)) return
+    // ---- write ONLY what changed since the drawer opened: an unread module's other values are the
+    //      project's defaults, and blindly re-writing them would wipe what the module is really running ----
+    const writes = []
+    if (setCanSleep && setSleepEnabled !== setSeed.sleepEnabled) writes.push([2, setSleepEnabled ? 1 : 0, 'auto-sleep'])
+    if (setCanSleep && setSleepTimeoutS !== setSeed.timeoutS) writes.push([5, Math.min(60000, Math.max(1000, Math.round(setSleepTimeoutS * 1000))), 'idle timeout'])
+    if (setCanSleep && setIgnoreAlwaysOn !== setSeed.ignoreAlwaysOn) writes.push([9, setIgnoreAlwaysOn ? 1 : 0, 'ignore always-on'])
+    if (setCanSleep && fs !== setSeed.forceSleep) writes.push([10, fs, 'force-sleep signal'])
+    if (mt !== setSeed.muteTx) writes.push([11, mt, 'mute-TX signal'])
+    if (setCanSleep && mask !== ((setSeed.wakeMask | 0) & ((1 << nDig) - 1))) writes.push([12, mask, 'wake inputs'])
+    if (setCanSleep && setWakeCan !== setSeed.wakeCan) writes.push([13, setWakeCan ? 1 : 0, 'wake on CAN'])
+    if (setBitrate !== setSeed.bitrate) writes.push([1, Math.max(0, BITRATES.indexOf(setBitrate)), 'bitrate'])
+    if (setFiltersEnabled !== setSeed.filters) writes.push([3, setFiltersEnabled ? 1 : 0, 'CAN filters'])
+    if (setConnectUsbToCan !== setSeed.usbToCan) writes.push([4, setConnectUsbToCan ? 1 : 0, 'USB↔CAN bridge'])
+    if (!writes.length) { setMsg = 'Nothing changed — nothing written.'; return }
     setBusy = true; setMsg = ''
     try {
-      const ms = Math.min(60000, Math.max(1000, Math.round(setSleepTimeoutS * 1000)))
-      const inputPin = Math.min(8, Math.max(1, setInput | 0))                  // clamp to a real 1–8 input
-      await api.writeParam(setGuid, 0x0000, 2, setSleepEnabled ? 1 : 0)        // device.sleepEnabled
-      await api.writeParam(setGuid, 0x0000, 5, ms)                             // device.sleepTimeoutMs
-      await api.writeParam(setGuid, 0x0000, 6, setInputEnabled ? 1 : 0)        // device.sleepInputEnabled
-      await api.writeParam(setGuid, 0x0000, 7, setInputEnabled ? inputPin : 0) // device.sleepInput
-      await api.writeParam(setGuid, 0x0000, 8, setInputSleepHigh ? 1 : 0)      // device.sleepInputActiveHigh
-      await api.writeParam(setGuid, 0x0000, 9, setIgnoreAlwaysOn ? 1 : 0)      // device.sleepIgnoreAlwaysOn
-      // device-level CAN settings: bitrate (CanBitRate enum int), filters, connect-USB-to-CAN
-      await api.writeParam(setGuid, 0x0000, 1, Math.max(0, BITRATES.indexOf(setBitrate)))  // device.canSpeed
-      await api.writeParam(setGuid, 0x0000, 3, setFiltersEnabled ? 1 : 0)      // device.canFiltersEnabled
-      await api.writeParam(setGuid, 0x0000, 4, setConnectUsbToCan ? 1 : 0)     // device.connectUsbToCan
+      for (const [sub, val] of writes) await api.writeParam(setGuid, 0x0000, sub, val)
       await api.action(setGuid, 'burn')
-      setMsg = 'Saved + burned.'
-    } catch (e) { setMsg = 'Failed: ' + e.message }
+      setSeed = { ...setSeed, sleepEnabled: setSleepEnabled, timeoutS: setSleepTimeoutS, ignoreAlwaysOn: setIgnoreAlwaysOn, forceSleep: fs, muteTx: mt, wakeMask: mask, wakeCan: setWakeCan, bitrate: setBitrate, filters: setFiltersEnabled, usbToCan: setConnectUsbToCan }
+      setMsg = `Written, burn queued: ${writes.map((w) => w[2]).join(', ')} — the module's reply shows in the Logs toast.`
+    } catch (e) { setMsg = 'Failed: ' + e.message + ' — the module may hold a partial change; Read it to see what landed.' }
     finally { setBusy = false }
   }
 
@@ -350,13 +405,16 @@
   const ACQUIRE_MS = 2500
   let firstSeen = $state({})
   let nowTick = $state(Date.now())
+  // Keyed on the guid list: `devices` is a new array every push, and re-running here used to tear down the
+  // 500 ms clock before it ever ticked — so "acquiring…" never turned into "not found".
+  const guidKey = $derived(devices.map((d) => d.guid).join(','))
   $effect(() => {
-    const seen = { ...firstSeen }; let changed = false
-    for (const d of devices) if (!(d.guid in seen)) { seen[d.guid] = Date.now(); changed = true }
+    const ids = guidKey ? guidKey.split(',') : []
+    const seen = { ...untrack(() => firstSeen) }; let changed = false
+    for (const g of ids) if (!(g in seen)) { seen[g] = Date.now(); changed = true }
     if (changed) firstSeen = seen
-    const id = setInterval(() => (nowTick = Date.now()), 500)
-    return () => clearInterval(id)
   })
+  $effect(() => { const id = setInterval(() => (nowTick = Date.now()), 500); return () => clearInterval(id) })
   const acquiring = (d) => connected && !d.connected && (nowTick - (firstSeen[d.guid] ?? 0) < ACQUIRE_MS)
 
   const onCount = (d) => (d.outputs ?? []).filter((o) => o.state === 'On').length
@@ -366,9 +424,8 @@
   let sysMaxA = $derived(devices.reduce((a, d) => a + maxA(d), 0))
 
   // A module owns a CAN-ID span from its base: config reply/request at +0/+1, then its cyclic
-  // broadcasts. The span is per type and matches the firmware's NUM_TX_MSGS — a CANboard sends 9
-  // cyclic msgs (baseId..baseId+10), a dingoPDM/-Max sends 27 (baseId..baseId+28). Two modules
-  // clash only if those spans actually overlap; e.g. two CANboards 0x10 apart do NOT.
+  // broadcasts (+ the CANBoard's bootloader ids). The exact per-type span is canids.spanAfter(),
+  // matching the firmware's NUM_TX_MSGS. Two modules clash only if those spans actually overlap.
   // The per-type spans + overlap test live in canids.js (shared with the "suggest free base"
   // action and tools/canfree.py) so the warning and the allocator can never disagree.
   let idConflicts = $derived(conflictPairs(devices))
@@ -380,7 +437,7 @@
   <div><h1>System — {devices.length} module{devices.length === 1 ? '' : 's'}</h1>
     <p class="sub">All modules on the CAN bus. Click a module to open it; drag a pin to match your install.</p></div>
   <div style="display:flex;align-items:center;gap:14px">
-    <button class="btn ghost" disabled={flashBusy || simAdapter} title={simAdapter ? PROG_TIP : "Flash a brand-new / blank module over USB DFU (no CAN bus needed — put it in DFU with BOOT0 + reset)"} onclick={openFlashBlank}>⬆ Flash new module</button>
+    <button class="btn ghost" disabled={flashBusy || simAdapter} title={simAdapter ? progTip : "Flash a brand-new / blank module over USB DFU (no CAN bus needed — put it in DFU with BOOT0 + reset)"} onclick={openFlashBlank}>⬆ Flash new module</button>
     <div class="stat" style="text-align:right" title="Sum across every module of every enabled output's current limit — worst case if the whole vehicle's loads switch on at their trip point at once">
       <div class="v">{sysMaxA} A</div><div class="k">Max load (trip-sum)</div>
     </div>
@@ -394,7 +451,7 @@
 {/if}
 
 {#if idConflicts.length}
-  <div class="sys-alert">⚠ {idConflicts.length} CAN ID overlap{idConflicts.length === 1 ? '' : 's'} — each module owns a span from its base (CANboard baseId−1…+11, dingoPDM baseId−1…+28). Re-space these so their spans don't intersect:
+  <div class="sys-alert">⚠ {idConflicts.length} CAN ID overlap{idConflicts.length === 1 ? '' : 's'} — each module owns a span from its base (CANboard baseId−{ID_BEFORE}…+{spanAfter('canboard')}, dingoPDM baseId−{ID_BEFORE}…+{spanAfter('pdm')}). Re-space these so their spans don't intersect:
     {#each idConflicts as [a, b]}<b>{a.name} ({hex(a.baseId)}) ↔ {b.name} ({hex(b.baseId)})</b>{' '}{/each}</div>
 {/if}
 
@@ -421,10 +478,10 @@
           <button class="btn ghost sm" onclick={(e) => { e.stopPropagation(); openSettings(d.guid) }}>⚙ Settings</button>
           {#if ft === 'can'}
             <button class="btn ghost sm" disabled={flashBusy || !connected || simAdapter || !d.connected}
-              title={simAdapter ? PROG_TIP : !connected ? 'Connect to the CAN bus first' : !d.connected ? 'Module not on the bus' : flashBusy ? 'A firmware flash is already in progress' : 'Reflash the application over CAN via the OpenBLT bootloader — no USB needed (pick the .srec)'}
+              title={simAdapter ? progTip : !connected ? 'Connect to the CAN bus first' : !d.connected ? 'Module not on the bus' : flashBusy ? 'A firmware flash is already in progress' : 'Reflash the application over CAN via the OpenBLT bootloader — no USB needed (pick the .srec)'}
               onclick={(e) => { e.stopPropagation(); openFlashCan(d.guid) }}>⬆ Flash over CAN</button>
           {:else if ft === 'usb'}
-            <button class="btn ghost sm" disabled={flashBusy || !connected || simAdapter} title={simAdapter ? PROG_TIP : !connected ? 'Connect to the CAN bus first' : flashBusy ? 'A firmware flash is already in progress' : 'Flash over USB DFU — this module bridges the CAN bus, so it can only be reflashed over USB (also how you install/update the bootloader itself, pick the .bin)'}
+            <button class="btn ghost sm" disabled={flashBusy || !connected || simAdapter} title={simAdapter ? progTip : !connected ? 'Connect to the CAN bus first' : flashBusy ? 'A firmware flash is already in progress' : 'Flash over USB DFU — this module bridges the CAN bus, so it can only be reflashed over USB (also how you install/update the bootloader itself, pick the .bin)'}
               onclick={(e) => { e.stopPropagation(); openFlash(d.guid) }}>⬆ Flash over USB</button>
           {/if}
         </div>
@@ -446,7 +503,7 @@
       <div style="display:flex;gap:8px;align-items:flex-end">
         <div class="field" style="max-width:160px;margin:0"><label>Base ID (hex or dec)</label>
           <input type="text" bind:value={setBaseId} placeholder="0xDE00" /></div>
-        <button class="btn" disabled={baseBusy || simAdapter} title={simAdapter ? PROG_TIP : ''} onclick={changeBaseId}>{baseBusy ? 'Setting…' : 'Change base ID'}</button>
+        <button class="btn" disabled={baseBusy} title="Offline-safe: changes the project record; a live module is re-addressed on the bus" onclick={changeBaseId}>{baseBusy ? 'Setting…' : 'Change base ID'}</button>
       </div>
       <p class="hint" style="margin-top:6px">The module's address on the CAN bus. Changing it on a <b>connected</b> module re-addresses
         it live; any CAN input/output bound to a fixed ID must be re-pointed. {#if baseMsg}<b>{baseMsg}</b>{/if}</p>
@@ -459,27 +516,57 @@
       <p class="hint" style="margin-top:6px">Written and burned with <b>Save + burn</b> below (module must be on the bus). Changing the bitrate
         takes effect after the module restarts — match it to the rest of the bus.</p>
 
-      <p class="lbl" style="margin-top:18px">Sleep</p>
-      <label class="chk"><input type="checkbox" bind:checked={setSleepEnabled} /> Auto-sleep enabled</label>
-      <div class="field" style="max-width:240px;margin-top:12px"><label>Sleep timeout (seconds)</label>
-        <input type="number" min="1" max="60" bind:value={setSleepTimeoutS} disabled={!setSleepEnabled} /></div>
-      <label class="chk" style="margin-top:8px"><input type="checkbox" bind:checked={setIgnoreAlwaysOn} /> Ignore always-on outputs when sleeping</label>
-      <p class="hint" style="margin-top:6px">The module sleeps after outputs are off, USB is unplugged and the CAN bus is idle
-        for this long (1–60 s). Sleeping is ignored while USB is connected to avoid a soft-lock. A CAN sleep command
-        waits ~2 s for the bus to settle before sleeping.</p>
-
-      <p class="lbl" style="margin-top:16px">Sleep input</p>
-      <label class="chk"><input type="checkbox" bind:checked={setInputEnabled} /> A digital input controls sleep</label>
-      {#if setInputEnabled}
-        <div class="f2" style="margin-top:8px">
-          <div class="field"><label>Digital input #</label><input type="number" min="1" max="8" bind:value={setInput} /></div>
-          <div class="field"><label>Sleep when input is</label>
-            <select bind:value={setInputSleepHigh}><option value={false}>Low</option><option value={true}>High</option></select></div>
-        </div>
-        <p class="hint">When the input enters its sleep state the module sleeps immediately (ignoring the CAN/outputs
-          checks) and only this input wakes it — no waking on other inputs or CAN. USB still wakes it for config.</p>
+      {#if setCfgUnread}
+        <p class="hint" style="margin-top:14px;color:var(--warn)">⚠ The values below are the project record, not what the module is running ({devices.find((x) => x.guid === setGuid)?.connected ? 'not Read yet' : 'module offline'}). Save writes only the fields you change.</p>
       {/if}
-      {#if setMsg}<p class="lbl" style="margin-top:10px">{setMsg}</p>{/if}
+      {#if setSigState === 'loading'}<p class="hint" style="margin-top:14px">Loading this module's signals…</p>
+      {:else if setSigState === 'error'}<p class="hint" style="margin-top:14px;color:var(--err)">⚠ Couldn't read this module's signal list — the pickers below show stored indices (#n) and the wake-input checkboxes can't be edited. Reopen Settings to retry.</p>{/if}
+
+      {#if setCanSleep}
+      <p class="lbl" style="margin-top:18px">Sleep</p>
+      <label class="chk"><input type="checkbox" bind:checked={setSleepEnabled} /> Auto-sleep when idle</label>
+      <div class="field" style="max-width:240px;margin-top:12px"><label>Idle timeout (seconds)</label>
+        <input type="number" min="1" max="60" bind:value={setSleepTimeoutS} disabled={!setSleepEnabled} /></div>
+      <label class="chk" style="margin-top:8px"><input type="checkbox" bind:checked={setIgnoreAlwaysOn} /> Ignore always-on outputs when deciding “idle”</label>
+      <p class="hint" style="margin-top:6px">Idle = no outputs on, USB unplugged and no CAN traffic for this long (1–60 s). Sleep is never
+        entered while USB is connected (avoids a soft-lock). A CAN/tool sleep command waits ~2 s for the bus to settle first.</p>
+
+      <SleepSequence guid={setGuid} {devices} live={setLive} funcs={setFuncs} vars={setAllVars} pickVars={setBoolInputs} onapplied={onSequenceApplied} onrefresh={() => loadSetLists(setGuid)} />
+      {/if}
+
+      <details class="adv" style="margin-top:14px">
+      <summary class="lbl">Advanced — raw force-sleep / mute signals</summary>
+      {#if setCanSleep}
+      <p class="lbl" style="margin-top:10px">Force sleep</p>
+      <div class="field" style="max-width:360px"><label>Sleep now while this signal is on</label>
+        <SearchSelect options={ssOpts(setSigOpts, true)} bind:value={setForceSleep} placeholder="— none —" disabled={setSigState !== 'ok'} /></div>
+      <p class="hint" style="margin-top:6px">Any on/off signal: an ignition input (invert the input to sleep when it's <i>off</i>), a CAN input carrying a
+        fleet “sleep now” message, or a <b>Timer</b> (“ignition off for 30 s”). It overrides the idle rules — the module sleeps even with
+        outputs on or a busy bus — but still never while USB is plugged in. <b>It works even with “Auto-sleep when idle” off</b>; clear the
+        signal to stop the module sleeping entirely. Always-true signals aren't offered: they would park the module after every boot.</p>
+      {/if}
+
+      <p class="lbl" style="margin-top:16px">Mute CAN broadcasts</p>
+      <div class="field" style="max-width:360px"><label>Stop the cyclic telemetry while this signal is on</label>
+        <SearchSelect options={ssOpts(setSigOpts, true)} bind:value={setMuteTx} placeholder="— none —" disabled={setSigState !== 'ok'} /></div>
+      <p class="hint" style="margin-top:6px">Lets a whole fleet go quiet on cue so every module's idle timer can run out (bus traffic otherwise keeps them awake).
+        Config replies and your own CAN outputs are not muted.{#if !setCanSleep} This is the only sleep-related setting a CANBoard has — its firmware never sleeps.{/if}</p>
+      </details>
+
+      {#if setCanSleep}
+      <fieldset class="wake" style="margin-top:16px">
+        <legend class="lbl" style="margin:0 0 6px">Wake sources</legend>
+        <div style="display:flex;gap:14px;flex-wrap:wrap">
+          {#each setDigInputs as di, i}
+            <label class="chk" style="margin:0"><input type="checkbox" checked={!!(setWakeMask & (1 << i))} onchange={(e) => (setWakeMask = e.target.checked ? (setWakeMask | (1 << i)) : (setWakeMask & ~(1 << i)))} /> {di.name || 'digitalInput' + (i + 1)}</label>
+          {/each}
+          <label class="chk" style="margin:0"><input type="checkbox" bind:checked={setWakeCan} /> CAN traffic</label>
+        </div>
+        <p class="hint" style="margin-top:6px">Which digital inputs (and whether any CAN frame) wake a sleeping module. Untick CAN for a module that must sleep on a
+          chattering bus and wake only from its ignition pin. USB always wakes it, so a config session can always get in — but a module
+          buried behind a dash isn't reachable by USB, so Save refuses a configuration with <b>no</b> wake source.</p>
+      </fieldset>
+      {/if}
 
       <p class="lbl" style="margin-top:18px">Flash a profile onto this module</p>
       <p class="hint" style="margin-top:0">Commission the <b>connected</b> module you opened: it takes the selected module's full
@@ -491,14 +578,16 @@
             <option value="">— pick a module —</option>
             {#each profProfiles as p}<option value={p.guid}>{p.name} ({hex(p.baseId)})</option>{/each}
           </select></div>
-        <button class="btn" disabled={profBusy || !profSrc || !setLive || simAdapter} title={simAdapter ? PROG_TIP : setLive ? '' : 'Connect this module to flash a profile onto it'} onclick={flashProfile}>{profBusy ? 'Flashing…' : 'Flash to module'}</button>
+        <button class="btn" disabled={profBusy || !profSrc || !setLive || simAdapter} title={simAdapter ? progTip : setLive ? '' : 'Connect this module to flash a profile onto it'} onclick={flashProfile}>{profBusy ? 'Flashing…' : 'Flash to module'}</button>
       </div>
       {#if profProfiles.length === 0}<p class="hint">Add the modules you want as profiles first (offline is fine).</p>{/if}
       {#if profMsg}<p class="lbl" style="margin-top:8px">{profMsg}</p>{/if}
     </div>
-    <div class="dfoot"><span style="margin-left:auto"></span>
+    <div class="dfoot">
+      {#if setMsg}<span class="setmsg" class:err={/^(Failed|No wake|“|Nothing)/.test(setMsg)} class:ok={setMsg.startsWith('Saved')}>{setMsg}</span>{/if}
+      <span style="margin-left:auto"></span>
       <button class="btn ghost" disabled={setBusy} onclick={() => (setDrawer = false)}>Close</button>
-      <button class="btn primary" disabled={setBusy || !setLive} title={setLive ? '' : 'Connect this module to write + burn its sleep settings'} onclick={saveSettings}>{setBusy ? 'Saving…' : 'Save + burn'}</button></div>
+      <button class="btn primary" disabled={setBusy || !setLive} title={setLive ? '' : 'Connect this module to write + burn its settings'} onclick={saveSettings}>{setBusy ? 'Saving…' : 'Save + burn'}</button></div>
   </aside>
 {/if}
 
@@ -581,7 +670,7 @@
 </div>
 
 <div style="display:flex;gap:10px;align-items:center;margin-top:12px">
-  {#if $crossFns.length}<button class="btn primary" disabled={deploying || simAdapter} title={simAdapter ? PROG_TIP : ''} onclick={deploy}>{deploying ? 'Deploying…' : 'Deploy to modules'}</button>{/if}
+  {#if $crossFns.length}<button class="btn primary" disabled={deploying || simAdapter} title={simAdapter ? progTip : ''} onclick={deploy}>{deploying ? 'Deploying…' : 'Deploy to modules'}</button>{/if}
   {#if deployMsg}<span style={deployErr ? 'color:var(--err)' : 'color:var(--muted)'}>{deployMsg}</span>{/if}
 </div>
 {#if devices.length < 2}
@@ -706,3 +795,12 @@
   </div>
   <div class="maphint" style="font-size:12px;color:var(--muted);text-align:center;margin-top:10px">Drag a pin to where the module sits · double-click to open it.</div>
 </div>
+
+<style>
+  /* Settings drawer: the save result sits next to the Save button, coloured by outcome */
+  .setmsg { font-size: 12px; color: var(--muted); max-width: 60%; line-height: 1.35; }
+  .setmsg.ok { color: var(--ok); }
+  .setmsg.err { color: var(--err); font-weight: 500; }
+  fieldset.wake { border: 1px solid var(--line-2, #3a3a4c); border-radius: 8px; padding: 8px 12px 4px; }
+  details.adv > summary { cursor: pointer; list-style: revert; }
+</style>

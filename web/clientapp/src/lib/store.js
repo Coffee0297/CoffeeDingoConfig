@@ -1,6 +1,7 @@
 import { writable, get } from 'svelte/store'
 import * as signalR from '@microsoft/signalr'
 import { toast } from './toast.js'
+import { spanAfter, isModule } from './canids.js'
 
 // Live telemetry pushed from the .NET backend (devices + CAN stats), 10 Hz
 export const telemetry = writable({
@@ -49,6 +50,12 @@ if (import.meta.env?.DEV && typeof window !== 'undefined') { window.__telemetry 
 // api.overloads(guid); the Logs ▸ Overloads tab renders them. (Previously the tool
 // captured these from live telemetry, which missed trips while disconnected.)
 
+// API errors are `{ ok:false, error:"…" }` — surface the message, not the JSON envelope (plain-text bodies pass through).
+async function apiError(r) {
+  const t = await r.text()
+  try { return new Error(JSON.parse(t)?.error ?? t) } catch { return new Error(t) }
+}
+
 async function j(method, url, body, timeoutMs = 15000) {
   // Abort a hung request (wedged CAN adapter / stalled device) so callers' busy flags
   // clear instead of spinning forever. Flash uses its own raw fetch (legitimately long).
@@ -65,7 +72,7 @@ async function j(method, url, body, timeoutMs = 15000) {
   } catch (e) {
     throw new Error(e.name === 'AbortError' ? `Request timed out after ${timeoutMs / 1000}s — is the device responding?` : `Network error: ${e.message}`)
   } finally { clearTimeout(to) }
-  if (!r.ok) throw new Error(await r.text())
+  if (!r.ok) throw await apiError(r)
   // An empty / non-JSON 200 body resolves to null (not a synthesized {}), so a caller can never
   // mistake "no body" for a populated, confirmed result. Write endpoints return explicit JSON.
   return r.json().catch(() => null)
@@ -83,9 +90,18 @@ export const api = {
   remove: (guid) => j('POST', `/api/devices/${guid}/remove`),
   action: (guid, act) => j('POST', `/api/devices/${guid}/${act}`),
   outputConfig: (guid, body) => j('POST', `/api/devices/${guid}/outputconfig`, body),
+  // Bench test: { mode: 'on'|'pwm'|'off', duty, freq, hold } — live module only, releases by itself after `hold` s.
+  outputTest: (guid, n, body) => j('POST', `/api/devices/${guid}/output/${n}/test`, body),
+  // The module's own inputs: { forceSleepInput?, muteTxInput? } (var-map index, 0 = unwired) — record edit offline, param write when live.
+  deviceInputs: (guid, body) => j('POST', `/api/devices/${guid}/device-inputs`, body),
   signals: (guid) => j('GET', `/api/devices/${guid}/signals`),
-  broadcastSignals: (guid) => j('GET', `/api/devices/${guid}/broadcast-signals`),
-  inputs: (guid, type) => j('GET', `/api/devices/${guid}/inputs${type ? `?type=${type}` : ''}`),
+  // inUse=true → only signals whose function is configured (the picker's view); each carries `label` = the user's name.
+  broadcastSignals: (guid, inUse = false) => j('GET', `/api/devices/${guid}/broadcast-signals${inUse ? '?inUse=true' : ''}`),
+  // Typed lists feed pickers → configured signals only (inUse). The untyped call is the full var map for
+  // index resolution and the Wiring canvas. Pass all=true for a typed list of every slot.
+  inputs: (guid, type, all = false) => j('GET', `/api/devices/${guid}/inputs${type ? `?type=${type}${all ? '' : '&inUse=true'}` : ''}`),
+  // Every data type, configured functions only — for pickers that take any signal (condition input, CAN-output value, wiper speed).
+  inputsInUse: (guid) => j('GET', `/api/devices/${guid}/inputs?inUse=true`),
   functions: (guid) => j('GET', `/api/devices/${guid}/functions`),
   luaUpload: (guid, Source) => j('POST', `/api/devices/${guid}/lua`, { Source }),
   luaRead: (guid) => j('GET', `/api/devices/${guid}/lua`),
@@ -94,13 +110,13 @@ export const api = {
   overloadsClear: (guid) => j('POST', `/api/devices/${guid}/overloads/clear`),
   async flash(guid, bytes) {
     const r = await fetch(`/api/devices/${guid}/flash`, { method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: bytes })
-    if (!r.ok) throw new Error(await r.text())
+    if (!r.ok) throw await apiError(r)
     return r.json()
   },
   // Flash a blank / new module already in DFU (BOOT0 + reset) — no bus device needed.
   async flashBlank(bytes) {
     const r = await fetch('/api/flash/blank', { method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: bytes })
-    if (!r.ok) throw new Error(await r.text())
+    if (!r.ok) throw await apiError(r)
     return r.json()
   },
   flashStatus: () => j('GET', '/api/flash/status'),
@@ -108,7 +124,7 @@ export const api = {
   // Flash a module's app over CAN via the OpenBLT XCP bootloader (.srec). No USB/DFU.
   async flashCan(guid, bytes) {
     const r = await fetch(`/api/devices/${guid}/flash-can`, { method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: bytes })
-    if (!r.ok) throw new Error(await r.text())
+    if (!r.ok) throw await apiError(r)
     return r.json()
   },
   flashCanStatus: () => j('GET', '/api/flash-can/status'),
@@ -137,7 +153,7 @@ export const api = {
   async simLoad(body) {
     // body is a File/Blob — the browser streams it, so even a huge log isn't held as a JS string.
     const r = await fetch('/api/sim/load', { method: 'POST', headers: { 'Content-Type': 'text/csv' }, body })
-    if (!r.ok) throw new Error(await r.text())
+    if (!r.ok) throw await apiError(r)
     return r.json()
   },
   dbcSignals: (guid, limit) => j('GET', `/api/devices/${guid}/dbc/signals${limit ? `?limit=${limit}` : ''}`),
@@ -145,12 +161,12 @@ export const api = {
   dbcAddSignal: (guid, body) => j('POST', `/api/devices/${guid}/dbc/signal`, body),
   async dbcImport(name, text, base = 0, rebase = false) {
     const r = await fetch(`/api/devices/dbc-import?name=${encodeURIComponent(name)}&base=${base}&rebase=${rebase}`, { method: 'POST', headers: { 'Content-Type': 'text/plain' }, body: text })
-    if (!r.ok) throw new Error(await r.text())
+    if (!r.ok) throw await apiError(r)
     return r.json()
   },
   async dbcOpen(guid, text) {
     const r = await fetch(`/api/devices/${guid}/dbc/open`, { method: 'POST', headers: { 'Content-Type': 'text/plain' }, body: text })
-    if (!r.ok) throw new Error(await r.text())
+    if (!r.ok) throw await apiError(r)
     return r.json()
   },
   canlog: () => j('GET', '/api/canlog'),
@@ -163,7 +179,7 @@ export const api = {
   crossModuleGet: () => j('GET', '/api/system/cross-module'),   // cross-module defs deployed via MCP (for the UI to import)
   async projUpload(text) {                                  // load a project file picked on the PC
     const r = await fetch('/api/project/upload', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: text })
-    if (!r.ok) throw new Error(await r.text())
+    if (!r.ok) throw await apiError(r)
     return r.json()
   },
   applyConfig: (doc) => j('POST', '/api/config', doc),
@@ -230,59 +246,44 @@ export function vDrop(lengthM, amps, mm2, sysV = 13.8) {
 }
 
 // ===========================================================================
-// Node-graph wiring — maps the device's VarMap (every function's input is a
-// varmap index pointing at another function's output) to/from a node graph.
-// VarMap layout MUST match the firmware/domain InitVarMap order.
+// Node-graph wiring — every function's input is a varmap index pointing at another
+// function's output. Indices are always resolved by name against the device's REAL VarMap
+// (api.inputs) — never from a hardcoded layout — so they can't drift from the firmware.
 // ===========================================================================
-export const SYS_VARS = ['None', 'Always On', 'State', 'Temperature', 'Battery Voltage']
-const KP_BTNS = 20, KP_DIALS = 2, KP_AIN = 4, LUA_SLOTS = 32
 
 // Which input fields each function node exposes (target handles). JSON field names.
 export const NODE_INPUTS = {
-  output: ['input'], virtualinput: ['var0', 'var1', 'var2'], condition: ['input'],
-  flasher: ['input'], counter: ['incInput', 'decInput', 'resetInput'], canoutput: ['input'],
-}
-
-// Build varmap index ⇄ source {node id, port}. idxToSrc[i] = {id, port}; srcToIdx['id|port']=i.
-export function varMapSources(funcs, outputs) {
-  const idxToSrc = {}, srcToIdx = {}
-  let i = 0
-  const put = (id, port) => { idxToSrc[i] = { id, port }; srcToIdx[id + '|' + port] = i; i++ }
-  SYS_VARS.forEach((n, k) => put('sys:' + k, 'out'))
-  ;(funcs?.inputs ?? []).forEach((_, k) => put('digin:' + (k + 1), 'out'))
-  ;(funcs?.canInputs ?? []).forEach((_, k) => { put('caninput:' + (k + 1), 'state'); put('caninput:' + (k + 1), 'value') })
-  ;(funcs?.virtualInputs ?? []).forEach((_, k) => put('virtualinput:' + (k + 1), 'out'))
-  ;(outputs ?? []).forEach((o) => { for (const p of ['on', 'current', 'oc', 'fault']) put('output:' + o.number, p) })
-  ;(funcs?.flashers ?? []).forEach((_, k) => put('flasher:' + (k + 1), 'out'))
-  ;(funcs?.conditions ?? []).forEach((_, k) => put('condition:' + (k + 1), 'out'))
-  ;(funcs?.counters ?? []).forEach((_, k) => put('counter:' + (k + 1), 'out'))
-  for (const p of ['slow', 'fast', 'park', 'inter', 'wash', 'swipe']) put('wiper', p)
-  ;(funcs?.keypads ?? []).forEach((_, ki) => {
-    for (let b = 0; b < KP_BTNS; b++) put('kpbtn:' + (ki + 1) + ':' + (b + 1), 'out')
-    for (let d = 0; d < KP_DIALS; d++) put('kpdial:' + (ki + 1) + ':' + (d + 1), 'out')
-    for (let a = 0; a < KP_AIN; a++) put('kpain:' + (ki + 1) + ':' + (a + 1), 'out')
-  })
-  for (let l = 0; l < LUA_SLOTS; l++) put('lua:' + l, 'out')
-  return { idxToSrc, srcToIdx }
+  output: ['input', 'dutyCycleInput', 'freqInput'], virtualinput: ['var0', 'var1', 'var2'], condition: ['input'],
+  flasher: ['input'], counter: ['incInput', 'decInput', 'resetInput'], timer: ['input'], table: ['xInput', 'yInput'], canoutput: ['input'],
+  sys: ['forceSleepInput', 'muteTxInput'],   // the module block itself: force-sleep / mute-TX signals (device params)
 }
 
 // Apply a graph edge: write the target function's input field = the source's varmap index.
+// For a PDM smart output `field` may also be dutyCycleInput / freqInput (variable PWM sources).
 export async function applyGraphConnection(guid, targetId, field, varIndex, devices) {
+  if (targetId === 'sys') { await api.deviceInputs(guid, { [field]: varIndex }); return }   // the module's own inputs
   const ci = targetId.indexOf(':')
   const kind = targetId.slice(0, ci), num = parseInt(targetId.slice(ci + 1), 10)
   if (kind === 'output') {
     const d = (devices ?? []).find((x) => x.guid === guid)
     const o = (d?.outputs ?? []).find((x) => x.number === num) ?? { number: num }
     // Preserve EVERY protection field from the live output — the backend replaces the whole
-    // output config, so anything not echoed back here is wiped. Only Input changes when wiring.
-    await api.outputConfig(guid, _binBody(o, varIndex))
+    // output config, so anything not echoed back here is wiped. Only the wired field changes.
+    const body = _binBody(o, field === 'input' ? varIndex : (o.inputVal ?? 0))
+    // Wiring a duty/freq source turns that variable-PWM mode (and PWM) on; unwiring turns the mode
+    // off and drops PWM too unless the other variable mode is still wired — so an output that only
+    // became PWM by being wired returns to plain on/off. (The caller confirms the switch-on.)
+    const otherVar = field === 'dutyCycleInput' ? (o.variableFreq && o.freqInput > 0) : (o.variableDutyCycle && o.dutyCycleInput > 0)
+    if (field === 'dutyCycleInput') Object.assign(body, { DutyCycleInput: varIndex, VariableDutyCycle: varIndex > 0, PwmEnabled: varIndex > 0 || otherVar })
+    if (field === 'freqInput') Object.assign(body, { FreqInput: varIndex, VariableFreq: varIndex > 0, PwmEnabled: varIndex > 0 || otherVar })
+    await api.outputConfig(guid, body)
   } else {
     await api.setFunction(guid, kind, num, { enabled: true, [field]: varIndex })
   }
 }
 
 // Function-array key for each creatable node kind.
-const KIND_ARR = { caninput: 'canInputs', virtualinput: 'virtualInputs', condition: 'conditions', counter: 'counters', flasher: 'flashers', canoutput: 'canOutputs' }
+const KIND_ARR = { caninput: 'canInputs', virtualinput: 'virtualInputs', condition: 'conditions', counter: 'counters', flasher: 'flashers', timer: 'timers', table: 'tables', canoutput: 'canOutputs' }
 
 // Create (enable) a function node from the canvas — claims the first free slot of that kind.
 // Returns the new node id (kind:number) or null if none free / not creatable.
@@ -298,28 +299,32 @@ export async function enableFunction(guid, kind) {
 // ---- Cross-device bridges: pull another module's signal onto this module via an auto
 // CAN output (source) + CAN input (target). CAN IDs from a reserved block, tracked so a
 // given remote signal reuses one ID across deploys. ----
-const GFX_ID_BASE = 0x580
-const GFX_ID_MAX = 0x5FF   // bounded reserved window for auto-assigned bridge IDs
+// 0x101–0x13F: above the default PDM span (0x0DE–0x0FB) and outside every CANopen node range (EMCY 0x081+, PDO 0x180+,
+// SDO 0x580/0x600+, heartbeat 0x700+). The old 0x580–0x5FF window WAS the SDO-response range the keypads reply on.
+const GFX_ID_BASE = 0x101
+const GFX_ID_MAX = 0x13F   // bounded reserved window for auto-assigned bridge IDs
 function loadBridges() { try { return JSON.parse(localStorage.getItem('dingoGfxBridges') || '{}') } catch { return {} } }
 function saveBridges(b) { try { localStorage.setItem('dingoGfxBridges', JSON.stringify(b)) } catch {} }
-function bridgeCanId(srcGuid, srcVar) {
+function bridgeCanId(srcGuid, srcVar, devices = []) {
   const b = loadBridges(); const key = srcGuid + '|' + srcVar
-  if (b[key]) return b[key]
+  if (b[key]) return b[key]   // ids handed out earlier (any window) keep working
   // Avoid colliding with another bridge OR an ID already live on the bus (a keypad / CANopen node
   // / another module's frames). Stay inside a bounded window so we never wander into CANopen
   // address space, and fail loudly rather than hand back a colliding ID.
   const used = new Set(Object.values(b))
   let liveIds = new Set(); try { liveIds = new Set(get(telemetry).ids ?? []) } catch {}
+  // …and nothing inside a configured module's frame span (base .. base+29 PDM / +13 CANBoard), live or not
+  const inSpan = (id) => (devices ?? []).some((d) => isModule(d.type) && id >= (d.baseId ?? 0) - 1 && id <= (d.baseId ?? 0) + spanAfter(d.type))
   let id = GFX_ID_BASE
-  while ((used.has(id) || liveIds.has(id)) && id <= GFX_ID_MAX) id++
-  if (id > GFX_ID_MAX) throw new Error('No free bridge CAN ID available in 0x580–0x5FF — free one up or wire it manually.')
+  while ((used.has(id) || liveIds.has(id) || inSpan(id)) && id <= GFX_ID_MAX) id++
+  if (id > GFX_ID_MAX) throw new Error('No free bridge CAN ID available in 0x101–0x13F — free one up or wire it manually.')
   b[key] = id; saveBridges(b); return id
 }
 
 // Ensure the remote signal (srcVar on srcGuid) is broadcast on CAN and received locally.
 // Returns the LOCAL varmap index of the receiving CAN input (to bind a local target to).
 export async function bridgeRemoteSignal(localGuid, srcGuid, srcVar, devices) {
-  const id = bridgeCanId(srcGuid, srcVar)
+  const id = bridgeCanId(srcGuid, srcVar, devices)
   // 1. source device broadcasts srcVar on `id` (reuse an existing matching CAN output, else claim one)
   const sf = await api.functions(srcGuid)
   if (!(sf?.canOutputs ?? []).some((x) => x.enabled && x.id === id)) {
@@ -327,20 +332,23 @@ export async function bridgeRemoteSignal(localGuid, srcGuid, srcVar, devices) {
     if (!free) throw new Error('source module has no free CAN output')
     await api.setFunction(srcGuid, 'canoutput', free.number, { enabled: true, input: srcVar, ide: false, id, startBit: 0, bitLength: 1, byteOrder: 0, interval: 100, name: 'gfx' + id.toString(16) })
   }
-  // 2. local device receives `id` (reuse an existing matching CAN input, else claim one)
+  // 2. local device receives `id` (reuse an existing matching CAN input, else claim one).
+  //    State = (bit != 0): a fresh slot defaults to "== 0", which would INVERT the bridged signal.
   let lf = await api.functions(localGuid)
   let ci = (lf?.canInputs ?? []).find((x) => x.enabled && x.id === id)
   if (!ci) {
     const free = (lf?.canInputs ?? []).find((x) => !x.enabled)
     if (!free) throw new Error('this module has no free CAN input')
-    await api.setFunction(localGuid, 'caninput', free.number, { enabled: true, ide: false, id, startBit: 0, bitLength: 1, byteOrder: 0, mode: 0, name: 'gfx' + id.toString(16) })
+    await api.setFunction(localGuid, 'caninput', free.number, { enabled: true, ide: false, id, startBit: 0, bitLength: 1, byteOrder: 0, mode: 0, operator: 1, operand: 0, name: 'gfx' + id.toString(16) })
     lf = await api.functions(localGuid)
     ci = (lf?.canInputs ?? []).find((x) => x.id === id && x.enabled)
   }
-  // 3. local varmap index of that CAN input's State port
-  const localOuts = (devices ?? []).find((d) => d.guid === localGuid)?.outputs ?? []
-  const { srcToIdx } = varMapSources(lf, localOuts)
-  return srcToIdx['caninput:' + ci.number + '|state']
+  // 3. local varmap index of that CAN input's State port — resolved by name off the device's real
+  //    VarMap (the State var is labelled by the input's bare name), so it holds on every board type.
+  const ins = await api.inputs(localGuid).catch(() => [])
+  const idx = ins.find((x) => x.name === ci.name)?.index
+  if (idx == null) throw new Error(`couldn't resolve the varmap index of CAN input "${ci.name}"`)
+  return idx
 }
 
 // ---- Pull a signal off the bus onto a consumer module: claim a free CAN input and fill it so it
@@ -351,15 +359,25 @@ export async function bridgeRemoteSignal(localGuid, srcGuid, srcVar, devices) {
 // `frame` = {name, id, ide, startBit, length, byteOrder, factor, offset, isSigned}.
 async function addCanInputFromFrame(consumerGuid, frame) {
   const f = await api.functions(consumerGuid)
+  // Idempotent: a CAN input already decoding this exact frame slice is reused, so clicking the same remote
+  // signal twice (or from two pickers) doesn't pile up duplicates ("ignition" ×5 in every list).
+  const same = (f?.canInputs ?? []).find((x) => x.enabled && x.id === frame.id && !!x.ide === !!frame.ide && x.startBit === frame.startBit && x.bitLength === frame.length)
+  if (same) {
+    const ins0 = await api.inputs(consumerGuid).catch(() => [])
+    return { number: same.number, name: same.name, reused: true,
+      stateIndex: ins0.find((x) => x.name === same.name)?.index ?? null,
+      valueIndex: ins0.find((x) => x.name === same.name + ' Value')?.index ?? null }
+  }
   const free = (f?.canInputs ?? []).find((x) => !x.enabled)
   if (!free) throw new Error('this module has no free CAN input slot — free one in Signals & logic')
   const name = (frame.name || ('dbc' + free.number)).slice(0, 32)
   // `id` BEFORE `ide`: CanInput.Id's setter forces Ide from the value (>2047), so send the source's
   // own ide flag afterwards to honour an extended-frame signal whose id happens to be ≤ 2047.
+  // State = (value != 0) — the slot default "== 0" would make the on/off port read inverted.
   await api.setFunction(consumerGuid, 'caninput', free.number, {
     enabled: true, id: frame.id, ide: !!frame.ide,
     startBit: frame.startBit, bitLength: frame.length, byteOrder: frame.byteOrder,
-    factor: frame.factor, offset: frame.offset, signed: frame.isSigned, mode: 0, name,
+    factor: frame.factor, offset: frame.offset, signed: frame.isSigned, mode: 0, operator: 1, operand: 0, name,
   })
   // Resolve the new input's varmap indices by VarLabel (State → name, Value → "name Value").
   const ins = await api.inputs(consumerGuid).catch(() => [])
@@ -377,7 +395,7 @@ export const addCanInputFromDbc = (consumerGuid, sig) => addCanInputFromFrame(co
 // bitLength), so resolve the absolute id off the source's current base. Native broadcast frames are
 // 11-bit standard (ide=false). `source` is the source device record (needs baseId).
 export const addCanInputFromBroadcast = (consumerGuid, source, sig) => addCanInputFromFrame(consumerGuid, {
-  name: sig.name, id: (source?.baseId ?? 0) + sig.offset, ide: false,
+  name: sig.label ?? sig.name, id: (source?.baseId ?? 0) + sig.offset, ide: false,   // the user's name ("ignition"), not "DigitalInput1.State"
   startBit: sig.startBit, length: sig.bitLength, byteOrder: sig.byteOrder,
   factor: sig.factor, offset: sig.valueOffset, isSigned: sig.signed,
 })
@@ -396,6 +414,7 @@ export function luaCopy(srcGuid, dstGuid) {
   luaSnippets.update((v) => ({ ...v, [dstGuid]: { ...(v[srcGuid] || {}) } }))
 }
 export function luaSet(guid, key, text) {
+  if ((get(luaSnippets)[guid]?.[key] ?? '') === (text ?? '')) return   // no-op when unchanged: an editor's effect re-runs often, localStorage shouldn't
   luaSnippets.update((v) => { v[guid] = { ...(v[guid] || {}) }; v[guid][key] = text; return { ...v } })
 }
 
@@ -552,7 +571,7 @@ export const cmfSlotOf = (f, i) => (f && typeof f.slot === 'number' ? f.slot : i
 
 // Reserved CAN-ID block for cross-module signals (2 per slot: trigger + clock). Keyed by the
 // function's STABLE slot, not its array position, so deleting one never relocates another's IDs.
-const CMF_ID_BASE = 0x520
+const CMF_ID_BASE = 0x140   // was 0x520 = CANopen RPDO4 for node ≥ 0x20; 0x140–0x17F is clear of node ranges and of the bridge window
 export const cmfTrigId = (slot) => CMF_ID_BASE + slot * 2
 export const cmfClkId = (slot) => CMF_ID_BASE + slot * 2 + 1
 
@@ -689,7 +708,7 @@ export const _binBody = (o, input) => {
 // deploy is a clean rebuild — handles edits/deletes without leaking slots (auto-pick scheme).
 async function cmfNativeCleanup(guid) {
   const f = await api.functions(guid)
-  for (const [kind, key] of [['caninput', 'canInputs'], ['canoutput', 'canOutputs'], ['flasher', 'flashers']])
+  for (const [kind, key] of [['caninput', 'canInputs'], ['canoutput', 'canOutputs'], ['flasher', 'flashers'], ['timer', 'timers']])
     for (const x of (f?.[key] ?? []))
       if (x.enabled && /^cmf\d/i.test(x.name ?? '')) await api.setFunction(guid, kind, x.number, { ...x, enabled: false })
 }
@@ -704,7 +723,8 @@ async function deployNativeRule(f, i, devices, used) {
   const U = (g) => (used[g] ??= new Set())
   const free = async (g, key) => { const fs = await api.functions(g); for (const x of (fs?.[key] ?? [])) if (!x.enabled && !U(g).has(key + x.number)) { U(g).add(key + x.number); return x.number } return null }
   const varByName = async (g, name) => (await api.inputs(g)).find((x) => x.name === name)?.index
-  const canIn = (id, name) => ({ name, enabled: true, ide: false, id, startBit: 0, bitLength: 1, mode: 0, byteOrder: 0 })
+  // operator NotEqual 0 → State follows the bit (a fresh slot defaults to "== 0", i.e. inverted)
+  const canIn = (id, name) => ({ name, enabled: true, ide: false, id, startBit: 0, bitLength: 1, mode: 0, byteOrder: 0, operator: 1, operand: 0 })
   const canOut = (id, name, input, interval) => ({ name, enabled: true, input, ide: false, id, startBit: 0, bitLength: 1, interval, byteOrder: 0 })
 
   if (!blink) {

@@ -11,8 +11,11 @@
   let stale = $derived($telemetry?.stale || $hubState !== 'live')
 
   let signals = $state([])
+  // Depend on the guid, not the `current` object: telemetry re-materialises `current` 10×/s, which
+  // would re-run this effect (and reset its interval) on every push instead of polling at 400 ms.
+  let curGuid = $derived(current?.guid)
   $effect(() => {
-    const g = current?.guid
+    const g = curGuid
     if (!g) { signals = []; return }
     let alive = true
     const load = async () => { try { if (alive) signals = await api.signals(g) } catch {} }
@@ -27,11 +30,14 @@
   // shows board temp + its own I/O instead. Drive that off the device type.
   let isCb = $derived(/canboard|can.?board/i.test(current?.type ?? ''))
   let outs = $derived((current?.outputs) ?? [])
-  let digOuts = $derived(signals.filter((s) => s.kind === 'Digital output'))
-  let analogs = $derived(signals.filter((s) => s.kind === 'Analog input'))
-  let rotaries = $derived(signals.filter((s) => s.kind === 'Rotary position'))
-  let digIns = $derived(signals.filter((s) => s.kind === 'Digital input'))
-  let flashers = $derived(signals.filter((s) => s.kind === 'Flasher'))
+  // only CONFIGURED slots — a stock PDM otherwise shows 4 flashers + 8 timers + 2 tables of blank tiles (and every unused pin)
+  const cfgd = (s) => s.enabled !== false
+  let digOuts = $derived(signals.filter((s) => s.kind === 'Digital output' && cfgd(s)))
+  let analogs = $derived(signals.filter((s) => s.kind === 'Analog input' && cfgd(s)))
+  let rotaries = $derived(signals.filter((s) => s.kind === 'Rotary position' && cfgd(s)))
+  let digIns = $derived(signals.filter((s) => s.kind === 'Digital input' && cfgd(s)))
+  let flashers = $derived(signals.filter((s) => (s.kind === 'Flasher' || s.kind === 'Timer') && cfgd(s)))
+  let tables = $derived(signals.filter((s) => s.kind === 'Table' && cfgd(s)))
   let canActive = $derived(signals.filter((s) => s.kind === 'CAN input' && s.on))
   let condActive = $derived(signals.filter((s) => s.kind === 'Condition' && s.on))
   // Friendly verb per action for toast feedback.
@@ -102,9 +108,9 @@
     <div class="statusgrid">
       {#each digOuts as s}
         <div class="sc"><span class="scn">{s.name}</span>
-          <span class="state {s.on ? 'on' : 'off'}" style="padding:1px 7px"><span class="ic"></span>{s.on ? 'ON' : 'OFF'}</span></div>
+          <span class="state {s.on ? 'on' : 'off'}" style="padding:1px 7px"><span class="ic"></span>{s.on ? (/^\d+$/.test(String(s.value)) ? `ON · ${s.value}%` : 'ON') : 'OFF'}</span></div>
       {/each}
-      {#if digOuts.length === 0}<span class="muted" style="font-size:13px">No digital outputs.</span>{/if}
+      {#if digOuts.length === 0}<span class="muted" style="font-size:13px">No configured digital outputs.</span>{/if}
     </div>
     <div class="cat-grp">Analog inputs <span class="ct"></span></div>
     <div class="statusgrid">
@@ -116,20 +122,23 @@
   {:else}
     <div class="cat-grp">Live status — Outputs <span class="ct"></span></div>
     <div class="statusgrid">
-      {#each outs as o}
+      {#each outs.filter((o) => o.enabled) as o}
         <div class="sc"><span class="scn">O{o.number} {o.name?.trim() ? o.name : ''}</span>
           <span class="state {sc(o.state)}" style="padding:1px 7px"><span class="ic"></span>{o.state === 'On' ? (o.pwmEnabled ? `ON · ${o.duty}% · ${(o.current ?? 0).toFixed(1)}A` : `ON · ${(o.current ?? 0).toFixed(1)}A`) : (o.state ?? 'OFF').toUpperCase()}</span></div>
       {/each}
     </div>
   {/if}
 
-  <div class="cat-grp">Digital inputs · Flashers <span class="ct"></span></div>
+  <div class="cat-grp">Digital inputs{#if flashers.length} · Flashers / Timers{/if}{#if tables.length} · Tables{/if} <span class="ct"></span></div>
   <div class="statusgrid">
     {#each digIns as s}
       <div class="sc"><span class="scn">{s.name}</span><span class="scv" style={s.on ? 'color:var(--ok)' : ''}>{s.value}</span></div>
     {/each}
     {#each flashers as s}
       <div class="sc"><span class="scn">{s.name}</span><span class="scv" style={s.on ? 'color:var(--ok)' : ''}>{s.value}</span></div>
+    {/each}
+    {#each tables as s}
+      <div class="sc"><span class="scn">{s.name}</span><span class="scv">{s.value}</span></div>
     {/each}
   </div>
 

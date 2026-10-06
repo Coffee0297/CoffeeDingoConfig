@@ -5,10 +5,10 @@ Configuration and live-monitoring tool for **dingoPDM** CAN power-distribution m
 SPA) that owns the CAN link — runs on **Windows, macOS, and Linux**.
 
 > **Firmware:** built for the matching **dingoPDM firmware**
-> ([CoffeeDingoFW v5.5.101](https://github.com/Coffee0297/CoffeeDingoFW/releases)). The advanced
-> features — Lua scripting, the on-device overload/trip log, warning & open-load detection, and
-> input-driven sleep — only work on that build. The tool expects firmware **≥ 5.5.100** and shows a
-> "firmware needs updating" notice below that.
+> ([CoffeeDingoFW v5.5.107](https://github.com/Coffee0297/CoffeeDingoFW/releases)). The advanced
+> features — Lua scripting, the on-device overload/trip log, warning & open-load detection, timers,
+> lookup tables and the force-sleep / mute-TX / wake-source model — only work on that build. The tool
+> expects firmware **≥ 5.5.107** and shows a "firmware needs updating" notice below that.
 
 ## Added in this fork — options not in the upstream dingoConfig `testing` branch
 
@@ -68,6 +68,28 @@ Features/options this fork adds on top of the original dingoConfig. (The analog 
     cyclic frame each module type broadcasts as `base + offset` + bit layout (rotary switches, inputs,
     output state/current, …). Served at `/can-frame-map.md` and via the `get_frame_map` MCP tool, so an
     agent can decode the bus with no device connected.
+
+**Logic blocks & sleep** *(need CoffeeDingoFW ≥ v5.5.107)*
+17. **Timer function** (upstream dingoFW #61) — on-delay / off-delay / pulse with a ms preset and a selectable
+    active level; 8 per PDM, 4 per CANBoard. Drive anything from it — including the module's force-sleep input
+    ("sleep 30 s after the ignition goes off").
+18. **2-axis lookup table** (upstream dingoConfig #58) — up to 8×8 cells, bilinear interpolation, edited as a grid
+    with a live interpolated preview; one row = a 1-D curve (fan duty vs temperature). PDM/-Max only.
+19. **Expanded sleep** (upstream dingoFW #52) — a **shutdown & sleep sequence designer** with a timeline (ignition
+    signal → quiet on CAN → held outputs off → sleep; master / follower roles where one module's shutdown frame puts
+    the rest to sleep, enrolled automatically), built on a **force-sleep** signal, a **mute CAN broadcasts** signal
+    (both also wireable as input ports on the module block of the Wiring canvas), and
+    per-input / CAN **wake sources**, all configured in System ▸ ⚙ Settings. Each module decides locally — no
+    inter-module handshake.
+20. **Wiring graph upgrades** (ported from upstream's flow editor) — type-coloured, type-checked ports (the dot under
+    the cursor rings green/red while you drag), wires that glow while on, inline editing below the canvas, a single
+    device node, free-slot counts in the Add menu, delete confirmation with the wire count, Duty/Freq source ports on
+    outputs, CANBoard outputs on the canvas.
+21. **Output bench test** — from an output's editor (or the ⚡ test link on its card while live) force the output
+    **on** or run **PWM at a chosen duty / frequency** to check wiring and loads, without touching its rule. The
+    module holds the test 5 s per command and the editor re-sends while it runs, so Stop, closing the panel or a
+    dropped link releases it by itself; PDM limits and fault handling stay active. PDM/-Max outputs and CANBoard
+    digital outputs; firmware ≥ 5.5.107.
 
 > ⚠️ The CANBoard analog features (9–11) pair with **CoffeeDingoFW ≥ v5.5.101**, which **has not been
 > flashed/tested on a CanBoard yet** — verify on hardware before relying on it.

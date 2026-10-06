@@ -27,27 +27,38 @@ public record OutputDto(int Number, string Name, string State, double Current, i
 public record DeviceDto(string Guid, string Name, string Type, int BaseId, bool Connected,
     double Battery, double Current, double Temp, string State, string Version, string Bitrate, OutputDto[] Outputs,
     bool Reading, int ReadDone, int ReadTotal, bool SleepEnabled, int SleepTimeoutMs,
-    bool SleepInputEnabled, int SleepInput, bool SleepInputActiveHigh, bool SleepIgnoreAlwaysOn,
+    bool SleepIgnoreAlwaysOn, int ForceSleepInput, int MuteTxInput, int WakeDigInputMask, bool WakeOnCan,
     bool CanBootloader, bool ConfigMismatch = false, int ConfigDiffCount = 0, bool IsGateway = false,
-    bool CanFiltersEnabled = false, bool ConnectUsbToCan = true);
+    bool CanFiltersEnabled = false, bool ConnectUsbToCan = true,
+    // false on a CANBoard (firmware CAN_SLEEP off): the sleep / force-sleep / wake controls do nothing there.
+    bool CanSleep = true);
 public record AdaptersDto(string[] Adapters, string[] Ports, bool Connected, string? ActiveAdapter, string? ActivePort);
 public record TelemetryDto(bool Connected, string? Adapter, long CanTotal, long CanRate, int[] Ids, DeviceDto[] Devices);
 public record ConnectReq(string Adapter, string Port, string Bitrate);
 public record AddDeviceReq(string Type, string Name, string BaseId);
 public record ModifyReq(string Name, string BaseId);
-public record SignalDto(string Kind, string Name, string Value, bool On);
+// Enabled = the owning function slot is configured (false for an unused timer/flasher/… slot), so a
+// dashboard can hide the dozens of blank slots a stock module exposes.
+public record SignalDto(string Kind, string Name, string Value, bool On, bool Enabled = true);
 public record CanLogDto(string Dir, int Id, bool Ide, int Len, string Data, int Count);
 public record SysLogDto(string Time, string Level, string Source, string Message);
 public record ProbeReq(string Base);
 public record SetOutputReq(int Number, double CurrentLimit);
-public record OutputConfigReq(int Number, bool Enabled, int Input, double CurrentLimit, double InrushLimit,
-    int InrushTime, int ResetMode, int ResetTime, int ResetCountLimit,
-    bool PwmEnabled, int Freq, int FixedDuty, int MinDuty, bool SoftStart, int SoftStartRamp,
-    double WarnLimit = 0, double OpenLoadLimit = 0, int OpenLoadTime = 1000, string? Name = null,
+/// <summary>Output bench test: mode on | pwm | off; duty %, freq Hz (0 = the output's own), hold s (1–30).</summary>
+public record OutputTestReq(string? Mode, int Duty = 100, int Freq = 0, int Hold = 5);
+/// <summary>The module's own var-map inputs (device params 0x0000:10 / :11); null = leave unchanged, 0 = unwired.</summary>
+public record DeviceInputsReq(int? ForceSleepInput, int? MuteTxInput);
+// Everything but Number is optional: a field left out of the body keeps the output's current value, so a
+// partial body (what the MCP set_output_config tool sends) merges instead of zeroing Enabled/Input/limits.
+// The SPA's _binBody always sends every field, so its saves are unchanged.
+public record OutputConfigReq(int Number, bool? Enabled = null, int? Input = null, double? CurrentLimit = null, double? InrushLimit = null,
+    int? InrushTime = null, int? ResetMode = null, int? ResetTime = null, int? ResetCountLimit = null,
+    bool? PwmEnabled = null, int? Freq = null, int? FixedDuty = null, int? MinDuty = null, bool? SoftStart = null, int? SoftStartRamp = null,
+    double? WarnLimit = null, double? OpenLoadLimit = null, int? OpenLoadTime = null, string? Name = null,
     string? WireColor = null, string? WireStripe = null, double? WireLength = null, double? WireGaugeMm2 = null,
-    bool VariableDutyCycle = false, int DutyCycleInput = 0, int DutyCycleDenom = 100,
-    bool VariableFreq = false, int FreqInput = 0, int FreqInputDenom = 1, bool RampDutyChanges = false,
-    int PrimaryOutput = -1);
+    bool? VariableDutyCycle = null, int? DutyCycleInput = null, int? DutyCycleDenom = null,
+    bool? VariableFreq = null, int? FreqInput = null, int? FreqInputDenom = null, bool? RampDutyChanges = null,
+    int? PrimaryOutput = null);
 public record ApplyProfileReq(string Source);
 public record RenameReq(string Name);
 public record ReadParamReq(int Index, int Sub);
@@ -81,11 +92,14 @@ public static class FunctionMap
                 "condition" or "cmp"  => (p.Conditions.FirstOrDefault(x => x.Number == number), Condition.BaseIndex + n),
                 "counter" or "cnt"    => (p.Counters.FirstOrDefault(x => x.Number == number), Counter.BaseIndex + n),
                 "flasher" or "fl"     => (p.Flashers.FirstOrDefault(x => x.Number == number), Flasher.BaseIndex + n),
+                "timer" or "tmr"      => (p.Timers.FirstOrDefault(x => x.Number == number), TimerFunction.BaseIndex + n),
+                "table" or "tbl"      => (p.Tables.FirstOrDefault(x => x.Number == number), LookupTable.BaseIndex + n),
                 "canoutput" or "cout" => (p.CanOutputs.FirstOrDefault(x => x.Number == number), CanOutput.BaseIndex + n),
                 "wiper" or "wip"      => (p.Wipers, Wiper.BaseIndex),
                 "starterdisable" or "std" => (p.StarterDisable, StarterDisable.BaseIndex),
                 "keypad"              => (p.Keypads.FirstOrDefault(x => x.Number == number), KeypadMaster.BaseIndex + n),
                 "keypadbutton"        => ResolveKeypadButton(p, number),
+                "keypaddial"          => ResolveKeypadDial(p, number),
                 _ => (null, -1)
             };
         if (device is CanboardDevice c)
@@ -99,6 +113,7 @@ public static class FunctionMap
                 "condition" or "cmp"  => (c.Conditions.FirstOrDefault(x => x.Number == number), Condition.BaseIndex + n),
                 "counter" or "cnt"    => (c.Counters.FirstOrDefault(x => x.Number == number), Counter.BaseIndex + n),
                 "flasher" or "fl"     => (c.Flashers.FirstOrDefault(x => x.Number == number), Flasher.BaseIndex + n),
+                "timer" or "tmr"      => (c.Timers.FirstOrDefault(x => x.Number == number), TimerFunction.BaseIndex + n),
                 "canoutput" or "cout" => (c.CanOutputs.FirstOrDefault(x => x.Number == number), CanOutput.BaseIndex + n),
                 _ => (null, -1)
             };
@@ -114,9 +129,38 @@ public static class FunctionMap
         return (b, Button.BaseIndex + (kp * 32) + btn);
     }
 
+    // keypaddial uses the same number encoding as keypadbutton (number = (kp-1)*32 + dialNo, dial 1..2) so
+    // callers address both the same way; the param index follows the firmware's dial layout instead —
+    // 0x3200 + keypad*4 + dial (core/param_defs.h KEYPAD_DIAL_PARAMS, Dial.InitParams).
+    static (object?, int) ResolveKeypadDial(PdmDevice p, int number)
+    {
+        var kp = (number - 1) / 32;
+        var dial = (number - 1) % 32;
+        var d = p.Keypads.ElementAtOrDefault(kp)?.Dials.ElementAtOrDefault(dial);
+        return (d, Dial.BaseIndex + (kp * 4) + dial);
+    }
+
     // Apply incoming JSON fields onto a function object by JsonPropertyName. Handles the scalar,
-    // enum, int[]/bool[], enum[] (e.g. Wiper.SpeedMap) and List<bool> shapes the function models use.
-    public static void ApplyJson(object target, JsonElement body)
+    // enum, int[]/bool[]/double[]/string[], enum[] (e.g. Wiper.SpeedMap) and List<bool> shapes the
+    // function models use. Returns the names of fields that could NOT be applied (unknown enum value,
+    // wrong JSON type, …) so the caller can refuse instead of reporting a silent success. Two-pass:
+    // every field is converted first and nothing is written unless all of them pass — otherwise the
+    // caller's "nothing was written" on a 400 would be a lie (the good fields had already landed on the
+    // record). Fractional numbers sent to an int field are rounded (a browser number input with
+    // step="any" emits 60000.5).
+    public static List<string> ApplyJson(object target, JsonElement body)
+    {
+        var rejected = new List<string>();
+        var sets = new List<Action>();
+        Collect(target, body, "", sets, rejected);
+        if (rejected.Count == 0) foreach (var set in sets) set();
+        return rejected;
+    }
+
+    // Pass 1: convert each field and queue its setter; names are prefixed ("rotary.") for nested objects.
+    // Names that aren't a writable model property are skipped on purpose — the SPA posts the whole GET
+    // object back (read-only `number`, live values), so those must not fail a save.
+    static void Collect(object target, JsonElement body, string prefix, List<Action> sets, List<string> rejected)
     {
         var props = target.GetType().GetProperties()
             .Where(p => p.CanWrite)
@@ -126,33 +170,66 @@ public static class FunctionMap
         foreach (var jp in body.EnumerateObject())
         {
             if (!props.TryGetValue(jp.Name, out var pi)) continue;
+            var name = prefix + jp.Name;
             // Nested function objects (AnalogInput.switch / .rotary) — recurse so their fields
             // persist. Without this, an analog input's rotary-switch config was silently dropped.
             if (jp.Value.ValueKind == JsonValueKind.Object)
             {
                 var nested = pi.GetValue(target);
-                if (nested != null) ApplyJson(nested, jp.Value);
+                if (nested != null) Collect(nested, jp.Value, name + ".", sets, rejected);
                 continue;
             }
+            // Collections of nested functions (KeypadMaster.buttons / .dials = List<Button> / List<Dial>)
+            // ride along in a round-trip body but are edited through their own kinds (keypadbutton /
+            // keypaddial) — skip them rather than fail every keypad save on "invalid value for buttons".
+            if (jp.Value.ValueKind == JsonValueKind.Array && IsComplexCollection(pi.PropertyType)) continue;
             var t = Nullable.GetUnderlyingType(pi.PropertyType) ?? pi.PropertyType;
             try
             {
+                int RoundedInt() => jp.Value.TryGetInt32(out var i) ? i : (int)Math.Round(jp.Value.GetDouble(), MidpointRounding.AwayFromZero);
                 object? val =
-                    t.IsEnum ? Enum.ToObject(t, jp.Value.GetInt32()) :
+                    t.IsEnum ? (Enum.IsDefined(t, RoundedInt()) ? Enum.ToObject(t, RoundedInt()) : throw new ArgumentOutOfRangeException(jp.Name, $"{RoundedInt()} is not a valid {t.Name}")) :
                     t == typeof(bool) ? jp.Value.GetBoolean() :
-                    t == typeof(int) ? jp.Value.GetInt32() :
+                    t == typeof(int) ? RoundedInt() :
                     t == typeof(double) ? jp.Value.GetDouble() :
                     t == typeof(string) ? jp.Value.GetString() :
                     pi.PropertyType == typeof(int[]) ? jp.Value.EnumerateArray().Select(e => e.GetInt32()).ToArray() :
+                    pi.PropertyType == typeof(double[]) ? FitDoubleArray(jp.Value, (double[])pi.GetValue(target)!) :
                     pi.PropertyType == typeof(bool[]) ? jp.Value.EnumerateArray().Select(e => e.GetBoolean()).ToArray() :
+                    // labels (RotarySwitch.positionNames); null entries are allowed, a non-string throws → rejected
+                    pi.PropertyType == typeof(string[]) ? jp.Value.EnumerateArray().Select(e => e.GetString()).ToArray() :
                     pi.PropertyType == typeof(List<bool>) ? jp.Value.EnumerateArray().Select(e => e.GetBoolean()).ToList() :
                     // enum arrays (e.g. Wiper.SpeedMap = WiperSpeed[]) — coerce each int into the element enum
                     (pi.PropertyType.IsArray && pi.PropertyType.GetElementType()!.IsEnum) ? CoerceEnumArray(pi.PropertyType.GetElementType()!, jp.Value) :
                     null;
-                if (val != null || t == typeof(string)) pi.SetValue(target, val);
+                if (val != null || t == typeof(string)) sets.Add(() => pi.SetValue(target, val));
+                else rejected.Add(name);
             }
-            catch { /* skip a malformed field rather than failing the whole save */ }
+            catch { rejected.Add(name); }
         }
+    }
+
+    // A T[] / List<T> whose element is a model class (not string): a nested-function collection, not a value array.
+    static bool IsComplexCollection(Type t)
+    {
+        var elem = t.IsArray ? t.GetElementType()
+            : t.IsGenericType && typeof(System.Collections.IEnumerable).IsAssignableFrom(t) ? t.GetGenericArguments().FirstOrDefault()
+            : null;
+        return elem is { IsClass: true } && elem != typeof(string);
+    }
+
+    // Fixed-length double[] (table axes / cells): keep the model's length so a short or over-long
+    // array from a client can never shift the param sub-indices — missing entries stay as they were.
+    private static double[] FitDoubleArray(JsonElement arr, double[] current)
+    {
+        var result = (double[])current.Clone();
+        var i = 0;
+        foreach (var e in arr.EnumerateArray())
+        {
+            if (i >= result.Length) break;
+            result[i++] = e.ValueKind == JsonValueKind.Number ? e.GetDouble() : 0;
+        }
+        return result;
     }
 
     // Build a typed enum[] from a JSON array of ints (System.Text.Json can't bind enum[] from raw ints here).
@@ -231,19 +308,21 @@ public static class DingoMap
             return new DeviceDto(p.Guid.ToString(), p.Name, p.Type, p.BaseId, p.Connected,
                 p.BatteryVoltage, p.TotalCurrent, p.BoardTempC, p.DeviceState.ToString(),
                 p.Version, BitrateLabel(p.BitRate), outs, reading, readDone, readTotal,
-                p.SleepEnabled, p.SleepTimeoutMs, p.SleepInputEnabled, p.SleepInput, p.SleepInputActiveHigh, p.SleepIgnoreAlwaysOn,
+                p.SleepEnabled, p.SleepTimeoutMs, p.SleepIgnoreAlwaysOn, p.ForceSleepInput, p.MuteTxInput, p.WakeDigInputMask, p.WakeOnCan,
                 p.CanBootloader, p.Connected && p.ConfigMismatch, p.LastConfigDiff.Count, false,
                 p.CanFiltersEnabled, p.ConnectUsbToCan);
         }
         if (d is domain.Devices.Canboard.CanboardDevice cb)
             // CANBoard has no battery/total-current sensing (those are PDM smart-output features) — leave
             // them 0; it DOES measure board temperature and reports a FW version, so surface those.
+            // TODO: switch to cb.BoardTemp (the live value decoded from the status frame) once the domain
+            // model exposes it — BoardTempC is a constant 0 placeholder today.
             return new DeviceDto(cb.Guid.ToString(), cb.Name, cb.Type, cb.BaseId, cb.Connected,
                 0, 0, cb.BoardTempC, "", cb.Version, BitrateLabel(cb.BitRate), Array.Empty<OutputDto>(), reading, readDone, readTotal,
-                cb.SleepEnabled, cb.SleepTimeoutMs, cb.SleepInputEnabled, cb.SleepInput, cb.SleepInputActiveHigh, cb.SleepIgnoreAlwaysOn,
-                cb.CanBootloader, cb.Connected && cb.ConfigMismatch, cb.LastConfigDiff.Count);
+                cb.SleepEnabled, cb.SleepTimeoutMs, cb.SleepIgnoreAlwaysOn, cb.ForceSleepInput, cb.MuteTxInput, cb.WakeDigInputMask, cb.WakeOnCan,
+                cb.CanBootloader, cb.Connected && cb.ConfigMismatch, cb.LastConfigDiff.Count, CanSleep: cb.CanSleep);
         return new DeviceDto(d.Guid.ToString(), d.Name, d.Type, d.BaseId, d.Connected,
-            0, 0, 0, "", "", "", Array.Empty<OutputDto>(), reading, readDone, readTotal, false, 30000, false, 0, false, true,
+            0, 0, 0, "", "", "", Array.Empty<OutputDto>(), reading, readDone, readTotal, false, 30000, true, 0, 0, 0, true,
             (d as IDeviceConfigurable)?.CanBootloader ?? false);
     }
 }
@@ -575,6 +654,33 @@ public static class LiveApi
             return Results.Ok(new { ok = true, o.Number, o.CurrentLimit, written = live });
         });
 
+        // Output bench test (firmware ≥ 5.5.107, MsgCmd 48): force an output on / PWM for a bounded hold.
+        // Live only — nothing is saved; the module releases by itself when the hold expires, so the UI
+        // re-sends while the test runs and sends mode "off" to stop early.
+        api.MapPost("/devices/{guid}/output/{n:int}/test", (string guid, int n, OutputTestReq r, DeviceManager dm, ICommsAdapterManager adapters) =>
+        {
+            if (!Guid.TryParse(guid, out var g)) return Results.BadRequest();
+            // PDM Profet outputs or CANBoard digital outputs — same command, same (1-based) index space.
+            var dev = dm.GetDevice(g);
+            bool? enabled = dev switch
+            {
+                PdmDevice p => p.Outputs.FirstOrDefault(x => x.Number == n)?.Enabled,
+                CanboardDevice c => c.DigitalOutputs.FirstOrDefault(x => x.Number == n)?.Enabled,
+                _ => null
+            };
+            if (enabled == null) return Results.NotFound();
+            int mode = (r.Mode ?? "off").ToLowerInvariant() switch { "on" => 1, "pwm" => 2, "off" => 0, _ => -1 };
+            if (mode < 0) return Results.BadRequest(new { ok = false, error = "mode must be on, pwm or off" });
+            if (!IsLiveModule(g, dm, adapters)) return Results.BadRequest(new { ok = false, error = "module is offline — an output test needs a live module" });
+            if (mode != 0 && enabled == false)
+                return Results.BadRequest(new { ok = false, error = dev is PdmDevice
+                    ? $"output {n} is disabled — enable it and set its current limit first; the test runs under that protection"
+                    : $"output {n} is disabled — enable it and Save first" });
+            var hold = Math.Clamp(r.Hold, 1, 30);
+            dm.TestOutput(g, n, mode, Math.Clamp(r.Duty, 0, 100), Math.Clamp(r.Freq, 0, 400), hold);
+            return Results.Ok(new { ok = true, output = n, mode = mode == 1 ? "on" : mode == 2 ? "pwm" : "off", holdSec = hold });
+        });
+
         // Apply an output's config from the editor, then write that output's params to the
         // device (paced). Burn separately to persist to flash.
         api.MapPost("/devices/{guid}/outputconfig", (string guid, OutputConfigReq r, DeviceManager dm, ICommsAdapterManager adapters) =>
@@ -588,31 +694,33 @@ public static class LiveApi
             if (r.WireStripe != null) o.WireStripe = r.WireStripe;
             if (r.WireLength != null) o.WireLength = r.WireLength.Value;
             if (r.WireGaugeMm2 != null) o.WireGaugeMm2 = r.WireGaugeMm2.Value;
-            o.Enabled = r.Enabled;
-            o.Input = r.Input;
-            o.CurrentLimit = r.CurrentLimit;
-            o.InrushCurrentLimit = r.InrushLimit;
-            o.InrushTime = r.InrushTime;
-            o.ResetMode = (ResetMode)r.ResetMode;
-            o.ResetTime = r.ResetTime;
-            o.ResetCountLimit = r.ResetCountLimit;
-            o.PwmEnabled = r.PwmEnabled;
-            o.Frequency = r.Freq;
-            o.FixedDutyCycle = r.FixedDuty;
-            o.MinDutyCycle = r.MinDuty;
-            o.SoftStartEnabled = r.SoftStart;
-            o.SoftStartRampTime = r.SoftStartRamp;
-            o.VariableDutyCycle = r.VariableDutyCycle;
-            o.DutyCycleInput = r.DutyCycleInput;
-            o.DutyCycleDenominator = r.DutyCycleDenom;
-            o.VariableFreq = r.VariableFreq;
-            o.FreqInput = r.FreqInput;
-            o.FreqInputDenom = r.FreqInputDenom;
-            o.RampDutyChanges = r.RampDutyChanges;
-            o.PrimaryOutput = r.PrimaryOutput;
-            o.WarnLimit = r.WarnLimit;
-            o.OpenLoadLimit = r.OpenLoadLimit;
-            o.OpenLoadTime = r.OpenLoadTime;
+            // Only fields present in the body are assigned (see OutputConfigReq) — a partial MCP body
+            // must not reset the rest of the output to zero.
+            if (r.Enabled is { } en) o.Enabled = en;
+            if (r.Input is { } inp) o.Input = inp;
+            if (r.CurrentLimit is { } cl) o.CurrentLimit = cl;
+            if (r.InrushLimit is { } il) o.InrushCurrentLimit = il;
+            if (r.InrushTime is { } it) o.InrushTime = it;
+            if (r.ResetMode is { } rm) o.ResetMode = (ResetMode)rm;
+            if (r.ResetTime is { } rt) o.ResetTime = rt;
+            if (r.ResetCountLimit is { } rcl) o.ResetCountLimit = rcl;
+            if (r.PwmEnabled is { } pwm) o.PwmEnabled = pwm;
+            if (r.Freq is { } fq) o.Frequency = fq;
+            if (r.FixedDuty is { } fd) o.FixedDutyCycle = fd;
+            if (r.MinDuty is { } md) o.MinDutyCycle = md;
+            if (r.SoftStart is { } ss) o.SoftStartEnabled = ss;
+            if (r.SoftStartRamp is { } ssr) o.SoftStartRampTime = ssr;
+            if (r.VariableDutyCycle is { } vdc) o.VariableDutyCycle = vdc;
+            if (r.DutyCycleInput is { } dci) o.DutyCycleInput = dci;
+            if (r.DutyCycleDenom is { } dcd) o.DutyCycleDenominator = dcd;
+            if (r.VariableFreq is { } vf) o.VariableFreq = vf;
+            if (r.FreqInput is { } fi) o.FreqInput = fi;
+            if (r.FreqInputDenom is { } fid) o.FreqInputDenom = fid;
+            if (r.RampDutyChanges is { } rdc) o.RampDutyChanges = rdc;
+            if (r.PrimaryOutput is { } po) o.PrimaryOutput = po;
+            if (r.WarnLimit is { } wl) o.WarnLimit = wl;
+            if (r.OpenLoadLimit is { } oll) o.OpenLoadLimit = oll;
+            if (r.OpenLoadTime is { } olt) o.OpenLoadTime = olt;
             // The record edit above always persists (offline config authoring). Only push to the
             // module over CAN when it is actually live; report which happened so the UI can say
             // "written to device" vs "saved to project".
@@ -648,11 +756,19 @@ public static class LiveApi
 
         // Selectable input sources (VarMap) — feeds output/flasher/condition pickers.
         // ?type=bool (default for an output rule) | int | float | omit for all.
-        api.MapGet("/devices/{guid}/inputs", (string guid, string? type, DeviceManager dm) =>
+        // ?inUse=true → only vars whose owning function is configured (what a picker should offer: the
+        // module's own system signals, enabled inputs/functions, Lua outs when a program is stored). The
+        // Wiring canvas and index resolution keep using the full map.
+        api.MapGet("/devices/{guid}/inputs", (string guid, string? type, bool? inUse, DeviceManager dm) =>
         {
-            if (!Guid.TryParse(guid, out var g) || dm.GetDevice(g) is not IDeviceConfigurable cfg) return Results.Ok(Array.Empty<object>());
-            var vars = type is null ? cfg.VarMap : cfg.VarMap.Where(v => v.DataType == type);
-            return Results.Ok(vars.Select(v => new { index = v.VariableIndex, name = DingoMap.VarLabel(v) }).ToArray());
+            if (!Guid.TryParse(guid, out var g) || dm.GetDevice(g) is not { } dev || dev is not IDeviceConfigurable cfg) return Results.Ok(Array.Empty<object>());
+            // "Lua Out N" vars are floats on the firmware but are the normal on/off drivers an output rule
+            // points at (setLuaOut writes 0/1), so the bool picker must offer them too.
+            var vars = type is null ? cfg.VarMap : cfg.VarMap.Where(v => v.DataType == type || (type == "bool" && v.OwnerKind == "lua"));
+            if (inUse == true) vars = vars.Where(v => VarInUse(dev, v));
+            // kind/number/prop = the owning function slot, so clients can resolve an index to its function
+            // without reconstructing names (a CAN input and a table both called "Fan" collide by name).
+            return Results.Ok(vars.Select(v => new { index = v.VariableIndex, name = DingoMap.VarLabel(v), kind = v.OwnerKind, number = v.OwnerNumber, prop = v.PropertyName, type = v.DataType }).ToArray());
         });
 
         // All editable function arrays — feeds the Signals & logic editor (PDM + CANBoard).
@@ -664,17 +780,59 @@ public static class LiveApi
                 {
                     inputs = p.Inputs, canInputs = p.CanInputs, virtualInputs = p.VirtualInputs,
                     conditions = p.Conditions, counters = p.Counters, flashers = p.Flashers,
+                    timers = p.Timers, tables = p.Tables,
                     canOutputs = p.CanOutputs, wiper = p.Wipers, starterDisable = p.StarterDisable,
                     keypads = p.Keypads,
+                    device = new { forceSleepInput = p.ForceSleepInput, muteTxInput = p.MuteTxInput, canSleep = p.CanSleep },
                 });
             if (dm.GetDevice(g) is CanboardDevice c)
                 return Results.Ok(new
                 {
                     analogIn = c.AnalogInputs, digitalIn = c.DigitalInputs, digitalOut = c.DigitalOutputs,
                     canInputs = c.CanInputs, virtualInputs = c.VirtualInputs, conditions = c.Conditions,
-                    counters = c.Counters, flashers = c.Flashers, canOutputs = c.CanOutputs,
+                    counters = c.Counters, flashers = c.Flashers, timers = c.Timers, canOutputs = c.CanOutputs,
+                    device = new { forceSleepInput = 0, muteTxInput = c.MuteTxInput, canSleep = c.CanSleep },
                 });
             return Results.Ok(new { });
+        });
+
+        // The module's own var-map inputs — the force-sleep and mute-TX signals (device params 0x0000:10 / :11).
+        // The Wiring canvas wires them like any function input. Record edit persists offline; CAN write when
+        // live. Same field-safety as System ▸ Settings: a module-level always-true signal is refused.
+        api.MapPost("/devices/{guid}/device-inputs", (string guid, DeviceInputsReq r, DeviceManager dm, ICommsAdapterManager adapters) =>
+        {
+            if (!Guid.TryParse(guid, out var g)) return Results.BadRequest();
+            var dev = dm.GetDevice(g);
+            if (dev is not IDeviceConfigurable cfg || dev is not (PdmDevice or CanboardDevice)) return Results.NotFound();
+            string? Check(int? idx, string what)
+            {
+                if (idx is null or 0) return null;
+                var v = cfg.VarMap.FirstOrDefault(x => x.VariableIndex == idx);
+                if (v == null) return $"signal #{idx} is not in this module's var map";
+                if (v.OwnerKind == "sys") return $"\"{DingoMap.VarLabel(v)}\" is always true on a running module — as the {what} it would {(what == "force-sleep input" ? "park the module 1 s after every boot" : "mute its telemetry for good")}; pick a real condition";
+                return null;
+            }
+            if (r.ForceSleepInput is { } fs && dev is not PdmDevice) return Results.BadRequest(new { ok = false, error = "this board never sleeps — it has no force-sleep input" });
+            if (Check(r.ForceSleepInput, "force-sleep input") is { } e1) return Results.BadRequest(new { ok = false, error = e1 });
+            if (Check(r.MuteTxInput, "mute-TX input") is { } e2) return Results.BadRequest(new { ok = false, error = e2 });
+            switch (dev)
+            {
+                case PdmDevice p:
+                    if (r.ForceSleepInput is { } a) p.ForceSleepInput = a;
+                    if (r.MuteTxInput is { } b) p.MuteTxInput = b;
+                    break;
+                case CanboardDevice c:
+                    if (r.MuteTxInput is { } m) c.MuteTxInput = m;
+                    break;
+            }
+            var live = IsLiveModule(g, dm, adapters);
+            if (live)
+            {
+                if (r.ForceSleepInput is { } a) dm.WriteParam(g, 0x0000, 10, (uint)a);
+                if (r.MuteTxInput is { } b) dm.WriteParam(g, 0x0000, 11, (uint)b);
+            }
+            var (fsNow, mtNow) = dev is PdmDevice pp ? (pp.ForceSleepInput, pp.MuteTxInput) : (0, ((CanboardDevice)dev).MuteTxInput);
+            return Results.Ok(new { ok = true, written = live, forceSleepInput = fsNow, muteTxInput = mtNow });
         });
 
         // Apply one function's fields from the editor, then write its params to the device.
@@ -684,7 +842,11 @@ public static class LiveApi
             var (fn, paramIndex) = FunctionMap.Resolve(dev, kind, number);
             if (fn == null || paramIndex < 0) return Results.NotFound(new { error = $"unknown function {kind} #{number}" });
             using var doc = await JsonDocument.ParseAsync(req.Body);
-            FunctionMap.ApplyJson(fn, doc.RootElement);
+            var rejected = FunctionMap.ApplyJson(fn, doc.RootElement);
+            // A field the model couldn't take (bad enum value, wrong type) must not become a silent
+            // "saved": refuse, and don't push a half-applied slot to the device.
+            if (rejected.Count > 0)
+                return Results.BadRequest(new { ok = false, error = $"invalid value for {string.Join(", ", rejected)} — nothing was written to the device" });
             // Record edit persists offline; CAN write only when live (see /outputconfig).
             var live = IsLiveModule(g, dm, adapters);
             if (live) dm.WriteFunctionParams(g, paramIndex);
@@ -702,7 +864,9 @@ public static class LiveApi
             var live = IsLiveModule(g, dm, adapters);
             if (live && !dm.UploadLua(g, r.Source ?? ""))
                 return Results.BadRequest(new { ok = false, error = "upload rejected (too big, or not a Lua-capable PDM)" });
-            return Results.Ok(new { ok = true, written = live });
+            // Slot lint: setLuaOut(n) drives "Lua Out n+1". A whole project was found with every call one slot high —
+            // each output silently ran its neighbour's rule. Say so at upload time.
+            return Results.Ok(new { ok = true, written = live, warnings = LuaSlotWarnings(dm.GetDevice(g), r.Source ?? "") });
         });
 
         // Read the stored Lua program back from the device (a live CAN read).
@@ -930,6 +1094,8 @@ public static class LiveApi
                 .Select(t => new
                 {
                     name = t.Signal.Name,
+                    label = SignalLabel(d, t.Signal.Name),     // the user's name for the owning function ("ignition"), null if none
+                    inUse = SignalInUse(d, t.Signal.Name),
                     offset = t.MessageId - baseId,
                     startBit = t.Signal.StartBit,
                     bitLength = t.Signal.Length,
@@ -937,6 +1103,9 @@ public static class LiveApi
                     valueOffset = t.Signal.Offset,
                     byteOrder = (int)t.Signal.ByteOrder,
                     signed = t.Signal.IsSigned,
+                    // float32 LE payloads (PDM table outputs): a firmware CAN input can't decode those, so
+                    // the picker greys them out.
+                    isFloat = t.Signal.IsFloat,
                     unit = t.Signal.Unit,
                     kind = t.Signal.Length == 1 ? "bool" : "value",
                 })
@@ -968,11 +1137,29 @@ public static class LiveApi
                 if (couts != null)
                     foreach (var co in couts.Where(x => x.Enabled))
                         Claim(co.Id, co.Ide, $"{d.Name}: CAN out '{co.Name}'");
-                if (!isDbc && d is IDeviceConfigurable) ranges.Add((d.Name, d.BaseId, d.BaseId + 15));
+                // A Lua program's txCan(bus, id, ext, …) frames are transmissions as well — without them a future module
+                // placed on those ids would overlap silently.
+                if (d is PdmDevice lp && !string.IsNullOrWhiteSpace(lp.LuaProgram))
+                    foreach (System.Text.RegularExpressions.Match m in System.Text.RegularExpressions.Regex.Matches(lp.LuaProgram, @"txCan\s*\(\s*\d+\s*,\s*(0[xX][0-9A-Fa-f]+|\d+)\s*,\s*(true|false)"))
+                    {
+                        var s = m.Groups[1].Value;
+                        var id = s.StartsWith("0x", StringComparison.OrdinalIgnoreCase) ? Convert.ToInt32(s[2..], 16) : int.Parse(s);
+                        Claim(id, m.Groups[2].Value == "true", $"{d.Name}: Lua txCan");
+                    }
+                // Span = the module's real TX footprint (same figures as clientapp canids.js and docs/can-frame-map.md):
+                // a PDM's 28 cyclic frames sit at base+2..base+29; a CANBoard's 10 at base+2..base+11 plus its
+                // OpenBLT bootloader ids at +12/+13.
+                if (!isDbc && d is IDeviceConfigurable) ranges.Add((d.Name, d.BaseId, d.BaseId + (d is CanboardDevice ? 13 : 29)));
             }
-            var collisions = owners.Where(kv => kv.Value.Count > 1)
-                .Select(kv => new { id = kv.Key.Id, hex = "0x" + kv.Key.Id.ToString("X"), ide = kv.Key.Ide, owners = kv.Value })
-                .OrderBy(c => c.id).ToList();
+            // An id sent ONLY by Lua txCan calls on several modules is a deliberate shared id (e.g. a master
+            // PDM broadcasts a state and backups take over when it goes quiet): report it as `shared`, not as
+            // a collision. Any non-Lua owner on the same id (a broadcast, a CAN output, an ECU) still collides.
+            static bool AllLua(List<string> o) => o.All(w => w.EndsWith(": Lua txCan", StringComparison.Ordinal));
+            object Row(KeyValuePair<(int Id, bool Ide), List<string>> kv) =>
+                new { id = kv.Key.Id, hex = "0x" + kv.Key.Id.ToString("X"), ide = kv.Key.Ide, owners = kv.Value };
+            var multi = owners.Where(kv => kv.Value.Count > 1).OrderBy(kv => kv.Key.Id).ToList();
+            var collisions = multi.Where(kv => !AllLua(kv.Value)).Select(Row).ToList();
+            var shared = multi.Where(kv => AllLua(kv.Value)).Select(Row).ToList();
             var overlaps = new List<object>();
             for (int i = 0; i < ranges.Count; i++)
                 for (int j = i + 1; j < ranges.Count; j++)
@@ -981,7 +1168,7 @@ public static class LiveApi
                             aRange = $"0x{ranges[i].Lo:X}–0x{ranges[i].Hi:X}", bRange = $"0x{ranges[j].Lo:X}–0x{ranges[j].Hi:X}" });
             // id -> owners, keyed by hex (with an 'x' prefix for extended) so the editor can check one id cheaply.
             var claimed = owners.ToDictionary(kv => (kv.Key.Ide ? "x" : "") + kv.Key.Id.ToString("X"), kv => kv.Value);
-            return Results.Ok(new { collisions, overlaps, claimed });
+            return Results.Ok(new { collisions, overlaps, shared, claimed });
         });
 
         // ---- Sim playback: replay a CAN-log CSV onto the simulated bus (connect the "Sim" adapter).
@@ -1137,33 +1324,37 @@ public static class LiveApi
             var s = new List<SignalDto>();
             if (dm.GetDevice(g) is PdmDevice p)
             {
-                foreach (var i in p.Inputs) s.Add(new("Digital input", i.Name, i.State ? "on" : "off", i.State));
-                foreach (var c in p.CanInputs) s.Add(new("CAN input", c.Name, c.Value.ToString(), c.Value != 0));
-                foreach (var v in p.VirtualInputs) s.Add(new("Virtual input", v.Name, v.Value ? "on" : "off", v.Value));
-                foreach (var c in p.Conditions) s.Add(new("Condition", c.Name, c.Value.ToString(), c.Value != 0));
-                foreach (var c in p.Counters) s.Add(new("Counter", c.Name, c.Value.ToString(), c.Value != 0));
-                foreach (var f in p.Flashers) s.Add(new("Flasher", f.Name, f.Value ? "on" : "off", f.Value));
-                foreach (var o in p.Outputs) s.Add(new("Output", o.Name, o.State.ToString(), o.State.ToString() == "On"));
+                foreach (var i in p.Inputs) s.Add(new("Digital input", i.Name, i.State ? "on" : "off", i.State, i.Enabled));
+                foreach (var c in p.CanInputs) s.Add(new("CAN input", c.Name, c.Value.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture), c.Value != 0, c.Enabled));
+                foreach (var v in p.VirtualInputs) s.Add(new("Virtual input", v.Name, v.Value ? "on" : "off", v.Value, v.Enabled));
+                foreach (var c in p.Conditions) s.Add(new("Condition", c.Name, c.Value.ToString(), c.Value != 0, c.Enabled));
+                foreach (var c in p.Counters) s.Add(new("Counter", c.Name, c.Value.ToString(), c.Value != 0, c.Enabled));
+                foreach (var f in p.Flashers) s.Add(new("Flasher", f.Name, f.Value ? "on" : "off", f.Value, f.Enabled));
+                foreach (var t in p.Timers) s.Add(new("Timer", t.Name, t.Value ? "on" : "off", t.Value, t.Enabled));
+                foreach (var t in p.Tables) s.Add(new("Table", t.Name, t.Value.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture), t.Value != 0, t.Enabled));
+                foreach (var o in p.Outputs) s.Add(new("Output", o.Name, o.State.ToString(), o.State.ToString() == "On", o.Enabled));
             }
             else if (dm.GetDevice(g) is CanboardDevice cb)
             {
                 // A CANBoard analog input exposes three live signals: raw mV, rotary position
-                // ("<name> Pos" — drives the multi-position switch readout), and switch state.
+                // ("<name> Pos" — drives the multi-position switch readout), and switch state. The sub-modes
+                // count as enabled only when the input AND that mode are on.
                 foreach (var a in cb.AnalogInputs)
                 {
-                    s.Add(new("Analog input", a.Name, ((int)a.Millivolts).ToString(), a.Millivolts > 0));
-                    s.Add(new("Rotary position", a.Name + " Pos", a.Rotary.Pos.ToString(), a.Rotary.Pos != 0));
-                    s.Add(new("Analog switch", a.Name + " Switch", a.Switch.State ? "on" : "off", a.Switch.State));
+                    s.Add(new("Analog input", a.Name, ((int)a.Millivolts).ToString(), a.Millivolts > 0, a.Enabled));
+                    s.Add(new("Rotary position", a.Name + " Pos", a.Rotary.Pos.ToString(), a.Rotary.Pos != 0, a.Enabled && a.Rotary.Enabled));
+                    s.Add(new("Analog switch", a.Name + " Switch", a.Switch.State ? "on" : "off", a.Switch.State, a.Enabled && a.Switch.Enabled));
                 }
-                foreach (var i in cb.DigitalInputs) s.Add(new("Digital input", i.Name, i.State ? "on" : "off", i.State));
+                foreach (var i in cb.DigitalInputs) s.Add(new("Digital input", i.Name, i.State ? "on" : "off", i.State, i.Enabled));
                 // PWM outputs report their live duty as the value (so the UI can show "ON · 45%");
                 // plain on/off outputs keep the textual state.
-                foreach (var o in cb.DigitalOutputs) s.Add(new("Digital output", o.Name, o.PwmEnabled ? Math.Clamp((int)o.CurrentDutyCycle, 0, 100).ToString() : (o.State ? "on" : "off"), o.State));
-                foreach (var c in cb.CanInputs) s.Add(new("CAN input", c.Name, c.Value.ToString(), c.Value != 0));
-                foreach (var v in cb.VirtualInputs) s.Add(new("Virtual input", v.Name, v.Value ? "on" : "off", v.Value));
-                foreach (var c in cb.Conditions) s.Add(new("Condition", c.Name, c.Value.ToString(), c.Value != 0));
-                foreach (var c in cb.Counters) s.Add(new("Counter", c.Name, c.Value.ToString(), c.Value != 0));
-                foreach (var f in cb.Flashers) s.Add(new("Flasher", f.Name, f.Value ? "on" : "off", f.Value));
+                foreach (var o in cb.DigitalOutputs) s.Add(new("Digital output", o.Name, o.PwmEnabled ? Math.Clamp((int)o.CurrentDutyCycle, 0, 100).ToString() : (o.State ? "on" : "off"), o.State, o.Enabled));
+                foreach (var c in cb.CanInputs) s.Add(new("CAN input", c.Name, c.Value.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture), c.Value != 0, c.Enabled));
+                foreach (var v in cb.VirtualInputs) s.Add(new("Virtual input", v.Name, v.Value ? "on" : "off", v.Value, v.Enabled));
+                foreach (var c in cb.Conditions) s.Add(new("Condition", c.Name, c.Value.ToString(), c.Value != 0, c.Enabled));
+                foreach (var c in cb.Counters) s.Add(new("Counter", c.Name, c.Value.ToString(), c.Value != 0, c.Enabled));
+                foreach (var f in cb.Flashers) s.Add(new("Flasher", f.Name, f.Value ? "on" : "off", f.Value, f.Enabled));
+                foreach (var t in cb.Timers) s.Add(new("Timer", t.Name, t.Value ? "on" : "off", t.Value, t.Enabled));
             }
             else if (dm.GetDevice(g) is DbcDevice dbc)
             {
@@ -1413,6 +1604,124 @@ public static class LiveApi
     // broadcast_signals?inUse=true shows only configured signals. System telemetry is always live;
     // everything else follows its function's Enabled flag (analog sub-signals need the input + its
     // rotary/switch mode enabled).
+    // Which Lua slots the program writes vs which "Lua Out" vars something on the module actually reads.
+    private static List<string> LuaSlotWarnings(IDevice? dev, string src)
+    {
+        var w = new List<string>();
+        if (dev is not PdmDevice p) return w;
+        var written = System.Text.RegularExpressions.Regex.Matches(src, @"setLuaOut\s*\(\s*(\d+)")
+            .Select(m => int.Parse(m.Groups[1].Value)).ToHashSet();
+        if (written.Count == 0) return w;
+        // every var-map index some function on this module consumes
+        var used = new HashSet<int>();
+        foreach (var o in p.GetOutputs()) { used.Add(o.Input); used.Add(o.DutyCycleInput); used.Add(o.FreqInput); }
+        foreach (var c in p.GetConditions()) used.Add(c.Input);
+        foreach (var f in p.GetFlashers()) used.Add(f.Input);
+        foreach (var v in p.GetVirtualInputs()) { used.Add(v.Var0); used.Add(v.Var1); used.Add(v.Var2); }
+        foreach (var c in p.GetCounters()) { used.Add(c.IncInput); used.Add(c.DecInput); used.Add(c.ResetInput); }
+        foreach (var t in p.GetTimers()) used.Add(t.Input);
+        foreach (var t in p.GetTables()) { used.Add(t.XInput); used.Add(t.YInput); }
+        foreach (var c in p.GetCanOutputs()) used.Add(c.Input);
+        used.Add(p.ForceSleepInput); used.Add(p.MuteTxInput);
+        var luaVars = p.VarMap.Where(v => v.OwnerKind == "lua").ToList();   // OwnerNumber = slot + 1
+        var consumedSlots = luaVars.Where(v => used.Contains(v.VariableIndex)).Select(v => v.OwnerNumber - 1).ToHashSet();
+        foreach (var s in written.Where(s => !consumedSlots.Contains(s)).OrderBy(s => s))
+            w.Add($"setLuaOut({s}) writes \"Lua Out {s + 1}\", but nothing on {p.Name} reads it");
+        foreach (var s in consumedSlots.Where(s => !written.Contains(s)).OrderBy(s => s))
+            w.Add($"something on {p.Name} is driven by \"Lua Out {s + 1}\", but the program never calls setLuaOut({s}, …)");
+        if (w.Count > 0 && written.Min() >= 1 && consumedSlots.Count > 0 && consumedSlots.Min() == written.Min() - 1)
+            w.Insert(0, "Every setLuaOut slot looks one too high — slots are 0-based: setLuaOut(0) drives \"Lua Out 1\"");
+        return w;
+    }
+
+    // The user's name for the function that owns a broadcast signal ("DigitalInput1.State" → "ignition"), so the
+    // cross-module picker shows and searches what the user typed, not the frame-map name. Null when unknown.
+    private static string? SignalLabel(IDevice d, string name)
+    {
+        var m = System.Text.RegularExpressions.Regex.Match(name, @"^([A-Za-z]+?)(\d+)(?:\.(\w+))?");
+        if (!m.Success) return null;
+        var kind = m.Groups[1].Value; var n = int.Parse(m.Groups[2].Value); var prop = m.Groups[3].Value;
+        string? fn = d switch
+        {
+            PdmDevice p => kind switch
+            {
+                "Input" => p.GetInputs().FirstOrDefault(x => x.Number == n)?.Name,
+                "Output" => p.GetOutputs().FirstOrDefault(x => x.Number == n)?.Name,
+                "CanInput" => p.GetCanInputs().FirstOrDefault(x => x.Number == n)?.Name,
+                "VirtualInput" => p.GetVirtualInputs().FirstOrDefault(x => x.Number == n)?.Name,
+                "Condition" => p.GetConditions().FirstOrDefault(x => x.Number == n)?.Name,
+                "Counter" => p.GetCounters().FirstOrDefault(x => x.Number == n)?.Name,
+                "Flasher" => p.GetFlashers().FirstOrDefault(x => x.Number == n)?.Name,
+                "Timer" => p.GetTimers().FirstOrDefault(x => x.Number == n)?.Name,
+                "Table" => p.GetTables().FirstOrDefault(x => x.Number == n)?.Name,
+                _ => null,
+            },
+            CanboardDevice c => kind switch
+            {
+                "AnalogInput" or "RotarySwitch" => c.GetAnalogInputs().FirstOrDefault(x => x.Number == n)?.Name,
+                "DigitalInput" => c.GetDigitalInputs().FirstOrDefault(x => x.Number == n)?.Name,
+                "DigitalOutput" => c.GetDigitalOutputs().FirstOrDefault(x => x.Number == n)?.Name,
+                "CanInput" => c.GetCanInputs().FirstOrDefault(x => x.Number == n)?.Name,
+                "VirtualInput" => c.GetVirtualInputs().FirstOrDefault(x => x.Number == n)?.Name,
+                "Condition" => c.GetConditions().FirstOrDefault(x => x.Number == n)?.Name,
+                "Counter" => c.GetCounters().FirstOrDefault(x => x.Number == n)?.Name,
+                "Flasher" => c.GetFlashers().FirstOrDefault(x => x.Number == n)?.Name,
+                "Timer" => c.GetTimers().FirstOrDefault(x => x.Number == n)?.Name,
+                _ => null,
+            },
+            _ => null,
+        };
+        if (string.IsNullOrWhiteSpace(fn)) return null;
+        // ".State" is the on/off port — the bare name; other ports keep their property ("coolant · Millivolts").
+        return string.IsNullOrEmpty(prop) || prop == "State" ? fn : $"{fn} · {prop}";
+    }
+
+    // Is the function that owns a var-map entry configured? Mirrors SignalInUse for the var map (owner kind/number
+    // are tagged on every entry). Unknown kinds count as in use so nothing real ever disappears from a picker.
+    private static bool VarInUse(IDevice d, domain.Models.DeviceVariable v)
+    {
+        var n = v.OwnerNumber;
+        return d switch
+        {
+            PdmDevice p => v.OwnerKind switch
+            {
+                "sys" => true,
+                "input" => p.GetInputs().FirstOrDefault(x => x.Number == n)?.Enabled ?? true,
+                "caninput" => p.GetCanInputs().FirstOrDefault(x => x.Number == n)?.Enabled ?? true,
+                "virtualinput" => p.GetVirtualInputs().FirstOrDefault(x => x.Number == n)?.Enabled ?? true,
+                "condition" => p.GetConditions().FirstOrDefault(x => x.Number == n)?.Enabled ?? true,
+                "counter" => p.GetCounters().FirstOrDefault(x => x.Number == n)?.Enabled ?? true,
+                "flasher" => p.GetFlashers().FirstOrDefault(x => x.Number == n)?.Enabled ?? true,
+                "timer" => p.GetTimers().FirstOrDefault(x => x.Number == n)?.Enabled ?? true,
+                "table" => p.GetTables().FirstOrDefault(x => x.Number == n)?.Enabled ?? true,
+                "output" => p.GetOutputs().FirstOrDefault(x => x.Number == n)?.Enabled ?? true,
+                "wiper" => p.GetWipers()?.Enabled ?? false,
+                "keypad" => p.GetKeypads().FirstOrDefault(x => x.Number == n)?.Enabled ?? true,
+                "lua" => !string.IsNullOrWhiteSpace(p.LuaProgram),
+                _ => true,
+            },
+            CanboardDevice c => v.OwnerKind switch
+            {
+                "sys" => true,
+                "input" => c.GetDigitalInputs().FirstOrDefault(x => x.Number == n)?.Enabled ?? true,
+                // The rotary-position / switch-value vars are sub-modes of the analog input: the input AND that
+                // mode must be on (PropertyName values are set in CanboardDevice.InitVarMap). Raw/mV/scaled
+                // follow the input alone.
+                "analoginput" => c.GetAnalogInputs().FirstOrDefault(x => x.Number == n) is not { } a ? true
+                    : a.Enabled && v.PropertyName switch { "Rotary Position" => a.Rotary.Enabled, "Switch Value" => a.Switch.Enabled, _ => true },
+                "digitaloutput" => c.GetDigitalOutputs().FirstOrDefault(x => x.Number == n)?.Enabled ?? true,
+                "caninput" => c.GetCanInputs().FirstOrDefault(x => x.Number == n)?.Enabled ?? true,
+                "virtualinput" => c.GetVirtualInputs().FirstOrDefault(x => x.Number == n)?.Enabled ?? true,
+                "condition" => c.GetConditions().FirstOrDefault(x => x.Number == n)?.Enabled ?? true,
+                "counter" => c.GetCounters().FirstOrDefault(x => x.Number == n)?.Enabled ?? true,
+                "flasher" => c.GetFlashers().FirstOrDefault(x => x.Number == n)?.Enabled ?? true,
+                "timer" => c.GetTimers().FirstOrDefault(x => x.Number == n)?.Enabled ?? true,
+                _ => true,
+            },
+            _ => true,
+        };
+    }
+
     private static bool SignalInUse(IDevice d, string name)
     {
         if (System.Text.RegularExpressions.Regex.IsMatch(name, "^(DeviceState|PdmType|TotalCurrent|BatteryVoltage|BoardTemp|Heartbeat)"))
@@ -1432,6 +1741,8 @@ public static class LiveApi
                 "Condition" => p.GetConditions().FirstOrDefault(x => x.Number == n)?.Enabled ?? false,
                 "Counter" => p.GetCounters().FirstOrDefault(x => x.Number == n)?.Enabled ?? false,
                 "Flasher" => p.GetFlashers().FirstOrDefault(x => x.Number == n)?.Enabled ?? false,
+                "Timer" => p.GetTimers().FirstOrDefault(x => x.Number == n)?.Enabled ?? false,
+                "Table" => p.GetTables().FirstOrDefault(x => x.Number == n)?.Enabled ?? false,
                 "Wiper" => p.GetWipers()?.Enabled ?? false,
                 _ => true,
             };
@@ -1447,6 +1758,7 @@ public static class LiveApi
                 "Condition" => c.GetConditions().FirstOrDefault(x => x.Number == n)?.Enabled ?? false,
                 "Counter" => c.GetCounters().FirstOrDefault(x => x.Number == n)?.Enabled ?? false,
                 "Flasher" => c.GetFlashers().FirstOrDefault(x => x.Number == n)?.Enabled ?? false,
+                "Timer" => c.GetTimers().FirstOrDefault(x => x.Number == n)?.Enabled ?? false,
                 _ => true,
             };
         return true;

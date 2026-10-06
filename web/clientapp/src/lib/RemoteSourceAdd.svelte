@@ -6,6 +6,7 @@
   import { api, addCanInputFromDbc, addCanInputFromBroadcast } from './store.js'
   import { toast } from './toast.js'
   import { clickable } from './a11y.js'
+  import { untrack } from 'svelte'
 
   let { guid, devices = [], kind = 'num', onadded = undefined, label = '＋ from another module / ECU' } = $props()
 
@@ -27,7 +28,10 @@
   // broadcast list is small enough to fetch once and filter client-side.
   $effect(() => {
     if (!open || !src) { hits = []; return }
-    const dbc = isDbc, g = src, term = q, dev = srcDev
+    // Re-run on open / source / filter only. `srcDev` is a fresh object every device poll — depending on it
+    // re-fetched the list twice a second and starved the connection pool.
+    const g = src, term = q
+    const dev = untrack(() => srcDev), dbc = untrack(() => isDbc)
     let alive = true; busy = true
     const done = (list) => { if (alive) { hits = list; busy = false } }
     if (dbc) {
@@ -35,13 +39,13 @@
         .then((r) => done((r.items ?? []).map((s) => ({ name: s.name, meta: `${hex(s.id)} · ${s.length}b${s.unit ? ' · ' + s.unit : ''}`, isDbc: true, sig: s }))))
         .catch(() => done([]))
     } else {
-      api.broadcastSignals(g)
+      api.broadcastSignals(g, true)   // configured signals only, each with the user's own name as `label`
         .then((s) => {
           const t = term.trim().toLowerCase()
           const list = (Array.isArray(s) ? s : [])
-            .filter((x) => !t || (x.name + ' ' + (x.unit || '')).toLowerCase().includes(t))
+            .filter((x) => !t || ((x.label ?? '') + ' ' + x.name + ' ' + (x.unit || '')).toLowerCase().includes(t))
             .slice(0, 200)
-            .map((x) => ({ name: x.name, meta: `${hex((dev?.baseId ?? 0) + x.offset)} · ${x.bitLength}b · ${x.kind}${x.unit ? ' · ' + x.unit : ''}`, isDbc: false, sig: x }))
+            .map((x) => ({ name: x.label ?? x.name, meta: `${x.label ? x.name + ' · ' : ''}${hex((dev?.baseId ?? 0) + x.offset)} · ${x.bitLength}b · ${x.kind}${x.unit ? ' · ' + x.unit : ''}${x.isFloat ? ' · float32' : ''}`, isDbc: false, isFloat: !!x.isFloat, sig: x }))
           done(list)
         })
         .catch(() => done([]))
@@ -50,13 +54,14 @@
   })
 
   async function add(h) {
+    if (h.isFloat) { toast('That signal is a float32 (table output) — a CAN input can only decode integers. Read it from a Lua program instead.', 'error'); return }
     adding = h.name
     try {
       const r = h.isDbc ? await addCanInputFromDbc(guid, h.sig) : await addCanInputFromBroadcast(guid, srcDev, h.sig)
       const idx = kind === 'bool' ? (r.stateIndex ?? r.valueIndex) : (r.valueIndex ?? r.stateIndex)
       if (idx == null) throw new Error('created the CAN input but could not resolve its signal index')
       onadded?.(idx, r)
-      toast(`Added CAN input “${r.name}” decoding ${h.meta.split(' · ')[0]} — set it as the source.`, 'info')
+      toast(r.reused ? `Using the existing CAN input “${r.name}” (already decodes that signal) as the source.` : `Added CAN input “${r.name}” decoding ${h.meta.split(' · ')[0]} — set it as the source.`, 'info')
       open = false; q = ''
     } catch (e) { toast('Couldn’t add: ' + e.message, 'error') }
     finally { adding = '' }
@@ -77,12 +82,12 @@
       </div>
       <div class="rsa-list">
         {#each hits as h (h.name + h.meta)}
-          <div class="rsa-opt" class:busy={adding === h.name} use:clickable onclick={() => add(h)}>
+          <div class="rsa-opt" class:busy={adding === h.name} class:dim={h.isFloat} title={h.isFloat ? 'float32 — a CAN input cannot decode this; read it from a Lua program instead' : ''} use:clickable onclick={() => add(h)}>
             <span class="nm">{h.name}</span><span class="mt">{h.meta}</span>
           </div>
         {/each}
         {#if busy}<div class="rsa-empty">loading…</div>
-        {:else if !hits.length}<div class="rsa-empty">{q ? 'no match' : (isDbc ? 'type to search' : 'no broadcast signals')}</div>{/if}
+        {:else if !hits.length}<div class="rsa-empty">{q ? 'no match' : (isDbc ? 'type to search' : 'no configured signals on that module yet — enable/name an input there first')}</div>{/if}
       </div>
       <p class="rsa-hint">Creates a CAN input on this module that decodes the selected frame, then uses it as the source.</p>
     </div>
@@ -100,6 +105,7 @@
   .rsa-opt:last-child { border-bottom: 0; }
   .rsa-opt:hover { background: var(--line); }
   .rsa-opt.busy { opacity: .5; pointer-events: none; }
+  .rsa-opt.dim { opacity: .45; }
   .rsa-opt .mt { color: var(--muted); font-size: 11px; white-space: nowrap; }
   .rsa-empty { padding: 6px 9px; color: var(--muted); font-size: 12px; }
   .rsa-hint { color: var(--muted); font-size: 11px; margin: 6px 2px 0; }

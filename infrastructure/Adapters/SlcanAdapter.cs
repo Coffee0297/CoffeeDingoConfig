@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.IO.Ports;
+using System.Net.Sockets;
 using System.Text;
 using domain.Enums;
 using domain.Interfaces;
@@ -19,21 +20,39 @@ public class SlcanAdapter : ICommsAdapter
     protected Timer? ConnectionMonitorTimer;
     protected TimeSpan RxTimeDelta { get; set; }
 
+    // The byte transport the SLCAN text protocol rides on: Serial.BaseStream for a COMx / tty port, or a
+    // TCP NetworkStream when the port name is tcp://host[:port] — the CoffeeDingoSim bridge speaks the same
+    // SLCAN protocol over a socket (default tcp://127.0.0.1:7778). Every read and write goes through _io so
+    // the protocol code is transport-agnostic; _tcp is non-null only on the TCP path.
+    private Stream? _io;
+    private TcpClient? _tcp;
+    private const int DefaultTcpPort = 7778;
+
+    // Open-state of whichever transport is active. Serial keeps the original SerialPort.IsOpen check;
+    // TCP uses Socket.Connected (reflects the last I/O — the reader's Poll surfaces a peer close sooner).
+    private bool IoOpen => _io != null && (_tcp != null ? TcpUp(_tcp) : Serial?.IsOpen ?? false);
+
+    private static bool TcpUp(TcpClient? t)
+    {
+        try { return t?.Connected ?? false; }
+        catch { return false; }   // disposed underneath us
+    }
+
     private CancellationTokenSource? _readCts;
     private Thread? _readThread;
-    // Serializes every write to the single serial port. SerialPort.Write is not safe to call
-    // from multiple threads at once; without this, an overlapping single-frame write and a
+    // Serializes every write to the single transport. Neither SerialPort.Write nor NetworkStream.Write is
+    // safe to call from multiple threads at once; without this, an overlapping single-frame write and a
     // batch write (or two queued writes from concurrent Read/Write/Flash requests) could
     // interleave bytes on the wire and corrupt CAN frames.
     private readonly object _writeLock = new();
 
-    // The port must actually be open to be "connected" — without this, a failed Init (Serial
+    // The transport must actually be open to be "connected" — without this, a failed Init (port
     // closed, RxTimeDelta still at its default Zero) reported IsConnected=true with no link.
-    public bool IsConnected => (Serial?.IsOpen ?? false) && RxTimeDelta < TimeSpan.FromMilliseconds(500);
+    public bool IsConnected => IoOpen && RxTimeDelta < TimeSpan.FromMilliseconds(500);
 
     public event DataReceivedHandler? DataReceived;
     public event EventHandler? Disconnected;
-    
+
     private int _bitrate;
 
     // CAN-id accept range applied in the reader (see SetReceiveFilter): _acceptLo < 0 = accept all,
@@ -73,13 +92,26 @@ public class SlcanAdapter : ICommsAdapter
         }
     }
 
-    // Fire-and-forget raw SLCAN command line under the shared write lock; swallows any port fault.
+    // Fire-and-forget raw SLCAN command line under the shared write lock; swallows any transport fault.
     private void SendRaw(string cmd)
     {
-        if (Serial is not { IsOpen: true }) return;
-        try { var b = Encoding.ASCII.GetBytes(cmd); lock (_writeLock) Serial?.Write(b, 0, b.Length); }
+        if (!IoOpen) return;
+        try { var b = Encoding.ASCII.GetBytes(cmd); lock (_writeLock) WriteIo(b, b.Length); }
         catch { /* best-effort */ }
     }
+
+    // Caller holds _writeLock. Serial: exactly the former Serial.Write — deliberately NO Flush, because
+    // Flush on a COM BaseStream is FlushFileBuffers (drains the UART) and would stall a 2300-frame
+    // ReadAll/batch burst. TCP: Flush is a no-op on NetworkStream (NoDelay already pushes each write
+    // out) but states the intent should the transport ever become buffered.
+    private void WriteIo(byte[] buf, int len)
+    {
+        var io = _io ?? throw new InvalidOperationException("The port is closed.");
+        io.Write(buf, 0, len);
+        if (_tcp != null) io.Flush();
+    }
+
+    private void WriteAscii(string s) { var b = Encoding.ASCII.GetBytes(s); WriteIo(b, b.Length); }
 
     // Count frames surfaced via DataReceived over a window (the reader-side filter is open during a probe).
     private async Task<int> CountForAsync(int ms, CancellationToken ct)
@@ -94,7 +126,7 @@ public class SlcanAdapter : ICommsAdapter
 
     public async Task<AdapterFilterProbe> ProbeFilterAsync(CancellationToken ct = default)
     {
-        if (Serial is not { IsOpen: true }) return new(null, "none", "Adapter is not connected.");
+        if (!IoOpen) return new(null, "none", "Adapter is not connected.");
         var savedLo = _acceptLo; var savedHi = _acceptHi;
         _acceptLo = -1; _acceptHi = -1;           // count everything the adapter actually forwards
         try
@@ -132,7 +164,7 @@ public class SlcanAdapter : ICommsAdapter
 
     public async Task<int?> IdentifyBridgeBaseIdAsync(CancellationToken ct = default)
     {
-        if (Serial is not { IsOpen: true }) return null;
+        if (!IoOpen) return null;
         _bridgeBaseId = -1;
         SendRaw("I\r");                              // dingoFW identify; standalone adapters ignore it
         // Poll for the reader to capture the 'I' reply. ~400ms is ample over a 115200 link; a non-dingo
@@ -144,70 +176,99 @@ public class SlcanAdapter : ICommsAdapter
         return _bridgeBaseId >= 0 ? _bridgeBaseId : null;
     }
 
-    public Task<bool> InitAsync(string port, CanBitRate bitRate, CancellationToken ct)
+    /// <summary>
+    /// tcp://host[:port] → (host, port); the port defaults to 7778 (the CoffeeDingoSim bridge). Anything
+    /// else (COM3, /dev/ttyACM0, can0) is a serial port name and returns false.
+    /// </summary>
+    internal static bool TryParseTcpEndpoint(string port, out string host, out int tcpPort)
     {
+        host = ""; tcpPort = 0;
+        if (string.IsNullOrWhiteSpace(port)) return false;
+        var s = port.Trim();
+        if (!s.StartsWith("tcp://", StringComparison.OrdinalIgnoreCase)) return false;
+        if (!Uri.TryCreate(s, UriKind.Absolute, out var u) || string.IsNullOrEmpty(u.Host)) return false;
+        host = u.DnsSafeHost;                       // strips IPv6 brackets
+        tcpPort = u.Port > 0 ? u.Port : DefaultTcpPort;
+        return true;
+    }
+
+    public async Task<bool> InitAsync(string port, CanBitRate bitRate, CancellationToken ct)
+    {
+        // Release any leftover handle from a prior session so re-open can't be denied.
+        CloseTransport(Serial, _tcp);
+        Serial = null; _tcp = null; _io = null;
+        PortName = port;
         try
         {
-            // Release any leftover handle from a prior session so re-open can't be denied.
-            if (Serial != null)
+            if (port.TrimStart().StartsWith("tcp://", StringComparison.OrdinalIgnoreCase))
             {
-                try { Serial.ErrorReceived -= _serial_ErrorReceived; } catch { /* ignore */ }
-                try { if (Serial.IsOpen) Serial.Close(); } catch { /* ignore */ }
-                try { Serial.Dispose(); } catch { /* ignore */ }
-                Serial = null;
+                if (!TryParseTcpEndpoint(port, out var host, out var tcpPort))
+                    throw new FormatException($"'{port}' is not a valid tcp://host:port");
+                var client = new TcpClient();
+                try
+                {
+                    // Bounded connect (~3 s) so a bridge that isn't running fails fast instead of hanging the UI.
+                    using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                    timeout.CancelAfter(TimeSpan.FromSeconds(3));
+                    await client.ConnectAsync(host, tcpPort, timeout.Token);
+                }
+                catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+                {
+                    client.Dispose();
+                    throw new TimeoutException($"No answer from {host}:{tcpPort} within 3 s — is the bridge running?");
+                }
+                catch { client.Dispose(); throw; }
+                client.NoDelay = true;                   // each SLCAN line leaves immediately — no Nagle batching
+                client.ReceiveBufferSize = 1 << 20;      // mirror the serial ReadBufferSize for a ReadAll burst
+                _tcp = client;
+                _io = client.GetStream();
             }
-            PortName = port;
-            Serial = new SerialPort(port, 115200, Parity.None, 8, StopBits.One);
-            Serial.Handshake = Handshake.None;
-            Serial.NewLine = "\r";
-            // Large OS buffer so a burst (e.g. ReadAll streams ~2300 frames back-to-back)
-            // can't overflow the driver buffer before the read thread drains it.
-            Serial.ReadBufferSize = 1 << 20; // 1 MB (~47k SLCAN frames)
-            Serial.WriteBufferSize = 65536;
-            Serial.ReadTimeout = 500;
-            Serial.ErrorReceived += _serial_ErrorReceived;
-            Serial.Open();
+            else
+            {
+                Serial = new SerialPort(port, 115200, Parity.None, 8, StopBits.One);
+                Serial.Handshake = Handshake.None;
+                Serial.NewLine = "\r";
+                // Large OS buffer so a burst (e.g. ReadAll streams ~2300 frames back-to-back)
+                // can't overflow the driver buffer before the read thread drains it.
+                Serial.ReadBufferSize = 1 << 20; // 1 MB (~47k SLCAN frames)
+                Serial.WriteBufferSize = 65536;
+                Serial.ReadTimeout = 500;
+                Serial.ErrorReceived += _serial_ErrorReceived;
+                Serial.Open();
+                _io = Serial.BaseStream;
+            }
 
             RxStopwatch = Stopwatch.StartNew();
         }
-        catch
+        catch (Exception ex)
         {
-            Serial?.ErrorReceived -= _serial_ErrorReceived;
-            Serial?.Close();
+            Console.WriteLine($"[{Name}] open failed for '{port}': {ex.Message}");
+            CloseTransport(Serial, _tcp);
+            Serial = null; _tcp = null; _io = null;
 
             RxStopwatch?.Stop();
             PortName = null;
 
-            return Task.FromResult(false);
+            return false;
         }
-        
+
         _bitrate = ToSlcanBitrate(bitRate);
-        
-        return Task.FromResult(true);
+
+        return true;
     }
 
     public Task<bool> StartAsync(CancellationToken ct)
     {
-        if (Serial is { IsOpen: false }) return Task.FromResult(false);
+        if (!IoOpen) return Task.FromResult(false);
 
         try
         {
             // Send SLCAN commands
-            var sData = "C\r";
-            if (Serial != null)
+            lock (_writeLock)
             {
-                lock (_writeLock)
-                {
-                    Serial.Write(Encoding.ASCII.GetBytes(sData), 0, Encoding.ASCII.GetByteCount(sData));
-
-                    //Set bitrate
-                    sData = "S" + _bitrate + "\r";
-                    Serial.Write(Encoding.ASCII.GetBytes(sData), 0, Encoding.ASCII.GetByteCount(sData));
-
-                    //Open slcan
-                    sData = "O\r";
-                    Serial.Write(Encoding.ASCII.GetBytes(sData), 0, Encoding.ASCII.GetByteCount(sData));
-                }
+                WriteAscii("C\r");                   // close any stale channel
+                WriteAscii("S" + _bitrate + "\r");   // set bitrate
+                WriteAscii("O\r");                   // open slcan
             }
 
             StartConnectionMonitor();
@@ -226,30 +287,41 @@ public class SlcanAdapter : ICommsAdapter
     {
         StopConnectionMonitor();
 
-        // Detach the field first so the read loop sees it gone and further writes stop.
-        var serial = Serial;
-        Serial = null;
+        // Detach the fields first so the read loop sees the transport gone and further writes stop.
+        var io = _io; var serial = Serial; var tcp = _tcp;
+        _io = null; Serial = null; _tcp = null;
 
-        // Best-effort: tell the SLCAN device to close its channel before we drop the port.
-        if (serial != null)
+        // Best-effort: tell the SLCAN device to close its channel before we drop the transport.
+        if (io != null && (serial?.IsOpen ?? TcpUp(tcp)))
         {
-            try { if (serial.IsOpen) lock (_writeLock) serial.Write(Encoding.ASCII.GetBytes("C\r"), 0, 2); } catch { /* shutting down */ }
+            try { lock (_writeLock) { io.Write(Encoding.ASCII.GetBytes("C\r"), 0, 2); if (tcp != null) io.Flush(); } }
+            catch { /* shutting down */ }
         }
 
-        StopReadLoop();   // cancel + join the reader (it was reading serial.BaseStream)
+        StopReadLoop();   // cancel + join the reader (it was reading `io`)
 
-        // Actually release the OS handle. Without this the port stays open and the next
-        // Connect fails with "Access denied" until the device is physically re-plugged.
+        CloseTransport(serial, tcp);
+
+        RxStopwatch?.Stop();
+        RxTimeDelta = new TimeSpan(1, 0, 0);   // force IsConnected = false
+        return Task.FromResult(true);
+    }
+
+    // Actually release the OS handle of either transport. Without this a serial port stays open and the
+    // next Connect fails with "Access denied" until the device is physically re-plugged; a socket would
+    // leak likewise. Disposing the TcpClient also disposes the NetworkStream it handed out.
+    private void CloseTransport(SerialPort? serial, TcpClient? tcp)
+    {
         if (serial != null)
         {
             try { serial.ErrorReceived -= _serial_ErrorReceived; } catch { /* ignore */ }
             try { if (serial.IsOpen) serial.Close(); } catch { /* ignore */ }
             try { serial.Dispose(); } catch { /* ignore */ }
         }
-
-        RxStopwatch?.Stop();
-        RxTimeDelta = new TimeSpan(1, 0, 0);   // force IsConnected = false
-        return Task.FromResult(true);
+        if (tcp != null)
+        {
+            try { tcp.Dispose(); } catch { /* ignore */ }
+        }
     }
 
     // Encodes a single CAN frame into buffer at offset using SLCAN format.
@@ -280,17 +352,16 @@ public class SlcanAdapter : ICommsAdapter
 
     public Task<bool> WriteAsync(CanFrame frame, CancellationToken ct)
     {
-        // `is not { IsOpen: true }` is true when Serial is null OR closed — so a write to a dropped
-        // port returns failure instead of falling through to a no-op `Serial?.Write` that would
-        // falsely report the frame as transmitted.
-        if (Serial is not { IsOpen: true } || frame.Payload.Length != 8)
+        // `!IoOpen` is true when the transport is null OR closed — so a write to a dropped port returns
+        // failure instead of falling through to a no-op that would falsely report the frame as transmitted.
+        if (!IoOpen || frame.Payload.Length != 8)
             return Task.FromResult(false);
 
         try
         {
             var buffer = new byte[22];
             var len = EncodeFrame(frame, buffer, 0);
-            lock (_writeLock) Serial?.Write(buffer, 0, len);
+            lock (_writeLock) WriteIo(buffer, len);
         }
         catch (InvalidOperationException ex)
         {
@@ -318,7 +389,7 @@ public class SlcanAdapter : ICommsAdapter
 
     public Task<bool> WriteBatchAsync(IReadOnlyList<CanFrame> frames, CancellationToken ct)
     {
-        if (Serial is not { IsOpen: true }) return Task.FromResult(false);   // null or closed → not written
+        if (!IoOpen) return Task.FromResult(false);   // null or closed → not written
 
         var frameBuffer = new byte[22];
         try
@@ -331,7 +402,7 @@ public class SlcanAdapter : ICommsAdapter
                 {
                     if (frame.Payload.Length != 8) continue;
                     var len = EncodeFrame(frame, frameBuffer, 0);
-                    Serial!.Write(frameBuffer, 0, len);
+                    WriteIo(frameBuffer, len);
                 }
             }
         }
@@ -358,7 +429,7 @@ public class SlcanAdapter : ICommsAdapter
 
         return Task.FromResult(true);
     }
-    
+
     protected void StartReadLoop()
     {
         _readCts = new CancellationTokenSource();
@@ -391,26 +462,40 @@ public class SlcanAdapter : ICommsAdapter
 
     private void ReadLoop(CancellationToken ct)
     {
-        var stream = Serial?.BaseStream;
+        var stream = _io;
+        var sock = _tcp?.Client;       // non-null on the TCP path only
         if (stream == null) return;
 
         var readBuf = new byte[16384];
         var line = new byte[64];       // an SLCAN 't' frame is <= 22 bytes
         var lineLen = 0;
 
-        while (!ct.IsCancellationRequested && (Serial?.IsOpen ?? false))
+        while (!ct.IsCancellationRequested && IoOpen)
         {
             int n;
             try
             {
-                n = stream.Read(readBuf, 0, readBuf.Length); // bulk read; honors ReadTimeout
+                if (sock != null)
+                {
+                    // A socket has no safe ReadTimeout (once SO_RCVTIMEO fires, Winsock leaves the connection
+                    // in an indeterminate state), so wait with Poll at the serial ReadTimeout cadence (500 ms):
+                    // cancellation is observed without data. Readable-but-empty means the peer closed (FIN).
+                    if (!sock.Poll(500_000, SelectMode.SelectRead)) continue;
+                    if (sock.Available == 0) { HandleDisconnection("ReadLoop: peer closed the connection"); return; }
+                }
+                n = stream.Read(readBuf, 0, readBuf.Length); // bulk read; serial honors ReadTimeout
             }
             catch (TimeoutException) { continue; }
             catch (OperationCanceledException) { return; }
             catch (InvalidOperationException ex) { HandleDisconnection($"ReadLoop: {ex.Message}"); return; }
             catch (IOException ex) { HandleDisconnection($"ReadLoop: {ex.Message}"); return; }
+            catch (SocketException ex) { HandleDisconnection($"ReadLoop: {ex.Message}"); return; }
             catch (ArgumentException ex) { HandleDisconnection($"ReadLoop: {ex.Message}"); return; }
-            if (n <= 0) continue;
+            if (n <= 0)
+            {
+                if (sock != null) { HandleDisconnection("ReadLoop: connection closed"); return; }   // TCP: 0 = EOF
+                continue;
+            }
 
             for (var i = 0; i < n; i++)
             {
@@ -513,6 +598,14 @@ public class SlcanAdapter : ICommsAdapter
 
         try
         {
+            if (_tcp is { } tcp)
+            {
+                // No OS port to enumerate for tcp://… — a dropped socket is caught by the reader (Poll/FIN);
+                // this only mops up a socket whose last I/O faulted.
+                if (!TcpUp(tcp)) HandleDisconnection("tcp: socket closed");
+                return;
+            }
+
             // Cross-platform approach: Check if the port still exists in the system
             // Works on Linux, Windows, and macOS
             if (string.IsNullOrEmpty(PortName))

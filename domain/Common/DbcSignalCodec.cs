@@ -13,7 +13,7 @@ public class DbcSignalCodec
     public static double ExtractSignal(byte[] data, DbcSignal dbcProp)
     {
         return ExtractSignal(data, dbcProp.StartBit, dbcProp.Length, dbcProp.ByteOrder, dbcProp.IsSigned,
-            dbcProp.Factor, dbcProp.Offset);
+            dbcProp.Factor, dbcProp.Offset, dbcProp.IsFloat);
     }
 
     /// <summary>

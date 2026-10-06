@@ -15,7 +15,11 @@ public class Condition : IDeviceFunction
     [JsonPropertyName("input")] public int Input { get; set; }
     [JsonPropertyName("operator")] public Operator Operator {get; set;} = Operator.Equal;
     [JsonPropertyName("arg")] public double Arg {get; set;}
-    [JsonPropertyName("argOff")] public double ArgOff {get; set;}   // hysteresis release; ==Arg → none
+    // Hysteresis release point; == Arg means a plain comparison. Files written before the field existed have no
+    // argOff — that must read back as Arg, not 0: the firmware treats argOff != arg as hysteresis, so a loaded 0
+    // against arg = 2 on ">=" would latch the condition on for good (it was doing exactly that to a wiper relay).
+    [JsonPropertyName("argOff")] public double ArgOff { get => _argOff ?? Arg; set => _argOff = value; }
+    private double? _argOff;
 
     [JsonIgnore][Plotable(displayName:"State")] public int Value {get; set;}
 

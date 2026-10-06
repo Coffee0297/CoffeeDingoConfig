@@ -71,6 +71,18 @@ public static class DbcParser
                         logger?.LogWarning(ex, "Failed to parse signal line: {Line}", trimmedLine);
                     }
                 }
+                // SIG_VALTYPE_ <MessageID> <SignalName> : <1=float32|2=double> ; — marks a signal whose raw
+                // bits are IEEE-754 (e.g. the dingoPDM table outputs). Appears after all BO_/SG_ lines.
+                else if (trimmedLine.StartsWith("SIG_VALTYPE_ "))
+                {
+                    var vt = trimmedLine.TrimEnd(';').Split(new[] { ' ', ':' }, StringSplitOptions.RemoveEmptyEntries);
+                    if (vt.Length >= 4 && long.TryParse(vt[1], out var vtRaw) && int.TryParse(vt[3], out var vtType) && vtType is 1 or 2)
+                    {
+                        var vtId = (int)(vtRaw & 0x1FFFFFFFL);
+                        foreach (var sig in properties.Where(s => s.Id == vtId && s.Name == vt[2]))
+                            sig.IsFloat = true;
+                    }
+                }
             }
 
             logger?.LogInformation("Parsed {Count} signals from DBC file", properties.Count);

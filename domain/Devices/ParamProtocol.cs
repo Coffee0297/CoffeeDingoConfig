@@ -12,6 +12,11 @@ internal class ParamProtocol(IDeviceConfigurable device, List<DeviceParameter> @
 {
     private ILogger _logger = NullLogger.Instance;
 
+    // Only the params the device actually stores. LocalOnly entries (output name / wire labels —
+    // strings and doubles at fake sub-indices) have no CAN counterpart: encoding them threw in
+    // WriteAll/CalcCrc, and a ReadAll reset them to defaults and reported them as "appOnly".
+    private readonly List<DeviceParameter> _params = @params.Where(p => !p.LocalOnly).ToList();
+
     private readonly Dictionary<(int Index, int SubIndex), object> _tempParamValues = new();
     private int _readAllCount;
     private int _writeAllCount;
@@ -53,7 +58,7 @@ internal class ParamProtocol(IDeviceConfigurable device, List<DeviceParameter> @
                 index = data[2] << 8 | data[1];
                 subIndex = data[3];
 
-                matchingParam = @params.FirstOrDefault(p => p.Index == index && p.SubIndex == subIndex);
+                matchingParam = _params.FirstOrDefault(p => p.Index == index && p.SubIndex == subIndex);
 
                 var paramName = "";
                 if (matchingParam != null)
@@ -89,7 +94,7 @@ internal class ParamProtocol(IDeviceConfigurable device, List<DeviceParameter> @
                 index = data[2] << 8 | data[1];
                 subIndex = data[3];
 
-                matchingParam = @params.FirstOrDefault(p => p.Index == index && p.SubIndex == subIndex);
+                matchingParam = _params.FirstOrDefault(p => p.Index == index && p.SubIndex == subIndex);
                 if (matchingParam is null) break;
 
                 if (matchingParam.ValueType == typeof(double))
@@ -133,7 +138,7 @@ internal class ParamProtocol(IDeviceConfigurable device, List<DeviceParameter> @
                 _deviceOnly.Clear();
 
                 _tempParamValues.Clear();
-                foreach (var param in @params)
+                foreach (var param in _params)
                     _tempParamValues[(param.Index, param.SubIndex)] = param.DefaultValue;
 
                 _readAllCount = 0;
@@ -161,7 +166,7 @@ internal class ParamProtocol(IDeviceConfigurable device, List<DeviceParameter> @
                 _readCrc32.Update(data.Skip(4).Take(4).ToArray());
                 _readAllCount++;
 
-                matchingParam = @params.FirstOrDefault(p => p.Index == index && p.SubIndex == subIndex);
+                matchingParam = _params.FirstOrDefault(p => p.Index == index && p.SubIndex == subIndex);
                 if (matchingParam is null)
                 {
                     // The device sent a param this app doesn't know — its firmware is newer than the app.
@@ -204,7 +209,7 @@ internal class ParamProtocol(IDeviceConfigurable device, List<DeviceParameter> @
                     // Diff the device's values against the app's CURRENT config BEFORE we overwrite them,
                     // so we can explain exactly what didn't match (value diffs + params each side is missing).
                     var diff = new List<ConfigDiffEntry>();
-                    foreach (var param in @params)
+                    foreach (var param in _params)
                     {
                         var paramKey = (param.Index, param.SubIndex);
                         if (!_readReceived.Contains(paramKey))
@@ -221,7 +226,7 @@ internal class ParamProtocol(IDeviceConfigurable device, List<DeviceParameter> @
                     device.LastConfigDiff = diff;
 
                     // End of params, apply all temporary values to actual properties
-                    foreach (var param in @params)
+                    foreach (var param in _params)
                     {
                         var paramKey = (param.Index, param.SubIndex);
                         if (_tempParamValues.TryGetValue(paramKey, out var value))
@@ -405,7 +410,7 @@ internal class ParamProtocol(IDeviceConfigurable device, List<DeviceParameter> @
 
     private List<DeviceCanFrame> BuildWriteAllMsgs(int baseId, int txId, bool allParams)
     {
-        var writeParams = allParams ? @params : @params.Where(p => p.IsModified).ToList();
+        var writeParams = allParams ? _params : _params.Where(p => p.IsModified).ToList();
         
         List<DeviceCanFrame> msgs = [];
         _writeAllCount = writeParams.Count;
@@ -450,7 +455,7 @@ internal class ParamProtocol(IDeviceConfigurable device, List<DeviceParameter> @
     private uint CalcCrc()
     {
         uint acc = 0;
-        foreach (var parameter in @params)
+        foreach (var parameter in _params)
         {
             var data = ParamCodec.ToFrame(MessageCommand.Null, parameter, 0);
             var c = new CumulativeCrc32();
