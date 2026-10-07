@@ -17,6 +17,21 @@ All notable changes to **dingoConfig** are recorded here. Versions follow [SemVe
 - CAN-ID guard: an id sent only by Lua `txCan` calls on several modules (a master/backup failover) is listed
   as a **shared Lua ID**, not a conflict; any other owner on the same id still collides.
 
+### Fixed
+- **Analog inputs from a loaded project were written as defaults.** The JSON reader replaces each input's
+  switch / rotary / scale objects after construction, but the param list still pointed at the defaults,
+  so Write All sent every rotary as disabled with no points (`AnalogInput.Params` is now built on read).
+- **Write All no longer fails silently.** A count/CRC mismatch is retried twice, then finished with
+  acknowledged per-parameter writes (a busy bus can drop a frame or two of a 2500-frame batch, and the
+  module keeps its old config when one is missing). A final failure shows an error toast.
+- CANBoard success / error notifications reach the UI (only PDM ones were wired).
+- **A lost Write All completion reply hung the write forever** with no message: the completion frame was sent
+  untracked. It now has the normal reply timeout and retries.
+- "Adapter disconnected" named the adapter "Unknown" (the name was read after it was cleared).
+- **System log flooded by HTTP request lines** when dingoConfig was started from another folder (a shortcut,
+  a script): the content root was that folder, `appsettings.json` was not found and ASP.NET logged every
+  request at Info, pushing real messages out of the log within minutes. The content root is now the exe folder.
+
 ## [0.7.0] — 2026-10-05
 
 Timers, 2-axis lookup tables, the expanded sleep model from upstream dingoFW #52, the upstream flow-editor

@@ -292,9 +292,14 @@ public class DeviceManager(ILogger<DeviceManager> logger, ILoggerFactory loggerF
             case PdmDevice pdmDevice:
                 pdmDevice.SetLogger(loggerFactory.CreateLogger<PdmDevice>());
                 pdmDevice.SuccessNotification += msg => systemLogger.Notify(pdmDevice.Name, msg);
+                pdmDevice.ErrorNotification += msg => systemLogger.Notify(pdmDevice.Name, msg, application.Models.LogLevel.Error);
+                pdmDevice.WriteAllIncomplete += () => FallBackToChunkedWrite(pdmDevice);
                 break;
             case CanboardDevice canboardDevice:
                 canboardDevice.SetLogger(loggerFactory.CreateLogger<CanboardDevice>());
+                canboardDevice.SuccessNotification += msg => systemLogger.Notify(canboardDevice.Name, msg);
+                canboardDevice.ErrorNotification += msg => systemLogger.Notify(canboardDevice.Name, msg, application.Models.LogLevel.Error);
+                canboardDevice.WriteAllIncomplete += () => FallBackToChunkedWrite(canboardDevice);
                 break;
             case DbcDevice dbcDevice:
                 dbcDevice.SetLogger(loggerFactory.CreateLogger<DbcDevice>());
@@ -653,6 +658,18 @@ public class DeviceManager(ILogger<DeviceManager> logger, ILoggerFactory loggerF
     }
 
     /// <summary>
+    /// A WriteAll that stays incomplete after its retries (frames lost on a busy bus — the device then keeps
+    /// its old config) is finished with acknowledged per-parameter writes instead: each one is retried on its
+    /// own, so a lost frame costs one retry instead of the whole batch.
+    /// </summary>
+    private void FallBackToChunkedWrite(IDevice device)
+    {
+        logger.LogWarning("{Name} (ID: {BaseId}): Write All incomplete after retries, writing params one by one", device.Name, device.BaseId);
+        systemLogger.Notify(device.Name, $"{device.Name}: bus dropped frames during Write All — writing parameters one by one", application.Models.LogLevel.Warning);
+        WriteAllParamsChunked(device.Guid);
+    }
+
+    /// <summary>
     /// Write the entire config (or only modified params) one parameter at a time, paced and
     /// windowed — the chunked counterpart to <see cref="ReadAllParamsChunked"/>.
     /// </summary>
@@ -684,6 +701,9 @@ public class DeviceManager(ILogger<DeviceManager> logger, ILoggerFactory loggerF
             }
             logger.LogInformation("Chunked Write All: wrote {Count} params for {Name} (ID: {BaseId})",
                 paramList.Count, device.Name, device.BaseId);
+            // let the queue drain (each write is acknowledged or retried) before reporting
+            for (var waits = 0; _requestQueue.Count > 0 && waits < 2000; waits++) Thread.Sleep(5);
+            systemLogger.Notify(device.Name, $"{device.Name}: wrote {paramList.Count} params one by one — burn to keep them");
         });
     }
 

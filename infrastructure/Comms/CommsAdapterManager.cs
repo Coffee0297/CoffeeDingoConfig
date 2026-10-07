@@ -162,8 +162,9 @@ public class CommsAdapterManager(IServiceProvider serviceProvider, ILogger<Comms
 
     private void OnDisconnected(object? sender, EventArgs e)
     {
+        var name = _activeAdapter?.Name ?? "Unknown";   // DisconnectAsync clears it
         _ = DisconnectAsync();
-        logger.LogWarning("Adapter disconnected: {AdapterName}", _activeAdapter?.Name ?? "Unknown");
+        logger.LogWarning("Adapter disconnected: {AdapterName}", name);
         Disconnected?.Invoke(this, EventArgs.Empty);
     }
 

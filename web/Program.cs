@@ -7,7 +7,13 @@ using web.Api;
 using domain.Interfaces;
 using Microsoft.AspNetCore.Connections;
 
-var builder = WebApplication.CreateBuilder(args);
+// Content root = the exe folder unless started from a folder that has the settings (dotnet run in web/).
+// Launched from anywhere else (a shortcut, a script, another cwd) the default content root is that cwd,
+// appsettings.json is not found and every ASP.NET request gets logged at Info, flooding the system log.
+var contentRoot = File.Exists(Path.Combine(Directory.GetCurrentDirectory(), "appsettings.json"))
+    ? Directory.GetCurrentDirectory()
+    : AppContext.BaseDirectory;
+var builder = WebApplication.CreateBuilder(new WebApplicationOptions { Args = args, ContentRootPath = contentRoot });
 builder.Host.ConfigureHostOptions(opts => opts.ShutdownTimeout = TimeSpan.FromSeconds(5));
 
 // --- Device engine (CAN adapters + device/comms services) ---

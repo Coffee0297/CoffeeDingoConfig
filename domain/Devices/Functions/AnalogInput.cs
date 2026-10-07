@@ -30,7 +30,10 @@ public class AnalogInput : IDeviceFunction
     
     [JsonIgnore][Plotable(displayName:"Millivolts")] public double Millivolts { get; set; }
     
-    [JsonIgnore] public List<DeviceParameter> Params { get; }
+    // Built on every read: the JSON reader replaces Switch/Rotary/Scale after the constructor runs, so a list
+    // captured there would read and write the constructor's default objects (a loaded project then wrote
+    // every rotary/switch/scale setting as its default).
+    [JsonIgnore] public List<DeviceParameter> Params => InitParams();
     
     [JsonConstructor]
     public AnalogInput(int number, string name)
@@ -41,8 +44,6 @@ public class AnalogInput : IDeviceFunction
         Switch = new AnalogSwitch(number, name);
         Rotary = new RotarySwitch(number, name);
         Scale = new AnalogScale(number, name);
-
-        Params = InitParams();
     }
     
     private List<DeviceParameter> InitParams()

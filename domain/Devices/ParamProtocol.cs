@@ -20,7 +20,16 @@ internal class ParamProtocol(IDeviceConfigurable device, List<DeviceParameter> @
     private readonly Dictionary<(int Index, int SubIndex), object> _tempParamValues = new();
     private int _readAllCount;
     private int _writeAllCount;
+    // A busy bus can drop a frame or two of a 600-frame WriteAll (the device then keeps its old config):
+    // re-run the whole WriteAll a couple of times before reporting failure.
+    private const int MaxWriteAllRetries = 2;
+    private int _writeAllRetries;
+    private MessageCommand _writeAllCmd = MessageCommand.WriteAll;
     public Action<string>? NotifySuccess;
+    public Action<string>? NotifyError;
+    // Called when a WriteAll is still incomplete after its retries; returns true when the owner took over
+    // (an acknowledged per-parameter write). Otherwise the failure is reported through NotifyError.
+    public Func<bool>? WriteAllFailed;
     
     private readonly CumulativeCrc32 _writeCrc32 =  new();
     private readonly CumulativeCrc32 _readCrc32 =  new();
@@ -306,6 +315,7 @@ internal class ParamProtocol(IDeviceConfigurable device, List<DeviceParameter> @
                 }
 
                 //Write all modified values
+                _writeAllCmd = MessageCommand.WriteAll;
                 outgoing.AddRange(BuildWriteAllMsgs(baseId, txId, allParams: true));
 
                 _logger.LogInformation("{Name} ID: {BaseId}, Write All Started {Count}", name, baseId, _writeAllCount);
@@ -328,6 +338,7 @@ internal class ParamProtocol(IDeviceConfigurable device, List<DeviceParameter> @
                 }
 
                 //Write all modified values
+                _writeAllCmd = MessageCommand.WriteAllModified;
                 outgoing.AddRange(BuildWriteAllMsgs(baseId, txId, allParams: false));
 
                 _logger.LogInformation("{Name} ID: {BaseId}, Write All Started {Count}", name, baseId, _writeAllCount);
@@ -336,6 +347,14 @@ internal class ParamProtocol(IDeviceConfigurable device, List<DeviceParameter> @
 
             case MessageCommand.WriteAllComplete:
                 if (data.Length != 8) return;
+
+                // queued under the count WE sent (index = count, sub 0); the reply carries the device's count
+                key = (baseId, _writeAllCount, 0);
+                if (queue.TryGetValue(key, out canFrame!))
+                {
+                    canFrame.TimeSentTimer?.Dispose();
+                    queue.TryRemove(key, out _);
+                }
                 
                 var writeAllCount = data[2] << 8 | data[1];
                 uint writeAllCrc = (uint)(data[7] << 24 | data[6] << 16 | data[5] << 8 | data[4]);
@@ -343,16 +362,36 @@ internal class ParamProtocol(IDeviceConfigurable device, List<DeviceParameter> @
                 if (writeAllCrc == _writeCrc32.Final)
                 {
                     // The device acknowledged every param the app sent — they're in sync now.
+                    _writeAllRetries = 0;
                     device.ConfigMismatch = false;
                     device.LastConfigDiff = new List<ConfigDiffEntry>();
                     _logger.LogInformation("{Name} ID: {BaseId}, Write All Completed {pdmCrc} = {thisCrc}, {fromPdm}",
                         name, baseId, writeAllCrc, _writeCrc32.Final, writeAllCount);
                     NotifySuccess?.Invoke($"{name}: Write Successful");
                 }
+                else if (_writeAllRetries < MaxWriteAllRetries)
+                {
+                    _writeAllRetries++;
+                    _logger.LogWarning("{Name} ID: {BaseId}, Write All incomplete ({fromPdm} of {sent} params arrived), retry {Try}/{Max}",
+                        name, baseId, writeAllCount, _writeAllCount, _writeAllRetries, MaxWriteAllRetries);
+                    outgoing.Add(new DeviceCanFrame
+                    {
+                        DeviceBaseId = baseId,
+                        Frame = new CanFrame(Id: txId, Len: 8, Payload: [Convert.ToByte(_writeAllCmd), 0, 0, 0, 0, 0, 0, 0]),
+                        Name = "WriteAll (retry)"
+                    });
+                    break;
+                }
                 else
                 {
+                    _writeAllRetries = 0;
                     _logger.LogError("{Name} ID: {BaseId}, Write All Failed {pdmCrc} != {thisCrc}, {fromPdm} vs {received}",
                         name, baseId, writeAllCrc, _writeCrc32.Final, writeAllCount, _writeAllCount);
+                    // The device keeps its old config when the count/CRC don't match: say so, don't let a
+                    // following burn look like it stored the new one.
+                    device.ConfigMismatch = true;
+                    if (WriteAllFailed?.Invoke() != true)
+                        NotifyError?.Invoke($"{name}: Write failed — device received {writeAllCount} of {_writeAllCount} params, config NOT applied");
                 }
                 
                 outgoing.Add(new DeviceCanFrame
@@ -428,11 +467,11 @@ internal class ParamProtocol(IDeviceConfigurable device, List<DeviceParameter> @
             _writeCrc32.Update(msgs.Last().Frame.Payload.Skip(4).Take(4).ToArray());
         }
 
-        //Write all complete, with num params
+        //Write all complete, with num params. Tracked (not SendOnly): the reply carries the verdict, and
+        //without a timeout a lost reply left the write hanging forever with no message.
         msgs.Add(new DeviceCanFrame
         {
             DeviceBaseId = baseId,
-            SendOnly = true,
             Frame = new CanFrame(
                 Id: txId,
                 Len: 8,

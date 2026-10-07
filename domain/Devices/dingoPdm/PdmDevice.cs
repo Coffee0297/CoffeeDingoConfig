@@ -127,6 +127,8 @@ public class PdmDevice : IDeviceConfigurable
     [JsonIgnore][Plotable(displayName:"Temperature", unit:"degC")] public double BoardTempC { get; private set; }
     [JsonIgnore] public string Version { get; private set; } = "v0.0.0";
     public event Action<string>? SuccessNotification;
+    public event Action<string>? ErrorNotification;
+    public event Action? WriteAllIncomplete;
     
     [JsonPropertyName("sleepEnabled")] public bool SleepEnabled { get; set; }
     // ms, clamped to the firmware's DEVICE_CONFIG range (1000 … 60000) — it silently rejects anything outside.
@@ -976,7 +978,9 @@ public class PdmDevice : IDeviceConfigurable
 
         _paramProtocol = new ParamProtocol(this, Params)
         {
-            NotifySuccess = msg => SuccessNotification?.Invoke(msg)
+            NotifySuccess = msg => SuccessNotification?.Invoke(msg),
+            NotifyError = msg => ErrorNotification?.Invoke(msg),
+            WriteAllFailed = () => { var h = WriteAllIncomplete; h?.Invoke(); return h != null; }
         };
     }
 

@@ -65,6 +65,8 @@ public class CanboardDevice : IDeviceConfigurable
     
     [JsonIgnore] public string Version { get; private set; } = "v0.0.0";
     public event Action<string>? SuccessNotification;
+    public event Action<string>? ErrorNotification;
+    public event Action? WriteAllIncomplete;
     
     [JsonIgnore] private DateTime LastRxTime { get; set; }
     [JsonPropertyName("sleepEnabled")] public bool SleepEnabled { get; set; }
@@ -718,7 +720,9 @@ public class CanboardDevice : IDeviceConfigurable
 
         _paramProtocol = new ParamProtocol(this, Params)
         {
-            NotifySuccess = msg => SuccessNotification?.Invoke(msg)
+            NotifySuccess = msg => SuccessNotification?.Invoke(msg),
+            NotifyError = msg => ErrorNotification?.Invoke(msg),
+            WriteAllFailed = () => { var h = WriteAllIncomplete; h?.Invoke(); return h != null; }
         };
     }
 
