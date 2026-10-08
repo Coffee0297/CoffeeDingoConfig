@@ -7,7 +7,7 @@ namespace tests;
 
 /// <summary>
 /// The var map is index-addressed, so dingoConfig's list must match the firmware's InitVarMap exactly.
-/// Sizes are the firmware's pVarMap length (CONFIG_VERSION 0x0010, read with nm from the built ELFs).
+/// Sizes are the firmware's pVarMap length (CONFIG_VERSION 0x0011, read with nm from the built ELFs).
 /// </summary>
 public class VarMapLayoutTests
 {
@@ -37,6 +37,7 @@ public class VarMapLayoutTests
         var pwm = di.Params.Single(p => p.Name == "input[1].pwm");
         var freq = di.Params.Single(p => p.Name == "input[1].pwmFreq");
         Assert.Equal((5, 6), (pwm.SubIndex, freq.SubIndex));
+        Assert.Equal(7, di.Params.Single(p => p.Name == "input[1].pwmMinPulseUs").SubIndex);
         Assert.Equal(true, pwm.GetValue());
         freq.SetValue(0);
         Assert.Equal(0, di.PwmFreq);

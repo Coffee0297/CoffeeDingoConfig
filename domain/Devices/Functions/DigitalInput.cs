@@ -18,7 +18,8 @@ public class DigitalInput : IDeviceFunction
     [JsonPropertyName("pull")] public InputPull Pull { get; set; } = InputPull.NoPull;
     // PWM mode: the firmware measures duty % and Hz (var map "PWM Duty"/"PWM Frequency") instead of on/off.
     [JsonPropertyName("pwm")] public bool Pwm { get; set; }
-    [JsonPropertyName("pwmFreq")] public int PwmFreq { get; set; }   // Hz; 0 = auto-detect
+    [JsonPropertyName("pwmFreq")] public int PwmFreq { get; set; }   // Hz; 0 = auto-detect (firmware cap per board)
+    [JsonPropertyName("pwmMinPulseUs")] public int PwmMinPulseUs { get; set; }   // glitch filter, us; 0 = off
 
     [JsonIgnore][Plotable(displayName:"State")] public bool State { get; set; }
 
@@ -84,6 +85,13 @@ public class DigitalInput : IDeviceFunction
                 ParentName = Name, Name = $"input[{Number}].pwmFreq", Index = BaseIndex + (Number - 1), SubIndex = subIndex++,
                 GetValue = () => PwmFreq, SetValue = val => PwmFreq = (int)val,
                 ValueType = PwmFreq.GetType(),
+                DefaultValue = 0
+            },
+            new DeviceParameter
+            {
+                ParentName = Name, Name = $"input[{Number}].pwmMinPulseUs", Index = BaseIndex + (Number - 1), SubIndex = subIndex++,
+                GetValue = () => PwmMinPulseUs, SetValue = val => PwmMinPulseUs = (int)val,
+                ValueType = PwmMinPulseUs.GetType(),
                 DefaultValue = 0
             }
         ];

@@ -21,6 +21,14 @@
   let live = $derived(!!current?.connected)
   // Only PDMs run Lua — the CANBoard has no engine. Hide every Lua affordance on boards without it.
   let hasLua = $derived(deviceHasLua(current?.type))
+  // PWM-input limits from each board's DI circuit (firmware DI_PWM_MAX_FREQ caps the frequency setting)
+  let pwmIn = $derived(/canboard/i.test(current?.type ?? '')
+    ? { board: 'CANBoard', maxHz: 5000, drivenHz: '~5 kHz', ocHz: '~5 kHz', ocNote: '',
+        circuit: '10 kΩ series resistor, no filter capacitor.',
+        filterNote: 'Nothing filters harness noise on these pins: a 20–50 µs glitch filter is a good start on long runs.' }
+    : { board: 'dingoPDM', maxHz: 1000, drivenHz: '~1 kHz', ocHz: '~100 Hz', ocNote: ' (it charges the 10 nF slowly); add an external pull-up (e.g. 1 kΩ to 5–12 V) for up to ~1 kHz',
+        circuit: '4.7 kΩ + 10 nF RC with a clamp to 3.3 V.',
+        filterNote: 'The RC already removes short spikes; the glitch filter is rarely needed.' })
 
   // Depend on the guid, not the `current` object: telemetry re-materialises `current` 10×/s, which
   // would re-run these effects (and reset their poll intervals) on every push.
@@ -920,7 +928,15 @@
           <div class="field"><label>Pull resistor</label><select bind:value={f.pull}><option value={0}>None</option><option value={1}>Pull-up</option><option value={2}>Pull-down</option></select></div>
         </div>
         {#if f.pwm}
-          <div class="field" style="max-width:230px"><label>Frequency (Hz, 0 = auto-detect)</label><input type="number" min="0" max="10000" bind:value={f.pwmFreq} /></div>
+          <div class="f2">
+            <div class="field"><label>Frequency (Hz, 0 = auto-detect, max {pwmIn.maxHz})</label>
+              <input type="number" min="0" max={pwmIn.maxHz} bind:value={f.pwmFreq} onchange={() => (f.pwmFreq = Math.max(0, Math.min(pwmIn.maxHz, Math.round(+f.pwmFreq || 0))))} /></div>
+            <div class="field"><label>Glitch filter (µs, 0 = off)</label>
+              <input type="number" min="0" max="10000" bind:value={f.pwmMinPulseUs} onchange={() => (f.pwmMinPulseUs = Math.max(0, Math.min(10000, Math.round(+f.pwmMinPulseUs || 0))))} /></div>
+          </div>
+          <p class="hint"><b>{pwmIn.board} inputs:</b> {pwmIn.circuit} Up to <b>{pwmIn.drivenHz}</b> from a driven (12 V) source;
+            open collector: <b>{pwmIn.ocHz}</b> on the {f.pull === 1 ? 'internal pull-up' : 'pull-up'}{pwmIn.ocNote}. {pwmIn.filterNote}
+            The filter drops any pulse shorter than it, so keep it well under the shortest real pulse (1 % at 1 kHz = 10 µs).</p>
           <label class="chk"><input type="checkbox" bind:checked={f.invert} /> Invert (duty = time low)</label>
           <p class="hint">Gives "{f.name || 'this input'} · PWM Duty" (0–100 %) and "· PWM Frequency" (Hz) as signals. No edges for 3 periods reads 0 % or 100 % from the pin level, and the input's own state goes off.
             Turn an output on at x %: a <b>Condition</b> on PWM Duty (with a turn-off value for hysteresis). Copy it to a PWM output: set the output's duty to follow PWM Duty, signal value at 100 % duty = 100.</p>

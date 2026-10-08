@@ -947,23 +947,49 @@ public class DeviceManager(ILogger<DeviceManager> logger, ILoggerFactory loggerF
         int txId = device.BaseId + 1;             // ConfigTxOffset — device RX channel
 
         logger.LogInformation("UploadLua starting: {Len} bytes to {Name} (txId 0x{TxId:X})", bytes.Length, device.Name, txId);
-        Task.Run(() =>
+        void SendChunk(int off)
+        {
+            var p = new byte[8];
+            p[0] = (byte)domain.Enums.MessageCommand.LuaWrite;
+            p[1] = (byte)(off >> 8); p[2] = (byte)(off & 0xFF);
+            for (int i = 0; i < 5 && off + i < bytes.Length; i++) p[3 + i] = bytes[off + i];
+            QueueMessage(new DeviceCanFrame
+            {
+                DeviceBaseId = device.BaseId, SendOnly = true, Name = "LuaWrite",
+                Frame = new CanFrame(txId, 8, p)
+            });
+        }
+
+        Task.Run(async () =>
         {
             try
             {
                 for (int off = 0; off < bytes.Length; off += 5)
                 {
                     if (GetDevice(deviceId) == null) return;
-                    var p = new byte[8];
-                    p[0] = (byte)domain.Enums.MessageCommand.LuaWrite;
-                    p[1] = (byte)(off >> 8); p[2] = (byte)(off & 0xFF);
-                    for (int i = 0; i < 5 && off + i < bytes.Length; i++) p[3 + i] = bytes[off + i];
-                    QueueMessage(new DeviceCanFrame
-                    {
-                        DeviceBaseId = device.BaseId, SendOnly = true, Name = "LuaWrite",
-                        Frame = new CanFrame(txId, 8, p)
-                    });
+                    SendChunk(off);
                     Thread.Sleep(3);
+                }
+                // The chunks are fire-and-forget: one lost frame left a 5-byte hole that the firmware then
+                // compiled on LuaWriteComplete ("'then' expected near 'treturn'"). Read the program back and
+                // re-send what differs; commit only a verified copy. The firmware persists and recompiles on
+                // Complete alone, so a failed upload leaves the running program and the stored one untouched.
+                var bad = new List<int>();
+                for (int round = 0; round < 3; round++)
+                {
+                    var back = System.Text.Encoding.ASCII.GetBytes(await ReadLua(deviceId));
+                    bad.Clear();
+                    for (int off = 0; off < bytes.Length; off += 5)
+                        for (int i = off; i < Math.Min(off + 5, bytes.Length); i++)
+                            if (i >= back.Length || back[i] != bytes[i]) { bad.Add(off); break; }
+                    if (bad.Count == 0) break;
+                    logger.LogWarning("UploadLua: {Count} chunk(s) to {Name} did not arrive, re-sending (round {Round})", bad.Count, device.Name, round + 1);
+                    foreach (var off in bad) { SendChunk(off); Thread.Sleep(3); }
+                }
+                if (bad.Count > 0)
+                {
+                    logger.LogError("UploadLua failed for {Name}: {Count} chunk(s) still wrong after 3 re-sends; not committed, the device keeps its previous program", device.Name, bad.Count);
+                    return;
                 }
                 QueueMessage(new DeviceCanFrame
                 {
@@ -971,7 +997,7 @@ public class DeviceManager(ILogger<DeviceManager> logger, ILoggerFactory loggerF
                     Frame = new CanFrame(txId, 8,
                         [(byte)domain.Enums.MessageCommand.LuaWriteComplete, (byte)(bytes.Length >> 8), (byte)(bytes.Length & 0xFF), 0, 0, 0, 0, 0])
                 });
-                logger.LogInformation("UploadLua done: {Len} bytes to {Name}", bytes.Length, device.Name);
+                logger.LogInformation("UploadLua done: {Len} bytes to {Name}, verified by read-back", bytes.Length, device.Name);
             }
             catch (Exception ex)
             {
