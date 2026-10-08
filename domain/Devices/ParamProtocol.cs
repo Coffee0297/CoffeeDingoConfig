@@ -41,6 +41,21 @@ internal class ParamProtocol(IDeviceConfigurable device, List<DeviceParameter> @
 
     public void SetLogger(ILogger logger) => _logger = logger;
 
+    // The value field (bytes 4..7) of a param reply, converted to the param's type.
+    private static object DecodeValue(DeviceParameter p, byte[] data)
+    {
+        if (p.ValueType == typeof(double))
+            return DbcSignalCodec.ExtractSignal(data, startBit: 32, length: 32, isFloat: true);
+        var raw = DbcSignalCodec.ExtractSignal(data, startBit: 32, length: 32, isSigned: p.IsSignedInt);
+        return p.ValueType switch
+        {
+            { } t when t == typeof(bool) => raw != 0,
+            { } t when t == typeof(int) => (int)raw,
+            { IsEnum: true } t => Enum.ToObject(t, (int)raw),
+            _ => raw
+        };
+    }
+
     public void HandleMessage(
         int baseId,
         int txId,
@@ -76,11 +91,17 @@ internal class ParamProtocol(IDeviceConfigurable device, List<DeviceParameter> @
                 }
 
                 key = (baseId, index, subIndex);
+                var singleWrite = false;
                 if (queue.TryGetValue(key, out canFrame!))
                 {
+                    singleWrite = canFrame.Frame.Payload.Length > 0 && canFrame.Frame.Payload[0] == (byte)MessageCommand.Write;
                     canFrame.TimeSentTimer?.Dispose();
                     queue.TryRemove(key, out _);
                 }
+                // A refused single Write carries the value the module kept (firmware 0x0011+): take it, so the
+                // project matches the device instead of keeping the value that was never applied.
+                if (singleWrite && (MessageCommand)data[0] == MessageCommand.WriteAllOutOfRange && matchingParam is not null)
+                    matchingParam.SetValue(DecodeValue(matchingParam, data));
 
                 var errorType = (MessageCommand)data[0] switch
                 {
@@ -106,25 +127,7 @@ internal class ParamProtocol(IDeviceConfigurable device, List<DeviceParameter> @
                 matchingParam = _params.FirstOrDefault(p => p.Index == index && p.SubIndex == subIndex);
                 if (matchingParam is null) break;
 
-                if (matchingParam.ValueType == typeof(double))
-                {
-                    convertedValue = DbcSignalCodec.ExtractSignal(data, startBit: 32, length: 32, isFloat: true);
-                }
-                else
-                {
-                    rawValue = DbcSignalCodec.ExtractSignal(data, startBit: 32, length: 32, isSigned: matchingParam.IsSignedInt);
-
-                    // Convert to the appropriate type based on param.ValueType
-                    convertedValue = matchingParam.ValueType switch
-                    {
-                        { } t when t == typeof(bool) => rawValue != 0,
-                        { } t when t == typeof(int) => (int)rawValue,
-                        { IsEnum: true } t => Enum.ToObject(t, (int)rawValue),
-                        _ => rawValue
-                    };
-                }
-
-                matchingParam.SetValue(convertedValue);
+                matchingParam.SetValue(DecodeValue(matchingParam, data));
 
                 key = (baseId, index, subIndex);
                 if (queue.TryGetValue(key, out canFrame!))

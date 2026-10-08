@@ -273,6 +273,7 @@ public class DeviceManager(ILogger<DeviceManager> logger, ILoggerFactory loggerF
     /// </summary>
     public void OnCanDataReceived(CanFrame frame)
     {
+        RecordWriteOutcome(frame);
         foreach (var device in _devices.Values)
         {
             if (device.InIdRange(frame.Id))
@@ -412,6 +413,62 @@ public class DeviceManager(ILogger<DeviceManager> logger, ILoggerFactory loggerF
         // NOTE: Timer starts after transmission in OnFrameTransmitted
     }
 
+    // ---- single-write confirmation --------------------------------------------------------------
+    // A Write used to be reported "written" as soon as it was queued; a value the module refused (out of
+    // range) never came back and the project silently drifted from the device. The module now answers every
+    // single Write: an echo of the stored value (accepted) or WriteAllOutOfRange / WriteAllParamNotFound
+    // (refused; out of range carries the value it kept, which ParamProtocol puts back into the project).
+    public enum WriteOutcome { Accepted, OutOfRange, NotFound, NoReply }
+    public sealed record WriteResult(string Param, int Index, int SubIndex, WriteOutcome Outcome, object? Value);
+    private readonly ConcurrentDictionary<(int BaseId, int Index, int SubIndex), WriteOutcome> _writeOutcomes = new();
+
+    private void RecordWriteOutcome(CanFrame frame)
+    {
+        if (frame.Payload.Length != 8) return;
+        var outcome = (domain.Enums.MessageCommand)frame.Payload[0] switch
+        {
+            domain.Enums.MessageCommand.Write => WriteOutcome.Accepted,
+            domain.Enums.MessageCommand.WriteAllOutOfRange => WriteOutcome.OutOfRange,
+            domain.Enums.MessageCommand.WriteAllParamNotFound => WriteOutcome.NotFound,
+            _ => (WriteOutcome?)null
+        };
+        if (outcome is null) return;
+        // replies come on the module's base id (firmware CONFIG_TX_OFFSET 0); only a pending single Write counts
+        var key = (frame.Id, frame.Payload[2] << 8 | frame.Payload[1], (int)frame.Payload[3]);
+        if (_requestQueue.TryGetValue(key, out var pending) && pending.Frame.Payload[0] == (byte)domain.Enums.MessageCommand.Write)
+            _writeOutcomes[key] = outcome.Value;
+    }
+
+    /// <summary>
+    /// Run <paramref name="write"/> (which queues single Writes for <paramref name="keys"/>) and wait for the
+    /// module's verdict on each: accepted, refused (the project now holds the value the module kept), or no
+    /// reply after the retries (~7 s). Values are the project's after the replies.
+    /// </summary>
+    public async Task<List<WriteResult>> WriteAndConfirm(Guid deviceId, IReadOnlyList<(int Index, int SubIndex)> keys, Action write, int timeoutMs = 8000)
+    {
+        var device = GetDevice(deviceId);
+        var res = new List<WriteResult>();
+        if (device is null) return res;
+        var k = keys.Select(x => (device.BaseId, x.Index, x.SubIndex)).ToList();
+        foreach (var key in k) _writeOutcomes.TryRemove(key, out _);
+        write();
+        for (var waited = 0; waited < timeoutMs && k.Any(key => !_writeOutcomes.ContainsKey(key)); waited += 50)
+            await Task.Delay(50);
+        var ps = (device as IDeviceConfigurable)?.Params;
+        foreach (var key in k)
+        {
+            var p = ps?.FirstOrDefault(x => x.Index == key.Index && x.SubIndex == key.SubIndex);
+            var o = _writeOutcomes.TryRemove(key, out var got) ? got : WriteOutcome.NoReply;
+            res.Add(new WriteResult(p?.Name ?? $"0x{key.Index:X4}:{key.SubIndex}", key.Index, key.SubIndex, o, p?.GetValue()));
+        }
+        return res;
+    }
+
+    /// <summary>The (index, sub) of every device param of one function slot, as WriteFunctionParams writes them.</summary>
+    public IReadOnlyList<(int Index, int SubIndex)> FunctionParamKeys(Guid deviceId, int index) =>
+        (GetDevice(deviceId) as IDeviceConfigurable)?.Params.Where(p => p.Index == index && !p.LocalOnly)
+            .Select(p => (p.Index, p.SubIndex)).ToList() ?? [];
+
     private void StartMessageTimer((int, int, int) key, DeviceCanFrame frame)
     {
         frame.TimeSentTimer = new Timer(_ => { HandleMessageTimeout(key, frame); }, null, TimeoutMs, Timeout.Infinite);
@@ -429,6 +486,8 @@ public class DeviceManager(ILogger<DeviceManager> logger, ILoggerFactory loggerF
             // Max retries exceeded - remove and log error
             _requestQueue.TryRemove(key, out _);
             frame.TimeSentTimer?.Dispose();
+            if (frame.Frame.Payload.Length > 0 && frame.Frame.Payload[0] == (byte)domain.Enums.MessageCommand.Write)
+                _writeOutcomes[key] = WriteOutcome.NoReply;
 
             int index =  frame.Frame.Payload[2] << 8 | frame.Frame.Payload[1];
             int subIndex = frame.Frame.Payload[3];

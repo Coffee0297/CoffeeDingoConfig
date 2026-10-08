@@ -639,7 +639,7 @@ public static class LiveApi
         });
 
         // Set an output's current limit (used by the output editor; also the write-path test hook)
-        api.MapPost("/devices/{guid}/output", (string guid, SetOutputReq r, DeviceManager dm, ICommsAdapterManager adapters) =>
+        api.MapPost("/devices/{guid}/output", async (string guid, SetOutputReq r, DeviceManager dm, ICommsAdapterManager adapters) =>
         {
             if (!Guid.TryParse(guid, out var g)) return Results.BadRequest();
             var d = dm.GetDevice<PdmDevice>(g);
@@ -649,9 +649,9 @@ public static class LiveApi
             // Push it to the module over CAN only when it's live, and report which happened so a
             // caller (e.g. the MCP set_output tool, described as "live") never reads the in-memory
             // change as a confirmed device write.
-            var live = IsLiveModule(g, dm, adapters);
-            if (live) dm.WriteOutputParams(g, r.Number);
-            return Results.Ok(new { ok = true, o.Number, o.CurrentLimit, written = live });
+            if (!IsLiveModule(g, dm, adapters)) return Results.Ok(new { ok = true, o.Number, o.CurrentLimit, written = false });
+            var res = await dm.WriteAndConfirm(g, dm.FunctionParamKeys(g, 0x1000 + (r.Number - 1)), () => dm.WriteOutputParams(g, r.Number));
+            return WriteReport(res, new() { ["Number"] = o.Number, ["CurrentLimit"] = o.CurrentLimit });
         });
 
         // Output bench test (firmware ≥ 5.5.107, MsgCmd 48): force an output on / PWM for a bounded hold.
@@ -683,7 +683,7 @@ public static class LiveApi
 
         // Apply an output's config from the editor, then write that output's params to the
         // device (paced). Burn separately to persist to flash.
-        api.MapPost("/devices/{guid}/outputconfig", (string guid, OutputConfigReq r, DeviceManager dm, ICommsAdapterManager adapters) =>
+        api.MapPost("/devices/{guid}/outputconfig", async (string guid, OutputConfigReq r, DeviceManager dm, ICommsAdapterManager adapters) =>
         {
             if (!Guid.TryParse(guid, out var g)) return Results.BadRequest();
             var d = dm.GetDevice<PdmDevice>(g);
@@ -724,9 +724,8 @@ public static class LiveApi
             // The record edit above always persists (offline config authoring). Only push to the
             // module over CAN when it is actually live; report which happened so the UI can say
             // "written to device" vs "saved to project".
-            var live = IsLiveModule(g, dm, adapters);
-            if (live) dm.WriteOutputParams(g, r.Number);
-            return Results.Ok(new { ok = true, written = live });
+            if (!IsLiveModule(g, dm, adapters)) return Results.Ok(new { ok = true, written = false });
+            return WriteReport(await dm.WriteAndConfirm(g, dm.FunctionParamKeys(g, 0x1000 + (r.Number - 1)), () => dm.WriteOutputParams(g, r.Number)));
         });
 
         // Single-param read/write (paced, no bulk burst) — reliable on the USB-direct link.
@@ -739,13 +738,14 @@ public static class LiveApi
             return dm.ReadParam(g, r.Index, r.Sub) ? Results.Ok(new { ok = true }) : Results.BadRequest();
         });
 
-        api.MapPost("/devices/{guid}/writeparam", (string guid, WriteParamReq r, DeviceManager dm, ICommsAdapterManager adapters) =>
+        api.MapPost("/devices/{guid}/writeparam", async (string guid, WriteParamReq r, DeviceManager dm, ICommsAdapterManager adapters) =>
         {
             if (!Guid.TryParse(guid, out var g)) return Results.BadRequest();
             if (r.Index is < 0 or > 0xFFFF || r.Sub is < 0 or > 0xFF)
                 return Results.BadRequest(new { ok = false, error = "Index must be 0–65535 (0xFFFF) and Sub 0–255 (0xFF)." });
             if (RequireLiveModule(g, dm, adapters, "write") is { } bad) return bad;
-            return dm.WriteParam(g, r.Index, r.Sub, r.Value) ? Results.Ok(new { ok = true }) : Results.BadRequest();
+            if (dm.GetDevice(g) is null) return Results.BadRequest();
+            return WriteReport(await dm.WriteAndConfirm(g, [(r.Index, r.Sub)], () => dm.WriteParam(g, r.Index, r.Sub, r.Value)));
         });
 
         api.MapPost("/devices/{guid}/remove", (string guid, DeviceManager dm) =>
@@ -799,7 +799,7 @@ public static class LiveApi
         // The module's own var-map inputs — the force-sleep and mute-TX signals (device params 0x0000:10 / :11).
         // The Wiring canvas wires them like any function input. Record edit persists offline; CAN write when
         // live. Same field-safety as System ▸ Settings: a module-level always-true signal is refused.
-        api.MapPost("/devices/{guid}/device-inputs", (string guid, DeviceInputsReq r, DeviceManager dm, ICommsAdapterManager adapters) =>
+        api.MapPost("/devices/{guid}/device-inputs", async (string guid, DeviceInputsReq r, DeviceManager dm, ICommsAdapterManager adapters) =>
         {
             if (!Guid.TryParse(guid, out var g)) return Results.BadRequest();
             var dev = dm.GetDevice(g);
@@ -826,13 +826,21 @@ public static class LiveApi
                     break;
             }
             var live = IsLiveModule(g, dm, adapters);
+            List<DeviceManager.WriteResult>? res = null;
             if (live)
             {
-                if (r.ForceSleepInput is { } a) dm.WriteParam(g, 0x0000, 10, (uint)a);
-                if (r.MuteTxInput is { } b) dm.WriteParam(g, 0x0000, 11, (uint)b);
+                var keys = new List<(int, int)>();
+                if (r.ForceSleepInput is not null) keys.Add((0x0000, 10));
+                if (r.MuteTxInput is not null) keys.Add((0x0000, 11));
+                res = await dm.WriteAndConfirm(g, keys, () =>
+                {
+                    if (r.ForceSleepInput is { } a) dm.WriteParam(g, 0x0000, 10, (uint)a);
+                    if (r.MuteTxInput is { } b) dm.WriteParam(g, 0x0000, 11, (uint)b);
+                });
             }
             var (fsNow, mtNow) = dev is PdmDevice pp ? (pp.ForceSleepInput, pp.MuteTxInput) : (0, ((CanboardDevice)dev).MuteTxInput);
-            return Results.Ok(new { ok = true, written = live, forceSleepInput = fsNow, muteTxInput = mtNow });
+            if (res is null) return Results.Ok(new { ok = true, written = false, forceSleepInput = fsNow, muteTxInput = mtNow });
+            return WriteReport(res, new() { ["forceSleepInput"] = fsNow, ["muteTxInput"] = mtNow });
         });
 
         // Apply one function's fields from the editor, then write its params to the device.
@@ -848,9 +856,8 @@ public static class LiveApi
             if (rejected.Count > 0)
                 return Results.BadRequest(new { ok = false, error = $"invalid value for {string.Join(", ", rejected)} — nothing was written to the device" });
             // Record edit persists offline; CAN write only when live (see /outputconfig).
-            var live = IsLiveModule(g, dm, adapters);
-            if (live) dm.WriteFunctionParams(g, paramIndex);
-            return Results.Ok(new { ok = true, written = live });
+            if (!IsLiveModule(g, dm, adapters)) return Results.Ok(new { ok = true, written = false });
+            return WriteReport(await dm.WriteAndConfirm(g, dm.FunctionParamKeys(g, paramIndex), () => dm.WriteFunctionParams(g, paramIndex)));
         });
 
         // Upload one assembled Lua program to the device (chunked, paced on the backend).
@@ -1217,7 +1224,7 @@ public static class LiveApi
         // SOURCE module's broadcast signal. Resolves the signal's current absolute CAN id + bit layout
         // from the source's frame map and writes the consumer's CAN input — what the UI picker does
         // client-side, in one call. Re-run after a source base-ID change to re-resolve the id.
-        api.MapPost("/devices/{guid}/link-remote", (string guid, LinkRemoteReq r, DeviceManager dm, ICommsAdapterManager adapters) =>
+        api.MapPost("/devices/{guid}/link-remote", async (string guid, LinkRemoteReq r, DeviceManager dm, ICommsAdapterManager adapters) =>
         {
             if (!Guid.TryParse(guid, out var cg) || dm.GetDevice(cg) is not IDeviceConfigurable consumer)
                 return Results.BadRequest(new { error = "bad or non-configurable consumer guid" });
@@ -1240,14 +1247,14 @@ public static class LiveApi
             ci.Signed = sig.IsSigned;
             if (string.IsNullOrWhiteSpace(ci.Name) || System.Text.RegularExpressions.Regex.IsMatch(ci.Name, @"^canInput\d+$"))
                 ci.Name = $"{src.Name} {sig.Name}";
-            var live = IsLiveModule(cg, dm, adapters);
-            if (live) dm.WriteFunctionParams(cg, paramIndex);
-            return Results.Ok(new
+            var info = new Dictionary<string, object?>
             {
-                ok = true, written = live, source = src.Name, signal = sig.Name, canInput = r.CanInput,
-                id = ci.Id, ide = ci.Ide, startBit = ci.StartBit, bitLength = ci.BitLength,
-                factor = ci.Factor, offset = ci.Offset, byteOrder = (int)ci.ByteOrder, signed = ci.Signed, name = ci.Name,
-            });
+                ["source"] = src.Name, ["signal"] = sig.Name, ["canInput"] = r.CanInput,
+                ["id"] = ci.Id, ["ide"] = ci.Ide, ["startBit"] = ci.StartBit, ["bitLength"] = ci.BitLength,
+                ["factor"] = ci.Factor, ["offset"] = ci.Offset, ["byteOrder"] = (int)ci.ByteOrder, ["signed"] = ci.Signed, ["name"] = ci.Name,
+            };
+            if (!IsLiveModule(cg, dm, adapters)) return Results.Ok(new Dictionary<string, object?>(info) { ["ok"] = true, ["written"] = false });
+            return WriteReport(await dm.WriteAndConfirm(cg, dm.FunctionParamKeys(cg, paramIndex), () => dm.WriteFunctionParams(cg, paramIndex)), info);
         });
 
         // Cross-module functions, server-side: compile a list of function definitions (trigger → target
@@ -1591,6 +1598,24 @@ public static class LiveApi
     // True when the adapter is open and the module is answering. Used by endpoints that ALSO
     // persist an offline project-record edit (outputconfig/function): the record edit always
     // applies; only the CAN write is conditioned on this so offline config authoring still works.
+    // A live write's response: "written" only when the module acknowledged every param. A refused value is
+    // named with the value the module kept (the project now holds it too); no reply after the retries is said
+    // as such. Either way the status is 409 so no caller (UI toast, MCP tool) reads it as done.
+    private static IResult WriteReport(List<DeviceManager.WriteResult> res, Dictionary<string, object?>? extra = null)
+    {
+        var rejected = res.Where(x => x.Outcome is DeviceManager.WriteOutcome.OutOfRange or DeviceManager.WriteOutcome.NotFound)
+            .Select(x => new { param = x.Param, reason = x.Outcome == DeviceManager.WriteOutcome.OutOfRange ? "out of range" : "unknown to this firmware", kept = x.Value }).ToList();
+        var noReply = res.Where(x => x.Outcome == DeviceManager.WriteOutcome.NoReply).Select(x => x.Param).ToList();
+        var ok = rejected.Count == 0 && noReply.Count == 0;
+        var body = new Dictionary<string, object?>(extra ?? []) { ["ok"] = ok, ["written"] = ok };
+        if (rejected.Count > 0) body["rejected"] = rejected;
+        if (noReply.Count > 0) body["noReply"] = noReply;
+        if (!ok)
+            body["error"] = string.Join("; ", rejected.Select(x => $"{x.param} {x.reason}: the module kept {x.kept}")
+                .Concat(noReply.Count > 0 ? [$"no reply for {string.Join(", ", noReply)}: not confirmed on the device"] : []));
+        return ok ? Results.Ok(body) : Results.Json(body, statusCode: 409);
+    }
+
     private static bool IsLiveModule(Guid g, DeviceManager dm, ICommsAdapterManager adapters)
     {
         if (!adapters.GetStatus().isConnected) return false;
