@@ -914,12 +914,20 @@
       {:else if editing.kind === 'input'}
         <label class="opt" style="border:0;padding-top:0"><input type="checkbox" bind:checked={f.enabled} /> Input enabled</label>
         <div class="field"><label>Name</label><input bind:value={f.name} /></div>
+        <label class="chk"><input type="checkbox" bind:checked={f.pwm} /> PWM input (measure duty % and frequency)</label>
         <div class="f2">
-          <div class="field"><label>Mode</label><select bind:value={f.mode}><option value={0}>Momentary</option><option value={1}>Latched</option></select></div>
+          {#if !f.pwm}<div class="field"><label>Mode</label><select bind:value={f.mode}><option value={0}>Momentary</option><option value={1}>Latched</option></select></div>{/if}
           <div class="field"><label>Pull resistor</label><select bind:value={f.pull}><option value={0}>None</option><option value={1}>Pull-up</option><option value={2}>Pull-down</option></select></div>
         </div>
-        <div class="field" style="max-width:230px"><label>Debounce (ms)</label><input type="number" min="0" bind:value={f.debounceTime} /></div>
-        <label class="chk"><input type="checkbox" bind:checked={f.invert} /> Invert (treat low as "on")</label>
+        {#if f.pwm}
+          <div class="field" style="max-width:230px"><label>Frequency (Hz, 0 = auto-detect)</label><input type="number" min="0" max="10000" bind:value={f.pwmFreq} /></div>
+          <label class="chk"><input type="checkbox" bind:checked={f.invert} /> Invert (duty = time low)</label>
+          <p class="hint">Gives "{f.name || 'this input'} · PWM Duty" (0–100 %) and "· PWM Frequency" (Hz) as signals. No edges for 3 periods reads 0 % or 100 % from the pin level, and the input's own state goes off.
+            Turn an output on at x %: a <b>Condition</b> on PWM Duty (with a turn-off value for hysteresis). Copy it to a PWM output: set the output's duty to follow PWM Duty, signal value at 100 % duty = 100.</p>
+        {:else}
+          <div class="field" style="max-width:230px"><label>Debounce (ms)</label><input type="number" min="0" bind:value={f.debounceTime} /></div>
+          <label class="chk"><input type="checkbox" bind:checked={f.invert} /> Invert (treat low as "on")</label>
+        {/if}
       {:else if editing.kind === 'condition'}
         <div class="field"><label>Name</label><input bind:value={f.name} /></div>
         <div class="field"><label>Signal</label>

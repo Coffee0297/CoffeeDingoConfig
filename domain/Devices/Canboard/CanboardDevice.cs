@@ -621,6 +621,22 @@ public class CanboardDevice : IDeviceConfigurable
                 SingleVariable = false
             });
         }
+
+        // Digital-input PWM measurement (duty %, Hz), appended after the timers like the firmware.
+        for (var i = 0; i < NumDigitalInputs; i++)
+        {
+            var num = i;
+            VarMap.Add(new DeviceVariable
+            {
+                GetName = () => DigitalInputs[num].Name, OwnerKind = "input", OwnerNumber = num + 1,
+                PropertyName = "PWM Duty", DataType = "float", VariableIndex = index++, SingleVariable = false
+            });
+            VarMap.Add(new DeviceVariable
+            {
+                GetName = () => DigitalInputs[num].Name, OwnerKind = "input", OwnerNumber = num + 1,
+                PropertyName = "PWM Frequency", DataType = "float", VariableIndex = index++, SingleVariable = false
+            });
+        }
     }
 
     private void InitParams()

@@ -16,6 +16,9 @@ public class DigitalInput : IDeviceFunction
     [JsonPropertyName("mode")] public InputMode Mode { get; set; } = InputMode.Momentary;
     [JsonPropertyName("debounceTime")] public int DebounceTime { get; set; } = 20;
     [JsonPropertyName("pull")] public InputPull Pull { get; set; } = InputPull.NoPull;
+    // PWM mode: the firmware measures duty % and Hz (var map "PWM Duty"/"PWM Frequency") instead of on/off.
+    [JsonPropertyName("pwm")] public bool Pwm { get; set; }
+    [JsonPropertyName("pwmFreq")] public int PwmFreq { get; set; }   // Hz; 0 = auto-detect
 
     [JsonIgnore][Plotable(displayName:"State")] public bool State { get; set; }
 
@@ -68,6 +71,20 @@ public class DigitalInput : IDeviceFunction
                 GetValue = () => Pull, SetValue = val => Pull = (InputPull)val,
                 ValueType = Pull.GetType(),
                 DefaultValue = InputPull.NoPull
+            },
+            new DeviceParameter
+            {
+                ParentName = Name, Name = $"input[{Number}].pwm", Index = BaseIndex + (Number - 1), SubIndex = subIndex++,
+                GetValue = () => Pwm, SetValue = val => Pwm = (bool)val,
+                ValueType = Pwm.GetType(),
+                DefaultValue = false
+            },
+            new DeviceParameter
+            {
+                ParentName = Name, Name = $"input[{Number}].pwmFreq", Index = BaseIndex + (Number - 1), SubIndex = subIndex++,
+                GetValue = () => PwmFreq, SetValue = val => PwmFreq = (int)val,
+                ValueType = PwmFreq.GetType(),
+                DefaultValue = 0
             }
         ];
     }
