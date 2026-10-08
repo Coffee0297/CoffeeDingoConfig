@@ -5,7 +5,19 @@ All notable changes to **dingoConfig** are recorded here. Versions follow [SemVe
 
 ## [Unreleased]
 
+## [0.8.0] — 2026-10-08
+
+PWM inputs on every digital input, confirmed parameter writes and verified Lua uploads. Pairs with
+**CoffeeDingoFW v5.5.108** (`CONFIG_VERSION` 0x0011: flashing resets a module's config, so deploy it again);
+minimum firmware is now **5.5.108**. Verified in CoffeeDingoSim (a 7-module vehicle scene) and by unit tests,
+**not yet on hardware**.
+
 ### Added
+- **PWM input** on any digital input (input editor ▸ *PWM input*): duty % and frequency become the signals
+  "PWM Duty" and "PWM Frequency", appended at the end of the var map so existing input numbers stay put.
+  Frequency auto-detect or fixed, capped per board from its input circuit (dingoPDM 1 kHz, CANBoard 5 kHz),
+  a **glitch filter** (µs) and per-board limits shown in the editor (open collector on the PDM's internal
+  pull-up only ~100 Hz). Use it with a Condition ("on at x %") or an output's variable duty.
 - SLCAN adapter accepts `tcp://host:port` (CoffeeDingoSim bridge); a **Sim** button next to the port box
   fills in `tcp://127.0.0.1:7778`.
 - A faulted / over-current output card says **why** it tripped (peak vs the limit that fired, read from the
@@ -18,6 +30,14 @@ All notable changes to **dingoConfig** are recorded here. Versions follow [SemVe
   as a **shared Lua ID**, not a conflict; any other owner on the same id still collides.
 
 ### Fixed
+- **Lua uploads could arrive with holes and still report success.** The 5-byte chunks were fire-and-forget,
+  so one lost CAN frame left a gap that the firmware then compiled ("'then' expected near 'treturn'"). The
+  upload now reads the program back, re-sends what differs and only then commits it; a failed upload is
+  logged and leaves the module's previous program running and stored.
+- **Single parameter writes reported `written:true` for values the module refused.** `set_function`, output,
+  output config, raw `write_param`, device inputs and remote-signal link now wait for the module's answer:
+  written only when every param was echoed; a refused value is named with the value the module kept (the
+  project takes that value back), no reply is reported as such, and both return HTTP 409.
 - **Analog inputs from a loaded project were written as defaults.** The JSON reader replaces each input's
   switch / rotary / scale objects after construction, but the param list still pointed at the defaults,
   so Write All sent every rotary as disabled with no points (`AnalogInput.Params` is now built on read).
