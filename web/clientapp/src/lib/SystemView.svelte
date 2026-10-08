@@ -607,20 +607,25 @@
         <p class="hint" style="margin-top:10px">For a <b>brand-new / blank module</b> (no firmware yet, not on the CAN bus):
           connect it by <b>USB</b>, put it in DFU — hold <b>BOOT0</b> while powering on / resetting — then Flash.
           dfu-util writes the binary and the module reboots into it. No CAN connection needed.</p>
+      {:else if flashMode === 'can'}
+        <p class="hint" style="margin-top:10px">No USB needed: the module is told to restart into its <b>OpenBLT bootloader</b>,
+          the <b>.srec</b> is written over the CAN bus (XCP), then it restarts into the new firmware.
+          <b>Keep it powered</b> while it flashes. The bootloader stays in flash, so an interrupted update can simply be
+          run again. A module flashed by USB / SWD without the bootloader cannot be updated over CAN.</p>
       {:else}
         <p class="hint" style="margin-top:10px">The module is commanded into its DFU bootloader, the binary is written with
           dfu-util, then it reboots into the new firmware. <b>Keep it powered</b> (~20 s). If it can't enter DFU, hold
           <b>BOOT0</b> and reset, then flash. The ROM bootloader is always recoverable via BOOT0.</p>
       {/if}
 
-      <div style="display:flex;align-items:center;gap:10px;margin-top:10px">
+      {#if flashMode !== 'can'}<div style="display:flex;align-items:center;gap:10px;margin-top:10px">
         <button class="btn ghost" disabled={flashBusy || dfuScanning} onclick={scanDfu}>{dfuScanning ? 'Scanning…' : '🔍 Scan for DFU device'}</button>
         {#if dfuScan}
           {#if dfuScan.devices > 0}<span style="color:var(--ok,#3aa)">✓ {dfuScan.devices} board{dfuScan.devices === 1 ? '' : 's'} in DFU, ready to flash</span>
           {:else if !dfuScan.utilOk}<span style="color:var(--err)">✗ dfu-util not found/runnable</span>
           {:else}<span style="color:var(--err)">✗ no board in DFU — put it in DFU (BOOT0 + reset) and/or install the WinUSB driver (Zadig)</span>{/if}
         {/if}
-      </div>
+      </div>{/if}
       {#if dfuScan?.devices > 0}<p class="hint" style="margin-top:4px">One board shows several DFU interfaces below (Internal Flash, Option Bytes, …) — that's normal; only Internal Flash is written.</p>{/if}
       {#if dfuScan?.raw}
         <pre style="background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:8px;font-size:11px;max-height:140px;overflow:auto;white-space:pre-wrap;margin-top:6px">{dfuScan.raw}</pre>

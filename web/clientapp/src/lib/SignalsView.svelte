@@ -611,16 +611,29 @@
   let luaOpen = $state(false)
   let luaSrc = $state('')
   let luaSeededFor = $state(null)
+  const LUA_TEMPLATE =
+    '-- Shared/global Lua. Runs on the device.\n' +
+    '-- API: readVar(i) setLuaOut(slot,v) | txCan(bus,id,ext,{bytes}) canRxAdd(id)\n' +
+    '--      onCanRx(bus,id,dlc,data) onTick() setTickRate(hz) Timer.new()\n' +
+    '-- Per-output logic goes in each output’s Lua tab.\n\n' +
+    'setTickRate(50)\n'
   $effect(() => {
     const g = current?.guid
     if (g && g !== luaSeededFor) {
-      luaSrc = luaGet(g, 'global') ||
-        '-- Shared/global Lua. Runs on the device.\n' +
-        '-- API: readVar(i) setLuaOut(slot,v) | txCan(bus,id,ext,{bytes}) canRxAdd(id)\n' +
-        '--      onCanRx(bus,id,dlc,data) onTick() setTickRate(hz) Timer.new()\n' +
-        '-- Per-output logic goes in each output’s Lua tab.\n\n' +
-        'setTickRate(50)\n'
-      luaSeededFor = g
+      // The pieces live in this browser's localStorage. A browser without them (another PC, cleared site
+      // data) used to start from the template, and Upload then replaced the module's real program with it.
+      // Load the real one first: the program stored in the project (what Deploy uploads; instant). "Read from
+      // device" still pulls the running program off a live module.
+      const local = Object.entries(untrack(() => $luaSnippets)[g] || {}).some(([k, t]) => t?.trim() && !(k === 'global' && t === LUA_TEMPLATE))   // the untouched template the old code saved is not a program
+      if (local || !hasLua) {
+        luaSrc = luaGet(g, 'global') || LUA_TEMPLATE
+        luaSeededFor = g
+      } else {
+        luaSrc = ''
+        luaReadToTabs(g, true)
+          .then(() => { if (current?.guid === g) { luaSrc = luaGet(g, 'global') || LUA_TEMPLATE; luaSeededFor = g } })
+          .catch(() => { if (current?.guid === g) { luaSrc = LUA_TEMPLATE; luaSeededFor = g } })
+      }
     }
   })
   let luaBusy = $state(false), luaMsg = $state(''), luaTab = $state('global')

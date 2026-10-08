@@ -104,7 +104,7 @@ export const api = {
   inputsInUse: (guid) => j('GET', `/api/devices/${guid}/inputs?inUse=true`),
   functions: (guid) => j('GET', `/api/devices/${guid}/functions`),
   luaUpload: (guid, Source) => j('POST', `/api/devices/${guid}/lua`, { Source }),
-  luaRead: (guid) => j('GET', `/api/devices/${guid}/lua`),
+  luaRead: (guid, stored = false) => j('GET', `/api/devices/${guid}/lua${stored ? '?stored=true' : ''}`),
   luaError: (guid) => j('GET', `/api/devices/${guid}/luaerror`),
   overloads: (guid) => j('GET', `/api/devices/${guid}/overloads`),
   overloadsClear: (guid) => j('POST', `/api/devices/${guid}/overloads/clear`),
@@ -436,9 +436,9 @@ export function luaParse(text) {
 }
 
 // Read the program off the device and populate the per-function snippet store.
-export async function luaReadToTabs(guid) {
+export async function luaReadToTabs(guid, stored = false) {
   // api.luaRead can return null (j() yields null on an empty 200 body); never destructure it blind.
-  const res = await api.luaRead(guid)
+  const res = await api.luaRead(guid, stored)
   const source = res?.source ?? ''
   const { global, outs } = luaParse(source)
   luaSnippets.update((v) => {

@@ -877,9 +877,11 @@ public static class LiveApi
         });
 
         // Read the stored Lua program back from the device (a live CAN read).
-        api.MapGet("/devices/{guid}/lua", async (string guid, DeviceManager dm, ICommsAdapterManager adapters) =>
+        api.MapGet("/devices/{guid}/lua", async (string guid, bool? stored, DeviceManager dm, ICommsAdapterManager adapters) =>
         {
             if (!Guid.TryParse(guid, out var g)) return Results.BadRequest();
+            // ?stored=true: the project's program without touching the bus (a live read takes ~1 min for 2 KB)
+            if (stored == true) return Results.Ok(new { source = dm.GetStoredLua(g), live = false });
             // Live: read the running program off the device. Offline: return the stored program from
             // the project record (so cross-module / authored Lua is visible without a live module).
             if (IsLiveModule(g, dm, adapters))
