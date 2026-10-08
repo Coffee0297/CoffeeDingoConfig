@@ -1,103 +1,114 @@
-# dingoConfig
+[![GitHub Release](https://img.shields.io/github/v/release/Coffee0297/CoffeeDingoConfig?display_name=tag)](https://github.com/Coffee0297/CoffeeDingoConfig/releases)
+[![Upstream](https://img.shields.io/badge/fork%20of-corygrant%2FdingoConfig-lightgrey)](https://github.com/corygrant/dingoConfig)
 
-Configuration and live-monitoring tool for **dingoPDM** CAN power-distribution modules and
-**CANBoard** I/O modules. A single self-contained app (lean ASP.NET .NET 10 backend + Svelte/Vite
-SPA) that owns the CAN link — runs on **Windows, macOS, and Linux**.
+# CoffeeDingoConfig
 
-> **Firmware:** built for the matching **dingoPDM firmware**
-> ([CoffeeDingoFW v5.5.107](https://github.com/Coffee0297/CoffeeDingoFW/releases)). The advanced
-> features — Lua scripting, the on-device overload/trip log, warning & open-load detection, timers,
-> lookup tables and the force-sleep / mute-TX / wake-source model — only work on that build. The tool
-> expects firmware **≥ 5.5.107** and shows a "firmware needs updating" notice below that.
+Configuration, live-monitoring and firmware-update tool for **dingoPDM** power-distribution modules and
+**CANBoard** I/O modules: a fork of [corygrant/dingoConfig](https://github.com/corygrant/dingoConfig),
+rebuilt as one self-contained app (lean ASP.NET .NET 10 backend + Svelte SPA in your browser) for
+**Windows, macOS and Linux**. It configures a whole vehicle at once rather than one module at a time: every
+module on the bus, the wiring between them, Lua programs, firmware updates over CAN, and an MCP server so an
+AI agent can do all of it too.
 
-## Added in this fork — options not in the upstream dingoConfig `testing` branch
+> **Firmware:** built for [CoffeeDingoFW](https://github.com/Coffee0297/CoffeeDingoFW). v0.8.0 expects
+> **≥ 5.5.108** (PWM inputs, confirmed writes); older builds show a "firmware needs updating" notice and
+> hide what they can't do. Want to try it without hardware? Point it at
+> [CoffeeDingoSim](https://github.com/Coffee0297/CoffeeDingoSim), which runs the real firmware on a virtual bus.
 
-Features/options this fork adds on top of the original dingoConfig. (The analog input as a simple
-**on/off threshold switch** was already in the original — that's *not* listed here.)
+![System view: seven modules live on one bus, with Flash over CAN on each card](docs/img/system.png)
 
-**Whole-vehicle / multi-module**
-1. **System overview + map of the car** — a single view of every module in the vehicle, laid out as a map.
-2. **Cross-module / shared components** — define a behaviour once that spans modules, and **point a CAN
-   input at another module's broadcast signal** with a searchable picker. It lists only the source's
-   *wired-up* signals (e.g. "CB-1 → rotary switch 4") and fills the frame ID/bits/scaling for you,
-   address-agnostically (`base + offset`); nothing is written until you Save, and re-basing the source
-   flags the consumers that need re-applying.
-3. **Wiring node-graph (wiring modules)** — drag from an output ● to an input ● to wire functions within
-   or across modules; visual block layout.
-4. **System summary** — per-module live current total + "N on", and a **vehicle-wide worst-case load**
-   (sum of every enabled output's trip point).
+*All screenshots: five dingoPDMs and two CANBoards of one vehicle, running live in CoffeeDingoSim.*
 
-**Per-module / per-output**
-5. **Wiring suggestions & colours** — per output: recommended **wire gauge (AWG/mm²)** from the current
-   rating, **voltage-drop** estimate, and a recordable wire **colour + stripe + length**.
-6. **Per-output / per-PDM summary + live mini-graphs** — each output card graphs its **current (A)** or
-   its trigger live; per-module status at a glance.
-7. **Plotting tool** — a global live plot: chart **any signal from any module**, show/hide lines,
-   export PNG.
-8. **Full Lua editor (Lua 5.5)** — a global/shared section plus per-function snippets, assembled into one
-   program and uploaded; runtime errors read back from the device.
+## Compared with the original dingoConfig
 
-**Analog input (CANBoard) — new options** *(need CoffeeDingoFW ≥ v5.5.101)*
-9. **Multi-position / rotary switch** (up to 10) — a **resistor-ladder designer** (E12/E24, auto pull-up,
-   even spread, noise-margin readout) **and** a **calibrate-from-switch** guide that captures the live
-   voltage at each detent; uneven steps decode via per-position windows.
-10. **Linear-scaled sensor** — two-point (mV → value) scaling; the input reads out in engineering units
-    (bar, °C, psi…) and the scaled value is usable in Conditions, outputs and CAN.
-11. **CANBoard live readouts + CANBoard-focused UI** — mV / decoded position / digital I/O / logic stream
-    live; Outputs is a digital-output card grid; Signals leads with the physical I/O; the Dashboard shows
-    only what the board measures.
+Compared from source: the original's `main` is release **v0.2.17**; its `testing` branch holds the
+pre-releases 0.3.0–0.4.2. "testing" below means the feature is only on that branch. ✅ = present, ❌ = absent.
 
-**Other**
-12. **Built-in firmware flasher (USB DFU)** — update a module's firmware from inside the app: it commands
-    the module into its DFU bootloader and writes the `.bin` with **dfu-util**. Also flashes a **brand-new /
-    blank module** (no firmware, not on the bus): put it in DFU (BOOT0 + reset) and use **⬆ Flash new
-    module** on the System view — no CAN connection needed. A **🔍 Scan for DFU device** button shows how
-    many **boards** are in DFU (one STM32 exposes several DFU interfaces — that's normal; only Internal
-    Flash is written) plus the raw `dfu-util -l` listing, so a failed flash is never blind.
-13. **MCP server** — drive the whole tool from an AI agent (read/configure modules, outputs, signals, Lua).
-14. **Quality of life** — reload resumes the last view + module; Lua hidden on boards without a Lua engine;
-    **project save/open to a local PC file** (cross-platform); per-output hardware current rating by model.
+| Feature | Original | This fork | Notes |
+|---|---|---|---|
+| Enter bootloader | ✅ | ✅ | The original stops there; flashing needs an external tool |
+| **Flash firmware over USB DFU** from the app | ❌ | ✅ | dfu-util built in, progress bar, keeps the bootloader |
+| **Flash a blank board** (DFU, no CAN link) | ❌ | ✅ | *Flash new module* + *Scan for DFU device* |
+| **Flash firmware over CAN** (OpenBLT XCP, `.srec`) | ❌ | ✅ | Per module, the System card offers USB or CAN; also an MCP tool |
+| Adapters: SLCAN, PCAN, SocketCAN, Sim replay | ✅ | ✅ | |
+| Adapter: **Kvaser** (CANlib) | ❌ | ✅ | Windows |
+| Adapter: **SLCAN over TCP** (`tcp://host:port`) | ❌ | ✅ | One click to CoffeeDingoSim (`tcp://127.0.0.1:7778`) |
+| Adapter: separate dingoPDM "USB" | ✅ | ❌ | Dropped: the PDM's USB speaks SLCAN anyway |
+| Works on a flooded bus (hardware accept-filter while reading/writing/flashing) | ❌ | ✅ | |
+| Bus discovery, *Add from CAN* | ❌ | ✅ | Handles the PDM's base − 2 offset |
+| **System view**: all modules, car-layout map, vehicle worst-case load | ❌ | ✅ | |
+| **Wiring node graph** | testing | ✅ | Typed ports, wires that glow live, Circuit Builder wizards |
+| Guided rule builder in the output editor | ❌ | ✅ | |
+| Signals view with a live 30 s chart per row | partial | ✅ | |
+| **Lua editor + upload** | ❌ | ✅ | Global + per-function pieces, runtime errors read back |
+| Lua upload **verified by read-back** | ❌ | ✅ | A failed upload leaves the old program running |
+| **Cross-module functions** + deploy | ❌ | ✅ | A rule compiles to native CAN wiring, or write it in Lua |
+| CAN input from another module's broadcast signal | ❌ | ✅ | Searchable picker, `base + offset` |
+| DBC devices and DBC-signal CAN inputs | ✅ | ✅ | Fork adds ECU import, search, float signals |
+| CAN-ID conflict guard, *Suggest* free base ID | ❌ | ✅ | Plus `tools/canfree.py` offline |
+| Live output cards | ✅ | ✅ | Fork adds a current sparkline, why it tripped, wire gauge / voltage drop |
+| **Trip log** with the current waveform | ❌ | ✅ | |
+| Global plot (any signal, any module) | testing | ✅ | PNG export |
+| CAN log / system log, CSV export | ✅ | ✅ | Fork adds record / download |
+| PWM output, duty from a signal | ✅ | ✅ | |
+| PWM frequency from a signal; CANBoard output PWM | ❌ | ✅ | |
+| **PWM input** (duty + Hz on a digital input) | ❌ | ✅ | Glitch filter, per-board frequency cap |
+| Condition **hysteresis**, **timers**, **lookup tables** | ❌ | ✅ | |
+| Analog: calibrated rotary (ladder designer, calibrate from switch), linear sensor | partial | ✅ | Original: uniform offset/step rotary only |
+| Force-sleep / mute-TX / wake sources | testing | ✅ | Plus a shutdown & sleep sequence designer |
+| Output bench test (force on / PWM) | ❌ | ✅ | |
+| Keypads (Blink Marine / Grayhill) + SDO | ✅ | ✅ | |
+| Write All with CRC | ✅ | ✅ | Fork retries, then falls back to acknowledged single writes |
+| **Confirmed single writes** | ❌ | ✅ | A refused value is reported with what the module kept |
+| Project as a local PC file, config diff (module vs project) | partial | ✅ | |
+| **REST API** + **MCP server** for AI agents | ❌ | ✅ | ~57 tools, 11 skills |
+| Unit tests + CI | ❌ | ✅ | |
 
-**CAN addressing & frame map**
-15. **Collision-free base IDs** — the System view flags modules whose CAN-ID spans overlap (per-type,
-    matching the firmware's broadcast footprint), and **Add / Modify module** can **Suggest** the lowest
-    free base, with an **OBD-II reserve toggle** (uncheck for buses with no OBD) and a live free-window
-    readout. A standalone [`tools/canfree.py`](tools/canfree.py) does the same **offline from a DBC or CAN
-    log** — free-ID report + base-address allocator (e.g. `--preset dingo:5pdm,2cb`).
-16. **Address-agnostic CAN frame map** — [`docs/can-frame-map.md`](docs/can-frame-map.md) documents every
-    cyclic frame each module type broadcasts as `base + offset` + bit layout (rotary switches, inputs,
-    output state/current, …). Served at `/can-frame-map.md` and via the `get_frame_map` MCP tool, so an
-    agent can decode the bus with no device connected.
+**Known limitation:** project files from the original 0.3.0 and later keep PDMs and CANBoards in one
+`Devices` list; this fork uses separate lists, so opening such a file loads no modules. Add the modules here
+and *Read* them off the bus instead (their config lives on the modules).
 
-**Logic blocks & sleep** *(need CoffeeDingoFW ≥ v5.5.107)*
-17. **Timer function** (upstream dingoFW #61) — on-delay / off-delay / pulse with a ms preset and a selectable
-    active level; 8 per PDM, 4 per CANBoard. Drive anything from it — including the module's force-sleep input
-    ("sleep 30 s after the ignition goes off").
-18. **2-axis lookup table** (upstream dingoConfig #58) — up to 8×8 cells, bilinear interpolation, edited as a grid
-    with a live interpolated preview; one row = a 1-D curve (fan duty vs temperature). PDM/-Max only.
-19. **Expanded sleep** (upstream dingoFW #52) — a **shutdown & sleep sequence designer** with a timeline (ignition
-    signal → quiet on CAN → held outputs off → sleep; master / follower roles where one module's shutdown frame puts
-    the rest to sleep, enrolled automatically), built on a **force-sleep** signal, a **mute CAN broadcasts** signal
-    (both also wireable as input ports on the module block of the Wiring canvas), and
-    per-input / CAN **wake sources**, all configured in System ▸ ⚙ Settings. Each module decides locally — no
-    inter-module handshake.
-20. **Wiring graph upgrades** (ported from upstream's flow editor) — type-coloured, type-checked ports (the dot under
-    the cursor rings green/red while you drag), wires that glow while on, inline editing below the canvas, a single
-    device node, free-slot counts in the Add menu, delete confirmation with the wire count, Duty/Freq source ports on
-    outputs, CANBoard outputs on the canvas.
-21. **Output bench test** — from an output's editor (or the ⚡ test link on its card while live) force the output
-    **on** or run **PWM at a chosen duty / frequency** to check wiring and loads, without touching its rule. The
-    module holds the test 5 s per command and the editor re-sends while it runs, so Stop, closing the panel or a
-    dropped link releases it by itself; PDM limits and fault handling stay active. PDM/-Max outputs and CANBoard
-    digital outputs; firmware ≥ 5.5.107.
+## Guide
 
-> ⚠️ The CANBoard analog features (9–11) pair with **CoffeeDingoFW ≥ v5.5.101**, which **has not been
-> flashed/tested on a CanBoard yet** — verify on hardware before relying on it.
+### Connect
+1. Run `dingoConfig.exe` (or the macOS / Linux binary, see [Install & run](#install--run)); the browser opens
+   at <http://localhost:5000>.
+2. Pick the adapter, port (`COM3`, `/dev/ttyACM0`, or `tcp://127.0.0.1:7778` for the simulator) and bitrate.
+3. **🔍 Add from CAN** finds every module and adds it at its base ID. *Read* pulls each config into the project.
 
-![System view — a 5-PDM + 3-CANBoard vehicle](docs/img/system.png)
+### Change things
+- **Outputs**: per output the rule that turns it on, current / inrush limit, reset mode, PWM or soft start, plus
+  wire gauge hints. *Test* forces it on to check the wiring.
+- **Signals & logic**: inputs (digital, PWM, analog switch / rotary / sensor, CAN), conditions, virtual
+  inputs, flashers, counters, timers, tables. Each row shows its last 30 s live.
+- **Wiring**: the same functions as a node graph. Drag from an output ● to an input ●; *Circuit builder…*
+  creates common circuits (switched load, fuel pump prime + run, after-run fan) in one go.
+- **Lua** (PDMs): anything the blocks can't do. The editor loads the program stored in the project; *Read
+  from device* pulls the running one.
+- **Across modules**: a CAN input can take another module's signal by name, and a *cross-module function*
+  (System view) is written once and deployed to every module it touches.
 
-> The screenshots below are a sample **5×dingoPDM + 3×CANBoard** vehicle. One module ("Front Left")
-> is live on the bus; the rest are configured-but-offline ("not found").
+### Save it
+*Deploy* writes the project to the module, *Burn* stores it in its flash/FRAM. **Project ▾** saves the whole
+vehicle as one JSON file.
+
+### Update firmware
+- A module running CoffeeDingoFW with the CAN bootloader: **⬆ Flash over CAN** on its System card, pick the
+  `.srec`. No USB, the module stays in the car.
+- Otherwise **⬆ Flash over USB** (`.bin`), or **⬆ Flash new module** for a blank board held in DFU (BOOT0 +
+  reset).
+
+![Firmware update over CAN](docs/img/flash.png)
+
+### Let an AI do it
+Point Claude Code / Copilot CLI at `http://localhost:5000/mcp` (see [MCP](#drive-it-from-an-ai-model-mcp)).
+Everything above is a tool: a request like "add a fan on PDM-02 output 4 that runs above 90 °C" can be carried out from one prompt.
+
+### Troubleshoot
+**Logs** shows the live CAN traffic per ID (record and download it), the system log, and each module's trip
+log with the current around every trip.
+
+![Logs: live CAN traffic](docs/img/logs.png)
 
 ---
 
@@ -169,6 +180,8 @@ to wire one function into another; delete a block with its **✕** or by selecti
 over CAN. Changes write live — Burn to keep.
 
 ### Lua scripting
+![Lua editor](docs/img/lua.png)
+
 Any output / virtual input / CAN output can be driven by a **Lua slot**. There's a global/shared
 section plus per-function snippets, assembled into one program and uploaded to the device
 (`setTickRate`, `readVar`, `setLuaOut`, `txCan`, `canRxAdd`, `onCanRx`, timers, …). Runtime errors
@@ -200,6 +213,8 @@ Chart **any signal from any module** live. Add as many series as you like, toggl
 legend chips, pause, pick the time window, and **export a PNG**.
 
 ### Dashboard
+![Dashboard](docs/img/dashboard.png)
+
 Live state of the selected module — battery, total current, board temperature, every output — plus
 Read / Write / Burn and Sleep / Wakeup controls.
 
@@ -214,10 +229,11 @@ Per-module sleep behaviour, written and burned to the device:
 - A CAN sleep command waits ~2 s for the bus to settle, and sleeping is refused while USB is
   connected (prevents the wake-reset soft-lock)
 
-### Firmware update (in-app DFU)
-Update a module's firmware over USB DFU from the **⬆ Firmware** button — the app commands the
-module into its bootloader and flashes the `.bin` with a live progress bar. BOOT0 recovery is
-always available.
+### Firmware update (USB DFU or CAN)
+Each module's System card offers **⬆ Flash over CAN** when it runs the OpenBLT CAN bootloader: the app
+restarts it into the bootloader and writes the `.srec` over the bus (XCP), with no USB connection. Otherwise
+**⬆ Flash over USB** commands it into DFU and writes the `.bin` with dfu-util, and **⬆ Flash new module**
+programs a blank board held in DFU. Both show a live progress bar; BOOT0 recovery is always available.
 
 ### Keypads (Blink Marine / Grayhill)
 Configure keypad buttons (action, LED colour, what the LED mirrors) and the keypad's own persistent
@@ -340,6 +356,8 @@ dotnet publish web/web.csproj -c Release -r osx-arm64 --self-contained true \
 ---
 
 ## Drive it from an AI model (MCP)
+
+![MCP tab](docs/img/mcp.png)
 
 dingoConfig **hosts an MCP server inside the app** so AI clients can drive an entire system
 directly — no UI automation. **Every UI capability is exposed as a tool (57)**, plus eleven guided
