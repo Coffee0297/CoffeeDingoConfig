@@ -11,7 +11,7 @@ module on the bus, the wiring between them, Lua programs, firmware updates over 
 AI agent can do all of it too.
 
 > **Firmware:** built for [CoffeeDingoFW](https://github.com/Coffee0297/CoffeeDingoFW). v0.8.0 expects
-> **≥ 5.5.108** (PWM inputs, confirmed writes); older builds show a "firmware needs updating" notice and
+> **≥ 5.5.108** (PWM inputs, confirmed writes; latest v5.5.109); older builds show a "firmware needs updating" notice and
 > hide what they can't do. Want to try it without hardware? Point it at
 > [CoffeeDingoSim](https://github.com/Coffee0297/CoffeeDingoSim), which runs the real firmware on a virtual bus.
 
@@ -93,10 +93,17 @@ and *Read* them off the bus instead (their config lives on the modules).
 vehicle as one JSON file.
 
 ### Update firmware
+Every [CoffeeDingoFW release](https://github.com/Coffee0297/CoffeeDingoFW/releases) (v5.5.109 on) carries all
+of it per board: `.srec` (CAN), `.bin` (USB), `.hex` / `.elf`, and the OpenBLT bootloaders.
+
 - A module running CoffeeDingoFW with the CAN bootloader: **⬆ Flash over CAN** on its System card, pick the
   `.srec`. No USB, the module stays in the car.
 - Otherwise **⬆ Flash over USB** (`.bin`), or **⬆ Flash new module** for a blank board held in DFU (BOOT0 +
   reset).
+- A batch of blank boards, or a CANBoard's first flash (SWD only, it has no USB):
+  [`flash-dingo.ps1`](https://github.com/Coffee0297/CoffeeDingoFW#batch-swd-flashing-flash-dingops1) in the
+  firmware repo. It downloads the release, installs the bootloader + firmware over SWD or the PDM's USB-C,
+  and verifies every board, so from then on every update goes over CAN from here.
 
 ![Firmware update over CAN](docs/img/flash.png)
 
