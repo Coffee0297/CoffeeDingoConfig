@@ -5,6 +5,25 @@ All notable changes to **dingoConfig** are recorded here. Versions follow [SemVe
 
 ## [Unreleased]
 
+### Added
+- **Templates tab**: ready-made circuits — **Headlights** (low / high / flash-to-pass, optional ignition and
+  H4 low-off-with-high), **Washer + wipers** (the module's wiper block with park switch and wipes after
+  washing, pump on the wash button), plus blinker / hazard, fuel pump, after-run, analog switch, PWM fan and
+  simple switched circuits. Outputs can be any output on any module, each optionally **through a relay**;
+  inputs any signal on the bus. The logic runs on the module that owns the outputs and an input from
+  another module becomes a CAN input there on Apply.
+- **Drawings** per template: *Wiring* (switches to their connector pins; each load, with its relay laid out
+  for how the output switches — a dingoPDM output feeds the coil, a CANBoard output grounds it) and *Links*
+  (input → CAN → logic blocks → output). Both save as SVG.
+- Applied templates are kept in the project file: **Edit** re-applies with new picks, **✕** disables what it
+  created and gives taken-over outputs back their previous input. A failed apply rolls itself back.
+- **Bus-wide pickers**: inputs and outputs are listed with their **connector pin** (dingoPDM v7 J3, CANBoard
+  J2/J3/J4) and function (`DI3`, `OUT1`, `DO2`), searchable by name, `J3-3`, `pin 3` or module. Unused input
+  pins are offered too and get enabled (and named after their role) when used.
+
+### Changed
+- The Wiring tab's Circuit Builder runs on the same template engine (`lib/templates.js`).
+
 ## [0.8.0] — 2026-10-08
 
 PWM inputs on every digital input, confirmed parameter writes and verified Lua uploads. Pairs with

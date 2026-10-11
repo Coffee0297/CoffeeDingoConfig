@@ -14,8 +14,10 @@
   let root
   let active = $state(0)   // keyboard-highlighted option index (into the visible/capped list)
   let sel = $derived(norm.find((o) => o.value === value))
-  let filtered = $derived(q.trim()
-    ? norm.filter((o) => o.label.toLowerCase().includes(q.trim().toLowerCase()))
+  // Every word must appear ("cb-1 ign"); an option may carry extra `search` text beyond its label (pins).
+  let words = $derived(q.trim().toLowerCase().split(/\s+/).filter(Boolean))
+  let filtered = $derived(words.length
+    ? norm.filter((o) => { const t = (o.label + ' ' + (o.search ?? '')).toLowerCase(); return words.every((w) => t.includes(w)) })
     : norm)
   const CAP = 200   // render cap — keep the DOM light for huge lists (e.g. 2500 DBC signals)
   let shown = $derived(filtered.slice(0, CAP))

@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "test": "node src/lib/ladder.test.js && node src/lib/table.test.js && node src/lib/trip.test.js"
+    "test": "node src/lib/ladder.test.js && node src/lib/table.test.js && node src/lib/trip.test.js && node src/lib/pinmap.test.js && node src/lib/businputs.test.js && node src/lib/templates.test.js"
   },
   "devDependencies": {
     "@sveltejs/vite-plugin-svelte": "^7.1.2",

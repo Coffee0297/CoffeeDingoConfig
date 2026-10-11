@@ -12,6 +12,7 @@
   import DeviceTypeView from './lib/DeviceTypeView.svelte'
   import KeypadView from './lib/KeypadView.svelte'
   import GraphView from './lib/GraphView.svelte'
+  import TemplatesView from './lib/TemplatesView.svelte'
   import PlotView from './lib/PlotView.svelte'
   import McpView from './lib/McpView.svelte'
   import { tripReason } from './lib/trip.js'
@@ -175,7 +176,7 @@
   const bitrates = ['1000K', '500K', '250K', '125K', '100K']
   const navs = [
     ['system', 'System'], ['dashboard', 'Dashboard'], ['outputs', 'Outputs'],
-    ['signals', 'Signals & logic'], ['wiring', 'Wiring'], ['plot', 'Plot'], ['logs', 'Logs'],
+    ['signals', 'Signals & logic'], ['wiring', 'Wiring'], ['templates', 'Templates'], ['plot', 'Plot'], ['logs', 'Logs'],
     ['mcp', 'MCP'],
   ]
 
@@ -206,6 +207,12 @@
       'CANBoard analog inputs decode a rotary (multi-position) switch, an on/off threshold or a scaled sensor; the Wiper block and PDM keypads live here too.',
       '＋ from another module / ECU pulls a signal off the bus as a local CAN input; the list shows the other module\'s own names.',
       'Lua — any output / virtual input / CAN output can be driven by a Lua slot (setLuaOut(0) drives “Lua Out 1”). Upload sends the program; Burn keeps it.' ] },
+    templates: { title: 'Templates', body: [
+      'Ready-made circuits: headlights, washer + wipers, blinkers, fuel pump, after-run, PWM fan and more.',
+      'Outputs — any output on any module, by module, connector pin (J3-7), OUT1/DO2 or name. Tick “through a relay” and the wiring drawing puts the relay on the right side: a dingoPDM output feeds the coil (high side), a CANBoard output grounds it (low side).',
+      'Inputs — any signal on the bus. The logic runs on the module that owns the outputs; a switch on another module becomes a CAN input there when you Apply.',
+      'The drawings show where every wire lands (Wiring) and how the signals flow (Links); ⬇ SVG saves them.',
+      'Applied templates are listed on the left and saved with the project: Edit re-applies with new picks, ✕ disables its blocks and unwires its outputs. Burn to keep (Deploy when offline).' ] },
     wiring: { title: 'Wiring', body: [
       'A node-graph of the module’s functions. Drag from an output ● (right) to an input ● (left); dots are coloured by type (green bool, blue int, amber real) and a mismatched wire won’t land.',
       'Delete a block with its ✕ or by selecting it and pressing Delete (the function is disabled on the device).',
@@ -782,6 +789,8 @@
       {/if}
     {:else if view === 'wiring'}
       <GraphView device={current} {devices} {dark} onOpenSettings={openItemSettings} />
+    {:else if view === 'templates'}
+      <TemplatesView {current} {devices} />
     {:else if view === 'plot'}
       <PlotView {devices} />
     {:else if view === 'logs'}

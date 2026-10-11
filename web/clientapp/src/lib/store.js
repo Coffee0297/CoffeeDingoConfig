@@ -2,6 +2,7 @@ import { writable, get } from 'svelte/store'
 import * as signalR from '@microsoft/signalr'
 import { toast } from './toast.js'
 import { spanAfter, isModule } from './canids.js'
+import { isDefaultName } from './businputs.js'
 
 // Live telemetry pushed from the .NET backend (devices + CAN stats), 10 Hz
 export const telemetry = writable({
@@ -400,6 +401,19 @@ export const addCanInputFromBroadcast = (consumerGuid, source, sig) => addCanInp
   factor: sig.factor, offset: sig.valueOffset, isSigned: sig.signed,
 })
 
+// Turn on a physical input that a pick relies on (an unused pin reads nothing until enabled), naming it
+// after what it now does when it still has its default name. phys = {kind: 'input'|'analoginput', number}.
+// Returns true when it had to enable it.
+export async function ensureInputEnabled(guid, phys, name) {
+  if (!phys) return false
+  const f = await api.functions(guid)
+  const list = phys.kind === 'input' ? (f?.inputs ?? f?.digitalIn) : f?.analogIn
+  const x = (list ?? []).find((i) => i.number === phys.number)
+  if (!x || x.enabled) return false
+  await api.setFunction(guid, phys.kind, phys.number, { enabled: true, ...(isDefaultName(x.name) && name ? { name: name.slice(0, 20) } : {}) })
+  return true
+}
+
 // ---- Lua snippets (authored per-function in the tool; the device stores one
 // assembled program). Persisted to localStorage, keyed by device guid then a
 // slot key ('global', 'out1'.. etc). ----
@@ -527,6 +541,13 @@ export function wantedId(link, devices) {
   return src ? src.baseId + link.offset : null
 }
 
+// Applied templates (Templates tab): what each one was built from and what it created, so it can be edited
+// or removed later. [{id, key, name, guid, sel, relays, created: [{kind, number}], wired: [n], prev: {n: input},
+// enabled / pins: [{guid, kind, number}], cans: [n], at}]
+function loadTemplates() { try { return JSON.parse(localStorage.getItem('dingoTemplates') || '[]') } catch { return [] } }
+export const templateInstances = writable(loadTemplates())
+templateInstances.subscribe((v) => { try { localStorage.setItem('dingoTemplates', JSON.stringify(v)) } catch {} })
+
 // ---- Whole-project client state: everything kept in the browser (NOT on the device) — cross-module
 // functions, per-function Lua snippets, CAN-bridge IDs, and layout (car-map pins + wiring-graph
 // positions). Bundled into the saved project file so a Save/Open round-trips EVERYTHING. Device
@@ -545,6 +566,7 @@ export function gatherClientState() {
     version: 1,
     crossFns: ls('dingoCrossFns', '[]'),
     remoteLinks: ls('dingoRemoteLinks', '[]'),
+    templates: ls('dingoTemplates', '[]'),
     lua: ls('dingoLua', '{}'),
     bridges: ls('dingoGfxBridges', '{}'),
     pinpos: ls('pinpos', '{}'),
@@ -557,6 +579,7 @@ export function restoreClientState(c) {
   try {
     crossFns.set(Array.isArray(c?.crossFns) ? c.crossFns : [])              // store subscriptions persist these
     remoteLinks.set(Array.isArray(c?.remoteLinks) ? c.remoteLinks : [])
+    templateInstances.set(Array.isArray(c?.templates) ? c.templates : [])
     luaSnippets.set(c?.lua && typeof c.lua === 'object' ? c.lua : {})
     localStorage.setItem('dingoGfxBridges', JSON.stringify(c?.bridges ?? {}))
     localStorage.setItem('pinpos', JSON.stringify(c?.pinpos ?? {}))

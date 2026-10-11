@@ -9,6 +9,9 @@
   import { api, applyGraphConnection, enableFunction, bridgeRemoteSignal, addCanInputFromDbc, NODE_INPUTS, telemetry } from './store.js'
   import { toast } from './toast.js'
   import RemoteSourceAdd from './RemoteSourceAdd.svelte'
+  import BusInputPicker from './BusInputPicker.svelte'
+  import { pinFor, ioTag } from './pinmap.js'
+  import { TEMPLATES, OPS, liveCtx, defaults as tplDefaults, validate as tplValidate } from './templates.js'
 
   let { device, devices = [], onOpenSettings, dark = true } = $props()   // dark follows the app theme (the canvas was a dark island in light mode)
   // graph kind -> the Signals & logic editor kind. Everything opens INLINE below the canvas (the
@@ -519,112 +522,28 @@
   }
 
   // ===== Circuit Builders =====================================================================
-  // Data-driven wizards that scaffold + auto-wire a set of functions. Each builder declares its
-  // fields; build(ctx, sel) creates Conditions/Flashers/VirtualInputs and wires the outputs.
+  // The template list (templates.js) run against this module: builds Conditions/Flashers/VirtualInputs and
+  // wires the outputs. The Templates tab runs the same list bus-wide, with drawings.
   let boolSrc = $state([]), numSrc = $state([])   // typed source lists (bool triggers / numeric)
   let bOpen = $state(false), bKey = $state(''), bSel = $state({}), bBusy = $state(false), bMsg = $state('')
-  const bOps = [{ v: 2, t: 'greater than' }, { v: 3, t: 'less than' }, { v: 4, t: '≥' }, { v: 5, t: '≤' }, { v: 0, t: 'equals' }]
   // Outputs the builder can target: PDM smart outputs (device.outputs) OR CANBoard digital outputs.
   const builderOutputs = $derived(device?.outputs?.length ? device.outputs : (funcs?.digitalOut ?? []))
   const bOutName = (n) => builderOutputs.find((o) => o.number === +n)?.name?.trim() || ('output' + n)
-  const And = 0, Or = 1   // BoolOperator
-
-  const BUILDERS = [
-    { key: 'simple', name: 'Simple switched circuit', desc: 'One input drives one output directly.',
-      fields: [{ k: 'input', t: 'bool', label: 'Driven by' }, { k: 'output', t: 'out', label: 'Output' }],
-      build: async (ctx, s) => { await ctx.wireOutput(s.output, +s.input) } },
-    { key: 'analog', name: 'Analog triggered switch', desc: 'Output turns on when an analog signal crosses a threshold (creates a Condition).',
-      fields: [{ k: 'analog', t: 'num', label: 'Analog signal' }, { k: 'op', t: 'op', label: 'Turn on when it is' }, { k: 'thr', t: 'number', label: 'Threshold', def: 0 }, { k: 'output', t: 'out', label: 'Output' }],
-      build: async (ctx, s) => { const c = await ctx.condition(+s.analog, +s.op, +s.thr, 'CB ' + bOutName(s.output)); await ctx.wireOutput(s.output, c) } },
-    { key: 'blinker', name: 'Blinker / hazard', desc: 'Left/right (+ optional hazard) blink two outputs. Optional US mode where the rear light is also the brake light (turn signal overrides brake on that side); the high-mount 3rd brake stays independent.',
-      fields: [{ k: 'left', t: 'bool', label: 'Left trigger' }, { k: 'right', t: 'bool', label: 'Right trigger' },
-        { k: 'hazard', t: 'bool', label: 'Hazard trigger', opt: true }, { k: 'leftOut', t: 'out', label: 'Left output' },
-        { k: 'rightOut', t: 'out', label: 'Right output' }, { k: 'rate', t: 'number', label: 'Blink rate (ms, max 5000)', def: 400, min: 0, max: 5000 },
-        { k: 'us', t: 'check', label: 'US: rear lamp is also the brake light' },
-        { k: 'brake', t: 'bool', label: 'Brake input (US mode)', opt: true }, { k: 'brake3', t: 'out', label: '3rd (high-mount) brake output', opt: true }],
-      build: async (ctx, s) => {
-        const fl = await ctx.flasher(ctx.alwaysOn(), +s.rate, +s.rate, 'CB Blink')
-        const haz = s.hazard ? +s.hazard : 0
-        const us = !!s.us && s.brake, brake = s.brake ? +s.brake : 0
-        const side = async (trig, nm) => {
-          const turn = await ctx.anyOf([+trig, haz], 'CB ' + nm + ' Turn')        // trig OR hazard (passthrough if no hazard)
-          if (us) {
-            const t1 = await ctx.anyOf([brake, turn], 'CB ' + nm + ' On')         // brake OR turning
-            const t2 = await ctx.virtual({ v0: fl, op0: Or, v1: turn, not1: true }, 'CB ' + nm + ' Phase') // blink OR not-turning
-            return ctx.virtual({ v0: t1, op0: And, v1: t2 }, 'CB ' + nm)          // → turning blinks, else solid on brake
-          }
-          return ctx.virtual({ v0: turn, op0: And, v1: fl }, 'CB ' + nm)          // turning AND blink
-        }
-        await ctx.wireOutput(s.leftOut, await side(s.left, 'Left'))
-        await ctx.wireOutput(s.rightOut, await side(s.right, 'Right'))
-        if (us && s.brake3) await ctx.wireOutput(s.brake3, brake)                 // independent high-mount brake
-      } },
-    { key: 'fuelpump', name: 'Fuel pump', desc: 'Primes on power-up for a moment, then runs while the engine is turning (a run signal — e.g. RPM — above a threshold).',
-      fields: [{ k: 'run', t: 'num', label: 'Run signal (e.g. RPM)' }, { k: 'thr', t: 'number', label: 'Running above', def: 300 },
-        { k: 'prime', t: 'number', label: 'Prime time (ms, max 1 h)', def: 3000, min: 0, max: 3600000 }, { k: 'output', t: 'out', label: 'Pump output' }],
-      build: async (ctx, s) => {
-        const run = await ctx.condition(+s.run, 2, +s.thr, 'CB FuelRun')                  // run signal > threshold
-        const prime = await ctx.timer(ctx.alwaysOn(), 2, +s.prime, 'CB Prime')             // one pulse at power-up (Timer, pulse mode)
-        await ctx.wireOutput(s.output, await ctx.virtual({ v0: run, op0: Or, v1: prime }, 'CB FuelPump'))
-      } },
-    { key: 'wipers', name: 'Wipers (low / high / intermittent)', desc: 'Low/High run the wiper output; Intermittent pulses it on a gap. Combines whatever you provide.',
-      fields: [{ k: 'low', t: 'bool', label: 'Low / On' }, { k: 'high', t: 'bool', label: 'High', opt: true },
-        { k: 'int', t: 'bool', label: 'Intermittent', opt: true }, { k: 'intRate', t: 'number', label: 'Intermittent gap (ms, max 5000)', def: 3000, min: 0, max: 5000 },
-        { k: 'output', t: 'out', label: 'Wiper output' }],
-      build: async (ctx, s) => {
-        const flInt = s.int ? await ctx.flasher(+s.int, 700, +s.intRate, 'CB WipeInt') : 0
-        const drv = await ctx.anyOf([+s.low, s.high ? +s.high : 0, flInt], 'CB Wipers')
-        await ctx.wireOutput(s.output, drv)
-      } },
-    { key: 'afterrun', name: 'After-run (stay on after switch-off)', desc: 'Output follows a trigger and keeps running for a hold time after it drops — radiator fan or turbo cooling after ignition off, courtesy light after the door closes (creates an off-delay Timer).',
-      fields: [{ k: 'trig', t: 'bool', label: 'Trigger' }, { k: 'hold', t: 'number', label: 'Hold after off (ms, max 1 h)', def: 60000, min: 0, max: 3600000 }, { k: 'output', t: 'out', label: 'Output' }],
-      build: async (ctx, s) => { await ctx.wireOutput(s.output, await ctx.timer(+s.trig, 1, +s.hold, 'CB ' + bOutName(s.output) + ' Hold')) } },
-    { key: 'pwmfan', name: 'PWM fan (duty from analog)', desc: 'Fan output runs PWM with its duty following an analog signal (e.g. a temp sensor), with soft start. CANBoard outputs only — set a PDM output’s variable duty in its output editor.',
-      fields: [{ k: 'analog', t: 'num', label: 'Duty source (e.g. temperature)' }, { k: 'full', t: 'number', label: 'Signal value at 100% duty', def: 5000 },
-        { k: 'min', t: 'number', label: 'Min duty (%)', def: 0 }, { k: 'freq', t: 'number', label: 'PWM frequency (Hz)', def: 200 }, { k: 'output', t: 'out', label: 'Fan output' }],
-      build: async (ctx, s) => { await ctx.setOutputPwm(s.output, { source: +s.analog, full: +s.full, min: +s.min, freq: +s.freq }) } },
-  ]
+  const BUILDERS = TEMPLATES
   const curBuilder = $derived(BUILDERS.find((b) => b.key === bKey))
 
   function openBuilder(key) {
     bKey = key; bMsg = ''
-    const b = BUILDERS.find((x) => x.key === key)
-    bSel = {}; for (const f of b.fields) bSel[f.k] = f.def ?? ''
+    bSel = tplDefaults(BUILDERS.find((x) => x.key === key))
     bOpen = true
-  }
-  // ctx helpers — each create returns the new function's OUTPUT varmap index, ready to wire.
-  async function bRefresh() { funcs = await api.functions(device.guid); vmap = await api.inputs(device.guid).catch(() => vmap) }
-  function bIdx(nodeId) { return maps().srcToIdx[nodeId + '|out'] }
-  function bFree(arr) { const s = (funcs?.[arr] ?? []).find((x) => !x.enabled); if (!s) throw new Error(`No free ${arr} slots`); return s.number }
-  // Firmware ranges (core/param_defs.h): flasher on/off 0..5000 ms, timer preset 0..3600000 ms. A number
-  // field with step="any" can emit 60000.5, and the device NAKs anything out of range — round + clamp
-  // here so "built" means the device really got it.
-  const ms = (v, max) => Math.min(max, Math.max(0, Math.round(+v || 0)))
-  const builderCtx = {
-    alwaysOn: () => vmap.find((v) => v.name === 'Always On')?.index ?? 1,
-    wireOutput: (outNum, srcIdx) => wireTarget('output:' + outNum, 'input', srcIdx),
-    condition: async (input, op, arg, name) => { const n = bFree('conditions'); await api.setFunction(device.guid, 'condition', n, { enabled: true, input, operator: op, arg: +arg || 0, name }); await bRefresh(); return bIdx('condition:' + n) },
-    flasher: async (input, onTime, offTime, name, single = false) => { const n = bFree('flashers'); await api.setFunction(device.guid, 'flasher', n, { enabled: true, input, onTime: ms(onTime, 5000), offTime: ms(offTime, 5000), single, name }); await bRefresh(); return bIdx('flasher:' + n) },
-    // mode: 0 on-delay, 1 off-delay, 2 pulse (firmware TimerMode)
-    timer: async (input, mode, preset, name) => { const n = bFree('timers'); await api.setFunction(device.guid, 'timer', n, { enabled: true, input, mode, edge: 0, preset: ms(preset, 3600000), name }); await bRefresh(); return bIdx('timer:' + n) },
-    virtual: async (c, name) => { const n = bFree('virtualInputs'); await api.setFunction(device.guid, 'virtualinput', n, { enabled: true, not0: !!c.not0, var0: c.v0 ?? 0, cond0: c.op0 ?? And, not1: !!c.not1, var1: c.v1 ?? 0, cond1: c.op1 ?? And, not2: !!c.not2, var2: c.v2 ?? 0, mode: 0, name }); await bRefresh(); return bIdx('virtualinput:' + n) },
-    // OR-combine a list of source vars (1→passthrough, 2/3→one VirtualInput). >3 not supported.
-    anyOf: async (vars, name) => { const v = vars.filter((x) => x > 0); if (v.length <= 1) return v[0] ?? 0; return builderCtx.virtual({ v0: v[0], op0: Or, v1: v[1], op1: Or, v2: v[2] ?? 0 }, name) },
-    // Configure a CANBoard digital output for variable-duty PWM from an analog source + soft start.
-    setOutputPwm: async (outNum, { source, full, min, freq, on }) => {
-      if (!isCanboard) throw new Error('PWM-from-analog is wired on CANBoard outputs; for a PDM output set it in the output editor')
-      await api.setFunction(device.guid, 'digitaloutput', outNum, { enabled: true, input: on ?? builderCtx.alwaysOn(), pwmEnabled: true, variableDutyCycle: true, dutyCycleInput: source, dutyCycleDenominator: Math.max(1, Math.round(full / 100)), minDutyCycle: min, frequency: freq, softStartEnabled: true, softStartRampTime: 500 })
-    },
   }
   async function applyBuilder() {
     if (!curBuilder) return
-    const missing = curBuilder.fields.filter((f) => !f.opt && f.t !== 'check' && (bSel[f.k] === '' || bSel[f.k] == null))
-    if (missing.length) { bMsg = 'Fill in: ' + missing.map((f) => f.label).join(', '); return }
-    const bad = curBuilder.fields.find((f) => f.t === 'number' && f.max != null && (+bSel[f.k] < (f.min ?? 0) || +bSel[f.k] > f.max))
-    if (bad) { bMsg = `${bad.label}: must be ${bad.min ?? 0}–${bad.max} (the module rejects anything outside).`; return }
-    bBusy = true; bMsg = ''
+    bMsg = tplValidate(curBuilder, bSel); if (bMsg) return
+    bBusy = true
     try {
-      await curBuilder.build(builderCtx, bSel)
+      const ctx = await liveCtx({ api, guid: device.guid, isCanboard, outName: bOutName, wireOutput: (n, idx) => wireTarget('output:' + n, 'input', idx) })
+      await curBuilder.build(ctx, bSel)
       await load()
       localStorage.removeItem(posKey()); build()   // re-layout so the new blocks are visible
       bOpen = false
@@ -708,16 +627,14 @@
           <label class="opt" style="border:0"><input type="checkbox" bind:checked={bSel[f.k]} /> {f.label}</label>
         {:else}
         <div class="field"><label>{f.label}{#if f.opt}<span class="muted">&nbsp;(optional)</span>{/if}</label>
-          {#if f.t === 'bool'}
-            <select bind:value={bSel[f.k]}><option value="">{f.opt ? '— none —' : 'Choose…'}</option>{#each boolSrc as v}<option value={v.index}>{v.name}</option>{/each}</select>
-            <RemoteSourceAdd guid={device.guid} {devices} kind="bool" onadded={(idx) => loadSrcLists().then(() => bSel[f.k] = idx)} />
-          {:else if f.t === 'num'}
-            <select bind:value={bSel[f.k]}><option value="">Choose…</option>{#each numSrc as v}<option value={v.index}>{v.name}</option>{/each}</select>
-            <RemoteSourceAdd guid={device.guid} {devices} kind="num" onadded={(idx) => loadSrcLists().then(() => bSel[f.k] = idx)} />
+          {#if f.t === 'bool' || f.t === 'num'}
+            <!-- any input on the bus: own signals, or another module's (becomes a local CAN input) -->
+            <BusInputPicker {device} {devices} kind={f.t} optional={!!f.opt} bind:value={bSel[f.k]} onpick={() => loadSrcLists()} />
+            <RemoteSourceAdd guid={device.guid} {devices} kind={f.t} label="＋ from an ECU / DBC" onadded={(idx) => loadSrcLists().then(() => bSel[f.k] = idx)} />
           {:else if f.t === 'out'}
-            <select bind:value={bSel[f.k]}><option value="">Choose…</option>{#each builderOutputs as o}<option value={o.number}>{(isCanboard ? 'DO' : 'O') + o.number}{o.name?.trim() ? ' · ' + o.name : ''}</option>{/each}</select>
+            <select bind:value={bSel[f.k]}><option value="">Choose…</option>{#each builderOutputs as o}{@const pin = pinFor(device, isCanboard ? 'digitaloutput' : 'output', o.number)}<option value={o.number}>{ioTag(device, isCanboard ? 'digitaloutput' : 'output', o.number)}{pin ? ' · ' + pin.label : ''}{o.name?.trim() ? ' · ' + o.name : ''}</option>{/each}</select>
           {:else if f.t === 'op'}
-            <select bind:value={bSel[f.k]}>{#each bOps as o}<option value={o.v}>{o.t}</option>{/each}</select>
+            <select bind:value={bSel[f.k]}>{#each OPS as o}<option value={o.v}>{o.t}</option>{/each}</select>
           {:else if f.t === 'number'}
             <input type="number" step={f.min != null ? 1 : 'any'} min={f.min} max={f.max} bind:value={bSel[f.k]} />
           {/if}

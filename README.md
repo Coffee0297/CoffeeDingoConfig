@@ -38,6 +38,7 @@ pre-releases 0.3.0–0.4.2. "testing" below means the feature is only on that br
 | Bus discovery, *Add from CAN* | ❌ | ✅ | Handles the PDM's base − 2 offset |
 | **System view**: all modules, car-layout map, vehicle worst-case load | ❌ | ✅ | |
 | **Wiring node graph** | testing | ✅ | Typed ports, wires that glow live, Circuit Builder wizards |
+| **Templates** | testing | ✅ | Headlights, washer + wipers…; bus-wide pin pickers, relay-aware wiring drawings |
 | Guided rule builder in the output editor | ❌ | ✅ | |
 | Signals view with a live 30 s chart per row | partial | ✅ | |
 | **Lua editor + upload** | ❌ | ✅ | Global + per-function pieces, runtime errors read back |
@@ -83,6 +84,9 @@ and *Read* them off the bus instead (their config lives on the modules).
   inputs, flashers, counters, timers, tables. Each row shows its last 30 s live.
 - **Wiring**: the same functions as a node graph. Drag from an output ● to an input ●; *Circuit builder…*
   creates common circuits (switched load, fuel pump prime + run, after-run fan) in one go.
+- **Templates**: headlights, washer + wipers, blinkers and more across the whole bus. Pick outputs on any
+  module (optionally through a relay) and inputs by name or connector pin (`J3-3`, `DI3`); a wiring drawing
+  and a signal-links drawing show the result before you Apply, and applied templates can be edited or removed.
 - **Lua** (PDMs): anything the blocks can't do. The editor loads the program stored in the project; *Read
   from device* pulls the running one.
 - **Across modules**: a CAN input can take another module's signal by name, and a *cross-module function*
