@@ -101,7 +101,7 @@ of it per board: `.srec` (CAN), `.bin` (USB), `.hex` / `.elf`, and the OpenBLT b
 - Otherwise **⬆ Flash over USB** (`.bin`), or **⬆ Flash new module** for a blank board held in DFU (BOOT0 +
   reset).
 - A batch of blank boards, or a CANBoard's first flash (SWD only, it has no USB):
-  [`flash-dingo.ps1`](https://github.com/Coffee0297/CoffeeDingoFW#batch-swd-flashing-flash-dingops1) in the
+  [`flash-dingo.ps1`](https://github.com/Coffee0297/CoffeeDingoFW#flashing-boards-with-flash-dingops1) in the
   firmware repo. It downloads the release, installs the bootloader + firmware over SWD or the PDM's USB-C,
   and verifies every board, so from then on every update goes over CAN from here.
 
