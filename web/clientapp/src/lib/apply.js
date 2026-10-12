@@ -182,9 +182,10 @@ export async function applyTemplate(api, { devices, tpl, sel, relays, name, id, 
 
 // ---- Picks by text, for agents: 'CB-1 DI3', 'PDM-01 J3-7', 'headlight'. Every word must appear in the
 // option's label/search text (the pickers' own search); among several hits the one matching most words as
-// whole tokens wins ('J3-1' is J3-1, not J3-10). A number is a local var index.
+// whole tokens wins ('J3-1' is J3-1, not J3-10). A number is a local var index; an option's exact value matches too.
 export function matchOption(opts, q) {
-  if (typeof q === 'number') return opts.find((o) => o.value === q) ?? { error: `no input with var index ${q}` }
+  const exact = opts.find((o) => o.value === q); if (exact) return exact   // a stored value (list_applied_templates' sel)
+  if (typeof q === 'number') return { error: `no input with var index ${q}` }
   const words = String(q).trim().toLowerCase().split(/\s+/).filter(Boolean)
   const text = (o) => (o.label + ' ' + (o.search ?? '')).toLowerCase()
   const hits = opts.filter((o) => words.every((w) => text(o).includes(w)))

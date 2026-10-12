@@ -480,8 +480,8 @@ public static class McpServer
             Schema("""{"type":"object","properties":{"key":{"type":"string","description":"template key from list_templates"},"picks":{"type":"object","description":"{field: input/output text, or a local var index}","additionalProperties":{"type":["string","integer"]}},"settings":{"type":"object","description":"{field: value} for number/op/check fields (defaults otherwise)"},"relays":{"type":"object","description":"{output field: true/false}; default true for lamps, motors, pumps, fans, horns — only changes the drawing/wiring advice"},"name":{"type":"string"}},"required":["key","picks"]}"""),
             a => new(POST, "/api/templates/preview", JsonRaw(a))),
 
-        new("apply_template", "Build a template on the module (same arguments as preview_template): enables unused input pins, adds CAN inputs for picks on other modules (reusing ones that already decode them), creates the logic blocks in free slots and wires the outputs. Refuses an output something else already drives unless takeOver=true (remove_template gives it back). A failure rolls back what it made. Pass id (from list_applied_templates) to edit an applied template — it is rebuilt with the new picks. Live writes are volatile: burn the module afterwards (device_action burn).",
-            Schema("""{"type":"object","properties":{"key":{"type":"string"},"picks":{"type":"object","additionalProperties":{"type":["string","integer"]}},"settings":{"type":"object"},"relays":{"type":"object"},"name":{"type":"string"},"takeOver":{"type":"boolean","description":"allow taking over outputs already driven by something else"},"id":{"type":"string","description":"edit this applied template instead of adding a new one"}},"required":["picks"]}"""),
+        new("apply_template", "Build a template on the module (same arguments as preview_template): enables unused input pins, adds CAN inputs for picks on other modules (reusing ones that already decode them), creates the logic blocks in free slots and wires the outputs. Refuses an output something else already drives unless takeOver=true (remove_template gives it back). A failure rolls back what it made. Pass id (from list_applied_templates) to edit an applied template — send only what changes: picks, settings and relays you leave out keep their applied values, '' clears an optional pick, key cannot change (remove and apply a new one). Live writes are volatile: burn the module afterwards (device_action burn).",
+            Schema("""{"type":"object","properties":{"key":{"type":"string"},"picks":{"type":"object","additionalProperties":{"type":["string","integer"]}},"settings":{"type":"object"},"relays":{"type":"object"},"name":{"type":"string"},"takeOver":{"type":"boolean","description":"allow taking over outputs already driven by something else"},"id":{"type":"string","description":"edit this applied template instead of adding a new one; only the fields sent change"}}}"""),
             a => new(POST, "/api/templates/apply", JsonRaw(a))),
 
         new("list_applied_templates", "List the applied templates: id, key, name, module guid, the picks, and what each created/wired (so it can be edited or removed).",
@@ -695,7 +695,8 @@ public static class McpServer
                outputs). Inputs on another module become CAN inputs on the logic module automatically.
             5. `device_action {guid, action:"burn"}` on the logic module (and on any module whose pin was
                enabled) to persist.
-            6. Edit: `list_applied_templates`, then `apply_template {id, picks, …}`. Remove: `remove_template {id}`.
+            6. Edit: `list_applied_templates`, then `apply_template {id, picks, …}` with just the picks / settings /
+               relays that change (the rest are kept; `''` clears an optional pick). `picks` may be omitted. Remove: `remove_template {id}`.
 
             All outputs of one template must be on one module (its logic runs there). Washer + wipers needs a
             dingoPDM (the wiper block); PWM fan needs a CANBoard output.

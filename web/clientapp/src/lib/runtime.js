@@ -45,12 +45,20 @@ export async function preview(host, reqJson) {
   return JSON.stringify(describe(p))
 }
 
+// An edit starts from the applied instance: its stored picks/settings/relays, overridden by what req sends
+// ('' clears an optional pick).
+export function merged(old, req) {
+  const tpl = TEMPLATES.find((t) => t.key === old.key), isPick = (f) => ['out', 'bool', 'num'].includes(f.t)
+  const from = (keep) => Object.fromEntries(tpl.fields.filter((f) => keep(f) && !blank(old.sel?.[f.k])).map((f) => [f.k, old.sel[f.k]]))
+  return { ...req, key: old.key, picks: { ...from(isPick), ...req.picks }, settings: { ...from((f) => !isPick(f)), ...req.settings }, relays: { ...old.relays, ...req.relays } }
+}
+
 // req.id = edit that applied instance; req.takeOver = allow outputs something else drives now.
 export async function apply(host, reqJson, instancesJson, newId) {
   const req = JSON.parse(reqJson), instances = JSON.parse(instancesJson || '[]')
   const old = req.id ? instances.find((i) => i.id === req.id) : null
   if (req.id && !old) throw new Error(`no applied template with id ${req.id}`)
-  const { api, devices, p } = await plan(host, { ...req, key: req.key ?? old?.key })
+  const { api, devices, p } = await plan(host, old ? merged(old, req) : req)
   const mine = old ? (old.wired ?? []).map((n) => `${old.guid}:${n}`) : []
   const taken = p.tpl ? p.tpl.fields.filter((f) => f.t === 'out' && p.outOpts.find((o) => o.value === p.sel[f.k])?.used && !mine.includes(p.sel[f.k])).map((f) => p.resolved[f.k]) : []
   if (p.errors.length) throw new Error(p.errors.join('; '))
