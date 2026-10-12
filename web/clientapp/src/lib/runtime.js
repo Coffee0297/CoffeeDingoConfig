@@ -23,10 +23,10 @@ export function list() {
     fields: fields.map(({ k, t, label, load, opt, def, min, max }) => ({ field: k, type: t, label, load, optional: !!opt, def, min, max })) })) })
 }
 
-async function plan(host, req) {
+async function plan(host, req, old = null) {
   const api = mkApi(host)
   const [devices, defs] = await Promise.all([api.devices(), api.definitions().catch(() => null)])
-  return { api, devices, p: await planTemplate(api, { devices, defs, templates: TEMPLATES, req }) }
+  return { api, devices, p: await planTemplate(api, { devices, defs, templates: TEMPLATES, req, old }) }
 }
 
 // What a request resolves to and would build, plus the wiring per output (relay coil / load terminals).
@@ -36,7 +36,8 @@ const describe = (p) => p.tpl ? {
   wires: p.preview?.wires ?? [],
   wiring: p.tpl.fields.filter((f) => f.t === 'out' && !blank(p.sel[f.k])).map((f) => {
     const o = p.outOpts.find((x) => x.value === p.sel[f.k])
-    return { field: f.k, output: o?.label, pin: o?.pin?.label ?? null, side: o?.side, relay: !!p.relays[f.k], load: f.load, circuit: outputCircuit(o?.side, !!p.relays[f.k]) }
+    return { field: f.k, output: o?.label, pin: o?.pin?.label ?? null, side: o?.side, relay: !!p.relays[f.k], load: f.load, circuit: outputCircuit(o?.side, !!p.relays[f.k]),
+      ...(o && p.logic && o.guid !== p.logic.guid ? { followsOverCan: `${o.module} follows the logic on ${p.logic.name} over CAN` } : {}) }
   }),
 } : { errors: p.errors }
 
@@ -50,7 +51,7 @@ export async function preview(host, reqJson) {
 export function merged(old, req) {
   const tpl = TEMPLATES.find((t) => t.key === old.key), isPick = (f) => ['out', 'bool', 'num'].includes(f.t)
   const from = (keep) => Object.fromEntries(tpl.fields.filter((f) => keep(f) && !blank(old.sel?.[f.k])).map((f) => [f.k, old.sel[f.k]]))
-  return { ...req, key: old.key, picks: { ...from(isPick), ...req.picks }, settings: { ...from((f) => !isPick(f)), ...req.settings }, relays: { ...old.relays, ...req.relays } }
+  return { ...req, key: old.key, name: req.name ?? old.name, picks: { ...from(isPick), ...req.picks }, settings: { ...from((f) => !isPick(f)), ...req.settings }, relays: { ...old.relays, ...req.relays } }
 }
 
 // req.id = edit that applied instance; req.takeOver = allow outputs something else drives now.
@@ -58,14 +59,15 @@ export async function apply(host, reqJson, instancesJson, newId) {
   const req = JSON.parse(reqJson), instances = JSON.parse(instancesJson || '[]')
   const old = req.id ? instances.find((i) => i.id === req.id) : null
   if (req.id && !old) throw new Error(`no applied template with id ${req.id}`)
-  const { api, devices, p } = await plan(host, old ? merged(old, req) : req)
-  const mine = old ? (old.wired ?? []).map((n) => `${old.guid}:${n}`) : []
+  const { api, devices, p } = await plan(host, old ? merged(old, req) : req, old)
+  const outKey = (i, w) => (/^\d+$/.test(String(w)) ? `${i.guid}:${w}` : String(w))   // older instances: bare n on the logic module
+  const mine = old ? (old.wired ?? []).map((w) => outKey(old, w)) : []
   const taken = p.tpl ? p.tpl.fields.filter((f) => f.t === 'out' && p.outOpts.find((o) => o.value === p.sel[f.k])?.used && !mine.includes(p.sel[f.k])).map((f) => p.resolved[f.k]) : []
   if (p.errors.length) throw new Error(p.errors.join('; '))
   if (taken.length && !req.takeOver) throw new Error(`already driven by something else: ${taken.join(', ')} — pass takeOver: true to take ${taken.length > 1 ? 'them' : 'it'} over (remove_template gives ${taken.length > 1 ? 'them' : 'it'} back)`)
   const others = instances.filter((i) => i.id !== req.id)
-  const inst = await applyTemplate(api, { devices, tpl: p.tpl, sel: p.sel, relays: p.relays, name: req.name, id: req.id ?? newId, old, others, inOpt: p.inOpt, outOpts: p.outOpts })
-  return JSON.stringify({ applied: { id: inst.id, name: inst.name, module: p.logic?.name, created: inst.created, wired: inst.wired.map((n) => p.outOpts.find((o) => o.value === `${inst.guid}:${n}`)?.label ?? n) }, ...describe(p), instances: [...others, inst] })
+  const { partial, ...inst } = await applyTemplate(api, { devices, tpl: p.tpl, sel: p.sel, relays: p.relays, name: req.name, id: req.id ?? newId, old, others, inOpt: p.inOpt, outOpts: p.outOpts })
+  return JSON.stringify({ ...(partial ? { warning: partial } : {}), applied: { id: inst.id, name: inst.name, module: p.logic?.name, created: inst.created, wired: inst.wired.map((w) => p.outOpts.find((o) => o.value === outKey(inst, w))?.label ?? w) }, ...describe(p), instances: [...others, inst] })
 }
 
 export async function remove(host, id, instancesJson) {

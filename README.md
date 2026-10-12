@@ -84,8 +84,11 @@ and *Read* them off the bus instead (their config lives on the modules).
   inputs, flashers, counters, timers, tables. Each row shows its last 30 s live.
 - **Wiring**: the same functions as a node graph. Drag from an output ● to an input ●; *Circuit builder…*
   creates common circuits (switched load, fuel pump prime + run, after-run fan) in one go.
-- **Templates**: headlights, washer + wipers, blinkers and more across the whole bus. Pick outputs on any
-  module (optionally through a relay) and inputs by name or connector pin (`J3-3`, `DI3`); a wiring drawing
+- **Templates**: headlights, washer + wipers, relay-switched wipers (standard self-park or **Ford concealed
+  park**, rotary stalk or switches), blinkers, brake / reverse / DRL / interior lights, radiator fan, fuel pump,
+  starter interlock, push-button toggle, lights-on reminder and more across the whole bus. Pick outputs on any
+  module, even several modules in one template (an output on another module follows the logic over CAN),
+  optionally through a relay, and inputs by name or connector pin (`J3-3`, `DI3`); a wiring drawing
   and a signal-links drawing show the result before you Apply, and applied templates can be edited or removed.
   The same templates are MCP tools, so an AI agent can build them too (inputs and outputs picked by text,
   e.g. `CB-1 DI3`, `PDM-01 J3-7`).

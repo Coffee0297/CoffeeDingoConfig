@@ -472,11 +472,11 @@ public static class McpServer
             a => new(POST, $"/api/devices/{Str(a, "guid")}/dbc/signal", JsonRaw(ObjArg(a, "signal")))),
 
         // -------- templates -------------------------------------------------
-        new("list_templates", "List the ready-made circuit templates (the Templates tab): headlights, washer + wipers, blinker/hazard, fuel pump, wipers, after-run, analog switch, PWM fan, simple switch. Each has a key and fields: type bool/num = an input signal, out = an output (load says what it drives), number/op/check = a setting; optional fields may be left out. Needs no connection.",
+        new("list_templates", "List the ready-made circuit templates (the Templates tab): headlights, washer + wipers, relay-switched wipers (standard self-park or Ford concealed park), blinker/hazard, brake, reverse, DRL, interior light, radiator fan, fuel pump, starter, push-button toggle, lights-on reminder, after-run, analog switch, PWM fan, simple switch. Each has a key and fields: type bool/num = an input signal, out = an output (load says what it drives), number/op/check = a setting; optional fields may be left out. Needs no connection.",
             Schema("""{"type":"object","properties":{}}"""),
             _ => new(GET, "/api/templates", null)),
 
-        new("preview_template", "Resolve and preview a template WITHOUT changing anything: which input/output each pick matched, the module its logic runs on (the one owning the outputs — all outputs must be on one module), the blocks it would create, the wiring per output (high/low side, relay coil and load terminals) and any errors (missing fields, no free slots, ambiguous picks). picks = {field: text}: an output like 'PDM-01 OUT1' or 'PDM-01 J3-7', an input from anywhere on the bus like 'CB-1 DI3', 'CB-1 J3-3', 'PDM-01 DI1' or a signal name; every word must match, so add the module name when a pin is ambiguous. An input on another module is decoded over CAN on apply; an unused pin is enabled. Run it before apply_template.",
+        new("preview_template", "Resolve and preview a template WITHOUT changing anything: which input/output each pick matched, the module its logic runs on (the one owning most of the outputs; outputs on other modules follow it over CAN, see wiring[].followsOverCan), the blocks it would create, the wiring per output (high/low side, relay coil and load terminals) and any errors (missing fields, no free slots, ambiguous picks). picks = {field: text}: an output like 'PDM-01 OUT1' or 'PDM-01 J3-7', an input from anywhere on the bus like 'CB-1 DI3', 'CB-1 J3-3', 'PDM-01 DI1' or a signal name; every word must match, so add the module name when a pin is ambiguous. An input on another module is decoded over CAN on apply; an unused pin is enabled. Run it before apply_template.",
             Schema("""{"type":"object","properties":{"key":{"type":"string","description":"template key from list_templates"},"picks":{"type":"object","description":"{field: input/output text, or a local var index}","additionalProperties":{"type":["string","integer"]}},"settings":{"type":"object","description":"{field: value} for number/op/check fields (defaults otherwise)"},"relays":{"type":"object","description":"{output field: true/false}; default true for lamps, motors, pumps, fans, horns — only changes the drawing/wiring advice"},"name":{"type":"string"}},"required":["key","picks"]}"""),
             a => new(POST, "/api/templates/preview", JsonRaw(a))),
 
@@ -698,8 +698,11 @@ public static class McpServer
             6. Edit: `list_applied_templates`, then `apply_template {id, picks, …}` with just the picks / settings /
                relays that change (the rest are kept; `''` clears an optional pick). `picks` may be omitted. Remove: `remove_template {id}`.
 
-            All outputs of one template must be on one module (its logic runs there). Washer + wipers needs a
-            dingoPDM (the wiper block); PWM fan needs a CANBoard output.
+            The logic runs on the module owning most of the outputs; an output on another module follows it over CAN
+            (a CAN input there, so that module needs a free one and must be burned too). Washer + wipers needs a
+            dingoPDM (the wiper block, logic on the slow output's module); PWM fan needs a CANBoard output.
+            Relay-switched wipers: `ford:true` for a Ford concealed (depressed) park motor — RUN is held for whole
+            sweeps (`sweep` ms, measure it) and the supply is held after ignition off so it can reverse into park.
             """),
 
         new("flash-firmware", "Update module firmware",

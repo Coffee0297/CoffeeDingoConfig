@@ -9,8 +9,8 @@
   import BusInputPicker from './BusInputPicker.svelte'
   import TemplateDrawing from './TemplateDrawing.svelte'
   import { api, templateInstances, deviceDefs, syncTemplates } from './store.js'
-  import { TEMPLATES, OPS, defaults, validate, previewTemplate, logicModule, shortfalls, isInput, blank } from './templates.js'
-  import { isMod, numOut, loadOutputOptions, applyTemplate, undoTemplate } from './apply.js'
+  import { TEMPLATES, OPS, defaults, validate, previewTemplate, logicModule, shortfalls, freedBy, isInput, blank } from './templates.js'
+  import { isMod, numOut, loadOutputOptions, applyTemplate, undoTemplate, remoteShortfalls } from './apply.js'
   import { toast } from './toast.js'
   import { labelFields } from './a11y.js'
 
@@ -60,33 +60,38 @@
 
   const outOpt = (k) => outOpts.find((o) => o.value === sel[k])
   const inOpt = (k) => (inOpts[k] ?? []).find((o) => o.value === sel[k] && o.value !== '')
-  const outName = (n) => { const o = outOpts.find((x) => x.value === `${logicGuid}:${n}`); return o?.name || 'output' + n }
+  const outName = (v) => outOpts.find((x) => x.value === v)?.name || 'output ' + numOut(v)
 
   // Live preview + drawings, re-run on every change.
   $effect(() => {
     const t = tpl, s = { ...sel }
-    for (const f of t.fields) if (f.t === 'out' && !blank(s[f.k])) s[f.k] = numOut(s[f.k])
     previewTemplate(t, s, outName).then((p) => { preview = p; previewErr = '' }).catch((e) => { preview = null; previewErr = e.message })
   })
-  const short = $derived(preview ? shortfalls(preview.need, funcsByGuid[logicGuid]) : [])
+  // an edit removes the old version first, so its slots count as free
+  const freed = $derived(freedBy(editing ? $templateInstances.find((i) => i.id === editing) : null))
+  const short = $derived(preview ? shortfalls(preview.need, funcsByGuid[logicGuid], freed[logicGuid]) : [])
+  const remoteShort = $derived(remoteShortfalls(tpl, sel, logicGuid, funcsByGuid, devices, freed))
   const drawIns = $derived(tpl.fields.filter(isInput).filter((f) => !f.opt || !blank(sel[f.k])).map((f) => ({ k: f.k, label: f.label, opt: inOpt(f.k) })))
-  const drawOuts = $derived(tpl.fields.filter((f) => f.t === 'out' && (!f.opt || !blank(sel[f.k]))).map((f) => ({ k: f.k, label: f.label, load: f.load, opt: outOpt(f.k), num: blank(sel[f.k]) ? null : numOut(sel[f.k]) })))
+  const drawOuts = $derived(tpl.fields.filter((f) => f.t === 'out' && (!f.opt || !blank(sel[f.k]))).map((f) => ({ k: f.k, label: f.label, load: f.load, opt: outOpt(f.k), num: blank(sel[f.k]) ? null : sel[f.k] })))
   const remoteIns = $derived(drawIns.filter((x) => x.opt && x.opt.local === false))
 
   // ---- apply / remove (the steps themselves live in apply.js, shared with the MCP template tools)
   async function apply() {
     msg = validate(tpl, sel) || lm.error || previewErr || (short.length ? 'Not enough free slots on ' + logic?.name + ': ' + short.join(', ') : '')
+      || (remoteShort.length ? 'Outputs on other modules follow the logic over CAN — not enough free CAN inputs on ' + remoteShort.join(', ') : '')
     if (msg) return
-    const mine = editing ? get(templateInstances).find((i) => i.id === editing)?.wired ?? [] : []
-    const taken = tpl.fields.filter((f) => f.t === 'out' && outOpt(f.k)?.used && !mine.includes(numOut(sel[f.k])))
+    const ed = editing && get(templateInstances).find((i) => i.id === editing)
+    const mine = (ed?.wired ?? []).map((w) => (/^\d+$/.test(String(w)) ? `${ed.guid}:${w}` : String(w)))   // older instances: bare n
+    const taken = tpl.fields.filter((f) => f.t === 'out' && outOpt(f.k)?.used && !mine.includes(sel[f.k]))
     if (taken.length && !confirm(`${taken.map((f) => outOpt(f.k).label.split(' · ').slice(0, 3).join(' · ')).join(', ')} already driven by something else. The template takes ${taken.length > 1 ? 'them' : 'it'} over (Remove gives ${taken.length > 1 ? 'them' : 'it'} back). Continue?`)) return
     busy = true
     const old = editing && get(templateInstances).find((i) => i.id === editing)
     const others = get(templateInstances).filter((i) => i.id !== editing)
     try {
-      const inst = await applyTemplate(api, { devices, tpl, sel, relays, name, id: editing ?? crypto.randomUUID(), old, others, inOpt, outOpts })
+      const { partial, ...inst } = await applyTemplate(api, { devices, tpl, sel, relays, name, id: editing ?? crypto.randomUUID(), old, others, inOpt, outOpts })
       templateInstances.set([...others, inst])
-      toast(`Applied “${inst.name}” on ${logic.name}${logic.connected ? ' — Burn to keep' : ' — saved to the project; Deploy to apply'}.`, 'info')
+      if (partial) toast(partial + '.', 'error')
+      else toast(`Applied “${inst.name}” on ${logic.name}${logic.connected ? ' — Burn to keep' : ' — saved to the project; Deploy to apply'}.`, 'info')
       editing = null; msg = ''
     } catch (e) {
       if (old) templateInstances.set(others)   // the previous version was undone before the failure
@@ -103,7 +108,7 @@
 
 <div class="h-row">
   <div><h1>Templates</h1>
-    <p class="sub">Ready-made circuits. Pick the <b>outputs</b> on any module (through a relay if you like), the <b>inputs</b> from anywhere on the bus — search by name, connector pin (<code>J3-3</code>), function (<code>DI3</code>) or module — and check the drawings. <b>Apply</b> builds the logic on the module that owns the outputs; then Burn (or Deploy when offline).</p></div>
+    <p class="sub">Ready-made circuits. Pick the <b>outputs</b> on any module (through a relay if you like), the <b>inputs</b> from anywhere on the bus — search by name, connector pin (<code>J3-3</code>), function (<code>DI3</code>) or module — and check the drawings. <b>Apply</b> builds the logic on the module that owns most of the outputs (outputs on other modules follow it over CAN); then Burn every module it touched (or Deploy when offline).</p></div>
 </div>
 
 {#if !mods.length}

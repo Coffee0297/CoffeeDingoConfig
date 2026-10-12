@@ -62,9 +62,10 @@ public class DeviceManager(ILogger<DeviceManager> logger, ILoggerFactory loggerF
         lock (_filterLock)
         {
             _setReceiveFilter(baseId, baseId + 15);   // config reply (base+0), status (base+2..) and XCP (base+12/13)
+            domain.Devices.RxFilterWindow.Narrow(baseId, baseId + 15);   // the other modules aren't gone, just hidden
             _filterIdleTimer ??= new System.Threading.Timer(_ =>
             {
-                lock (_filterLock) _setReceiveFilter?.Invoke(null, null);
+                lock (_filterLock) { _setReceiveFilter?.Invoke(null, null); domain.Devices.RxFilterWindow.Lift(); }
             });
             _filterIdleTimer.Change(FilterIdleMs, Timeout.Infinite);
         }

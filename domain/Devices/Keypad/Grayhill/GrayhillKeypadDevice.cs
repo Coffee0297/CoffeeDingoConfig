@@ -93,7 +93,7 @@ public class GrayhillKeypadDevice : IKeypadDevice
         var timeSpan = DateTime.Now - _lastRxTime;
         // ponytail: heartbeat window — 3000ms so the "live" badge doesn't strobe on sub-second
         // feed gaps. See PdmDevice.UpdateIsConnected.
-        Connected = timeSpan.TotalMilliseconds < 3000;
+        Connected = timeSpan.TotalMilliseconds < 3000 || RxFilterWindow.Excuses(BaseId, lastConnected);   // quiet only because our RX filter hides it
 
         return Connected & !lastConnected;
     }

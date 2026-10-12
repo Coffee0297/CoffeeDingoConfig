@@ -5,6 +5,32 @@ All notable changes to **dingoConfig** are recorded here. Versions follow [SemVe
 
 ## [Unreleased]
 
+### Added
+- **More templates**: *Wipers, relay-switched* for a motor with its own park circuit (RUN and FAST relays plus
+  a motor supply), with a **Ford concealed (depressed) park** option: RUN is held for whole sweeps so the motor
+  never reverses mid-wipe, and the supply is held after ignition off so the blades can reverse into the hidden
+  park; works from a rotary wiper stalk (positions) or separate switches, with intermittent and after-wash
+  wipes. Also *Interior / courtesy light*, *Reverse lights* (gear position or switch), *Brake lights*,
+  *Radiator fan* (temperature with hysteresis, A/C request, after-run), *Starter* (interlock + crank limit),
+  *Daytime running lights*, *Push-button toggle* and *Lights-on reminder*.
+- **A template's outputs can be on several modules**: the logic runs on the module with most of them, and an
+  output on another module follows it through a CAN input there (wiring tells which; `followsOverCan` over MCP).
+
+### Fixed
+- **A module hidden by our own receive filter no longer counts as gone.** During a read / write / burn the
+  adapter only lets that module's ids through, so every other module fell silent for us and after 3 s was
+  "not connected" — and a write to it (a template's second module, the next module of a deploy) was quietly
+  saved to the project only. Hidden modules keep their state while the filter is on and for 3 s after.
+- Templates: an Apply or Remove that reached some modules only in the project now says which (*Write All
+  them, then Burn*); Remove reports any step that failed instead of skipping it silently, and keeps the
+  template so Remove can run again.
+- Templates: an empty optional input no longer sits in the middle of a virtual input (the firmware reads
+  that slot as a constant 0, so e.g. DRL without an "engine running" pick never came on).
+- Templates: a CAN input shared by two templates is put back by whichever is removed last (it used to stay
+  enabled when the one that created it went first).
+- Templates: editing over MCP or in the tab counts the slots the old version frees (an edit used to fail with
+  "not enough free slots"), and an MCP edit keeps the template's name.
+
 ## [0.9.0] — 2026-10-12
 
 ### Added

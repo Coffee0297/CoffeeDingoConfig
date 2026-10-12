@@ -2,7 +2,7 @@
 // backend's template runner (MCP list/preview/apply/remove_template, run in Jint from template-runtime.js)
 // do exactly the same thing. `api` is store.js's api, or the backend's loopback twin with the same methods
 // (functions, inputs, setFunction, outputConfig, broadcastSignals).
-import { previewTemplate, liveCtx, outputOptions, logicModule, shortfalls, validate, isInput, blank } from './templates.js'
+import { previewTemplate, liveCtx, outputOptions, logicModule, shortfalls, freedBy, validate, isInput, blank } from './templates.js'
 import { pinFor, ioTag } from './pinmap.js'
 import { busInputOptions, isDefaultName } from './businputs.js'
 
@@ -143,38 +143,126 @@ export async function loadOutputOptions(api, mods, defs) {
   return { outOpts, funcs }
 }
 
+// Watch an apply / remove's writes. The device API saves to the project only (written:false) while a module
+// is off the bus, so a module that drops out ends up partly or not at all written while the rest went live.
+// Returns [api, partial] — partial() = when anything was written live, the modules that took any write only
+// into the project (none when it all went to the project: an offline edit, Deploy covers it).
+export function trackWrites(api, devices) {
+  const seen = new Map()
+  const note = (g, r) => { if (!seen.has(g)) seen.set(g, new Set()); seen.get(g).add(r?.written === false ? 'project' : 'live'); return r }
+  const t = { ...api,
+    setFunction: async (g, ...a) => note(g, await api.setFunction(g, ...a)),
+    outputConfig: async (g, b) => note(g, await api.outputConfig(g, b)) }
+  const anyLive = () => [...seen.values()].some((s) => s.has('live'))
+  return [t, () => (anyLive() ? [...seen].filter(([, s]) => s.has('project')).map(([g]) => devices.find((d) => d.guid === g)?.name ?? g) : [])]
+}
+const partialMsg = (names, what) => `${names.join(', ')} dropped off the bus during ${what}: some changes went only into the project`
+
 // ---- Remove: put back every output, block slot and pin the instance touched, as it was before (instances
 // saved before snapshots existed: outputs back to their old driver, blocks just disabled).
 // CAN inputs and pins another applied template still relies on (`keep`) stay on.
-export async function undoTemplate(api, devices, inst, keep = []) {
+export async function undoTemplate(api0, devices, inst, keep = []) {
   const dev = devices.find((d) => d.guid === inst.guid); if (!dev) return
-  const busyCan = new Set(keep.filter((i) => i.guid === inst.guid).flatMap((i) => i.cans ?? []))
+  const [api, partial] = trackWrites(api0, devices)
+  const devOf = (g) => devices.find((d) => d.guid === g)
+  // Outputs are keyed '<guid>:<n>'; instances saved before outputs could sit on other modules used a bare n
+  // (on the logic module). CAN inputs: a bare number on the logic module, '<guid>|<n>' elsewhere.
+  const key = (w) => (/^\d+$/.test(String(w)) ? `${inst.guid}:${w}` : String(w))
+  const canKey = (i, c) => (typeof c === 'number' ? `${i.guid}|${c}` : c)
+  const busyCan = new Set(keep.flatMap((i) => (i.cans ?? []).map((c) => canKey(i, c))))
   const pinKey = (p) => `${p.guid}|${p.kind}|${p.number}`
   const busyPin = new Set(keep.flatMap((i) => (i.pins ?? []).map(pinKey)))
-  for (const n of inst.wired ?? []) if (!inst.outs?.[n]) await wireOut(api, dev, n, inst.prev?.[n] ?? 0).catch(() => {})
-  for (const s of Object.values(inst.outs ?? {})) if (s) await restoreOutput(api, dev, s).catch(() => {})
-  for (const c of [...(inst.created ?? [])].reverse())
-    if (!(c.kind === 'caninput' && busyCan.has(c.number))) await restoreSlot(api, dev.guid, c).catch(() => {})
-  for (const e of inst.enabled ?? []) if (!busyPin.has(pinKey(e))) await api.setFunction(e.guid, e.kind, e.number, { enabled: false, ...(e.name ? { name: e.name } : {}) }).catch(() => {})
+  // Every step runs even when one fails; the failures are reported together at the end (so a partial
+  // remove is never silent, and running Remove again retries them).
+  const failed = []
+  const step = async (what, f) => { try { await f() } catch (e) { failed.push(`${what}: ${e?.message ?? e}`) } }
+  const name = (g) => devOf(g)?.name ?? g
+  const snaps = Object.fromEntries(Object.entries(inst.outs ?? {}).map(([k, s]) => [key(k), s]))
+  for (const w of inst.wired ?? []) {
+    const k = key(w), [g, n] = k.split(':'), d = devOf(g)
+    if (!snaps[k] && d) await step(`${name(g)} output ${n}`, () => wireOut(api, d, +n, inst.prev?.[k] ?? inst.prev?.[w] ?? 0))
+  }
+  for (const [k, s] of Object.entries(snaps)) { const g = k.split(':')[0], d = devOf(g); if (s && d) await step(`${name(g)} output ${s.number}`, () => restoreOutput(api, d, s)) }
+  for (const c of [...(inst.created ?? [])].reverse()) {
+    const g = c.guid ?? inst.guid, k = `${g}|${c.number}`
+    if (!(c.kind === 'caninput' && busyCan.has(k))) { await step(`${name(g)} ${c.kind} ${c.number}`, () => restoreSlot(api, g, c)); continue }
+    // still decoded for another applied template: it inherits the slot (and its before), so removing that
+    // one later puts it back
+    const heir = keep.find((i) => (i.cans ?? []).some((x) => canKey(i, x) === k))
+    heir.created = [...(heir.created ?? []), { ...c, guid: g }]
+  }
+  for (const e of inst.enabled ?? []) if (!busyPin.has(pinKey(e))) await step(`${name(e.guid)} ${e.kind} ${e.number}`, () => api.setFunction(e.guid, e.kind, e.number, { enabled: false, ...(e.name ? { name: e.name } : {}) }))
+  if (failed.length) throw new Error(`couldn't put back ${failed.length} thing(s): ${failed.join('; ')}`)
+  // not done on the module yet: keep the instance so Remove can run again once it is back
+  if (partial().length) throw new Error(partialMsg(partial(), 'Remove') + ' — Remove again once it is back')
+}
+
+// The broadcast signal names a module sends var `v` ({kind, number, prop} of /inputs) under (PDM / CANBoard).
+function broadcastNames(v) {
+  const n = v?.number, base = { virtualinput: 'VirtualInput', timer: 'Timer', flasher: 'Flasher', condition: 'Condition', counter: 'Counter' }[v?.kind]
+  if (base) return [base + n, `${base}${n}.State`]
+  if (v?.kind === 'caninput') return v.prop === 'Value' ? [`CanInput${n}.Value`] : [`CanInput${n}`]
+  if (v?.kind === 'input') return [`Input${n}.State`, `DigitalInput${n}.State`]
+  if (v?.kind === 'output') return [`Output${n}.State`]
+  if (v?.kind === 'digitaloutput') return [`DigitalOutput${n}.State`]
+  if (v?.kind === 'wiper') return [{ 'Slow Output': 'WiperSlowState', 'Fast Output': 'WiperFastState' }[v.prop]]
+  if (v?.kind === 'analoginput') return [`AnalogInput${n}.${v.prop === 'Rotary Position' ? 'Pos' : 'Millivolts'}`, `RotarySwitch${n}.Pos`]
+  return []
+}
+
+// Make module `to` follow var `idx` of module `from` (an output on `to` driven by `from`'s logic): a CAN
+// input on `to` decoding `from`'s broadcast of it, reused when one already does. Always On maps to `to`'s own.
+// Returns addCanInputFromFrame's result ({number, stateIndex, reused, before}) or {stateIndex} for Always On.
+export async function followSignal(api, from, to, idx) {
+  const v = (await api.inputs(from.guid)).find((x) => x.index === idx)
+  if (v?.name === 'Always On') return { stateIndex: (await api.inputs(to.guid)).find((x) => x.name === 'Always On')?.index ?? 1 }
+  const names = broadcastNames(v), sig = (await api.broadcastSignals(from.guid)).find((x) => names.includes(x.name))
+  if (!sig) throw new Error(`${from.name} does not broadcast “${v?.name ?? 'signal ' + idx}”, so an output on ${to.name} can't follow it — pick that output on ${from.name}`)
+  const r = await addCanInputFromFrame(api, to.guid, broadcastFrame(from, { ...sig, label: `${from.name} ${v.name ?? sig.name}`.slice(0, 32) }))
+  if (r.stateIndex == null) throw new Error(`created the CAN input on ${to.name} but couldn't resolve its signal`)
+  return r
+}
+
+// Outputs picked on modules other than the logic one, per module: each takes a free CAN input there.
+// Returns shortfall messages like 'CB-2: 2 CAN inputs (1 free)'.
+export function remoteShortfalls(tpl, sel, logicGuid, funcs, devices, freed = {}) {
+  const n = new Map()
+  for (const f of tpl.fields) if (f.t === 'out' && !blank(sel[f.k])) { const g = String(sel[f.k]).split(':')[0]; if (g !== logicGuid) n.set(g, (n.get(g) ?? 0) + 1) }
+  const out = []
+  for (const [g, c] of n) { const free = (funcs?.[g]?.canInputs ?? []).filter((x) => !x.enabled).length + (freed[g]?.canInputs ?? 0); if (free < c) out.push(`${devices.find((d) => d.guid === g)?.name ?? g}: ${c} CAN inputs (${free} free)`) }
+  return out
 }
 
 // ---- Apply. sel = the picks as the UI holds them (outputs 'guid:n', local inputs a var index, remote ones
 // 'remote:…'); inOpt(k) = the picked input's option; outOpts from loadOutputOptions. When `old` is given
 // (an edit) it is undone first. Returns the new instance; on failure rolls back what it made and throws.
-export async function applyTemplate(api, { devices, tpl, sel, relays, name, id, old = null, others = [], inOpt, outOpts }) {
+// The result's `partial` (not part of the instance) names modules that took only some of the writes live.
+export async function applyTemplate(api0, { devices, tpl, sel, relays, name, id, old = null, others = [], inOpt, outOpts }) {
+  const [api, partial] = trackWrites(api0, devices)
   const dev = devices.find((d) => d.guid === logicModule(tpl, sel).guid)
   if (!dev) throw new Error('Pick an output first — the logic runs on the module that owns the outputs')
+  const devOf = (g) => devices.find((d) => d.guid === g)
   const created = [], enabled = [], cans = [], pins = [], prev = {}, outs = {}
-  const outName = (n) => outOpts.find((x) => x.value === `${dev.guid}:${n}`)?.name || 'output' + n
+  const outName = (o) => outOpts.find((x) => x.value === o)?.name || 'output ' + numOut(o)
+  // What an old instance stored for output v (older instances keyed outputs on the logic module by bare n).
+  const oldOf = (map, v) => old && (map?.[v] ?? (v.startsWith(old.guid + ':') ? map?.[numOut(v)] : undefined))
   // Each picked output as it is before this template; an edit keeps the snapshots from the first apply.
-  const picked = tpl.fields.filter((f) => f.t === 'out' && !blank(sel[f.k])).map((f) => numOut(sel[f.k]))
-  for (const n of picked) outs[n] = old?.outs?.[n] ?? await outputSnapshot(api, dev, n)
+  const picked = tpl.fields.filter((f) => f.t === 'out' && !blank(sel[f.k])).map((f) => String(sel[f.k]))
+  for (const v of picked) {
+    const d = devOf(v.split(':')[0]); if (!d) throw new Error(`The module of ${v} is not in the project`)
+    outs[v] = oldOf(old?.outs, v) ?? await outputSnapshot(api, d, numOut(v))
+  }
+  // An output on another module follows the logic's broadcast of `idx` through a CAN input there.
+  const wireRemote = async (d, n, idx) => {
+    const r = idx ? await followSignal(api, dev, d, idx) : { stateIndex: 0 }
+    if (r.number != null) { if (!r.reused) created.push({ guid: d.guid, kind: 'caninput', number: r.number, before: r.before }); cans.push(`${d.guid}|${r.number}`) }
+    return wireOut(api, d, n, r.stateIndex)
+  }
   let ctx = null
   try {
     if (old) await undoTemplate(api, devices, old, others)
     const s = { ...sel }
     for (const f of tpl.fields) {
-      if (f.t === 'out' && !blank(s[f.k])) s[f.k] = numOut(s[f.k])
       if (!isInput(f) || blank(s[f.k])) continue
       const o = inOpt(f.k)
       // An unused pin reads nothing until it is enabled (on its own module).
@@ -190,14 +278,20 @@ export async function applyTemplate(api, { devices, tpl, sel, relays, name, id, 
       s[f.k] = f.t === 'bool' ? (r.stateIndex ?? r.valueIndex) : (r.valueIndex ?? r.stateIndex)
       if (s[f.k] == null) throw new Error(`${f.label}: created the CAN input but couldn't resolve its signal`)
     }
-    const was = (n) => old?.prev?.[n] ?? outOpts.find((o) => o.value === `${dev.guid}:${n}`)?.input ?? 0
-    ctx = await liveCtx({ api, guid: dev.guid, isCanboard: isCb(dev), outName, wireOutput: (n, idx) => { prev[n] ??= was(n); return wireOut(api, dev, n, idx) } })
+    const was = (v) => oldOf(old?.prev, v) ?? outOpts.find((o) => o.value === v)?.input ?? 0
+    ctx = await liveCtx({ api, guid: dev.guid, isCanboard: isCb(dev), outName, wireOutput: (v, idx) => {
+      prev[v] ??= was(v)
+      const [g, n] = String(v).split(':')
+      return g === dev.guid ? wireOut(api, dev, +n, idx) : wireRemote(devOf(g), +n, idx)
+    } })
     await tpl.build(ctx, s)
-    return { id, key: tpl.key, name: (name ?? '').trim() || tpl.name, guid: dev.guid, sel: { ...sel }, relays: { ...relays },
+    const p = partial()
+    return { ...(p.length ? { partial: partialMsg(p, 'Apply') + ` — Write All ${p.length > 1 ? 'them' : 'it'} (device_action writeall), then Burn` } : {}), id, key: tpl.key, name: (name ?? '').trim() || tpl.name, guid: dev.guid, sel: { ...sel }, relays: { ...relays },
       created: [...created, ...ctx.created], wired: ctx.wired, prev, outs, enabled, cans, pins, at: new Date().toISOString() }
   } catch (e) {
     // Roll back what this run made so a failed apply leaves no half-built circuit.
-    await undoTemplate(api, devices, { guid: dev.guid, created: [...created, ...(ctx?.created ?? [])], wired: ctx?.wired ?? [], prev, outs, enabled }, others)
+    await undoTemplate(api, devices, { guid: dev.guid, created: [...created, ...(ctx?.created ?? [])], wired: ctx?.wired ?? [], prev, outs, enabled, cans }, others)
+      .catch((u) => { e.message += ` (and the roll-back ${u.message})` })
     throw e
   }
 }
@@ -219,7 +313,8 @@ export function matchOption(opts, q) {
 
 // Resolve a text request {key, picks: {field: text}, settings, relays, name} into the UI's sel + options,
 // and preview it: what it would create, wiring per output, shortfalls. errors[] lists everything wrong.
-export async function planTemplate(api, { devices, defs, templates, req }) {
+// old = the applied instance an edit replaces (its slots count as free).
+export async function planTemplate(api, { devices, defs, templates, req, old = null }) {
   const tpl = templates.find((t) => t.key === req.key)
   if (!tpl) return { errors: [`unknown template “${req.key}” — one of ${templates.map((t) => t.key).join(', ')}`] }
   const mods = devices.filter(isMod), errors = []
@@ -248,9 +343,10 @@ export async function planTemplate(api, { devices, defs, templates, req }) {
   const v = validate(tpl, sel); if (v) errors.push(v)
   let preview = null
   try {
-    const s = { ...sel }; for (const f of tpl.fields) if (f.t === 'out' && !blank(s[f.k])) s[f.k] = numOut(s[f.k])
-    preview = await previewTemplate(tpl, s, (n) => outOpts.find((x) => x.value === `${lm.guid}:${n}`)?.name || 'output' + n)
-    const short = shortfalls(preview.need, funcs[lm.guid]); if (short.length) errors.push(`Not enough free slots on ${dev?.name}: ${short.join(', ')}`)
+    preview = await previewTemplate(tpl, { ...sel }, (o) => outOpts.find((x) => x.value === o)?.name || 'output ' + numOut(o))
+    const freed = freedBy(old)
+    const short = shortfalls(preview.need, funcs[lm.guid], freed[lm.guid]); if (short.length) errors.push(`Not enough free slots on ${dev?.name}: ${short.join(', ')}`)
+    const rs = remoteShortfalls(tpl, sel, lm.guid, funcs, devices, freed); if (rs.length) errors.push(`Outputs on other modules follow the logic over CAN — not enough free CAN inputs on ${rs.join(', ')}`)
   } catch (e) { errors.push(e.message) }
   const taken = tpl.fields.filter((f) => f.t === 'out' && outOpts.find((o) => o.value === sel[f.k])?.used).map((f) => resolved[f.k])
   return { tpl, sel, relays, resolved, logic: dev ? { guid: dev.guid, name: dev.name } : null, preview, errors, taken,

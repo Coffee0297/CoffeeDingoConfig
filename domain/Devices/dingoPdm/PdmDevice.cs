@@ -1032,7 +1032,7 @@ public class PdmDevice : IDeviceConfigurable
         // wiping live values) then back — the badge strobed. 3000ms tolerates a couple of dropped
         // broadcasts; a genuinely removed module still clears within 3s. Tighten only if a real
         // disconnect must be detected faster than the status broadcast period × 3.
-        Connected = timeSpan.TotalMilliseconds < 3000;
+        Connected = timeSpan.TotalMilliseconds < 3000 || RxFilterWindow.Excuses(BaseId, lastConnected);   // quiet only because our RX filter hides it
 
         return Connected & !lastConnected;
     }

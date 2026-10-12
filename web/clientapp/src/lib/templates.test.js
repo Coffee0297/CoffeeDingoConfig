@@ -1,6 +1,6 @@
 // Self-check: `node templates.test.js`.
 import assert from 'node:assert/strict'
-import { TEMPLATES, defaults, validate, previewTemplate, liveCtx, outputOptions, logicModule, shortfalls, outputCircuit } from './templates.js'
+import { TEMPLATES, defaults, validate, previewTemplate, liveCtx, outputOptions, logicModule, shortfalls, freedBy, outputCircuit } from './templates.js'
 import { pinFor, ioTag } from './pinmap.js'
 
 const T = (k) => TEMPLATES.find((t) => t.key === k)
@@ -47,6 +47,10 @@ for (const t of TEMPLATES) {
 }
 
 assert.deepEqual(shortfalls({ timers: 2, virtualInputs: 1 }, { timers: [{ enabled: true }, { enabled: false }], virtualInputs: [{ enabled: false }] }), ['2 timers (1 free)'])
+// an edit frees the old version's slots first
+assert.deepEqual(freedBy({ guid: 'c', created: [{ kind: 'timer', number: 1 }, { kind: 'caninput', number: 2 }, { guid: 'p', kind: 'caninput', number: 3 }, { kind: 'wiper', number: 1 }] }),
+  { c: { timers: 1, canInputs: 1 }, p: { canInputs: 1 } })
+assert.deepEqual(shortfalls({ timers: 2 }, { timers: [{ enabled: true }, { enabled: false }] }, { timers: 1 }), [])
 
 // live ctx against a fake module: creates in free slots, resolves indices, records what it made
 const calls = []
@@ -82,7 +86,51 @@ assert.equal(oo[1].label, 'PDM-01 · J3-7 OUT1 · Fuel Pump · high-side 15 A ·
 assert.equal(oo[1].value, 'p:1')
 
 assert.deepEqual(logicModule(head, { lowL: 'p:1', highL: 'p:3' }), { guid: 'p' })
-assert.ok(logicModule(head, { lowL: 'p:1', highL: 'c:3' }).error)
+// outputs on two modules: the logic runs where most of them are (ties: the first picked), or on `logicOn`
+assert.deepEqual(logicModule(head, { lowL: 'p:1', highL: 'c:3' }), { guid: 'p' })
+assert.deepEqual(logicModule(head, { lowL: 'p:1', lowR: 'c:2', highL: 'c:3' }), { guid: 'c' })
+assert.deepEqual(logicModule(T('relaywipe'), { runOut: 'c:1', fastOut: 'c:2', supplyOut: 'p:5' }), { guid: 'c' })
+assert.deepEqual(logicModule(T('washwipe'), { slowOut: 'p:5', pumpOut: 'c:1', fastOut: 'c:2' }), { guid: 'p' })   // the wiper block's module
+
+// relay-switched wiper: Ford holds RUN for a whole sweep on intermittent, standard just kicks it
+const rw = T('relaywipe'), rwSel = { ...defaults(rw), low: 5, high: 6, int: 7, wash: 8, ign: 9, runOut: 'c:1', fastOut: 'c:2', supplyOut: 'p:5', pumpOut: 'p:6' }
+let rp = await previewTemplate(rw, { ...rwSel, ford: true, sweep: 1600 })
+assert.equal(rp.ops.find((o) => o.name === 'TP WipeInt').detail, '1600 / 3000 ms')
+assert.equal(rp.ops.find((o) => o.name === 'TP WashWipe').detail, 'off-delay 3200 ms')                 // 2 wipes x sweep
+assert.equal(rp.ops.find((o) => o.name === 'TP WipeSupply').detail, 'off-delay 3000 ms')
+assert.deepEqual(rp.wires.map((w) => w.out), ['c:1', 'c:2', 'p:5', 'p:6'])
+assert.equal((await previewTemplate(rw, { ...rwSel, ford: false })).ops.find((o) => o.name === 'TP WipeInt').detail, '400 / 3000 ms')
+await assert.rejects(previewTemplate(rw, { ...rwSel, high: '' }), /FAST relay needs/)
+assert.deepEqual(rp.need, { flashers: 1, timers: 2, virtualInputs: 5 })   // 4-way OR chains into 2 virtuals
+// no ignition: the supply is simply always on
+// a rotary stalk: positions become Conditions (OFF/INT/LOW/HIGH = 0/1/2/3 by default)
+rp = await previewTemplate(rw, { ...rwSel, low: '', high: '', int: '', pos: 4, ford: true })
+assert.deepEqual(rp.ops.filter((o) => o.op === 'condition').map((o) => o.detail), ['equals 2', 'equals 3', 'equals 1'])
+assert.match(validate(rw, { ...defaults(rw), runOut: 'c:1' }), /one of: Wiper switch: low/)
+rp = await previewTemplate(rw, { ...rwSel, ign: '', int: '', wash: '', pumpOut: '' })
+assert.deepEqual(rp.wires.find((w) => w.out === 'p:5'), { out: 'p:5', src: 'on' })
+
+// the other new ones build with a typical pick
+const pv = async (k, extra) => previewTemplate(T(k), { ...defaults(T(k)), ...extra })
+assert.deepEqual((await pv('radfan', { temp: 5, ac: 6, ign: 7, output: 'p:1' })).ops.map((o) => o.detail), ['greater than 95, off at 90', 'any of 2', 'off-delay 120000 ms', 'all of 2'])
+await assert.rejects(pv('radfan', { temp: 5, on: 90, off: 95, output: 'p:1' }), /must be lower/)
+assert.deepEqual((await pv('starter', { start: 5, ign: 6, neutral: 7, running: 8, output: 'p:1' })).ops.map((o) => o.op), ['virtual', 'timer', 'virtual'])
+assert.equal((await pv('toggle', { button: 5, reset: 6, output: 'p:1' })).ops[0].detail, 'toggle')
+assert.deepEqual((await pv('toggle', { button: 5, output: 'p:1' })).need, { counters: 1 })
+assert.equal((await pv('reverse', { gear: 5, rev: 1, left: 'p:1' })).ops[0].detail, 'equals 1')
+assert.match(validate(T('reverse'), { ...defaults(T('reverse')), left: 'p:1' }), /one of: Gear signal/)
+assert.deepEqual((await pv('interior', { door1: 5, door2: 6, ign: 7, output: 'p:1' })).ops.map((o) => o.name), ['TP Door', 'TP DoorHold', 'TP DoorFade', 'TP Courtesy'])
+assert.equal((await pv('brake', { brake: 5, left: 'p:1', right: 'p:2', third: 'c:1' })).wires.length, 3)
+assert.deepEqual((await pv('drl', { ign: 5, lights: 6, left: 'p:1' })).ops.length, 1)
+assert.deepEqual((await pv('reminder', { lights: 5, ign: 6, output: 'p:1' })).ops.map((o) => o.op), ['virtual', 'flasher'])
+// allOf never leaves an empty middle slot: the firmware reads var1 always (index 0 = constant 0)
+const vc = []
+const vctx = await liveCtx({ api: { functions: async () => ({ virtualInputs: [1, 2, 3].map((number) => ({ number, enabled: false })) }), inputs: async () => [1, 2, 3].map((n) => ({ index: 70 + n, kind: 'virtualinput', number: n, prop: 'State' })).concat([{ index: 1, name: 'Always On' }]),
+  setFunction: async (g, k, n, b) => vc.push(b) }, guid: 'p' })
+await T('drl').build(Object.assign(vctx, { wireOutput: async () => {} }), { ign: 5, running: '', lights: 6, left: 'p:1' })
+assert.deepEqual([vc[0].var0, vc[0].var1, vc[0].not1, vc[0].var2], [5, 6, true, 0])
+assert.equal(await vctx.allOf([7], 'x'), 7)
+await vctx.allOf([{ v: 8, not: true }], 'y'); assert.deepEqual([vc[1].var0, vc[1].not0, vc[1].var1], [8, true, 1])     // NOT x AND Always On
 
 // relay wiring adapts to the switching side
 assert.deepEqual(outputCircuit('high', true).coil, ['OUT', 'GND'])
