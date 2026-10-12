@@ -38,7 +38,7 @@ pre-releases 0.3.0–0.4.2. "testing" below means the feature is only on that br
 | Bus discovery, *Add from CAN* | ❌ | ✅ | Handles the PDM's base − 2 offset |
 | **System view**: all modules, car-layout map, vehicle worst-case load | ❌ | ✅ | |
 | **Wiring node graph** | testing | ✅ | Typed ports, wires that glow live, Circuit Builder wizards |
-| **Templates** | testing | ✅ | Headlights, washer + wipers…; bus-wide pin pickers, relay-aware wiring drawings |
+| **Templates** | testing | ✅ | Headlights, washer + wipers…; bus-wide pin pickers, relay-aware wiring drawings; MCP tools |
 | Guided rule builder in the output editor | ❌ | ✅ | |
 | Signals view with a live 30 s chart per row | partial | ✅ | |
 | **Lua editor + upload** | ❌ | ✅ | Global + per-function pieces, runtime errors read back |
@@ -62,7 +62,7 @@ pre-releases 0.3.0–0.4.2. "testing" below means the feature is only on that br
 | Write All with CRC | ✅ | ✅ | Fork retries, then falls back to acknowledged single writes |
 | **Confirmed single writes** | ❌ | ✅ | A refused value is reported with what the module kept |
 | Project as a local PC file, config diff (module vs project) | partial | ✅ | |
-| **REST API** + **MCP server** for AI agents | ❌ | ✅ | ~57 tools, 11 skills |
+| **REST API** + **MCP server** for AI agents | ❌ | ✅ | ~64 tools, 12 skills |
 | Unit tests + CI | ❌ | ✅ | |
 
 **Known limitation:** project files from the original 0.3.0 and later keep PDMs and CANBoards in one
@@ -87,6 +87,8 @@ and *Read* them off the bus instead (their config lives on the modules).
 - **Templates**: headlights, washer + wipers, blinkers and more across the whole bus. Pick outputs on any
   module (optionally through a relay) and inputs by name or connector pin (`J3-3`, `DI3`); a wiring drawing
   and a signal-links drawing show the result before you Apply, and applied templates can be edited or removed.
+  The same templates are MCP tools, so an AI agent can build them too (inputs and outputs picked by text,
+  e.g. `CB-1 DI3`, `PDM-01 J3-7`).
 - **Lua** (PDMs): anything the blocks can't do. The editor loads the program stored in the project; *Read
   from device* pulls the running one.
 - **Across modules**: a CAN input can take another module's signal by name, and a *cross-module function*
@@ -371,7 +373,7 @@ dotnet publish web/web.csproj -c Release -r osx-arm64 --self-contained true \
 ![MCP tab](docs/img/mcp.png)
 
 dingoConfig **hosts an MCP server inside the app** so AI clients can drive an entire system
-directly — no UI automation. **Every UI capability is exposed as a tool (57)**, plus eleven guided
+directly — no UI automation. **Every UI capability is exposed as a tool (64)**, plus twelve guided
 **skills** (playbooks). There's an in-app **MCP** tab (endpoint, *Test connection*, copy-paste
 client configs, and the live tool + skill catalog).
 
@@ -386,15 +388,16 @@ client configs, and the live tool + skill catalog).
   stdio→`/mcp` forwarder (zero-dependency, Node 18+) for stdio-only clients. Use an **absolute**
   path in `args` — stdio clients launch `node` from their own cwd, so a relative path fails
   ("Connection closed"). The MCP tab emits the correct absolute path; see [`mcp/README.md`](mcp/README.md).
-- **Tools (57):** full UI + system coverage — connection (`list_adapters`/`connect`/`discover`/`identify`),
+- **Tools (64):** full UI + system coverage — connection (`list_adapters`/`connect`/`discover`/`identify`),
   devices (`add_device`/`read_device`/`device_action`/`apply_profile`/`get_definitions`), config
   (`get_schema`/`get_config`/`apply_config`/`get_frame_map`), outputs, params, signals & logic
   (`get_signals`/`set_function`/`get_lua`/`set_lua`), **cross-module** (`broadcast_signals`/`link_remote_signal`/`deploy_cross_module`),
+  **templates** (`list_templates`/`preview_template`/`apply_template`/`list_applied_templates`/`remove_template`),
   firmware (`flash_firmware`/`flash_blank`/`scan_dfu`/`flash_status`), keypad SDO, project
   (incl. `project_download`/`project_upload`), and logs.
-- **Skills (11):** `connect-and-discover`, `configure-a-module`, `wire-outputs-safely`,
+- **Skills (12):** `connect-and-discover`, `configure-a-module`, `wire-outputs-safely`,
   `signals-and-logic`, **`lua-programming`** (the full on-device Lua API), **`cross-module-signals`**,
-  **`cross-module-functions`**, **`can-addressing`**, `flash-firmware`, `keypad-sdo`, `logs-and-troubleshooting`.
+  **`cross-module-functions`**, **`can-addressing`**, **`apply-a-template`**, `flash-firmware`, `keypad-sdo`, `logs-and-troubleshooting`.
 - **Discovery:** `GET /mcp` (health) · `GET /mcp/info` (full catalog + copy-paste configs) ·
   `GET /mcp/skills[/{id}]` (playbooks) · [`/llms.txt`](http://localhost:5000/llms.txt) and
   [`AI-CONFIG.md`](AI-CONFIG.md) document the config surface.
@@ -416,7 +419,8 @@ dingoConfig-redesign/
 ├── web/               the app
 │   ├── Program.cs         DI + serves the SPA + /api + SignalR (single process)
 │   ├── Api/LiveApi.cs     REST /api/* + SignalR telemetry hub (/hub/live)
-│   ├── Api/McpServer.cs   in-app MCP server (POST /mcp) — 57 tools + 11 skills, loops back to /api
+│   ├── Api/McpServer.cs   in-app MCP server (POST /mcp) — 64 tools + 12 skills, loops back to /api
+│   ├── Api/TemplateApi.cs /api/templates — runs the SPA's template engine (wwwroot/template-runtime.js) in Jint
 │   ├── clientapp/         Svelte + Vite source → builds into ../wwwroot
 │   └── wwwroot/           built SPA (generated by `npm run build`)
 ├── mcp/               stdio→HTTP bridge for MCP clients that don't speak HTTP

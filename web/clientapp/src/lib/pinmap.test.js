@@ -1,4 +1,4 @@
-// Self-check: `node pinmap.test.js`. Pins as drawn in the dingoPDM v7.5 and CANBoard v2 schematics.
+// Self-check: `node pinmap.test.js`. Pins as drawn in the dingoPDM v7.5, dingoPDM-Max v1.2 and CANBoard v2 schematics.
 import assert from 'node:assert/strict'
 import { boardOf, pinFor, pinFromSignal, pinSearchText } from './pinmap.js'
 
@@ -23,10 +23,16 @@ assert.equal(pinFromSignal(cb, 'DigitalInput3.State').label, 'J3-3')
 assert.equal(pinFromSignal(cb, 'RotarySwitch2').label, 'J2-3')
 assert.equal(pinFromSignal(cb, 'AnalogInput5.Millivolts').label, 'J2-8')
 
-// No schematic for the Max yet, and logic functions have no pin
-assert.equal(boardOf(max), null)
-assert.equal(pinFor(max, 'output', 1), null)
-assert.equal(boardOf({ type: 'dingoPDM', pdmType: 1 }), null)
+// dingoPDM-Max v1.2: Deutsch DT 12-pin J4, each output on two pins, not in order
+assert.equal(pinFor(max, 'output', 1).label, 'J4-7/8')
+assert.equal(pinFor(max, 'output', 4).label, 'J4-1/2')
+assert.equal(pinFor(max, 'output', 2).side, 'high')
+assert.equal(pinFor(max, 'output', 5), null)                 // four outputs
+assert.equal(pinFor(max, 'input', 2).label, 'J4-10')
+assert.match(pinSearchText(pinFor(max, 'output', 3)), /J4-5 .*J4-6 /)
+assert.equal(boardOf({ type: 'dingoPDM', pdmType: 1 }).name, 'dingoPDM-Max')
+
+// Logic functions have no pin
 assert.equal(pinFor(cb, 'condition', 1), null)
 assert.equal(pinFromSignal(cb, 'BatteryVoltage'), null)
 

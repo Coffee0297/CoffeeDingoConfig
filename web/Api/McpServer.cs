@@ -471,6 +471,27 @@ public static class McpServer
             Schema("""{"type":"object","properties":{"guid":{"type":"string"},"signal":{"type":"object"}},"required":["guid","signal"]}"""),
             a => new(POST, $"/api/devices/{Str(a, "guid")}/dbc/signal", JsonRaw(ObjArg(a, "signal")))),
 
+        // -------- templates -------------------------------------------------
+        new("list_templates", "List the ready-made circuit templates (the Templates tab): headlights, washer + wipers, blinker/hazard, fuel pump, wipers, after-run, analog switch, PWM fan, simple switch. Each has a key and fields: type bool/num = an input signal, out = an output (load says what it drives), number/op/check = a setting; optional fields may be left out. Needs no connection.",
+            Schema("""{"type":"object","properties":{}}"""),
+            _ => new(GET, "/api/templates", null)),
+
+        new("preview_template", "Resolve and preview a template WITHOUT changing anything: which input/output each pick matched, the module its logic runs on (the one owning the outputs — all outputs must be on one module), the blocks it would create, the wiring per output (high/low side, relay coil and load terminals) and any errors (missing fields, no free slots, ambiguous picks). picks = {field: text}: an output like 'PDM-01 OUT1' or 'PDM-01 J3-7', an input from anywhere on the bus like 'CB-1 DI3', 'CB-1 J3-3', 'PDM-01 DI1' or a signal name; every word must match, so add the module name when a pin is ambiguous. An input on another module is decoded over CAN on apply; an unused pin is enabled. Run it before apply_template.",
+            Schema("""{"type":"object","properties":{"key":{"type":"string","description":"template key from list_templates"},"picks":{"type":"object","description":"{field: input/output text, or a local var index}","additionalProperties":{"type":["string","integer"]}},"settings":{"type":"object","description":"{field: value} for number/op/check fields (defaults otherwise)"},"relays":{"type":"object","description":"{output field: true/false}; default true for lamps, motors, pumps, fans, horns — only changes the drawing/wiring advice"},"name":{"type":"string"}},"required":["key","picks"]}"""),
+            a => new(POST, "/api/templates/preview", JsonRaw(a))),
+
+        new("apply_template", "Build a template on the module (same arguments as preview_template): enables unused input pins, adds CAN inputs for picks on other modules (reusing ones that already decode them), creates the logic blocks in free slots and wires the outputs. Refuses an output something else already drives unless takeOver=true (remove_template gives it back). A failure rolls back what it made. Pass id (from list_applied_templates) to edit an applied template — it is rebuilt with the new picks. Live writes are volatile: burn the module afterwards (device_action burn).",
+            Schema("""{"type":"object","properties":{"key":{"type":"string"},"picks":{"type":"object","additionalProperties":{"type":["string","integer"]}},"settings":{"type":"object"},"relays":{"type":"object"},"name":{"type":"string"},"takeOver":{"type":"boolean","description":"allow taking over outputs already driven by something else"},"id":{"type":"string","description":"edit this applied template instead of adding a new one"}},"required":["picks"]}"""),
+            a => new(POST, "/api/templates/apply", JsonRaw(a))),
+
+        new("list_applied_templates", "List the applied templates: id, key, name, module guid, the picks, and what each created/wired (so it can be edited or removed).",
+            Schema("""{"type":"object","properties":{}}"""),
+            _ => new(GET, "/api/templates/instances", null)),
+
+        new("remove_template", "Remove an applied template: disables the blocks it created and gives its outputs back what drove them before. CAN inputs and pins another applied template still uses stay on. Burn afterwards to persist.",
+            Schema("""{"type":"object","properties":{"id":{"type":"string"}},"required":["id"]}"""),
+            a => new(POST, "/api/templates/remove", Json(new { id = Str(a, "id") }))),
+
         // -------- lua -------------------------------------------------------
         new("get_lua", "Get a device's Lua script.",
             Schema("""{"type":"object","properties":{"guid":{"type":"string"}},"required":["guid"]}"""),
@@ -654,6 +675,30 @@ public static class McpServer
             - Lua: `get_lua {guid}` / `set_lua {guid, source}` and `get_lua_error {guid}` to debug.
 
             Lua upload is best-effort; always check `get_lua_error` after `set_lua`, and `burn` to persist.
+            """),
+
+        new("apply-a-template", "Build a ready-made circuit (headlights, washer + wipers, …)",
+            "Pick inputs and outputs anywhere on the bus, preview, apply, edit or remove a template.",
+            """
+            # Skill: apply a template
+
+            1. `list_templates` — pick a `key`; note its fields (bool/num = input, out = output).
+            2. `list_devices` — module names. Pin names: dingoPDM outputs `OUT1..8` (J3-x), inputs `DI1..2`;
+               CANBoard digital outputs `DO1..4` (J4-x, low-side), inputs `DI1..8` (J3-x), analog `AI1..5`.
+            3. `preview_template {key, picks:{field:'MODULE PIN'}, settings?, relays?}`, e.g. headlights:
+               `{ "key":"headlights", "picks":{ "low":"CB-1 DI1", "high":"CB-1 DI2", "lowL":"PDM-01 OUT1",
+               "highL":"PDM-01 OUT2" }, "settings":{ "h4":true } }`.
+               Fix every entry in `errors` (ambiguous picks list their candidates). `takesOver` lists outputs
+               something else drives now; `wiring` says how to wire each output (relay coil / load terminals,
+               high- or low-side).
+            4. `apply_template` with the same arguments (+ `takeOver:true` if the operator agreed to take over
+               outputs). Inputs on another module become CAN inputs on the logic module automatically.
+            5. `device_action {guid, action:"burn"}` on the logic module (and on any module whose pin was
+               enabled) to persist.
+            6. Edit: `list_applied_templates`, then `apply_template {id, picks, …}`. Remove: `remove_template {id}`.
+
+            All outputs of one template must be on one module (its logic runs there). Washer + wipers needs a
+            dingoPDM (the wiper block); PWM fan needs a CANBoard output.
             """),
 
         new("flash-firmware", "Update module firmware",

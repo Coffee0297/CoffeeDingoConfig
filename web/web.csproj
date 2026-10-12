@@ -12,6 +12,7 @@
     <GenerateEmbeddedFilesManifest>true</GenerateEmbeddedFilesManifest>
   </PropertyGroup>
   <ItemGroup>
+    <PackageReference Include="Jint" Version="4.17.0" />
     <PackageReference Include="Microsoft.Extensions.FileProviders.Embedded" Version="10.0.0" />
     <EmbeddedResource Include="wwwroot\**" />
     <EmbeddedResource Include="..\llms.txt" Link="wwwroot\llms.txt" />

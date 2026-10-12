@@ -7,7 +7,7 @@
   // Apply); onload(opts) hands the caller the options so it can look a value's pin and module up.
   import SearchSelect from './SearchSelect.svelte'
   import { api, addCanInputFromBroadcast, ensureInputEnabled } from './store.js'
-  import { busInputOptions } from './businputs.js'
+  import { loadInputOptions } from './apply.js'
   import { toast } from './toast.js'
   import { untrack } from 'svelte'
   let { device, devices = [], kind = 'bool', value = $bindable(), optional = false, defer = false, disabled = false, onpick = undefined, onload = undefined } = $props()
@@ -17,14 +17,7 @@
   $effect(() => { sel = value ?? '' })
 
   async function load() {
-    const types = kind === 'bool' ? ['bool'] : ['float', 'int']
-    // In-use signals, plus this module's physical inputs nobody uses yet (enabled by whoever applies the pick).
-    const [used, all] = await Promise.all([false, true].map(async (every) => (await Promise.all(types.map((t) => api.inputs(device.guid, t, every).catch(() => [])))).flat()))
-    const usedIdx = new Set(used.map((v) => v.index))
-    const local = [...used, ...all.filter((v) => !usedIdx.has(v.index) && (v.kind === 'input' || v.kind === 'analoginput')).map((v) => ({ ...v, unused: true }))]
-    const others = (devices ?? []).filter((d) => d.guid !== device.guid && /pdm|can.?board/i.test(d.type ?? ''))
-    const remotes = await Promise.all(others.map(async (d) => ({ device: d, sigs: await api.broadcastSignals(d.guid).catch(() => []) })))
-    opts = [...(optional ? [{ value: '', label: '— none —' }] : []), ...busInputOptions(device, local, remotes, kind)]
+    opts = [...(optional ? [{ value: '', label: '— none —' }] : []), ...await loadInputOptions(api, device, devices, kind)]
     onload?.(opts)
   }
   // Once per module and kind, not once per telemetry push (`devices` is a fresh array every poll).

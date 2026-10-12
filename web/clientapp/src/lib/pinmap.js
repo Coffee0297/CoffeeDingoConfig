@@ -1,8 +1,9 @@
-// Physical connector pins per board, read off the hardware schematics (dingoPDM v7.5, CANBoard v2), so
+// Physical connector pins per board, read off the hardware schematics (dingoPDM v7.5, dingoPDM-Max v1.2,
+// CANBoard v2), so
 // pickers can show "J3-8" next to an input and a template drawing can say where each wire lands.
 // Keys are '<group>:<number>' in firmware numbering: di = digital input, ai = analog input, out = output.
 // side = how an output switches its load: 'high' supplies +12 V (load to ground), 'low' pulls to ground
-// (load from a supply). The dingoPDM-Max has no schematic here yet, so it maps to null (numbers only).
+// (load from a supply). An entry [conn, pin, pin2] is an output on two connector pins (the Max doubles them).
 
 const PDM_V7 = {
   name: 'dingoPDM v7',
@@ -14,6 +15,17 @@ const PDM_V7 = {
     'out:5': ['J3', 6], 'out:6': ['J3', 5], 'out:7': ['J3', 4], 'out:8': ['J3', 3],
   },
   power: { '+12V': ['J1', 1], GND: ['J2', 1], 'CAN-H': ['J3', 2], 'CAN-L': ['J3', 1] },
+}
+
+const PDM_MAX = {
+  name: 'dingoPDM-Max',
+  connectors: { J1: '+12 V battery lug', J3: 'GND lug', J4: 'Deutsch DT 12-pin' },   // J2 is the USB-C inside
+  side: 'high',   // BTS70012-1ESP per output, each on two DT pins
+  pins: {
+    'di:1': ['J4', 9], 'di:2': ['J4', 10],
+    'out:1': ['J4', 7, 8], 'out:2': ['J4', 11, 12], 'out:3': ['J4', 5, 6], 'out:4': ['J4', 1, 2],
+  },
+  power: { '+12V': ['J1', 1], GND: ['J3', 1], 'CAN-H': ['J4', 4], 'CAN-L': ['J4', 3] },
 }
 
 const CANBOARD_V2 = {
@@ -34,7 +46,7 @@ const CANBOARD_V2 = {
 export function boardOf(device) {
   const t = device?.type ?? ''
   if (/can.?board/i.test(t)) return CANBOARD_V2
-  if (/max/i.test(t) || device?.pdmType === 1) return null
+  if (/max/i.test(t) || device?.pdmType === 1) return PDM_MAX
   if (/pdm/i.test(t)) return PDM_V7
   return null
 }
@@ -52,8 +64,8 @@ export function pinFor(device, kind, number) {
   const g = GROUP[String(kind).toLowerCase()]
   const p = b && g && b.pins[`${g}:${number}`]
   if (!p) return null
-  const [conn, pin] = p
-  return { conn, pin, label: `${conn}-${pin}`, side: g === 'out' ? b.side : null, connector: b.connectors[conn] }
+  const [conn, pin, pin2] = p
+  return { conn, pin, pin2, label: `${conn}-${pin}${pin2 ? '/' + pin2 : ''}`, side: g === 'out' ? b.side : null, connector: b.connectors[conn] }
 }
 
 // The same from a broadcast signal name ('DigitalInput3.State', 'Output2.Current', 'RotarySwitch1').
@@ -74,5 +86,5 @@ export function ioTagFromSignal(device, signalName) {
   return m ? ioTag(device, m[1], +m[2]) : ''
 }
 
-// Text a search box can match: 'J3-8', 'J3.8', 'pin 8'.
-export const pinSearchText = (p) => (p ? `${p.label} ${p.conn}.${p.pin} pin ${p.pin}` : '')
+// Text a search box can match: 'J3-8', 'J3.8', 'pin 8' (and the second pin of a doubled output).
+export const pinSearchText = (p) => (p ? [p.pin, p.pin2].filter(Boolean).map((n) => `${p.conn}-${n} ${p.conn}.${n} pin ${n}`).join(' ') : '')

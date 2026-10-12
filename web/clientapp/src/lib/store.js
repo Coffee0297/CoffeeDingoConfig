@@ -2,7 +2,7 @@ import { writable, get } from 'svelte/store'
 import * as signalR from '@microsoft/signalr'
 import { toast } from './toast.js'
 import { spanAfter, isModule } from './canids.js'
-import { isDefaultName } from './businputs.js'
+import { outputRatingA, binBody, broadcastFrame, addCanInputFromFrame as addCanInputFromFrameApi, ensureInputEnabled as ensureInputEnabledApi } from './apply.js'
 
 // Live telemetry pushed from the .NET backend (devices + CAN stats), 10 Hz
 export const telemetry = writable({
@@ -228,13 +228,7 @@ api.definitions().then((d) => { if (d) deviceDefs.set(d) }).catch((e) => console
 // Rated channel current (A) for an output, looked up from the loaded definitions by the device's
 // type name and output NUMBER (OUT1 = index 0). null when unknown (the UI then shows no rating).
 // Setting a trip above the rating is allowed — advisory only; callers just flag it.
-export function outputRatingA(defs, deviceType, outputNumber) {
-  const t = (deviceType || '').toLowerCase()
-  const all = [...(defs?.pdms ?? []), ...(defs?.canboards ?? [])]
-  const def = all.find((d) => (d.typeName || '').toLowerCase() === t)
-  const r = def?.outputCurrentRatings
-  return Array.isArray(r) ? (r[(Number(outputNumber) | 0) - 1] ?? null) : null
-}
+export { outputRatingA }
 
 // Voltage drop over a copper wire run at a given current. lengthM is one-way; the feed +
 // return path is 2·L. ρ ≈ 0.0175 Ω·mm²/m (copper, slightly warm). Returns volts + % of
@@ -358,36 +352,7 @@ export async function bridgeRemoteSignal(localGuid, srcGuid, srcVar, devices) {
 // decode it locally. Returns the new caninput number + the varmap indices of its decoded ports:
 // valueIndex (analog, float) and stateIndex (the 1-bit boolean). ----
 // `frame` = {name, id, ide, startBit, length, byteOrder, factor, offset, isSigned}.
-async function addCanInputFromFrame(consumerGuid, frame) {
-  const f = await api.functions(consumerGuid)
-  // Idempotent: a CAN input already decoding this exact frame slice is reused, so clicking the same remote
-  // signal twice (or from two pickers) doesn't pile up duplicates ("ignition" ×5 in every list).
-  const same = (f?.canInputs ?? []).find((x) => x.enabled && x.id === frame.id && !!x.ide === !!frame.ide && x.startBit === frame.startBit && x.bitLength === frame.length)
-  if (same) {
-    const ins0 = await api.inputs(consumerGuid).catch(() => [])
-    return { number: same.number, name: same.name, reused: true,
-      stateIndex: ins0.find((x) => x.name === same.name)?.index ?? null,
-      valueIndex: ins0.find((x) => x.name === same.name + ' Value')?.index ?? null }
-  }
-  const free = (f?.canInputs ?? []).find((x) => !x.enabled)
-  if (!free) throw new Error('this module has no free CAN input slot — free one in Signals & logic')
-  const name = (frame.name || ('dbc' + free.number)).slice(0, 32)
-  // `id` BEFORE `ide`: CanInput.Id's setter forces Ide from the value (>2047), so send the source's
-  // own ide flag afterwards to honour an extended-frame signal whose id happens to be ≤ 2047.
-  // State = (value != 0) — the slot default "== 0" would make the on/off port read inverted.
-  await api.setFunction(consumerGuid, 'caninput', free.number, {
-    enabled: true, id: frame.id, ide: !!frame.ide,
-    startBit: frame.startBit, bitLength: frame.length, byteOrder: frame.byteOrder,
-    factor: frame.factor, offset: frame.offset, signed: frame.isSigned, mode: 0, operator: 1, operand: 0, name,
-  })
-  // Resolve the new input's varmap indices by VarLabel (State → name, Value → "name Value").
-  const ins = await api.inputs(consumerGuid).catch(() => [])
-  return {
-    number: free.number, name,
-    stateIndex: ins.find((x) => x.name === name)?.index ?? null,
-    valueIndex: ins.find((x) => x.name === name + ' Value')?.index ?? null,
-  }
-}
+const addCanInputFromFrame = (consumerGuid, frame) => addCanInputFromFrameApi(api, consumerGuid, frame)
 
 // From a /dbc/search or /dbc/signals hit (absolute id): {name,id,ide,startBit,length,byteOrder,isSigned,factor,offset}.
 export const addCanInputFromDbc = (consumerGuid, sig) => addCanInputFromFrame(consumerGuid, sig)
@@ -395,24 +360,12 @@ export const addCanInputFromDbc = (consumerGuid, sig) => addCanInputFromFrame(co
 // From a /broadcast-signals entry of another module. That DTO is base-ID-relative (offset, valueOffset,
 // bitLength), so resolve the absolute id off the source's current base. Native broadcast frames are
 // 11-bit standard (ide=false). `source` is the source device record (needs baseId).
-export const addCanInputFromBroadcast = (consumerGuid, source, sig) => addCanInputFromFrame(consumerGuid, {
-  name: sig.label ?? sig.name, id: (source?.baseId ?? 0) + sig.offset, ide: false,   // the user's name ("ignition"), not "DigitalInput1.State"
-  startBit: sig.startBit, length: sig.bitLength, byteOrder: sig.byteOrder,
-  factor: sig.factor, offset: sig.valueOffset, isSigned: sig.signed,
-})
+export const addCanInputFromBroadcast = (consumerGuid, source, sig) => addCanInputFromFrame(consumerGuid, broadcastFrame(source, sig))
 
 // Turn on a physical input that a pick relies on (an unused pin reads nothing until enabled), naming it
 // after what it now does when it still has its default name. phys = {kind: 'input'|'analoginput', number}.
 // Returns true when it had to enable it.
-export async function ensureInputEnabled(guid, phys, name) {
-  if (!phys) return false
-  const f = await api.functions(guid)
-  const list = phys.kind === 'input' ? (f?.inputs ?? f?.digitalIn) : f?.analogIn
-  const x = (list ?? []).find((i) => i.number === phys.number)
-  if (!x || x.enabled) return false
-  await api.setFunction(guid, phys.kind, phys.number, { enabled: true, ...(isDefaultName(x.name) && name ? { name: name.slice(0, 20) } : {}) })
-  return true
-}
+export const ensureInputEnabled = (guid, phys, name) => ensureInputEnabledApi(api, guid, phys, name)
 
 // ---- Lua snippets (authored per-function in the tool; the device stores one
 // assembled program). Persisted to localStorage, keyed by device guid then a
@@ -546,7 +499,23 @@ export function wantedId(link, devices) {
 // enabled / pins: [{guid, kind, number}], cans: [n], at}]
 function loadTemplates() { try { return JSON.parse(localStorage.getItem('dingoTemplates') || '[]') } catch { return [] } }
 export const templateInstances = writable(loadTemplates())
-templateInstances.subscribe((v) => { try { localStorage.setItem('dingoTemplates', JSON.stringify(v)) } catch {} })
+// The backend keeps the same list for the MCP template tools (an agent may apply/remove some), so it's mirrored
+// there: every change is pushed, and syncTemplates() adopts the server's list (or seeds it from this browser's
+// when the server has none yet, i.e. just started). Called at startup and whenever the Templates tab opens.
+let tplSynced = false
+templateInstances.subscribe((v) => {
+  try { localStorage.setItem('dingoTemplates', JSON.stringify(v)) } catch {}
+  if (tplSynced) fetch('/api/templates/instances', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(v) }).catch(() => {})
+})
+export async function syncTemplates() {
+  try {
+    const r = await fetch('/api/templates/instances'), srv = r.ok ? await r.json() : null
+    tplSynced = true
+    if (Array.isArray(srv)) templateInstances.set(srv)
+    else templateInstances.set(get(templateInstances))   // server just started (null): seed it with ours
+  } catch { tplSynced = true }
+}
+syncTemplates()
 
 // ---- Whole-project client state: everything kept in the browser (NOT on the device) — cross-module
 // functions, per-function Lua snippets, CAN-bridge IDs, and layout (car-map pins + wiring-graph
@@ -710,22 +679,7 @@ export function compileCrossModule() {
 // CurrentLimit is the hardware over-current trip: we refuse to invent it. If the source output
 // was never read/configured (no currentLimit), writing a guessed value could under- or
 // over-protect the circuit, so we throw and make the caller Read the module first.
-export const _binBody = (o, input) => {
-  if (o == null || o.currentLimit == null)
-    throw new Error(`Output ${o?.number ?? '?'} has no current limit yet — Read the module before writing/deploying so its trip point isn't guessed.`)
-  return {
-    Number: o.number, Enabled: true, Input: input,
-    CurrentLimit: o.currentLimit, InrushLimit: o.inrushLimit ?? 50, InrushTime: o.inrushTime ?? 1000,
-    ResetMode: o.resetMode ?? 0, ResetTime: o.resetTime ?? 1000, ResetCountLimit: o.resetCountLimit ?? 3,
-    PwmEnabled: o.pwmEnabled ?? false, Freq: o.freq ?? 100, FixedDuty: o.fixedDuty ?? 100, MinDuty: o.minDuty ?? 0,
-    SoftStart: o.softStart ?? false, SoftStartRamp: o.softStartRamp ?? 0,
-    // Variable-PWM (duty/freq follow a signal) — carry through so a deploy/binburn doesn't reset them.
-    VariableDutyCycle: o.variableDutyCycle ?? false, DutyCycleInput: o.dutyCycleInput ?? 0, DutyCycleDenom: o.dutyCycleDenom ?? 100,
-    VariableFreq: o.variableFreq ?? false, FreqInput: o.freqInput ?? 0, FreqInputDenom: o.freqInputDenom ?? 1,
-    RampDutyChanges: o.rampDutyChanges ?? false, PrimaryOutput: o.primaryOutput ?? -1,
-    WarnLimit: o.warnLimit ?? 0, OpenLoadLimit: o.openLoadLimit ?? 0, OpenLoadTime: o.openLoadTime ?? 1000,
-  }
-}
+export const _binBody = binBody
 
 // Disable every cross-module-owned native function (name starts "cmf") on a module, so each
 // deploy is a clean rebuild — handles edits/deletes without leaking slots (auto-pick scheme).

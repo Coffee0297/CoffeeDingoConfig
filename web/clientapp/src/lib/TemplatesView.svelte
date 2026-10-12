@@ -8,17 +8,14 @@
   import SearchSelect from './SearchSelect.svelte'
   import BusInputPicker from './BusInputPicker.svelte'
   import TemplateDrawing from './TemplateDrawing.svelte'
-  import { api, applyGraphConnection, addCanInputFromBroadcast, ensureInputEnabled, templateInstances, outputRatingA, deviceDefs } from './store.js'
-  import { TEMPLATES, OPS, defaults, validate, previewTemplate, liveCtx, outputOptions, logicModule, shortfalls, isInput, blank } from './templates.js'
-  import { pinFor, ioTag } from './pinmap.js'
-  import { isDefaultName } from './businputs.js'
+  import { api, templateInstances, deviceDefs, syncTemplates } from './store.js'
+  import { TEMPLATES, OPS, defaults, validate, previewTemplate, logicModule, shortfalls, isInput, blank } from './templates.js'
+  import { isMod, numOut, loadOutputOptions, applyTemplate, undoTemplate } from './apply.js'
   import { toast } from './toast.js'
   import { labelFields } from './a11y.js'
 
   let { current, devices = [] } = $props()
 
-  const isMod = (d) => /pdm|can.?board/i.test(d?.type ?? '')
-  const isCb = (d) => /can.?board/i.test(d?.type ?? '')
   const mods = $derived(devices.filter(isMod))
   const devOf = (g) => devices.find((d) => d.guid === g)
 
@@ -42,16 +39,12 @@
 
   // Outputs on every module, with what drives them now (this module's functions for CANBoard outputs).
   async function loadOutputs() {
-    const defs = get(deviceDefs)
-    const f = {}
-    await Promise.all(mods.map(async (d) => { f[d.guid] = await api.functions(d.guid).catch(() => null) }))
-    funcsByGuid = f
-    outOpts = outputOptions(mods.map((d) => ({ device: d, outs: isCb(d)
-      ? (f[d.guid]?.digitalOut ?? []).map((o) => ({ number: o.number, name: o.name, input: o.enabled ? o.input : 0 }))
-      : (d.outputs ?? []).map((o) => ({ number: o.number, name: o.name, input: o.inputVal, ratingA: outputRatingA(defs, d.type, o.number) })) })), pinFor, ioTag)
+    const r = await loadOutputOptions(api, mods, get(deviceDefs))
+    funcsByGuid = r.funcs; outOpts = r.outOpts
   }
   let modKey = $derived(mods.map((d) => d.guid).join())
   $effect(() => { modKey; loadOutputs() })
+  $effect(() => { syncTemplates() })   // pick up templates an agent applied over MCP
 
   // The logic module: owner of the picked outputs, else the selected module.
   const lm = $derived(logicModule(tpl, sel))
@@ -68,7 +61,6 @@
   const outOpt = (k) => outOpts.find((o) => o.value === sel[k])
   const inOpt = (k) => (inOpts[k] ?? []).find((o) => o.value === sel[k] && o.value !== '')
   const outName = (n) => { const o = outOpts.find((x) => x.value === `${logicGuid}:${n}`); return o?.name || 'output' + n }
-  const numOut = (v) => +String(v).split(':')[1]
 
   // Live preview + drawings, re-run on every change.
   $effect(() => {
@@ -81,23 +73,7 @@
   const drawOuts = $derived(tpl.fields.filter((f) => f.t === 'out' && (!f.opt || !blank(sel[f.k]))).map((f) => ({ k: f.k, label: f.label, load: f.load, opt: outOpt(f.k), num: blank(sel[f.k]) ? null : numOut(sel[f.k]) })))
   const remoteIns = $derived(drawIns.filter((x) => x.opt && x.opt.local === false))
 
-  // ---- apply / remove
-  async function wireOut(dev, n, idx) {
-    if (isCb(dev)) await api.setFunction(dev.guid, 'digitaloutput', n, { enabled: true, input: idx })
-    else await applyGraphConnection(dev.guid, 'output:' + n, 'input', idx, devices)
-  }
-  // Disable what an instance made and unwire its outputs. CAN inputs and pins another applied template
-  // still relies on (`keep`) stay on.
-  async function undo(inst, keep = []) {
-    const dev = devOf(inst.guid); if (!dev) return
-    const busyCan = new Set(keep.filter((i) => i.guid === inst.guid).flatMap((i) => i.cans ?? []))
-    const pinKey = (p) => `${p.guid}|${p.kind}|${p.number}`
-    const busyPin = new Set(keep.flatMap((i) => (i.pins ?? []).map(pinKey)))
-    for (const n of inst.wired ?? []) await wireOut(dev, n, inst.prev?.[n] ?? 0).catch(() => {})   // back to what drove it before
-    for (const c of [...(inst.created ?? [])].reverse())
-      if (!(c.kind === 'caninput' && busyCan.has(c.number))) await api.setFunction(dev.guid, c.kind, c.number, { enabled: false }).catch(() => {})
-    for (const e of inst.enabled ?? []) if (!busyPin.has(pinKey(e))) await api.setFunction(e.guid, e.kind, e.number, { enabled: false }).catch(() => {})
-  }
+  // ---- apply / remove (the steps themselves live in apply.js, shared with the MCP template tools)
   async function apply() {
     msg = validate(tpl, sel) || lm.error || previewErr || (short.length ? 'Not enough free slots on ' + logic?.name + ': ' + short.join(', ') : '')
     if (msg) return
@@ -105,49 +81,22 @@
     const taken = tpl.fields.filter((f) => f.t === 'out' && outOpt(f.k)?.used && !mine.includes(numOut(sel[f.k])))
     if (taken.length && !confirm(`${taken.map((f) => outOpt(f.k).label.split(' · ').slice(0, 3).join(' · ')).join(', ')} already driven by something else. The template takes ${taken.length > 1 ? 'them' : 'it'} over (Remove gives ${taken.length > 1 ? 'them' : 'it'} back). Continue?`)) return
     busy = true
-    const dev = logic, created = [], enabled = [], cans = [], pins = [], prev = {}
-    let ctx = null
+    const old = editing && get(templateInstances).find((i) => i.id === editing)
+    const others = get(templateInstances).filter((i) => i.id !== editing)
     try {
-      const old = editing && get(templateInstances).find((i) => i.id === editing)
-      const others = get(templateInstances).filter((i) => i.id !== editing)
-      if (old) { await undo(old, others); templateInstances.set(others) }
-      const s = { ...sel }
-      for (const f of tpl.fields) {
-        if (f.t === 'out' && !blank(s[f.k])) s[f.k] = numOut(s[f.k])
-        if (!isInput(f) || blank(s[f.k])) continue
-        const o = inOpt(f.k)
-        // An unused pin reads nothing until it is enabled (on its own module).
-        const pin = o?.phys && { guid: o.local ? dev.guid : o.source.guid, ...o.phys }
-        const role = f.label.replace(/\s*[(/].*$/, '')   // 'Headlight switch', what the pin now does
-        if (pin) { pins.push(pin); if (await ensureInputEnabled(pin.guid, o.phys, role)) enabled.push(pin) }
-        if (typeof s[f.k] === 'number') continue
-        if (!o?.sig) throw new Error(`${f.label}: that signal is no longer on the bus — pick it again`)
-        // remote: decode its broadcast here, named after the role while the pin still has its factory name
-        const r = await addCanInputFromBroadcast(dev.guid, o.source, isDefaultName(o.sig.label) ? { ...o.sig, label: role } : o.sig)
-        if (!r.reused) created.push({ kind: 'caninput', number: r.number })
-        cans.push(r.number)
-        s[f.k] = f.t === 'bool' ? (r.stateIndex ?? r.valueIndex) : (r.valueIndex ?? r.stateIndex)
-        if (s[f.k] == null) throw new Error(`${f.label}: created the CAN input but couldn't resolve its signal`)
-      }
-      const was = (n) => old?.prev?.[n] ?? outOpts.find((o) => o.value === `${dev.guid}:${n}`)?.input ?? 0
-      ctx = await liveCtx({ api, guid: dev.guid, isCanboard: isCb(dev), outName, wireOutput: (n, idx) => { prev[n] ??= was(n); return wireOut(dev, n, idx) } })
-      await tpl.build(ctx, s)
-      const inst = { id: editing ?? crypto.randomUUID(), key, name: name.trim() || tpl.name, guid: dev.guid, sel: { ...sel }, relays: { ...relays },
-        created: [...created, ...ctx.created], wired: ctx.wired, prev, enabled, cans, pins, at: new Date().toISOString() }
-      templateInstances.update((l) => [...l, inst])
-      toast(`Applied “${inst.name}” on ${dev.name}${dev.connected ? ' — Burn to keep' : ' — saved to the project; Deploy to apply'}.`, 'info')
+      const inst = await applyTemplate(api, { devices, tpl, sel, relays, name, id: editing ?? crypto.randomUUID(), old, others, inOpt, outOpts })
+      templateInstances.set([...others, inst])
+      toast(`Applied “${inst.name}” on ${logic.name}${logic.connected ? ' — Burn to keep' : ' — saved to the project; Deploy to apply'}.`, 'info')
       editing = null; msg = ''
-      await loadOutputs()
     } catch (e) {
-      // Roll back what this run made so a failed apply leaves no half-built circuit.
-      await undo({ guid: dev.guid, created: [...created, ...(ctx?.created ?? [])], wired: ctx?.wired ?? [], prev, enabled }, get(templateInstances))
-      msg = 'Failed: ' + e.message + (editing ? ' — the previous version was removed; fix and Apply again.' : ''); toast(msg, 'error')
-    } finally { busy = false }
+      if (old) templateInstances.set(others)   // the previous version was undone before the failure
+      msg = 'Failed: ' + e.message + (old ? ' — the previous version was removed; fix and Apply again.' : ''); toast(msg, 'error')
+    } finally { busy = false; await loadOutputs() }
   }
   async function remove(inst) {
     if (!confirm(`Remove “${inst.name}”? Its blocks are disabled and its outputs unwired.`)) return
     busy = true
-    try { const others = get(templateInstances).filter((i) => i.id !== inst.id); await undo(inst, others); templateInstances.set(others); await loadOutputs(); if (editing === inst.id) choose(key) }
+    try { const others = get(templateInstances).filter((i) => i.id !== inst.id); await undoTemplate(api, devices, inst, others); templateInstances.set(others); await loadOutputs(); if (editing === inst.id) choose(key) }
     catch (e) { toast('Remove failed: ' + e.message, 'error') } finally { busy = false }
   }
 </script>

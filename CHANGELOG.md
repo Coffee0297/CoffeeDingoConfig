@@ -17,12 +17,19 @@ All notable changes to **dingoConfig** are recorded here. Versions follow [SemVe
   (input → CAN → logic blocks → output). Both save as SVG.
 - Applied templates are kept in the project file: **Edit** re-applies with new picks, **✕** disables what it
   created and gives taken-over outputs back their previous input. A failed apply rolls itself back.
-- **Bus-wide pickers**: inputs and outputs are listed with their **connector pin** (dingoPDM v7 J3, CANBoard
-  J2/J3/J4) and function (`DI3`, `OUT1`, `DO2`), searchable by name, `J3-3`, `pin 3` or module. Unused input
+- **Bus-wide pickers**: inputs and outputs are listed with their **connector pin** (dingoPDM v7 J3,
+  dingoPDM-Max J4 with each output on two pins, CANBoard J2/J3/J4) and function (`DI3`, `OUT1`, `DO2`), searchable by name, `J3-3`, `pin 3` or module. Unused input
   pins are offered too and get enabled (and named after their role) when used.
 
+- **MCP template tools**: `list_templates`, `preview_template`, `apply_template` (new or `id` to edit,
+  `takeOver` for outputs already in use), `list_applied_templates`, `remove_template`, plus the
+  `apply-a-template` skill. Inputs and outputs are picked by text — `CB-1 DI3`, `PDM-01 J3-7`, a signal name —
+  and the backend runs the Templates tab's own engine (Jint, `wwwroot/template-runtime.js`), so an agent builds
+  exactly what the UI builds. Templates applied over MCP show up in the tab and are saved with the project.
+
 ### Changed
-- The Wiring tab's Circuit Builder runs on the same template engine (`lib/templates.js`).
+- The Wiring tab's Circuit Builder runs on the same template engine (`lib/templates.js`); Apply / Remove live in
+  `lib/apply.js`, shared by the Templates tab, the input picker and the backend.
 
 ## [0.8.0] — 2026-10-08
 
