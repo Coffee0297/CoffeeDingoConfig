@@ -5,6 +5,8 @@ All notable changes to **dingoConfig** are recorded here. Versions follow [SemVe
 
 ## [Unreleased]
 
+## [0.9.0] — 2026-10-12
+
 ### Added
 - **Templates tab**: ready-made circuits — **Headlights** (low / high / flash-to-pass, optional ignition and
   H4 low-off-with-high), **Washer + wipers** (the module's wiper block with park switch and wipes after
@@ -15,20 +17,16 @@ All notable changes to **dingoConfig** are recorded here. Versions follow [SemVe
 - **Drawings** per template: *Wiring* (switches to their connector pins; each load, with its relay laid out
   for how the output switches — a dingoPDM output feeds the coil, a CANBoard output grounds it) and *Links*
   (input → CAN → logic blocks → output). Both save as SVG.
-- Applied templates are kept in the project file: **Edit** re-applies with new picks, **✕** disables what it
-  created and gives taken-over outputs back their previous input. A failed apply rolls itself back.
+- Applied templates are kept in the project file: **Edit** re-applies with new picks, **✕** puts back everything it
+  changed: each output in full (enabled state, PWM, what drove it), each block slot and pin as it was, so the
+  module's config CRC matches what it was before. A failed apply rolls itself back.
 - **Bus-wide pickers**: inputs and outputs are listed with their **connector pin** (dingoPDM v7 J3,
   dingoPDM-Max J4 with each output on two pins, CANBoard J2/J3/J4) and function (`DI3`, `OUT1`, `DO2`), searchable by name, `J3-3`, `pin 3` or module. Unused input
   pins are offered too and get enabled (and named after their role) when used.
-
-- **Removing a template restores the module exactly**: each output it used comes back in full (enabled state,
-  PWM, what drove it) and each block slot and pin it took gets its old contents back, so a module's config
-  CRC matches what it was before the template was applied.
-- Templates set every field of a reused block slot: an Analog switch or Fuel pump condition no longer
-  inherits a leftover hysteresis release point (it could stay on forever), and Washer + wipers / PWM fan
-  clear leftover swipe / frequency-follow inputs.
-- **Fuel pump** template takes a digital run switch (oil pressure, ECU pump request) as well as, or instead of,
-  an RPM-style run signal.
+- Templates set every field of the free block slots they take, so a leftover value in a disabled slot (an old
+  hysteresis release point, a swipe input) can't change what the template does.
+- **Fuel pump** takes an RPM-style run signal above a threshold, a digital run switch (oil pressure, ECU pump
+  request), or both.
 - **MCP template tools**: `list_templates`, `preview_template`, `apply_template` (new, or `id` to edit — send only what changes,
   `takeOver` for outputs already in use), `list_applied_templates`, `remove_template`, plus the
   `apply-a-template` skill. Inputs and outputs are picked by text — `CB-1 DI3`, `PDM-01 J3-7`, a signal name —

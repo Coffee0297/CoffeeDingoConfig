@@ -10,7 +10,7 @@ rebuilt as one self-contained app (lean ASP.NET .NET 10 backend + Svelte SPA in 
 module on the bus, the wiring between them, Lua programs, firmware updates over CAN, and an MCP server so an
 AI agent can do all of it too.
 
-> **Firmware:** built for [CoffeeDingoFW](https://github.com/Coffee0297/CoffeeDingoFW). v0.8.0 expects
+> **Firmware:** built for [CoffeeDingoFW](https://github.com/Coffee0297/CoffeeDingoFW). v0.9.0 expects
 > **≥ 5.5.108** (PWM inputs, confirmed writes; latest v5.5.109); older builds show a "firmware needs updating" notice and
 > hide what they can't do. Want to try it without hardware? Point it at
 > [CoffeeDingoSim](https://github.com/Coffee0297/CoffeeDingoSim), which runs the real firmware on a virtual bus.
