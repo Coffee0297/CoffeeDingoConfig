@@ -56,6 +56,17 @@ jobs:
         shell: pwsh
         run: ./publish.ps1
 
+      # Release text = this version's CHANGELOG section (was a hard-coded body that went stale).
+      - name: Release notes from CHANGELOG
+        if: steps.check.outputs.exists == 'false'
+        shell: bash
+        run: |
+          v='${{ steps.ver.outputs.version }}'
+          awk -v h="## [$v]" 'index($0, h) == 1 { p = 1; next } p && /^## \[/ { exit } p' CHANGELOG.md > release-notes.md
+          echo >> release-notes.md
+          echo 'See [CHANGELOG.md](https://github.com/${{ github.repository }}/blob/main/CHANGELOG.md) for earlier versions.' >> release-notes.md
+          test -s release-notes.md
+
       - name: Create GitHub Release
         if: steps.check.outputs.exists == 'false'
         uses: softprops/action-gh-release@v3
@@ -64,20 +75,7 @@ jobs:
           name: dingoConfig v${{ steps.ver.outputs.version }}
           generate_release_notes: true
           prerelease: ${{ contains(steps.ver.outputs.version, '-') }}
-          body: |
-            Pairs with **CoffeeDingoFW v5.5.104** (OpenBLT CAN bootloader + always-live analog inputs).
-
-            ### Highlights
-            - **Flash firmware over CAN (OpenBLT XCP)** through a dingoPDM bridge — no USB/DFU.
-            - **Kvaser** CAN adapter (CANlib, Windows) alongside SLCAN/PCAN.
-            - **Smart flash routing** — the USB↔CAN bridge flashes over USB (identified via the dingoFW
-              `I` command); downstream modules and the CANBoard flash over CAN.
-            - **CANBoard analog inputs always read live**; **board-temp removed** (no sensor).
-            - Bus-load-resilient comms (receive accept-filter), CANBoard digital-output PWM, and a
-              non-strobing "live" badge.
-
-            See [CHANGELOG.md](https://github.com/${{ github.repository }}/blob/main/CHANGELOG.md) for
-            the full list.
+          body_path: release-notes.md
           files: publish/dingoConfig-${{ steps.ver.outputs.version }}/*.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
