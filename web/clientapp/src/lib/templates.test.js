@@ -61,11 +61,18 @@ const ctx = await liveCtx({ api, guid: 'p', wireOutput: async (n, i) => calls.pu
 await head.build(ctx, { low: 5, high: 6, lowL: 1, highL: 3, h4: true })
 assert.deepEqual(calls.map((c) => c.slice(0, 2)), [['virtualinput', 2], ['virtualinput', 3], ['wire', 1], ['wire', 3]])
 assert.deepEqual(calls[2], ['wire', 1, 73]); assert.deepEqual(calls[3], ['wire', 3, 72])
-assert.deepEqual(ctx.created, [{ kind: 'virtualinput', number: 2 }, { kind: 'virtualinput', number: 3 }])
+assert.deepEqual(ctx.created, [{ kind: 'virtualinput', number: 2, before: { number: 2, enabled: false } }, { kind: 'virtualinput', number: 3, before: { number: 3, enabled: false } }])
 assert.deepEqual(ctx.wired, [1, 3])
 await assert.rejects(head.build(ctx, { low: 5, high: 6, lowL: 1, highL: 3, h4: true }), /No free virtualInputs/)
 const w = await ctx.wiper({ slowInput: 5 }); assert.equal(w.slow, 159)
 await assert.rejects(ctx.wiper({}), /already in use/)
+
+// a reused slot keeps its old fields: the condition must reset argOff (a leftover hysteresis release point)
+const cc = []
+const capi = { functions: async () => ({ conditions: [{ number: 1, enabled: false, argOff: 2 }] }), inputs: async () => [{ index: 20, kind: 'condition', number: 1, prop: 'Value' }],
+  setFunction: async (g, kind, n, body) => cc.push(body) }
+assert.equal(await (await liveCtx({ api: capi, guid: 'p' })).condition(9, 2, 2500, 'x'), 20)
+assert.equal(cc[0].argOff, 2500)
 
 // bus-wide outputs: pin, side, rating, free first
 const pdm = { guid: 'p', name: 'PDM-01', type: 'dingoPDM' }, cb = { guid: 'c', name: 'CB-1', type: 'CANBoard' }

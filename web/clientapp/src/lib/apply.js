@@ -24,11 +24,11 @@ export function outputRatingA(defs, deviceType, outputNumber) {
 // CurrentLimit is the hardware over-current trip: we refuse to invent it. If the source output
 // was never read/configured (no currentLimit), writing a guessed value could under- or
 // over-protect the circuit, so we throw and make the caller Read the module first.
-export const binBody = (o, input) => {
+export const binBody = (o, input, enabled = true) => {
   if (o == null || o.currentLimit == null)
     throw new Error(`Output ${o?.number ?? '?'} has no current limit yet — Read the module before writing/deploying so its trip point isn't guessed.`)
   return {
-    Number: o.number, Enabled: true, Input: input,
+    Number: o.number, Enabled: enabled, Input: input,
     CurrentLimit: o.currentLimit, InrushLimit: o.inrushLimit ?? 50, InrushTime: o.inrushTime ?? 1000,
     ResetMode: o.resetMode ?? 0, ResetTime: o.resetTime ?? 1000, ResetCountLimit: o.resetCountLimit ?? 3,
     PwmEnabled: o.pwmEnabled ?? false, Freq: o.freq ?? 100, FixedDuty: o.fixedDuty ?? 100, MinDuty: o.minDuty ?? 0,
@@ -47,6 +47,23 @@ export async function wireOut(api, dev, n, idx) {
   await api.outputConfig(dev.guid, binBody((dev.outputs ?? []).find((x) => x.number === n) ?? { number: n }, idx))
 }
 
+// What output n of `dev` is now, in full (PDM: its device record; CANBoard: its digital output block), so a
+// remove can put it back exactly — enabled state, PWM and all, not just what drove it.
+export async function outputSnapshot(api, dev, n) {
+  const o = isCb(dev) ? (await api.functions(dev.guid))?.digitalOut?.find((x) => x.number === n) : (dev.outputs ?? []).find((x) => x.number === n)
+  return o ? JSON.parse(JSON.stringify(o)) : null
+}
+const restoreOutput = (api, dev, s) => isCb(dev) ? api.setFunction(dev.guid, 'digitaloutput', s.number, s) : api.outputConfig(dev.guid, binBody(s, s.inputVal ?? 0, !!s.enabled))
+
+// A block slot back to what it held before (a template only ever takes free slots, so that is a disabled
+// block, but its old fields count: the module config should come back byte for byte). caninput: id before
+// ide, as on create (CanInput.Id's setter forces Ide).
+function restoreSlot(api, guid, c) {
+  if (!c.before) return api.setFunction(guid, c.kind, c.number, { enabled: false })
+  const { id, ide, ...rest } = c.before
+  return api.setFunction(guid, c.kind, c.number, c.kind === 'caninput' ? { ...rest, id, ide } : c.before)
+}
+
 // ---- Add a local CAN input on `consumerGuid` decoding a frame slice. Returns the caninput number + the
 // varmap indices of its decoded ports: valueIndex (analog, float) and stateIndex (the 1-bit boolean).
 // `frame` = {name, id, ide, startBit, length, byteOrder, factor, offset, isSigned}.
@@ -61,7 +78,7 @@ export async function addCanInputFromFrame(api, consumerGuid, frame) {
       stateIndex: ins0.find((x) => x.name === same.name)?.index ?? null,
       valueIndex: ins0.find((x) => x.name === same.name + ' Value')?.index ?? null }
   }
-  const free = (f?.canInputs ?? []).find((x) => !x.enabled)
+  const free = (f?.canInputs ?? []).find((x) => !x.enabled)   // also its `before` snapshot
   if (!free) throw new Error('this module has no free CAN input slot — free one in Signals & logic')
   const name = (frame.name || ('dbc' + free.number)).slice(0, 32)
   // `id` BEFORE `ide`: CanInput.Id's setter forces Ide from the value (>2047), so send the source's
@@ -75,7 +92,7 @@ export async function addCanInputFromFrame(api, consumerGuid, frame) {
   // Resolve the new input's varmap indices by VarLabel (State → name, Value → "name Value").
   const ins = await api.inputs(consumerGuid).catch(() => [])
   return {
-    number: free.number, name,
+    number: free.number, name, before: JSON.parse(JSON.stringify(free)),
     stateIndex: ins.find((x) => x.name === name)?.index ?? null,
     valueIndex: ins.find((x) => x.name === name + ' Value')?.index ?? null,
   }
@@ -92,7 +109,7 @@ export const broadcastFrame = (source, sig) => ({
 
 // Turn on a physical input that a pick relies on (an unused pin reads nothing until enabled), naming it
 // after what it now does when it still has its default name. phys = {kind: 'input'|'analoginput', number}.
-// Returns true when it had to enable it.
+// Returns what the pin was (truthy) when it had to enable it, so a remove can restore its name too.
 export async function ensureInputEnabled(api, guid, phys, name) {
   if (!phys) return false
   const f = await api.functions(guid)
@@ -100,7 +117,7 @@ export async function ensureInputEnabled(api, guid, phys, name) {
   const x = (list ?? []).find((i) => i.number === phys.number)
   if (!x || x.enabled) return false
   await api.setFunction(guid, phys.kind, phys.number, { enabled: true, ...(isDefaultName(x.name) && name ? { name: name.slice(0, 20) } : {}) })
-  return true
+  return { enabled: false, name: x.name }
 }
 
 // ---- Picker options. Every input on the bus as seen from `device` (its own in-use signals, its unused
@@ -126,17 +143,19 @@ export async function loadOutputOptions(api, mods, defs) {
   return { outOpts, funcs }
 }
 
-// ---- Remove: disable what an instance made and unwire its outputs (back to what drove them before).
+// ---- Remove: put back every output, block slot and pin the instance touched, as it was before (instances
+// saved before snapshots existed: outputs back to their old driver, blocks just disabled).
 // CAN inputs and pins another applied template still relies on (`keep`) stay on.
 export async function undoTemplate(api, devices, inst, keep = []) {
   const dev = devices.find((d) => d.guid === inst.guid); if (!dev) return
   const busyCan = new Set(keep.filter((i) => i.guid === inst.guid).flatMap((i) => i.cans ?? []))
   const pinKey = (p) => `${p.guid}|${p.kind}|${p.number}`
   const busyPin = new Set(keep.flatMap((i) => (i.pins ?? []).map(pinKey)))
-  for (const n of inst.wired ?? []) await wireOut(api, dev, n, inst.prev?.[n] ?? 0).catch(() => {})
+  for (const n of inst.wired ?? []) if (!inst.outs?.[n]) await wireOut(api, dev, n, inst.prev?.[n] ?? 0).catch(() => {})
+  for (const s of Object.values(inst.outs ?? {})) if (s) await restoreOutput(api, dev, s).catch(() => {})
   for (const c of [...(inst.created ?? [])].reverse())
-    if (!(c.kind === 'caninput' && busyCan.has(c.number))) await api.setFunction(dev.guid, c.kind, c.number, { enabled: false }).catch(() => {})
-  for (const e of inst.enabled ?? []) if (!busyPin.has(pinKey(e))) await api.setFunction(e.guid, e.kind, e.number, { enabled: false }).catch(() => {})
+    if (!(c.kind === 'caninput' && busyCan.has(c.number))) await restoreSlot(api, dev.guid, c).catch(() => {})
+  for (const e of inst.enabled ?? []) if (!busyPin.has(pinKey(e))) await api.setFunction(e.guid, e.kind, e.number, { enabled: false, ...(e.name ? { name: e.name } : {}) }).catch(() => {})
 }
 
 // ---- Apply. sel = the picks as the UI holds them (outputs 'guid:n', local inputs a var index, remote ones
@@ -145,8 +164,11 @@ export async function undoTemplate(api, devices, inst, keep = []) {
 export async function applyTemplate(api, { devices, tpl, sel, relays, name, id, old = null, others = [], inOpt, outOpts }) {
   const dev = devices.find((d) => d.guid === logicModule(tpl, sel).guid)
   if (!dev) throw new Error('Pick an output first — the logic runs on the module that owns the outputs')
-  const created = [], enabled = [], cans = [], pins = [], prev = {}
+  const created = [], enabled = [], cans = [], pins = [], prev = {}, outs = {}
   const outName = (n) => outOpts.find((x) => x.value === `${dev.guid}:${n}`)?.name || 'output' + n
+  // Each picked output as it is before this template; an edit keeps the snapshots from the first apply.
+  const picked = tpl.fields.filter((f) => f.t === 'out' && !blank(sel[f.k])).map((f) => numOut(sel[f.k]))
+  for (const n of picked) outs[n] = old?.outs?.[n] ?? await outputSnapshot(api, dev, n)
   let ctx = null
   try {
     if (old) await undoTemplate(api, devices, old, others)
@@ -158,12 +180,12 @@ export async function applyTemplate(api, { devices, tpl, sel, relays, name, id, 
       // An unused pin reads nothing until it is enabled (on its own module).
       const pin = o?.phys && { guid: o.local ? dev.guid : o.source.guid, ...o.phys }
       const role = f.label.replace(/\s*[(/].*$/, '')   // 'Headlight switch', what the pin now does
-      if (pin) { pins.push(pin); if (await ensureInputEnabled(api, pin.guid, o.phys, role)) enabled.push(pin) }
+      if (pin) { pins.push(pin); const was = await ensureInputEnabled(api, pin.guid, o.phys, role); if (was) enabled.push({ ...pin, name: was.name }) }
       if (typeof s[f.k] === 'number') continue
       if (!o?.sig) throw new Error(`${f.label}: that signal is no longer on the bus — pick it again`)
       // remote: decode its broadcast here, named after the role while the pin still has its factory name
       const r = await addCanInputFromFrame(api, dev.guid, broadcastFrame(o.source, isDefaultName(o.sig.label) ? { ...o.sig, label: role } : o.sig))
-      if (!r.reused) created.push({ kind: 'caninput', number: r.number })
+      if (!r.reused) created.push({ kind: 'caninput', number: r.number, before: r.before })
       cans.push(r.number)
       s[f.k] = f.t === 'bool' ? (r.stateIndex ?? r.valueIndex) : (r.valueIndex ?? r.stateIndex)
       if (s[f.k] == null) throw new Error(`${f.label}: created the CAN input but couldn't resolve its signal`)
@@ -172,10 +194,10 @@ export async function applyTemplate(api, { devices, tpl, sel, relays, name, id, 
     ctx = await liveCtx({ api, guid: dev.guid, isCanboard: isCb(dev), outName, wireOutput: (n, idx) => { prev[n] ??= was(n); return wireOut(api, dev, n, idx) } })
     await tpl.build(ctx, s)
     return { id, key: tpl.key, name: (name ?? '').trim() || tpl.name, guid: dev.guid, sel: { ...sel }, relays: { ...relays },
-      created: [...created, ...ctx.created], wired: ctx.wired, prev, enabled, cans, pins, at: new Date().toISOString() }
+      created: [...created, ...ctx.created], wired: ctx.wired, prev, outs, enabled, cans, pins, at: new Date().toISOString() }
   } catch (e) {
     // Roll back what this run made so a failed apply leaves no half-built circuit.
-    await undoTemplate(api, devices, { guid: dev.guid, created: [...created, ...(ctx?.created ?? [])], wired: ctx?.wired ?? [], prev, enabled }, others)
+    await undoTemplate(api, devices, { guid: dev.guid, created: [...created, ...(ctx?.created ?? [])], wired: ctx?.wired ?? [], prev, outs, enabled }, others)
     throw e
   }
 }

@@ -21,6 +21,12 @@ All notable changes to **dingoConfig** are recorded here. Versions follow [SemVe
   dingoPDM-Max J4 with each output on two pins, CANBoard J2/J3/J4) and function (`DI3`, `OUT1`, `DO2`), searchable by name, `J3-3`, `pin 3` or module. Unused input
   pins are offered too and get enabled (and named after their role) when used.
 
+- **Removing a template restores the module exactly**: each output it used comes back in full (enabled state,
+  PWM, what drove it) and each block slot and pin it took gets its old contents back, so a module's config
+  CRC matches what it was before the template was applied.
+- Templates set every field of a reused block slot: an Analog switch or Fuel pump condition no longer
+  inherits a leftover hysteresis release point (it could stay on forever), and Washer + wipers / PWM fan
+  clear leftover swipe / frequency-follow inputs.
 - **Fuel pump** template takes a digital run switch (oil pressure, ECU pump request) as well as, or instead of,
   an RPM-style run signal.
 - **MCP template tools**: `list_templates`, `preview_template`, `apply_template` (new, or `id` to edit — send only what changes,

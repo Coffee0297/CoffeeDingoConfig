@@ -52,7 +52,7 @@ export const TEMPLATES = [
       { k: 'fastOut', t: 'out', load: 'motor', label: 'Wiper motor, fast', opt: true },
       { k: 'pumpOut', t: 'out', load: 'pump', label: 'Washer pump' }],
     build: async (ctx, s) => {
-      const w = await ctx.wiper({ mode: 0, slowInput: +s.slow, fastInput: +s.fast || 0, interInput: +s.int || 0,
+      const w = await ctx.wiper({ mode: 0, slowInput: +s.slow, fastInput: +s.fast || 0, interInput: +s.int || 0, onInput: 0, speedInput: 0, swipeInput: 0,
         parkInput: +s.park, parkStopLevel: !!s.parkHigh, washInput: +s.wash, washWipeCycles: Math.round(+s.cycles), name: 'Wipers' })
       await ctx.wireOutput(s.slowOut, w.slow)
       if (s.fastOut) await ctx.wireOutput(s.fastOut, w.fast)
@@ -202,7 +202,7 @@ export async function liveCtx(env) {
     const slot = (funcs?.[arr] ?? []).find((x) => !x.enabled)
     if (!slot) throw new Error(`No free ${arr} slots on this module`)
     await api.setFunction(guid, kind, slot.number, { enabled: true, ...body })
-    created.push({ kind, number: slot.number })
+    created.push({ kind, number: slot.number, before: slot })   // what the slot held, put back on remove
     await refresh()
     const i = idxOf(kind, slot.number, prop)
     if (i == null) throw new Error(`couldn't resolve ${kind} ${slot.number}'s signal index`)
@@ -211,7 +211,9 @@ export async function liveCtx(env) {
   const ctx = withAnyOf({
     created, wired, outName: env.outName ?? ((n) => 'output' + n),
     alwaysOn: () => vmap.find((v) => v.name === 'Always On')?.index ?? 1,
-    condition: (input, operator, arg, name) => make('condition', 'conditions', 'Value', { input, operator, arg: +arg || 0, name }),
+    // Every field is set: a free slot keeps whatever it held before (a leftover argOff is a hysteresis release
+    // point — e.g. argOff 2 on a '> 2500' never lets the output turn off).
+    condition: (input, operator, arg, name) => make('condition', 'conditions', 'Value', { input, operator, arg: +arg || 0, argOff: +arg || 0, name }),
     flasher: (input, on, off, name, single = false) => make('flasher', 'flashers', 'State', { input, onTime: ms(on, 5000), offTime: ms(off, 5000), single, name }),
     // mode: 0 on-delay, 1 off-delay, 2 pulse (firmware TimerMode)
     timer: (input, mode, preset, name) => make('timer', 'timers', 'State', { input, mode, edge: 0, preset: ms(preset, 3600000), name }),
@@ -220,7 +222,7 @@ export async function liveCtx(env) {
     // Configure a CANBoard digital output for variable-duty PWM from an analog source + soft start.
     setOutputPwm: async (n, { source, full, min, freq, on }) => {
       if (!env.isCanboard) throw new Error('PWM-from-analog is wired on CANBoard outputs; for a PDM output set it in the output editor')
-      await api.setFunction(guid, 'digitaloutput', +n, { enabled: true, input: on ?? ctx.alwaysOn(), pwmEnabled: true, variableDutyCycle: true, dutyCycleInput: source, dutyCycleDenominator: Math.max(1, Math.round(full / 100)), minDutyCycle: min, frequency: freq, softStartEnabled: true, softStartRampTime: 500 })
+      await api.setFunction(guid, 'digitaloutput', +n, { enabled: true, input: on ?? ctx.alwaysOn(), pwmEnabled: true, variableDutyCycle: true, dutyCycleInput: source, dutyCycleDenominator: Math.max(1, Math.round(full / 100)), minDutyCycle: min, frequency: freq, variableFreq: false, freqInput: 0, rampDutyChanges: false, softStartEnabled: true, softStartRampTime: 500 })
       wired.push(+n)
     },
     // The native wiper block (a singleton, PDM only).
@@ -228,7 +230,7 @@ export async function liveCtx(env) {
       if (!funcs?.wiper) throw new Error('This module has no wiper block — wipers need a dingoPDM')
       if (funcs.wiper.enabled) throw new Error('The wiper block on this module is already in use — remove that first')
       await api.setFunction(guid, 'wiper', 1, { enabled: true, ...cfg })
-      created.push({ kind: 'wiper', number: 1 })
+      created.push({ kind: 'wiper', number: 1, before: funcs.wiper })
       await refresh()
       const p = (prop) => idxOf('wiper', 1, prop)
       return { slow: p('Slow Output'), fast: p('Fast Output'), park: p('Park Output'), inter: p('Inter Output'), wash: p('Wash Output'), swipe: p('Swipe Output') }
