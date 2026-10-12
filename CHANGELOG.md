@@ -21,6 +21,8 @@ All notable changes to **dingoConfig** are recorded here. Versions follow [SemVe
   dingoPDM-Max J4 with each output on two pins, CANBoard J2/J3/J4) and function (`DI3`, `OUT1`, `DO2`), searchable by name, `J3-3`, `pin 3` or module. Unused input
   pins are offered too and get enabled (and named after their role) when used.
 
+- **Fuel pump** template takes a digital run switch (oil pressure, ECU pump request) as well as, or instead of,
+  an RPM-style run signal.
 - **MCP template tools**: `list_templates`, `preview_template`, `apply_template` (new, or `id` to edit — send only what changes,
   `takeOver` for outputs already in use), `list_applied_templates`, `remove_template`, plus the
   `apply-a-template` skill. Inputs and outputs are picked by text — `CB-1 DI3`, `PDM-01 J3-7`, a signal name —

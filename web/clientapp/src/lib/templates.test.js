@@ -25,6 +25,14 @@ p = await previewTemplate(head, { ...num, h4: false, pass: 7, ign: 8 })
 assert.deepEqual(p.ops.map((o) => o.name), ['Head Low On', 'Head High Sw', 'Head High'])
 await assert.rejects(previewTemplate(head, { ...num, high: '', highL: 3 }), /High-beam outputs/)
 
+// fuel pump: RPM condition and/or a digital run switch, at least one
+const fp = T('fuelpump')
+assert.match(validate(fp, { ...defaults(fp), output: 'p:1' }), /one of: Run signal/)
+assert.equal(validate(fp, { ...defaults(fp), runSw: 5, output: 'p:1' }), '')
+p = await previewTemplate(fp, { ...defaults(fp), runSw: 5, output: 1 })
+assert.ok(!p.ops.some((o) => o.name === 'TP FuelRun') && p.ops.some((o) => o.name === 'TP FuelPump'))
+p = await previewTemplate(fp, { ...defaults(fp), run: 4, runSw: 5, output: 1 })
+assert.ok(p.ops.some((o) => o.name === 'TP FuelRun'))
 // washer: wiper block + pump straight off the wash button
 p = await previewTemplate(T('washwipe'), { slow: 5, wash: 6, park: 7, cycles: 3, slowOut: 1, pumpOut: 2 })
 assert.equal(p.ops[0].op, 'wiper')

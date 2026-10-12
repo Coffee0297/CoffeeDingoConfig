@@ -87,13 +87,14 @@ export const TEMPLATES = [
       await ctx.wireOutput(s.rightOut, await side(s.right, 'Right'))
       if (us && s.brake3) await ctx.wireOutput(s.brake3, brake)                 // independent high-mount brake
     } },
-  { key: 'fuelpump', name: 'Fuel pump', icon: '⛽', desc: 'Primes on power-up for a moment, then runs while the engine is turning (a run signal — e.g. RPM — above a threshold).',
-    fields: [{ k: 'run', t: 'num', label: 'Run signal (e.g. RPM)' }, { k: 'thr', t: 'number', label: 'Running above', def: 300 },
+  { key: 'fuelpump', name: 'Fuel pump', icon: '⛽', desc: 'Primes on power-up for a moment, then runs while the engine is turning: a run signal (e.g. RPM) above a threshold, and/or a run switch (oil pressure, alternator, ECU pump request).',
+    need: [['run', 'runSw']],
+    fields: [{ k: 'run', t: 'num', label: 'Run signal (e.g. RPM)', opt: true }, { k: 'runSw', t: 'bool', label: 'Or a run switch (oil pressure / ECU pump request)', opt: true }, { k: 'thr', t: 'number', label: 'Running above', def: 300 },
       { k: 'prime', t: 'number', label: 'Prime time (ms, max 1 h)', def: 3000, min: 0, max: 3600000 }, { k: 'output', t: 'out', load: 'pump', label: 'Pump output' }],
     build: async (ctx, s) => {
-      const run = await ctx.condition(+s.run, 2, +s.thr, 'TP FuelRun')                  // run signal > threshold
+      const run = s.run ? await ctx.condition(+s.run, 2, +s.thr, 'TP FuelRun') : 0      // run signal > threshold
       const prime = await ctx.timer(ctx.alwaysOn(), 2, +s.prime, 'TP Prime')             // one pulse at power-up (Timer, pulse mode)
-      await ctx.wireOutput(s.output, await ctx.virtual({ v0: run, op0: Or, v1: prime }, 'TP FuelPump'))
+      await ctx.wireOutput(s.output, await ctx.anyOf([run, +s.runSw || 0, prime], 'TP FuelPump'))
     } },
   { key: 'wipers', name: 'Wipers, simple (no park switch)', icon: '🌂', desc: 'Low/High run the wiper output; Intermittent pulses it on a gap. Combines whatever you provide. For a motor with a park switch use Washer + wipers.',
     fields: [{ k: 'low', t: 'bool', label: 'Low / On' }, { k: 'high', t: 'bool', label: 'High', opt: true },
@@ -123,6 +124,8 @@ export function defaults(tpl) { const s = {}; for (const f of tpl.fields) s[f.k]
 export function validate(tpl, sel) {
   const missing = tpl.fields.filter((f) => !f.opt && f.t !== 'check' && blank(sel[f.k]))
   if (missing.length) return 'Fill in: ' + missing.map((f) => f.label).join(', ')
+  const none = (tpl.need ?? []).find((ks) => ks.every((k) => blank(sel[k])))   // at least one of these
+  if (none) return 'Fill in one of: ' + none.map((k) => tpl.fields.find((f) => f.k === k).label).join(' or ')
   const bad = tpl.fields.find((f) => f.t === 'number' && f.max != null && (+sel[f.k] < (f.min ?? 0) || +sel[f.k] > f.max))
   if (bad) return `${bad.label}: must be ${bad.min ?? 0}–${bad.max} (the module rejects anything outside).`
   const outs = tpl.fields.filter((f) => f.t === 'out' && !blank(sel[f.k])).map((f) => String(sel[f.k]))
