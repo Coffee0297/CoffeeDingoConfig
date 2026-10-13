@@ -96,7 +96,7 @@ public class DeviceManager(ILogger<DeviceManager> logger, ILoggerFactory loggerF
     /// <summary>
     /// Create and add a device of the specified type
     /// </summary>
-    public void AddDevice(string deviceType, string name, int baseId)
+    public Guid AddDevice(string deviceType, string name, int baseId)
     {
         var parts = deviceType.ToLower().Split('-', 2); // Limit to 2 parts max
         var devType = parts[0];
@@ -137,7 +137,17 @@ public class DeviceManager(ILogger<DeviceManager> logger, ILoggerFactory loggerF
 
         SetCyclicTimer(device);
         OnDeviceAdded(new DeviceEventArgs(device));
+        return device.Guid;
     }
+
+    /// <summary>Add a device of the same kind as <paramref name="sourceId"/> (PDM model included) at another
+    /// base id — e.g. a temporary entry to reach a module on USB before a profile is written to it.</summary>
+    public Guid? AddLike(Guid sourceId, string name, int baseId) => GetDevice(sourceId) switch
+    {
+        PdmDevice p => AddDevice($"pdm:{p.PdmType}", name, baseId),
+        CanboardDevice => AddDevice("canboard", name, baseId),
+        _ => null,
+    };
 
     /// <summary>
     /// Get a device by Guid
@@ -988,10 +998,15 @@ public class DeviceManager(ILogger<DeviceManager> logger, ILoggerFactory loggerF
     /// <summary>The Lua program stored on the device record (empty for non-PDM / none stored).</summary>
     public string GetStoredLua(Guid deviceId) => GetDevice(deviceId) is PdmDevice p ? p.LuaProgram : string.Empty;
 
-    public bool UploadLua(Guid deviceId, string source)
+    public bool UploadLua(Guid deviceId, string source) => StartLuaUpload(deviceId, source) != null;
+
+    /// <summary>Start a Lua upload; null when refused (too big / not a PDM). The task completes true once the
+    /// program was read back identical and committed (LuaWriteComplete), false if it never verified or the
+    /// device record went away mid-upload.</summary>
+    public Task<bool>? StartLuaUpload(Guid deviceId, string source)
     {
         var device = GetDevice(deviceId);
-        if (device is null) return false;
+        if (device is null) return null;
 
         // Only the PDMs run an embedded Lua engine (firmware HAS_LUA). A CANBoard / DBC / keypad
         // has none — refuse here so no path (cross-module deploy, drawer, MCP) can ever push Lua
@@ -999,11 +1014,11 @@ public class DeviceManager(ILogger<DeviceManager> logger, ILoggerFactory loggerF
         if (device is not PdmDevice)
         {
             logger.LogWarning("UploadLua refused: {Name} ({Type}) has no Lua engine", device.Name, device.Type);
-            return false;
+            return null;
         }
 
         var bytes = System.Text.Encoding.ASCII.GetBytes(source ?? string.Empty);
-        if (bytes.Length > 4096) return false;   // matches firmware LUA_SCRIPT_MAX
+        if (bytes.Length > 4096) return null;   // matches firmware LUA_SCRIPT_MAX
         int txId = device.BaseId + 1;             // ConfigTxOffset — device RX channel
 
         logger.LogInformation("UploadLua starting: {Len} bytes to {Name} (txId 0x{TxId:X})", bytes.Length, device.Name, txId);
@@ -1020,13 +1035,13 @@ public class DeviceManager(ILogger<DeviceManager> logger, ILoggerFactory loggerF
             });
         }
 
-        Task.Run(async () =>
+        return Task.Run(async () =>
         {
             try
             {
                 for (int off = 0; off < bytes.Length; off += 5)
                 {
-                    if (GetDevice(deviceId) == null) return;
+                    if (GetDevice(deviceId) == null) return false;
                     SendChunk(off);
                     Thread.Sleep(3);
                 }
@@ -1049,7 +1064,7 @@ public class DeviceManager(ILogger<DeviceManager> logger, ILoggerFactory loggerF
                 if (bad.Count > 0)
                 {
                     logger.LogError("UploadLua failed for {Name}: {Count} chunk(s) still wrong after 3 re-sends; not committed, the device keeps its previous program", device.Name, bad.Count);
-                    return;
+                    return false;
                 }
                 QueueMessage(new DeviceCanFrame
                 {
@@ -1058,13 +1073,14 @@ public class DeviceManager(ILogger<DeviceManager> logger, ILoggerFactory loggerF
                         [(byte)domain.Enums.MessageCommand.LuaWriteComplete, (byte)(bytes.Length >> 8), (byte)(bytes.Length & 0xFF), 0, 0, 0, 0, 0])
                 });
                 logger.LogInformation("UploadLua done: {Len} bytes to {Name}, verified by read-back", bytes.Length, device.Name);
+                return true;
             }
             catch (Exception ex)
             {
                 logger.LogError(ex, "UploadLua failed for {Name}", device.Name);
+                return false;
             }
         });
-        return true;
     }
 
     /// <summary>
@@ -1282,13 +1298,21 @@ public class DeviceManager(ILogger<DeviceManager> logger, ILoggerFactory loggerF
     /// <returns>
     /// Send enter bootloader success
     /// </returns>
-    public bool RequestBootloader(Guid deviceId, bool canUpdate = false)
+    /// <param name="atBaseId">Send to this base id instead of the project record's — the USB bridge's real id
+    /// (from its 'I' identify), which differs when the record and the module disagree (a fresh 0xDE module,
+    /// a re-address that wasn't burned).</param>
+    public bool RequestBootloader(Guid deviceId, bool canUpdate = false, int? atBaseId = null)
     {
         var device = GetDevice(deviceId);
         if (device is not IDeviceConfigurable configurable)
             return false;
 
         var bootloaderMsg = configurable.GetBootloaderMsg(canUpdate);
+        if (bootloaderMsg != null && atBaseId is int at && at != device.BaseId)
+        {
+            bootloaderMsg.Frame = bootloaderMsg.Frame with { Id = bootloaderMsg.Frame.Id - device.BaseId + at };
+            bootloaderMsg.DeviceBaseId = at;
+        }
 
         if (bootloaderMsg == null)
         {

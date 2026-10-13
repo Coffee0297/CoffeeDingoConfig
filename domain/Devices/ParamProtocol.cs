@@ -19,6 +19,8 @@ internal class ParamProtocol(IDeviceConfigurable device, List<DeviceParameter> @
 
     private readonly Dictionary<(int Index, int SubIndex), object> _tempParamValues = new();
     private int _readAllCount;
+    // ReadAllModified: the device sends only non-default params, so one it didn't send is AT its default.
+    private bool _readModifiedOnly;
     private int _writeAllCount;
     // A busy bus can drop a frame or two of a 600-frame WriteAll (the device then keeps its old config):
     // re-run the whole WriteAll a couple of times before reporting failure.
@@ -154,6 +156,7 @@ internal class ParamProtocol(IDeviceConfigurable device, List<DeviceParameter> @
                     _tempParamValues[(param.Index, param.SubIndex)] = param.DefaultValue;
 
                 _readAllCount = 0;
+                _readModifiedOnly = (MessageCommand)data[0] == MessageCommand.ReadAllModified;
 
                 key = (baseId, index, subIndex);
                 if (queue.TryGetValue(key, out canFrame!))
@@ -224,7 +227,13 @@ internal class ParamProtocol(IDeviceConfigurable device, List<DeviceParameter> @
                     foreach (var param in _params)
                     {
                         var paramKey = (param.Index, param.SubIndex);
-                        if (!_readReceived.Contains(paramKey))
+                        if (!_readReceived.Contains(paramKey) && _readModifiedOnly)
+                        {
+                            // Not sent in a modified-only read = the device holds the default.
+                            if (!ValuesEqual(param.GetValue(), param.DefaultValue))
+                                diff.Add(new ConfigDiffEntry(param.Name, param.Index, param.SubIndex, "value", FormatVal(param.GetValue()), FormatVal(param.DefaultValue)));
+                        }
+                        else if (!_readReceived.Contains(paramKey))
                         {
                             // App has this param but the device never sent it — device firmware older than the app.
                             diff.Add(new ConfigDiffEntry(param.Name, param.Index, param.SubIndex, "appOnly", FormatVal(param.GetValue()), null));

@@ -3,6 +3,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using application.Models;
 using application.Services;
+using infrastructure.Comms;
 using domain.Devices.Canboard;
 using domain.Devices.Functions;
 using domain.Devices.Functions.Keypad;
@@ -32,7 +33,7 @@ public record DeviceDto(string Guid, string Name, string Type, int BaseId, bool 
     bool CanFiltersEnabled = false, bool ConnectUsbToCan = true,
     // false on a CANBoard (firmware CAN_SLEEP off): the sleep / force-sleep / wake controls do nothing there.
     bool CanSleep = true);
-public record AdaptersDto(string[] Adapters, string[] Ports, bool Connected, string? ActiveAdapter, string? ActivePort);
+public record AdaptersDto(string[] Adapters, string[] Ports, bool Connected, string? ActiveAdapter, string? ActivePort, int? GatewayBaseId);
 public record TelemetryDto(bool Connected, string? Adapter, long CanTotal, long CanRate, int[] Ids, DeviceDto[] Devices);
 public record ConnectReq(string Adapter, string Port, string Bitrate);
 public record AddDeviceReq(string Type, string Name, string BaseId);
@@ -422,19 +423,33 @@ public static class LiveApi
         {
             var (adapters, ports) = m.GetAvailable();
             var s = m.GetStatus();
-            return Results.Ok(new AdaptersDto(adapters, ports, s.isConnected, s.activeAdapter, s.activePort));
+            return Results.Ok(new AdaptersDto(adapters, ports, s.isConnected, s.activeAdapter, s.activePort, m.GatewayBaseId));
         });
 
         api.MapPost("/connect", async (ConnectReq r, ICommsAdapterManager m) =>
         {
             try
             {
+                if (r.Adapter == "USB")   // find the module's COM port; try each one found (several modules plugged in)
+                {
+                    var found = UsbPortFinder.Find();
+                    if (found.Length == 0)
+                        return Results.Ok(new { ok = false, error = $"No dingo module found on USB ({UsbPortFinder.Vid}:{UsbPortFinder.Pid}) — check the cable carries data and the module has 12 V." });
+                    foreach (var p in found)
+                        if (await m.ConnectAsync(m.ToAdapter("USB"), p, DingoMap.ParseBitrate(r.Bitrate), CancellationToken.None))
+                            return Results.Ok(new { ok = true, port = p });
+                    return Results.Ok(new { ok = false, error = $"Found {string.Join(", ", found)} but couldn't open it — is another program using the port?" });
+                }
                 var adapter = m.ToAdapter(r.Adapter);
                 var ok = await m.ConnectAsync(adapter, r.Port, DingoMap.ParseBitrate(r.Bitrate), CancellationToken.None);
                 return Results.Ok(new { ok });
             }
             catch (Exception ex) { return Results.BadRequest(new { ok = false, error = ex.Message }); }
         });
+
+        // Re-ask the module on USB for its base id (it moves when re-addressed); returns { gatewayBaseId }.
+        api.MapPost("/usb/identify", async (ICommsAdapterManager m) =>
+            Results.Ok(new { gatewayBaseId = await m.ReidentifyAsync() }));
 
         api.MapPost("/disconnect", async (ICommsAdapterManager m) =>
             Results.Ok(new { ok = await m.DisconnectAsync() }));
@@ -609,8 +624,18 @@ public static class LiveApi
             // A DBC/ECU device has no base id (its ids come from the DBC's messages), so 0 is allowed.
             var isDbc = r.Type?.StartsWith("dbc", StringComparison.OrdinalIgnoreCase) ?? false;
             if (id < 0 || (id == 0 && !isDbc)) return Results.BadRequest(new { ok = false, error = "Invalid base ID" });
-            dm.AddDevice(r.Type, string.IsNullOrWhiteSpace(r.Name) ? r.Type : r.Name, id);
+            try { dm.AddDevice(r.Type, string.IsNullOrWhiteSpace(r.Name) ? r.Type : r.Name, id); }
+            catch (ArgumentException ex) { return Results.BadRequest(new { ok = false, error = ex.Message }); }
             return Results.Ok(new { ok = true });
+        });
+
+        // Add a device of the same kind (and PDM model) as {guid} at another base id; returns its guid.
+        api.MapPost("/devices/{guid}/add-like", (string guid, AddDeviceReq r, DeviceManager dm) =>
+        {
+            var id = DingoMap.ParseId(r.BaseId);
+            if (!Guid.TryParse(guid, out var g) || id < 1 || id > 0x7FF) return Results.BadRequest(new { ok = false, error = "Invalid device or base ID" });
+            var made = dm.AddLike(g, string.IsNullOrWhiteSpace(r.Name) ? "Module" : r.Name, id);
+            return made is Guid m ? Results.Ok(new { ok = true, guid = m }) : Results.BadRequest(new { ok = false, error = "Only a PDM or CANBoard can be copied" });
         });
 
         // Rename only — sets the project label, no CAN traffic / no base-ID change. (The name
@@ -861,7 +886,7 @@ public static class LiveApi
         });
 
         // Upload one assembled Lua program to the device (chunked, paced on the backend).
-        api.MapPost("/devices/{guid}/lua", (string guid, LuaReq r, DeviceManager dm, ICommsAdapterManager adapters) =>
+        api.MapPost("/devices/{guid}/lua", async (string guid, LuaReq r, DeviceManager dm, ICommsAdapterManager adapters) =>
         {
             if (!Guid.TryParse(guid, out var g)) return Results.BadRequest();
             // Store on the device record (persists in the project JSON, offline-safe), then push over
@@ -869,8 +894,15 @@ public static class LiveApi
             // with device_action "uploadlua" once the module is online.
             dm.StoreLua(g, r.Source ?? "");
             var live = IsLiveModule(g, dm, adapters);
-            if (live && !dm.UploadLua(g, r.Source ?? ""))
-                return Results.BadRequest(new { ok = false, error = "upload rejected (too big, or not a Lua-capable PDM)" });
+            if (live)
+            {
+                // Wait for the read-back verify + commit, so "written" means the module runs this program.
+                var up = dm.StartLuaUpload(g, r.Source ?? "");
+                if (up is null)
+                    return Results.BadRequest(new { ok = false, error = "upload rejected (too big, or not a Lua-capable PDM)" });
+                if (await Task.WhenAny(up, Task.Delay(TimeSpan.FromSeconds(90))) != up || !up.Result)
+                    return Results.Json(new { ok = false, written = false, error = "Lua upload didn't verify on the module (see Logs) — it keeps its previous program" }, statusCode: 409);
+            }
             // Slot lint: setLuaOut(n) drives "Lua Out n+1". A whole project was found with every call one slot high —
             // each output silently ran its neighbour's rule. Say so at upload time.
             return Results.Ok(new { ok = true, written = live, warnings = LuaSlotWarnings(dm.GetDevice(g), r.Source ?? "") });

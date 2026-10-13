@@ -44,9 +44,9 @@ public class CommsAdapterManager(IServiceProvider serviceProvider, ILogger<Comms
         }
 
         // Adapter list with platform guard
-        // No separate "USB" entry: a dingoPDM/CANBoard connected over USB speaks SLCAN, so it IS the SLCAN
-        // adapter. (USB-DFU firmware flashing is a different path entirely — dfu-util, not a comms adapter.)
-        var adapters = new List<string> { "SLCAN", "PCAN", "Sim" };
+        // "USB" = SLCAN to a dingoPDM/CANBoard on USB with the port found for you (UsbPortFinder, 0483:5740);
+        // the connect endpoint resolves it. (USB-DFU firmware flashing is a different path — dfu-util.)
+        var adapters = new List<string> { "USB", "SLCAN", "PCAN", "Sim" };
 
         if (OperatingSystem.IsWindows())
             adapters.Add("Kvaser");          // CANlib (canlib32.dll) — Windows driver
@@ -73,7 +73,7 @@ public class CommsAdapterManager(IServiceProvider serviceProvider, ILogger<Comms
     {
         return adapterName switch
         {
-            "SLCAN" => serviceProvider.GetRequiredService<SlcanAdapter>(),
+            "SLCAN" or "USB" => serviceProvider.GetRequiredService<SlcanAdapter>(),
             "SocketCAN" => serviceProvider.GetRequiredService<SocketCanAdapter>(),
             "PCAN" => serviceProvider.GetRequiredService<PcanAdapter>(),
             "Kvaser" => serviceProvider.GetRequiredService<KvaserAdapter>(),
@@ -131,6 +131,14 @@ public class CommsAdapterManager(IServiceProvider serviceProvider, ILogger<Comms
         logger.LogInformation($"Adapter connected: {_activeAdapter.Name}" +
             (GatewayBaseId is int gw ? $" (USB bridge at 0x{gw:X3})" : ""));
         return await Task.FromResult(true);
+    }
+
+    public async Task<int?> ReidentifyAsync(CancellationToken ct = default)
+    {
+        if (_activeAdapter is not { IsConnected: true } a) return GatewayBaseId = null;
+        try { GatewayBaseId = await a.IdentifyBridgeBaseIdAsync(ct) ?? GatewayBaseId; }
+        catch { /* keep the last known id */ }
+        return GatewayBaseId;
     }
 
     public async Task<bool> DisconnectAsync()

@@ -1,5 +1,5 @@
 <script>
-  import { api, luaGet, luaSet, luaAssemble, luaReadToTabs, luaSnippets, deviceHasLua, telemetry, remoteLinks, remoteLinkFor, setRemoteLink, clearRemoteLink } from './store.js'
+  import { api, luaGet, luaSet, luaAssemble, luaHydrate, luaReadToTabs, luaSnippets, deviceHasLua, telemetry, remoteLinks, remoteLinkFor, setRemoteLink, clearRemoteLink } from './store.js'
   import { recommendResistors, deriveBands, nodeVoltageMv, resistorForMv, nearestStandard, recommendPullup, supplyCurrentMa, ocVoltageMv, autoTolerance, decodePoints, R_IN } from './ladder.js'
   import { interpolate, spreadAxis, firstNonAscending, AXIS_MAX } from './table.js'
   import { untrack } from 'svelte'
@@ -655,6 +655,7 @@
     luaSet(current.guid, 'global', luaSrc)
     luaBusy = true; luaMsg = ''
     try {
+      await luaHydrate(current.guid)
       const up = await api.luaUpload(current.guid, luaAssemble(current.guid))
       for (const w of up?.warnings ?? []) toast('Lua: ' + w, 'error')
       luaMsg = 'Uploaded ✓ — Burn to keep across reboot'

@@ -317,7 +317,7 @@ public static class McpServer
             _ => new(GET, "/api/adapters", null)),
 
         new("connect", "Open the CAN link. Bitrate is a string like '500K'.",
-            Schema("""{"type":"object","properties":{"adapter":{"type":"string","description":"SLCAN | PCAN | SocketCAN | Sim"},"port":{"type":"string","description":"e.g. COM3, or tcp://127.0.0.1:7778 for the CoffeeDingoSim bridge"},"bitrate":{"type":"string","enum":["1000K","500K","250K","125K","100K"]}},"required":["adapter","port","bitrate"]}"""),
+            Schema("""{"type":"object","properties":{"adapter":{"type":"string","description":"USB (a dingo module on USB, port found automatically) | SLCAN | PCAN | SocketCAN | Sim"},"port":{"type":"string","description":"e.g. COM3, or tcp://127.0.0.1:7778 for the CoffeeDingoSim bridge; ignored for USB (send \"\")"},"bitrate":{"type":"string","enum":["1000K","500K","250K","125K","100K"]}},"required":["adapter","port","bitrate"]}"""),
             a => new(POST, "/api/connect", Json(new { Adapter = Str(a, "adapter"), Port = Str(a, "port"), Bitrate = Str(a, "bitrate") }))),
 
         new("disconnect", "Close the CAN link.",

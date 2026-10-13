@@ -1,6 +1,6 @@
 <script>
   import { onMount } from 'svelte'
-  import { crossFns, deployCrossModule, cmfTrigId, cmfClkId, cmfIsLua, cmfSlotOf, nextCmfSlot, api, luaAssemble, deviceHasLua, deviceDefs } from './store.js'
+  import { crossFns, deployCrossModule, cmfTrigId, cmfClkId, cmfIsLua, cmfSlotOf, nextCmfSlot, api, luaAssemble, luaForDeploy, deviceHasLua, deviceDefs } from './store.js'
   import { conflictPairs, spanAfter, ID_BEFORE, isModule } from './canids.js'
   import { toast } from './toast.js'
   import { untrack } from 'svelte'
@@ -293,9 +293,11 @@
       // Atomic hardware sequence (config + re-address + burn) on the PHYSICAL connected module
       // (setGuid). It is what physically becomes the profile.
       await api.applyProfile(setGuid, profSrc)
-      // Put the profile's Lua on that physical module — still reachable via setGuid, now at src's id.
+      // Put the profile's Lua on that physical module — it now answers at src's id, so through src's entry
+      // (setGuid is removed next, which would cut a running upload short).
       let luaOk = true
-      try { await api.luaUpload(setGuid, luaAssemble(profSrc)) } catch { luaOk = false }
+      for (let i = 0; i < 40 && !devices.find((d) => d.guid === profSrc)?.connected; i++) await new Promise((r) => setTimeout(r, 250))
+      try { const lua = await luaForDeploy(profSrc); if (lua.trim() && !(await api.luaUpload(profSrc, lua))?.written) luaOk = false } catch { luaOk = false }
       // The physical module now IS the profile at src's base ID, so the profile entry (profSrc)
       // already matches it. Keep that one and remove the entry we opened — its identity is gone
       // (the module the user pressed Settings on has been turned into the profile).

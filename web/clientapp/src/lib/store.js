@@ -82,10 +82,12 @@ async function j(method, url, body, timeoutMs = 15000) {
 export const api = {
   version: () => j('GET', '/api/version'),
   adapters: () => j('GET', '/api/adapters'),
+  usbIdentify: () => j('POST', '/api/usb/identify'),
   connect: (Adapter, Port, Bitrate) => j('POST', '/api/connect', { Adapter, Port, Bitrate }),
   disconnect: () => j('POST', '/api/disconnect'),
   identify: () => j('GET', '/api/identify'),
   addDevice: (Type, Name, BaseId) => j('POST', '/api/devices', { Type, Name, BaseId }),
+  addLike: (guid, Name, BaseId) => j('POST', `/api/devices/${guid}/add-like`, { Type: '', Name, BaseId }),
   modify: (guid, Name, BaseId) => j('POST', `/api/devices/${guid}/modify`, { Name, BaseId }),
   rename: (guid, Name) => j('POST', `/api/devices/${guid}/rename`, { Name }),
   remove: (guid) => j('POST', `/api/devices/${guid}/remove`),
@@ -104,7 +106,7 @@ export const api = {
   // Every data type, configured functions only — for pickers that take any signal (condition input, CAN-output value, wiper speed).
   inputsInUse: (guid) => j('GET', `/api/devices/${guid}/inputs?inUse=true`),
   functions: (guid) => j('GET', `/api/devices/${guid}/functions`),
-  luaUpload: (guid, Source) => j('POST', `/api/devices/${guid}/lua`, { Source }),
+  luaUpload: (guid, Source) => j('POST', `/api/devices/${guid}/lua`, { Source }, 100000),   // waits for the read-back verify
   luaRead: (guid, stored = false) => j('GET', `/api/devices/${guid}/lua${stored ? '?stored=true' : ''}`),
   luaError: (guid) => j('GET', `/api/devices/${guid}/luaerror`),
   overloads: (guid) => j('GET', `/api/devices/${guid}/overloads`),
@@ -402,12 +404,26 @@ export function luaParse(text) {
   return { global, outs }
 }
 
+// Modules whose tabs were filled from a program (device or project record) this session.
+const luaLoaded = new Set()
+// Fill the tabs from the project's stored program before an edit is assembled and uploaded, so a module whose
+// tabs were never loaded (project opened over the API/MCP, page reloaded) keeps its global Lua and other
+// functions instead of being replaced by only the edited snippet. Edits already in the tabs win.
+// ponytail: a snippet deleted in the tabs but still in the stored program comes back — clear it there too.
+export async function luaHydrate(guid) {
+  if (luaLoaded.has(guid)) return
+  const cur = get(luaSnippets)[guid] || {}
+  await luaReadToTabs(guid, true)
+  if (Object.keys(cur).length) luaSnippets.update((v) => ({ ...v, [guid]: { ...v[guid], ...cur } }))
+}
+
 // Read the program off the device and populate the per-function snippet store.
 export async function luaReadToTabs(guid, stored = false) {
   // api.luaRead can return null (j() yields null on an empty 200 body); never destructure it blind.
   const res = await api.luaRead(guid, stored)
   const source = res?.source ?? ''
   const { global, outs } = luaParse(source)
+  luaLoaded.add(guid)
   luaSnippets.update((v) => {
     const dev = {}
     if (global) dev.global = global
@@ -415,6 +431,15 @@ export async function luaReadToTabs(guid, stored = false) {
     return { ...v, [guid]: dev }
   })
   return source
+}
+
+// The Lua to put on a module for `guid` when deploying it: the per-function tabs if the user has any, else the
+// program stored on the project record (a project loaded over the API/MCP never filled the tabs). Never the
+// bare header luaAssemble() makes from empty tabs — that would wipe the module's Lua.
+export async function luaForDeploy(guid) {
+  await luaHydrate(guid)
+  const v = get(luaSnippets)[guid] || {}
+  return Object.values(v).some((x) => typeof x === 'string' && x.trim()) ? luaAssemble(guid) : ''
 }
 
 // Concatenate the global section + every per-function snippet into one program.
@@ -792,6 +817,7 @@ export async function deployCrossModule(devices) {
       results.push({ name: d.name, ok: false, error: `${d.name} has no Lua engine (a CANBoard doesn't run Lua) — switch this function to a native rule, or run the Lua on a PDM and bridge the signal over CAN.` })
       continue
     }
+    if (deviceHasLua(d.type)) await luaHydrate(d.guid)   // keep the module's own Lua around the cmf block
     luaSnippets.update((v) => { v[d.guid] = { ...(v[d.guid] || {}) }; v[d.guid].cmf = lua; return { ...v } })
     if (!lua && !c) continue
     try {

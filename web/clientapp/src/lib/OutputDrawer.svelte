@@ -1,5 +1,5 @@
 <script>
-  import { api, luaGet, luaSet, luaAssemble, awgFor, vDrop, WIRE_GAUGES, awgForMm2, outputRatingA, deviceDefs, _binBody } from './store.js'
+  import { api, luaGet, luaSet, luaAssemble, luaHydrate, awgFor, vDrop, WIRE_GAUGES, awgForMm2, outputRatingA, deviceDefs, _binBody } from './store.js'
   import { toast } from './toast.js'
   import { dialog, labelFields, clickable } from './a11y.js'
   import LuaEditor from './LuaEditor.svelte'
@@ -60,6 +60,7 @@
     luaSet(guid, luaKey, luaText)
     luaBusy = true; luaMsg = ''
     try {
+      await luaHydrate(guid)
       const up = await api.luaUpload(guid, luaAssemble(guid))
       for (const w of up?.warnings ?? []) toast('Lua: ' + w, 'error')
       // A per-output snippet drives the output by writing its Lua slot (setLuaOut).

@@ -33,7 +33,7 @@ pre-releases 0.3.0–0.4.2. "testing" below means the feature is only on that br
 | Adapters: SLCAN, PCAN, SocketCAN, Sim replay | ✅ | ✅ | |
 | Adapter: **Kvaser** (CANlib) | ❌ | ✅ | Windows |
 | Adapter: **SLCAN over TCP** (`tcp://host:port`) | ❌ | ✅ | One click to CoffeeDingoSim (`tcp://127.0.0.1:7778`) |
-| Adapter: separate dingoPDM "USB" | ✅ | ❌ | Dropped: the PDM's USB speaks SLCAN anyway |
+| Adapter: **USB** (dingo module on USB, port found automatically) | ✅ | ✅ | SLCAN to the module's port, found by USB id `0483:5740`; *Deploy to USB module* writes a project PDM to it whatever its base ID |
 | Works on a flooded bus (hardware accept-filter while reading/writing/flashing) | ❌ | ✅ | |
 | Bus discovery, *Add from CAN* | ❌ | ✅ | Handles the PDM's base − 2 offset |
 | **System view**: all modules, car-layout map, vehicle worst-case load | ❌ | ✅ | |

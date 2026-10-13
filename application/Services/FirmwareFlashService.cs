@@ -63,7 +63,13 @@ public partial class FirmwareFlashService(
             // 1. If the device is on the bus, command it into the DFU bootloader.
             if (dm.GetDevice(deviceId) != null)
             {
-                if (dm.RequestBootloader(deviceId)) log.AppendLine("Sent bootloader command…");
+                // USB DFU can only reach the module on the USB link, so address it at the id that module reports
+                // ('I' identify), not the project record's — they differ for a fresh or un-burned module.
+                var gw = await adapters.ReidentifyAsync();   // fresh: a re-address since connect moves it
+                if (dm.RequestBootloader(deviceId, atBaseId: gw))
+                    log.AppendLine(gw is int g && g != dm.GetDevice(deviceId)!.BaseId
+                        ? $"Sent bootloader command to the module on USB (0x{g:X}; the project has it at 0x{dm.GetDevice(deviceId)!.BaseId:X})…"
+                        : "Sent bootloader command…");
                 else log.AppendLine("Device did not accept a bootloader command (continuing — may already be in DFU).");
                 await Task.Delay(250);              // let the command transmit…
                 await adapters.DisconnectAsync();   // …then release the port BEFORE the device re-enumerates as DFU

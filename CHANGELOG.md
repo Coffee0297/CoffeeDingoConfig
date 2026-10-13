@@ -5,6 +5,10 @@ All notable changes to **dingoConfig** are recorded here. Versions follow [SemVe
 
 ## [Unreleased]
 
+## [0.10.0] — 2026-10-13
+
+Needs dingoFW **v5.5.110** for a module alone on USB (bench); older firmware still works on a bus with other modules.
+
 ### Added
 - **More templates**: *Wipers, relay-switched* for a motor with its own park circuit (RUN and FAST relays plus
   a motor supply), with a **Ford concealed (depressed) park** option: RUN is held for whole sweeps so the motor
@@ -13,10 +17,31 @@ All notable changes to **dingoConfig** are recorded here. Versions follow [SemVe
   wipes. Also *Interior / courtesy light*, *Reverse lights* (gear position or switch), *Brake lights*,
   *Radiator fan* (temperature with hysteresis, A/C request, after-run), *Starter* (interlock + crank limit),
   *Daytime running lights*, *Push-button toggle* and *Lights-on reminder*.
+- **USB interface**: pick *USB* and Connect — the dingoPDM / CANBoard on USB is found by its USB id
+  (`0483:5740`, registry on Windows, sysfs on Linux) and opened as SLCAN; no COM port to choose. Several
+  plugged in: the first that opens.
+- **Deploy to USB module**: with a module on USB, write one of the project's PDMs to it whatever base ID it
+  has now (a factory-fresh 0xDE, another car's PDM): full config + Lua, re-addressed to the profile's base ID,
+  burned. A temporary project entry is used to reach it and removed afterwards; an existing entry at that ID
+  is left alone.
 - **A template's outputs can be on several modules**: the logic runs on the module with most of them, and an
   output on another module follows it through a CAN input there (wiring tells which; `followsOverCan` over MCP).
 
 ### Fixed
+- **USB-DFU flash failed to enter the bootloader** when the project's base ID and the module's differed (a
+  fresh 0xDE module, a re-address that wasn't burned): the bootloader command now goes to the id the module
+  on USB reports (asked again right before flashing).
+- **Lua could be wiped by a deploy**: *Flash a profile* (and the new USB deploy) uploaded the Lua through the
+  entry it then removed, cutting the upload off after the first chunk, and assembled it from Lua tabs that
+  were never loaded (an 84-byte header). It now goes through the live profile entry and uses the project's
+  stored program when the tabs are empty; editing a snippet or a cross-module deploy also loads the stored
+  program first instead of replacing it.
+- **Lua upload said "written" before it was**: the endpoint now waits for the read-back verify + commit and
+  answers 409 when it didn't verify.
+- A modified-only *Read* reported every default parameter as an "app-only difference"; a parameter the
+  module didn't send is now taken as at its default.
+- Adding a device of an unknown type returned an empty 500 (the UI showed a blank error); it's a 400 with
+  the reason now.
 - **A module hidden by our own receive filter no longer counts as gone.** During a read / write / burn the
   adapter only lets that module's ids through, so every other module fell silent for us and after 3 s was
   "not connected" — and a write to it (a template's second module, the next module of a deploy) was quietly

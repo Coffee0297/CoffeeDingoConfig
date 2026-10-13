@@ -1,5 +1,5 @@
 <script>
-  import { telemetry, hubState, reconnectHub, api, luaReadToTabs, awgFor, awgForMm2, outputRatingA, deviceDefs, gatherClientState, restoreClientState, linksForSource } from './lib/store.js'
+  import { telemetry, hubState, reconnectHub, api, luaReadToTabs, awgFor, awgForMm2, outputRatingA, deviceDefs, gatherClientState, restoreClientState, linksForSource, luaForDeploy } from './lib/store.js'
   import { suggestBase, usedIds, freeRanges, spanAfter, ID_BEFORE, isModule } from './lib/canids.js'
   import { toast, toasts, dismiss } from './lib/toast.js'
   import { clickable, labelFields, dialog as dlg } from './lib/a11y.js'
@@ -265,15 +265,15 @@
 
   async function loadPorts() {
     try {
-      const a = await api.adapters(); ports = a.ports ?? []
+      const a = await api.adapters(); ports = a.ports ?? []; usbGw = a.connected ? a.gatewayBaseId ?? null : null
       if (a.adapters?.length) { adapters = a.adapters; if (!adapters.includes(adapter)) adapter = adapters[0] }
       // A typed tcp://host:port is never in the enumerated list — don't clobber it with COM3.
       if (!ports.includes(port) && !isTcpPort(port)) port = ports.find((p) => /COM3/i.test(p)) ?? ports[0] ?? ''
     } catch (e) { toast('Could not list adapters: ' + e.message, 'error') }
   }
   loadPorts()
-  // Sim/SocketCAN don't use a serial port; only serial adapters need one picked.
-  let needsPort = $derived(/usb|slcan|socketcan|pcan/i.test(adapter))
+  // Sim doesn't use a port and USB finds the module's port itself; the others need one picked.
+  let needsPort = $derived(/slcan|socketcan|pcan/i.test(adapter))
 
   async function connect() {
     busy = true
@@ -281,11 +281,61 @@
       // The backend returns HTTP 200 {ok:false} when the adapter can't actually open (port busy,
       // wrong/missing COM, init failure) — so a bare resolve is NOT proof of a link. Inspect ok.
       const r = await api.connect(adapter, port, bitrate)
-      if (!r?.ok) { toast(`Connect failed — ${adapter}${needsPort ? ' ' + port : ''} didn't open. Check the port isn't already in use and the bitrate matches the bus.`, 'error'); return }
-      toast(`Connected · ${adapter} ${bitrate}`, 'ok')
+      if (!r?.ok) { toast(r?.error ? `Connect failed — ${r.error}` : `Connect failed — ${adapter}${needsPort ? ' ' + port : ''} didn't open. Check the port isn't already in use and the bitrate matches the bus.`, 'error'); return }
+      toast(`Connected · ${adapter}${r.port ? ' ' + r.port : ''} ${bitrate}`, 'ok')
+      usbGw = (await api.adapters().catch(() => null))?.gatewayBaseId ?? null
     } catch (e) { toast('Connect failed: ' + e.message, 'error') } finally { busy = false }
   }
-  async function disconnect() { busy = true; try { await api.disconnect() } catch (e) { toast('Disconnect failed: ' + e.message, 'error') } finally { busy = false } }
+  // The module on the USB link (dingoFW 'I' identify at connect), or null for a plain CAN adapter.
+  let usbGw = $state(null)
+  let usbDeployOpen = $state(false), usbDeploySrc = $state(''), usbDeployBusy = $state(false)
+  let usbProfiles = $derived(devices.filter((d) => /pdm/i.test(d.type ?? '')))
+  // Deploy a project module's config to whatever PDM is on USB, whatever base ID it has now: it is written,
+  // re-addressed to the profile's base ID and burned (the System "Flash a profile" path), then gets the Lua.
+  async function deployToUsb() {
+    const src = devices.find((d) => d.guid === usbDeploySrc)
+    if (!src || usbGw == null || usbDeployBusy) return
+    usbGw = (await api.usbIdentify().catch(() => null))?.gatewayBaseId ?? usbGw   // it moves on a re-address
+    if (usbGw == null) { toast('The module on USB stopped answering — reconnect it.', 'error'); return }
+    const tgtNow = () => devices.find((d) => d.guid !== src.guid && /pdm/i.test(d.type ?? '') && d.baseId === usbGw)
+    const same = src.baseId === usbGw
+    if (!confirm(same ? `Write "${src.name}" (0x${usbGw.toString(16).toUpperCase()}) to the module on USB?`
+      : `Write "${src.name}" to the module on USB (now 0x${usbGw.toString(16).toUpperCase()})?
+
+It gets ${src.name}'s full config + Lua, is re-addressed to 0x${src.baseId.toString(16).toUpperCase()} and burned — it becomes "${src.name}".`
+        + (src.connected ? `
+
+⚠ "${src.name}" is also live on the bus right now — power it down first, or two modules will fight over its ID.` : ''))) return
+    usbDeployBusy = true
+    let made = null
+    try {
+      let tgt = same ? src : tgtNow()
+      if (!tgt) {   // no project entry at the module's current id yet: add a temporary one to talk to it
+        const name = `USB module 0x${usbGw.toString(16).toUpperCase()}`
+        made = (await api.addLike(src.guid, name, '0x' + usbGw.toString(16))).guid   // same PDM model as the profile
+        for (let i = 0; i < 40 && !(tgt = devices.find((d) => d.guid === made))?.connected; i++) await new Promise((r) => setTimeout(r, 250))
+        if (!tgt) throw new Error('could not add a project entry for it')
+      }
+      if (!tgt.connected) throw new Error(`the module at 0x${usbGw.toString(16).toUpperCase()} isn't answering`)
+      if (same) await api.action(src.guid, 'writeall')
+      else await api.applyProfile(tgt.guid, src.guid)
+      let luaOk = true
+      // After the re-address the module answers at src's id, so its Lua goes through src's entry (the temporary
+      // one is about to be removed, which would cut a running upload short).
+      // Wait for it to answer there first — straight after the re-address src's entry isn't live yet and the upload
+      // would only be stored in the project.
+      for (let i = 0; i < 40 && !devices.find((d) => d.guid === src.guid)?.connected; i++) await new Promise((r) => setTimeout(r, 250))
+      try { const lua = await luaForDeploy(src.guid); if (lua.trim() && !(await api.luaUpload(src.guid, lua))?.written) luaOk = false } catch { luaOk = false }
+      if (made) { await api.remove(made); made = null }   // the module is now src; an entry that was already in the project stays
+      if (!same) usbGw = src.baseId
+      toast(`Module on USB is now "${src.name}" at 0x${src.baseId.toString(16).toUpperCase()}` + (luaOk ? '' : ' — but the Lua upload failed; re-upload it from the Lua tab.'), luaOk ? 'ok' : 'error', luaOk ? 4000 : 8000)
+      usbDeployOpen = false
+    } catch (e) {
+      toast('Deploy failed (module unchanged or only partially written): ' + e.message, 'error', 8000)
+      if (made) await api.remove(made).catch(() => {})
+    } finally { usbDeployBusy = false }
+  }
+  async function disconnect() { busy = true; usbGw = null; usbDeployOpen = false; try { await api.disconnect() } catch (e) { toast('Disconnect failed: ' + e.message, 'error') } finally { busy = false } }
   async function addPdm() { try { await api.addDevice('pdm', 'PDM', newBaseId) } catch (e) { toast(e.message, 'error') } }
   // Scan the bus and identify each module's type from its broadcast signature.
   let scanning = $state(false)
@@ -548,6 +598,21 @@
       <button class="btn primary" disabled={busy} onclick={connect}>{busy ? 'Connecting…' : 'Connect'}</button>
     {:else}
       <button class="btn ghost" disabled={scanning} onclick={scanUsb} title="Scan the CAN bus and add detected modules">{scanning ? 'Scanning…' : '🔍 Add from CAN'}</button>
+      {#if usbGw != null}
+        <span class="switch" class:open={usbDeployOpen}>
+          <button class="btn ghost" onclick={() => (usbDeployOpen = !usbDeployOpen)}
+                  title="Write one of the project's PDMs to the module on USB, whatever ID it has now">⬆ Deploy to USB module</button>
+          {#if usbDeployOpen}
+            <span style="display:inline-flex;gap:6px;align-items:center;margin-left:6px">
+              <select class="in" bind:value={usbDeploySrc} aria-label="Config to deploy">
+                <option value="">— config —</option>
+                {#each usbProfiles as p}<option value={p.guid}>{p.name} (0x{p.baseId.toString(16).toUpperCase()})</option>{/each}
+              </select>
+              <button class="btn primary" disabled={!usbDeploySrc || usbDeployBusy} onclick={deployToUsb}>{usbDeployBusy ? 'Deploying…' : 'Deploy'}</button>
+            </span>
+          {/if}
+        </span>
+      {/if}
       <span class="switch" class:open={readOpen}>
         <span style="display:inline-flex">
           <button class="btn ghost" style="border-radius:8px 0 0 8px" disabled={!current || !current.connected || current?.reading || scopeBusy} title={current && !current.connected ? 'Module not on the bus' : ''} onclick={() => readScope(false)}>{current?.reading ? `Reading ${readPct}%` : `Read: ${current?.name ?? '—'}`}</button>

@@ -17,6 +17,9 @@ public interface ICommsAdapterManager
     /// firmware). The bridge board must be flashed over USB; every other module can be flashed over CAN.
     /// </summary>
     int? GatewayBaseId { get; }
+    /// <summary>Ask the USB bridge for its base id again (it changes when the module is re-addressed) and
+    /// update <see cref="GatewayBaseId"/>. Null for a standalone adapter / not connected.</summary>
+    Task<int?> ReidentifyAsync(CancellationToken ct = default);
     Task<bool> ConnectAsync(ICommsAdapter commsAdapter, string port, CanBitRate bitRate,  CancellationToken ct = default);
     Task<bool> DisconnectAsync();
 
