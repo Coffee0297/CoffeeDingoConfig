@@ -5,6 +5,13 @@ All notable changes to **dingoConfig** are recorded here. Versions follow [SemVe
 
 ## [Unreleased]
 
+## [0.10.1] — 2026-10-13
+
+### Added
+- **Connector pins on the outputs**: each output card (and the output editor) shows its Deutsch pin —
+  `J3-7` for dingoPDM v7 OUT1, `J4-7/8` for a -Max output on two pins, `J4-2` for a CANBoard DO — so you can
+  tell what is what at the connector.
+
 ## [0.10.0] — 2026-10-13
 
 Needs dingoFW **v5.5.110** for a module alone on USB (bench); older firmware still works on a bus with other modules.

@@ -16,6 +16,7 @@
   import PlotView from './lib/PlotView.svelte'
   import McpView from './lib/McpView.svelte'
   import { tripReason } from './lib/trip.js'
+  import { pinFor } from './lib/pinmap.js'
 
   // Reload resumes where you left off — last view + selected module (System overview on first run).
   let view = $state((() => { try { return localStorage.getItem('dingoView') || 'system' } catch { return 'system' } })())
@@ -769,10 +770,12 @@ It gets ${src.name}'s full config + Lua, is re-addressed to 0x${src.baseId.toStr
           {@const rating = outputRatingA($deviceDefs, current.type, o.number)}
           {@const followsO = o.primaryOutput >= 0 ? o.primaryOutput + 1 : null}
           {@const drivesOuts = current.outputs.filter((x) => x.primaryOutput === o.number - 1).map((x) => x.number)}
+          {@const pin = pinFor(current, 'output', o.number)}
           <div class="card" use:clickable aria-label={'Configure ' + (o.name?.trim() ? o.name : 'output ' + o.number)} onclick={() => (editNum = o.number)}>
             <div class="num">O{o.number}</div>
             <div class="top">
               <span class="state {sc(o.state)}"><span class="ic"></span>{stT(o.state)}{#if o.pwmEnabled && o.state === 'On'} · {o.duty}%{/if}</span>
+              {#if pin}<span class="pin" title={`${pin.connector}, pin ${pin.pin}${pin.pin2 ? ' + ' + pin.pin2 : ''}`}>{pin.label}</span>{/if}
               <span class="nm">{o.name?.trim() ? o.name : 'Output ' + o.number}{#if !o.enabled}<span class="muted" style="font-weight:400">&nbsp;· off</span>{/if}</span>
               <span class="amp">{(o.current ?? 0).toFixed(1)} <span class="amp-lim">/ {o.currentLimit} A</span></span>
             </div>

@@ -1,4 +1,5 @@
 <script>
+  import { pinFor } from './pinmap.js'
   import { api, luaGet, luaSet, luaAssemble, luaHydrate, awgFor, vDrop, WIRE_GAUGES, awgForMm2, outputRatingA, deviceDefs, _binBody } from './store.js'
   import { toast } from './toast.js'
   import { dialog, labelFields, clickable } from './a11y.js'
@@ -7,6 +8,7 @@
   import RemoteSourceAdd from './RemoteSourceAdd.svelte'
   import OutputTest from './OutputTest.svelte'
   let { output, outputs = [], guid, connected = false, deviceType = '', devices = [], onclose } = $props()
+  let pin = $derived(pinFor({ type: deviceType }, 'output', output.number))
   // Other outputs on this module, for the "Paired output" picker (-1 = none).
   let otherOutputs = $derived((outputs ?? []).filter((o) => o.number !== output.number))
   // Outputs that follow THIS one (the link is stored on the follower as a 0-based index).
@@ -332,7 +334,7 @@
   <div class="dh">
     <div>
       <div class="nm">{output.name?.trim() ? output.name : 'Output ' + output.number}</div>
-      <div class="meta">Output {output.number}
+      <div class="meta">Output {output.number}{#if pin} · <b title={`${pin.connector}, pin ${pin.pin}${pin.pin2 ? ' + ' + pin.pin2 : ''}`}>{pin.label}</b>{/if}
         <span class="state {output.state === 'On' ? 'on' : output.state === 'Fault' ? 'fault' : output.state === 'Overcurrent' || output.state === 'Warning' || output.state === 'OpenLoad' ? 'oc' : 'off'}" style="transform:scale(.9)"><span class="ic"></span>{output.state} · {(output.current ?? 0).toFixed(1)} A</span></div>
     </div>
     <button class="x" aria-label="Close" onclick={onclose}>✕</button>
