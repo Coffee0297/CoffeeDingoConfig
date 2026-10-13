@@ -76,8 +76,9 @@ html{background:#14141b}
 .rx .wire-row .wv{font-family:var(--mono);font-weight:700;font-size:15px;color:var(--ink);white-space:nowrap;text-align:right}
 .rx .wire-row.sub .wv{font-weight:500;font-size:12px;color:var(--muted)}
 .rx .wire-row .wv.warn{color:var(--err)}
-.rx .card .num{position:absolute;top:14px;right:16px;font-family:var(--mono);font-size:11px;color:var(--faint)}
-.rx .card .pin{flex:none;font-family:var(--mono);font-size:11px;padding:1px 5px;border:1px solid var(--line-2);border-radius:4px;color:var(--ink);font-weight:600}
+.rx .card .num{position:absolute;top:14px;right:16px;font-family:var(--mono);font-size:11px;color:var(--faint);display:flex;flex-direction:column;align-items:flex-end;line-height:1.35}
+/* the corner holds O1 + its connector pin (J3-7) on two lines; keep the top row clear of it */
+.rx .card:has(.num) .top{padding-right:44px}
 .rx .rule-txt{font-size:13.5px;color:var(--ink);background:var(--bg);border-radius:var(--r-sm);padding:10px 12px;line-height:1.5}
 .rx .rule-txt .kw{color:var(--accent-d);font-weight:600}
 .rx .rule-txt .sig{font-weight:600}

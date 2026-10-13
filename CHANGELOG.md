@@ -5,6 +5,12 @@ All notable changes to **dingoConfig** are recorded here. Versions follow [SemVe
 
 ## [Unreleased]
 
+## [0.10.2] — 2026-10-13
+
+### Changed
+- The connector pin sits in the card corner under the output number (`O1` / `J3-7`, same font), on the
+  dingoPDM output cards and the CANBoard digital-output cards, instead of a chip in the title row.
+
 ## [0.10.1] — 2026-10-13
 
 ### Added

@@ -772,10 +772,9 @@ It gets ${src.name}'s full config + Lua, is re-addressed to 0x${src.baseId.toStr
           {@const drivesOuts = current.outputs.filter((x) => x.primaryOutput === o.number - 1).map((x) => x.number)}
           {@const pin = pinFor(current, 'output', o.number)}
           <div class="card" use:clickable aria-label={'Configure ' + (o.name?.trim() ? o.name : 'output ' + o.number)} onclick={() => (editNum = o.number)}>
-            <div class="num">O{o.number}</div>
+            <div class="num">O{o.number}{#if pin}<span title={`${pin.connector}, pin ${pin.pin}${pin.pin2 ? ' + ' + pin.pin2 : ''}`}>{pin.label}</span>{/if}</div>
             <div class="top">
               <span class="state {sc(o.state)}"><span class="ic"></span>{stT(o.state)}{#if o.pwmEnabled && o.state === 'On'} · {o.duty}%{/if}</span>
-              {#if pin}<span class="pin" title={`${pin.connector}, pin ${pin.pin}${pin.pin2 ? ' + ' + pin.pin2 : ''}`}>{pin.label}</span>{/if}
               <span class="nm">{o.name?.trim() ? o.name : 'Output ' + o.number}{#if !o.enabled}<span class="muted" style="font-weight:400">&nbsp;· off</span>{/if}</span>
               <span class="amp">{(o.current ?? 0).toFixed(1)} <span class="amp-lim">/ {o.currentLimit} A</span></span>
             </div>

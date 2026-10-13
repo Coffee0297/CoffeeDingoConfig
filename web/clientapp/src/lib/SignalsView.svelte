@@ -3,6 +3,7 @@
   import { recommendResistors, deriveBands, nodeVoltageMv, resistorForMv, nearestStandard, recommendPullup, supplyCurrentMa, ocVoltageMv, autoTolerance, decodePoints, R_IN } from './ladder.js'
   import { interpolate, spreadAxis, firstNonAscending, AXIS_MAX } from './table.js'
   import { untrack } from 'svelte'
+  import { pinFor } from './pinmap.js'
   import { toast } from './toast.js'
   import { dialog, labelFields, clickable } from './a11y.js'
   import LuaEditor from './LuaEditor.svelte'
@@ -735,8 +736,9 @@
         {@const lv = liveByName[o.name]}
         {@const on = !!lv?.on}
         {@const drv = o.enabled ? varName(o.input) : null}
+        {@const pin = pinFor(current, 'digitaloutput', o.number)}
         <div class="card" use:clickable aria-label={'Configure ' + o.name} onclick={() => openEdit(meta('digitaloutput'), o)}>
-          <div class="num">DO{o.number}</div>
+          <div class="num">DO{o.number}{#if pin}<span title={`${pin.connector}, pin ${pin.pin}`}>{pin.label}</span>{/if}</div>
           <div class="top">
             <span class="state {on ? 'on' : 'off'}" style={live ? '' : 'opacity:.65'}><span class="ic"></span>{on ? (o.pwmEnabled ? `ON · ${lv?.value ?? 0}%` : 'ON') : 'OFF'}</span>
             <span class="nm">{o.name}{#if !o.enabled}<span class="muted" style="font-weight:400">&nbsp;· off</span>{/if}</span>
