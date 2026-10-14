@@ -114,7 +114,7 @@ public class SystemConfigService(DeviceManager devices, ILogger<SystemConfigServ
     // ---- APPLY: write a target document -------------------------------------------------
     public record ApplyReport(int DevicesTouched, int ParamsChanged, List<string> Notes, List<string> Errors);
 
-    public ApplyReport Apply(JsonElement doc)
+    public async Task<ApplyReport> ApplyAsync(JsonElement doc)
     {
         var notes = new List<string>();
         var errors = new List<string>();
@@ -170,7 +170,8 @@ public class SystemConfigService(DeviceManager devices, ILogger<SystemConfigServ
             {
                 if (!HasLua(dev)) errors.Add($"{dev.Name}: device has no Lua support");
                 else if (!live) errors.Add($"{dev.Name}: module offline — Lua not uploaded");
-                else { devices.UploadLua(dev.Guid, luaEl.GetString() ?? ""); notes.Add($"{dev.Name}: Lua uploaded"); changed++; }
+                else if (!await devices.UploadLuaAsync(dev.Guid, luaEl.GetString() ?? "")) errors.Add($"{dev.Name}: Lua upload didn't verify — the module keeps its previous program");
+                else { notes.Add($"{dev.Name}: Lua uploaded"); changed++; }
             }
 
             if (changed > 0)

@@ -16,6 +16,9 @@ public static class RxFilterWindow
     private static DateTime _liftedAt = DateTime.MinValue;
     private static int _lastLo = -1, _lastHi = -1;    // the block of the filter that lifted at _liftedAt
 
+    /// <summary>True while a filter hides part of the bus — a module that was never seen yet can't show up until it lifts.</summary>
+    public static bool Narrowed { get { lock (Gate) return _lo >= 0; } }
+
     public static void Narrow(int lo, int hi) { lock (Gate) { _lo = lo; _hi = hi; } }
 
     public static void Lift()

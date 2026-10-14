@@ -998,7 +998,13 @@ public class DeviceManager(ILogger<DeviceManager> logger, ILoggerFactory loggerF
     /// <summary>The Lua program stored on the device record (empty for non-PDM / none stored).</summary>
     public string GetStoredLua(Guid deviceId) => GetDevice(deviceId) is PdmDevice p ? p.LuaProgram : string.Empty;
 
-    public bool UploadLua(Guid deviceId, string source) => StartLuaUpload(deviceId, source) != null;
+    /// <summary>Upload and wait for the read-back verify + commit. False when refused, not verified, or not done
+    /// within 90 s — the module then keeps its previous program. Uploads must not overlap: run them one at a time.</summary>
+    public async Task<bool> UploadLuaAsync(Guid deviceId, string source)
+    {
+        var up = StartLuaUpload(deviceId, source);
+        return up != null && await Task.WhenAny(up, Task.Delay(TimeSpan.FromSeconds(90))) == up && up.Result;
+    }
 
     /// <summary>Start a Lua upload; null when refused (too big / not a PDM). The task completes true once the
     /// program was read back identical and committed (LuaWriteComplete), false if it never verified or the

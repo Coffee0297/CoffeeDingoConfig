@@ -674,7 +674,7 @@ public static class LiveApi
             // Push it to the module over CAN only when it's live, and report which happened so a
             // caller (e.g. the MCP set_output tool, described as "live") never reads the in-memory
             // change as a confirmed device write.
-            if (!IsLiveModule(g, dm, adapters)) return Results.Ok(new { ok = true, o.Number, o.CurrentLimit, written = false });
+            if (!await IsLiveModuleAsync(g, dm, adapters)) return Results.Ok(new { ok = true, o.Number, o.CurrentLimit, written = false });
             var res = await dm.WriteAndConfirm(g, dm.FunctionParamKeys(g, 0x1000 + (r.Number - 1)), () => dm.WriteOutputParams(g, r.Number));
             return WriteReport(res, new() { ["Number"] = o.Number, ["CurrentLimit"] = o.CurrentLimit });
         });
@@ -682,7 +682,7 @@ public static class LiveApi
         // Output bench test (firmware ≥ 5.5.107, MsgCmd 48): force an output on / PWM for a bounded hold.
         // Live only — nothing is saved; the module releases by itself when the hold expires, so the UI
         // re-sends while the test runs and sends mode "off" to stop early.
-        api.MapPost("/devices/{guid}/output/{n:int}/test", (string guid, int n, OutputTestReq r, DeviceManager dm, ICommsAdapterManager adapters) =>
+        api.MapPost("/devices/{guid}/output/{n:int}/test", async (string guid, int n, OutputTestReq r, DeviceManager dm, ICommsAdapterManager adapters) =>
         {
             if (!Guid.TryParse(guid, out var g)) return Results.BadRequest();
             // PDM Profet outputs or CANBoard digital outputs — same command, same (1-based) index space.
@@ -696,7 +696,7 @@ public static class LiveApi
             if (enabled == null) return Results.NotFound();
             int mode = (r.Mode ?? "off").ToLowerInvariant() switch { "on" => 1, "pwm" => 2, "off" => 0, _ => -1 };
             if (mode < 0) return Results.BadRequest(new { ok = false, error = "mode must be on, pwm or off" });
-            if (!IsLiveModule(g, dm, adapters)) return Results.BadRequest(new { ok = false, error = "module is offline — an output test needs a live module" });
+            if (!await IsLiveModuleAsync(g, dm, adapters)) return Results.BadRequest(new { ok = false, error = "module is offline — an output test needs a live module" });
             if (mode != 0 && enabled == false)
                 return Results.BadRequest(new { ok = false, error = dev is PdmDevice
                     ? $"output {n} is disabled — enable it and set its current limit first; the test runs under that protection"
@@ -749,17 +749,17 @@ public static class LiveApi
             // The record edit above always persists (offline config authoring). Only push to the
             // module over CAN when it is actually live; report which happened so the UI can say
             // "written to device" vs "saved to project".
-            if (!IsLiveModule(g, dm, adapters)) return Results.Ok(new { ok = true, written = false });
+            if (!await IsLiveModuleAsync(g, dm, adapters)) return Results.Ok(new { ok = true, written = false });
             return WriteReport(await dm.WriteAndConfirm(g, dm.FunctionParamKeys(g, 0x1000 + (r.Number - 1)), () => dm.WriteOutputParams(g, r.Number)));
         });
 
         // Single-param read/write (paced, no bulk burst) — reliable on the USB-direct link.
-        api.MapPost("/devices/{guid}/readparam", (string guid, ReadParamReq r, DeviceManager dm, ICommsAdapterManager adapters) =>
+        api.MapPost("/devices/{guid}/readparam", async (string guid, ReadParamReq r, DeviceManager dm, ICommsAdapterManager adapters) =>
         {
             if (!Guid.TryParse(guid, out var g)) return Results.BadRequest();
             if (r.Index is < 0 or > 0xFFFF || r.Sub is < 0 or > 0xFF)
                 return Results.BadRequest(new { ok = false, error = "Index must be 0–65535 (0xFFFF) and Sub 0–255 (0xFF)." });
-            if (RequireLiveModule(g, dm, adapters, "read") is { } bad) return bad;
+            if (await RequireLiveModuleAsync(g, dm, adapters, "read") is { } bad) return bad;
             return dm.ReadParam(g, r.Index, r.Sub) ? Results.Ok(new { ok = true }) : Results.BadRequest();
         });
 
@@ -768,7 +768,7 @@ public static class LiveApi
             if (!Guid.TryParse(guid, out var g)) return Results.BadRequest();
             if (r.Index is < 0 or > 0xFFFF || r.Sub is < 0 or > 0xFF)
                 return Results.BadRequest(new { ok = false, error = "Index must be 0–65535 (0xFFFF) and Sub 0–255 (0xFF)." });
-            if (RequireLiveModule(g, dm, adapters, "write") is { } bad) return bad;
+            if (await RequireLiveModuleAsync(g, dm, adapters, "write") is { } bad) return bad;
             if (dm.GetDevice(g) is null) return Results.BadRequest();
             return WriteReport(await dm.WriteAndConfirm(g, [(r.Index, r.Sub)], () => dm.WriteParam(g, r.Index, r.Sub, r.Value)));
         });
@@ -850,7 +850,7 @@ public static class LiveApi
                     if (r.MuteTxInput is { } m) c.MuteTxInput = m;
                     break;
             }
-            var live = IsLiveModule(g, dm, adapters);
+            var live = await IsLiveModuleAsync(g, dm, adapters);
             List<DeviceManager.WriteResult>? res = null;
             if (live)
             {
@@ -881,7 +881,7 @@ public static class LiveApi
             if (rejected.Count > 0)
                 return Results.BadRequest(new { ok = false, error = $"invalid value for {string.Join(", ", rejected)} — nothing was written to the device" });
             // Record edit persists offline; CAN write only when live (see /outputconfig).
-            if (!IsLiveModule(g, dm, adapters)) return Results.Ok(new { ok = true, written = false });
+            if (!await IsLiveModuleAsync(g, dm, adapters)) return Results.Ok(new { ok = true, written = false });
             return WriteReport(await dm.WriteAndConfirm(g, dm.FunctionParamKeys(g, paramIndex), () => dm.WriteFunctionParams(g, paramIndex)));
         });
 
@@ -893,7 +893,7 @@ public static class LiveApi
             // CAN only when the module is live — same model as output/function params. Push it later
             // with device_action "uploadlua" once the module is online.
             dm.StoreLua(g, r.Source ?? "");
-            var live = IsLiveModule(g, dm, adapters);
+            var live = await IsLiveModuleAsync(g, dm, adapters);
             if (live)
             {
                 // Wait for the read-back verify + commit, so "written" means the module runs this program.
@@ -916,7 +916,7 @@ public static class LiveApi
             if (stored == true) return Results.Ok(new { source = dm.GetStoredLua(g), live = false });
             // Live: read the running program off the device. Offline: return the stored program from
             // the project record (so cross-module / authored Lua is visible without a live module).
-            if (IsLiveModule(g, dm, adapters))
+            if (await IsLiveModuleAsync(g, dm, adapters))
                 return Results.Ok(new { source = await dm.ReadLua(g), live = true });
             return Results.Ok(new { source = dm.GetStoredLua(g), live = false });
         });
@@ -925,7 +925,7 @@ public static class LiveApi
         api.MapGet("/devices/{guid}/luaerror", async (string guid, DeviceManager dm, ICommsAdapterManager adapters) =>
         {
             if (!Guid.TryParse(guid, out var g)) return Results.BadRequest();
-            if (RequireLiveModule(g, dm, adapters, "read the error state from") is { } bad) return bad;
+            if (await RequireLiveModuleAsync(g, dm, adapters, "read the error state from") is { } bad) return bad;
             var error = await dm.ReadLuaError(g);
             return Results.Ok(new { error });
         });
@@ -934,16 +934,16 @@ public static class LiveApi
         api.MapGet("/devices/{guid}/overloads", async (string guid, DeviceManager dm, ICommsAdapterManager adapters) =>
         {
             if (!Guid.TryParse(guid, out var g)) return Results.BadRequest();
-            if (RequireLiveModule(g, dm, adapters, "read trips from") is { } bad) return bad;
+            if (await RequireLiveModuleAsync(g, dm, adapters, "read trips from") is { } bad) return bad;
             var events = await dm.ReadOverloadLog(g);
             return Results.Ok(new { events });
         });
 
         // Clear the on-device overload log.
-        api.MapPost("/devices/{guid}/overloads/clear", (string guid, DeviceManager dm, ICommsAdapterManager adapters) =>
+        api.MapPost("/devices/{guid}/overloads/clear", async (string guid, DeviceManager dm, ICommsAdapterManager adapters) =>
         {
             if (!Guid.TryParse(guid, out var g)) return Results.BadRequest();
-            if (RequireLiveModule(g, dm, adapters, "clear trips on") is { } bad) return bad;
+            if (await RequireLiveModuleAsync(g, dm, adapters, "clear trips on") is { } bad) return bad;
             dm.ClearOverloadLog(g);
             return Results.Ok(new { ok = true });
         });
@@ -1015,7 +1015,7 @@ public static class LiveApi
         api.MapPost("/config", async (HttpRequest req, SystemConfigService cfg) =>
         {
             using var doc = await JsonDocument.ParseAsync(req.Body);
-            var r = cfg.Apply(doc.RootElement);
+            var r = await cfg.ApplyAsync(doc.RootElement);
             var ok = r.Errors.Count == 0;
             var payload = new { ok, devicesTouched = r.DevicesTouched, paramsChanged = r.ParamsChanged, notes = r.Notes, errors = r.Errors };
             // Validation failures now surface as HTTP 400 (was 200 + ok:false) so the frontend's
@@ -1287,7 +1287,7 @@ public static class LiveApi
                 ["id"] = ci.Id, ["ide"] = ci.Ide, ["startBit"] = ci.StartBit, ["bitLength"] = ci.BitLength,
                 ["factor"] = ci.Factor, ["offset"] = ci.Offset, ["byteOrder"] = (int)ci.ByteOrder, ["signed"] = ci.Signed, ["name"] = ci.Name,
             };
-            if (!IsLiveModule(cg, dm, adapters)) return Results.Ok(new Dictionary<string, object?>(info) { ["ok"] = true, ["written"] = false });
+            if (!await IsLiveModuleAsync(cg, dm, adapters)) return Results.Ok(new Dictionary<string, object?>(info) { ["ok"] = true, ["written"] = false });
             return WriteReport(await dm.WriteAndConfirm(cg, dm.FunctionParamKeys(cg, paramIndex), () => dm.WriteFunctionParams(cg, paramIndex)), info);
         });
 
@@ -1332,9 +1332,10 @@ public static class LiveApi
                     // and push over CAN only when the module is live — exactly how params behave. A
                     // module that's offline gets "saved" (written=false); push later with device_action
                     // "uploadlua" + "writeall", or re-deploy once it's online.
-                    var live = IsLiveModule(g, dm, adapters);
+                    var live = await IsLiveModuleAsync(g, dm, adapters);
                     dm.StoreLua(g, plan.Lua);
-                    if (live) dm.UploadLua(g, plan.Lua);
+                    if (live && !await dm.UploadLuaAsync(g, plan.Lua))
+                        throw new InvalidOperationException("Lua upload didn't verify on the module (see Logs) — it keeps its previous program");
                     var luaOut1 = pdm.VarMap.FirstOrDefault(v => v.GetName() == "Lua Out 1");
                     var bound = new List<int>();
                     foreach (var outNum in plan.Bindings)
@@ -1570,7 +1571,7 @@ public static class LiveApi
             return ok ? Results.Ok(new { ok = true, baseId = dm.GetDevice(t)?.BaseId }) : Results.Text(err, "text/plain", null, 400);
         });
 
-        api.MapPost("/devices/{guid}/{action}", (string guid, string action, DeviceManager dm, ICommsAdapterManager adapters) =>
+        api.MapPost("/devices/{guid}/{action}", async (string guid, string action, DeviceManager dm, ICommsAdapterManager adapters) =>
         {
             if (!Guid.TryParse(guid, out var g)) return Results.BadRequest();
 
@@ -1578,16 +1579,7 @@ public static class LiveApi
             // a guard they "succeed" silently against an empty bus. Refuse unless the adapter is
             // connected AND the target module is actually broadcasting (seen within ~500 ms).
             string[] liveActions = ["read", "readall", "write", "writeall", "burn", "sleep", "wakeup", "bootloader", "version", "uploadlua"];
-            if (liveActions.Contains(action))
-            {
-                if (!adapters.GetStatus().isConnected)
-                    return Results.Text("Not connected to a CAN adapter — connect first.", "text/plain", null, 400);
-                var dev = dm.GetDevice(g);
-                if (dev == null) return Results.NotFound();
-                dev.UpdateIsConnected();
-                if (!dev.Connected)
-                    return Results.Text($"Module 0x{dev.BaseId:X} ({dev.Name}) is not responding on the bus — nothing to {action}. Check power, wiring, base ID and bitrate.", "text/plain", null, 400);
-            }
+            if (liveActions.Contains(action) && await RequireLiveModuleAsync(g, dm, adapters, action) is { } bad) return bad;
 
             switch (action)
             {
@@ -1605,7 +1597,10 @@ public static class LiveApi
                 case "version": dm.RequestVersion(g); break;
                 // Push the Lua program stored on the record (e.g. an offline cross-module deploy) to the
                 // now-live module. Pair with "writeall" to also push the output bindings (params).
-                case "uploadlua": dm.UploadLua(g, dm.GetStoredLua(g)); break;
+                case "uploadlua":
+                    if (!await dm.UploadLuaAsync(g, dm.GetStoredLua(g)))
+                        return Results.Json(new { ok = false, error = "Lua upload didn't verify on the module (see Logs) — it keeps its previous program" }, statusCode: 409);
+                    break;
                 default: return Results.NotFound();
             }
             return Results.Ok(new { ok = true });
@@ -1617,14 +1612,13 @@ public static class LiveApi
     // short-circuit with, or null when it's safe to proceed. Mirrors the /{action} guard so every
     // CAN-commit path fails loud and consistent instead of "succeeding" against an empty bus.
     // (Base-ID/rename are offline-safe and firmware/DFU runs over USB — neither uses this.)
-    private static IResult? RequireLiveModule(Guid g, DeviceManager dm, ICommsAdapterManager adapters, string verb)
+    private static async Task<IResult?> RequireLiveModuleAsync(Guid g, DeviceManager dm, ICommsAdapterManager adapters, string verb)
     {
         if (!adapters.GetStatus().isConnected)
             return Results.Text("Not connected to a CAN adapter — connect first.", "text/plain", null, 400);
         var dev = dm.GetDevice(g);
         if (dev == null) return Results.NotFound();
-        dev.UpdateIsConnected();
-        if (!dev.Connected)
+        if (!await SeenAsync(dev, waitAlways: true))
             return Results.Text($"Module 0x{dev.BaseId:X} ({dev.Name}) is not responding on the bus — nothing to {verb}. Check power, wiring, base ID and bitrate.", "text/plain", null, 400);
         return null;
     }
@@ -1650,13 +1644,27 @@ public static class LiveApi
         return ok ? Results.Ok(body) : Results.Json(body, statusCode: 409);
     }
 
-    private static bool IsLiveModule(Guid g, DeviceManager dm, ICommsAdapterManager adapters)
+    private static async Task<bool> IsLiveModuleAsync(Guid g, DeviceManager dm, ICommsAdapterManager adapters)
     {
         if (!adapters.GetStatus().isConnected) return false;
         var dev = dm.GetDevice(g);
-        if (dev == null) return false;
-        dev.UpdateIsConnected();
-        return dev.Connected;
+        return dev != null && await SeenAsync(dev, waitAlways: false);
+    }
+
+    // A module can be quiet on OUR side only: just after connecting, or while another module's exchange narrows
+    // the RX filter — and a module that wasn't seen before the filter narrowed gets no excuse from RxFilterWindow,
+    // so a deploy's next module was refused as "not responding". Give it until the filter lifts (1.5 s idle) plus
+    // a status broadcast. waitAlways=false (offline-safe paths) waits only while a filter hides the bus, so a module
+    // that's really offline isn't held up. ponytail: 5 s poll, an event on first frame if this ever matters.
+    private static async Task<bool> SeenAsync(IDevice dev, bool waitAlways)
+    {
+        var until = DateTime.Now.AddSeconds(5);
+        while (true)
+        {
+            dev.UpdateIsConnected();
+            if (dev.Connected || DateTime.Now > until || !(waitAlways || domain.Devices.RxFilterWindow.Narrowed)) return dev.Connected;
+            await Task.Delay(200);
+        }
     }
 
     // Is a broadcast signal actually wired up on its source? Mirrors the UI picker's filter so

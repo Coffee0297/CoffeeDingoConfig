@@ -13,10 +13,12 @@ public class RxFilterWindowTests
     public void HiddenModulesStayConnected()
     {
         RxFilterWindow.Narrow(0x680, 0x68F);                      // exchanging with PDM-01
+        Assert.True(RxFilterWindow.Narrowed);                      // live guards wait for the lift before refusing
         Assert.True(RxFilterWindow.Excuses(0x6C0, wasConnected: true));    // PDM-03 is only hidden
         Assert.False(RxFilterWindow.Excuses(0x680, wasConnected: true));   // PDM-01 itself is visible: no excuse
         Assert.False(RxFilterWindow.Excuses(0x6C0, wasConnected: false));  // never seen: stays offline
         RxFilterWindow.Lift();
+        Assert.False(RxFilterWindow.Narrowed);
         Assert.True(RxFilterWindow.Excuses(0x6C0, true, DateTime.Now.AddMilliseconds(RxFilterWindow.GraceMs - 500)));
         Assert.False(RxFilterWindow.Excuses(0x6C0, true, DateTime.Now.AddMilliseconds(RxFilterWindow.GraceMs + 500)));
     }
