@@ -1588,9 +1588,14 @@ public static class LiveApi
                 // chunked path issues — that was the "super slow read". (Verified on USB-SLCAN.)
                 case "read": dm.ReadDeviceConfig(g); break;
                 case "readall": dm.ReadAllDeviceConfig(g); break;
-                case "write": dm.WriteDeviceConfig(g); break;
-                case "writeall": dm.WriteAllDeviceConfig(g); break;
-                case "burn": dm.BurnSettings(g); break;
+                case "write" or "writeall":
+                    if (!await dm.WriteDeviceConfigConfirmed(g, all: action == "writeall"))
+                        return Results.Json(new { ok = false, error = "The module didn't confirm the write (see Logs) — it keeps its previous config" }, statusCode: 409);
+                    break;
+                case "burn":
+                    if (!await dm.BurnSettingsConfirmed(g))
+                        return Results.Json(new { ok = false, error = "The module didn't confirm the burn (see Logs) — flash still holds the previous config" }, statusCode: 409);
+                    break;
                 case "sleep": dm.RequestSleep(g); break;
                 case "wakeup": dm.RequestWakeup(g); break;
                 case "bootloader": dm.RequestBootloader(g); break;

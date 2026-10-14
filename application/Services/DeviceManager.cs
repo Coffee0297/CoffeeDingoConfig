@@ -293,9 +293,52 @@ public class DeviceManager(ILogger<DeviceManager> logger, ILoggerFactory loggerF
                 device.Read(frame.Id, frame.Payload, ref _requestQueue, outgoing);
                 if (outgoing.Count > 0)
                     _batchTransmitCallback?.Invoke(outgoing);
+                if (frame.Id == device.BaseId) RecordConfirm(device, frame, outgoing);
             }
         }
     }
+
+    // ---- write / burn confirmation ------------------------------------------------------------------
+    // Write, Write All and Burn used to be "ok" once queued, so a write that never landed (sent before the
+    // module was seen, lost on a busy bus) passed silently and the module kept its old config. The module
+    // answers both: WriteAllComplete with the CRC of what it received, BurnParams with a success byte.
+    private readonly ConcurrentDictionary<(int BaseId, domain.Enums.MessageCommand Cmd), TaskCompletionSource<bool>> _confirms = new();
+
+    private void RecordConfirm(IDevice device, CanFrame frame, List<DeviceCanFrame> outgoing)
+    {
+        if (frame.Payload.Length != 8) return;
+        var cmd = (domain.Enums.MessageCommand)frame.Payload[0];
+        bool ok;
+        if (cmd == domain.Enums.MessageCommand.WriteAllComplete)
+        {
+            if (outgoing.Any(f => f.Name == "WriteAll (retry)")) return;   // CRC short, ParamProtocol re-sends: not final
+            ok = device is IDeviceConfigurable { ConfigMismatch: false };    // ParamProtocol cleared it on a CRC match
+        }
+        else if (cmd == domain.Enums.MessageCommand.BurnParams) ok = frame.Payload[4] == 1;
+        else return;
+        if (_confirms.TryRemove((device.BaseId, cmd), out var tcs)) tcs.TrySetResult(ok);
+    }
+
+    private async Task<bool> Confirmed(IDevice device, domain.Enums.MessageCommand cmd, Func<bool> send, int timeoutMs)
+    {
+        var tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        _confirms[(device.BaseId, cmd)] = tcs;
+        if (!send()) { _confirms.TryRemove((device.BaseId, cmd), out _); return false; }
+        var done = await Task.WhenAny(tcs.Task, Task.Delay(timeoutMs)) == tcs.Task && tcs.Task.Result;
+        _confirms.TryRemove(new KeyValuePair<(int, domain.Enums.MessageCommand), TaskCompletionSource<bool>>((device.BaseId, cmd), tcs));
+        return done;
+    }
+
+    /// <summary>Write (changed params, or all) and wait until the module reports it received them (CRC match).
+    /// False on a CRC mismatch after the retries or no answer within 30 s — the module keeps its old config.</summary>
+    public Task<bool> WriteDeviceConfigConfirmed(Guid deviceId, bool all) => GetDevice(deviceId) is { } d
+        ? Confirmed(d, domain.Enums.MessageCommand.WriteAllComplete, () => all ? WriteAllDeviceConfig(deviceId) : WriteDeviceConfig(deviceId), 30000)
+        : Task.FromResult(false);
+
+    /// <summary>Burn and wait for the module's burn reply; false if it reported a failure or never answered (10 s).</summary>
+    public Task<bool> BurnSettingsConfirmed(Guid deviceId) => GetDevice(deviceId) is { } d
+        ? Confirmed(d, domain.Enums.MessageCommand.BurnParams, () => BurnSettings(deviceId), 10000)
+        : Task.FromResult(false);
 
     private void SetLoggers(IDevice device)
     {

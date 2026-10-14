@@ -365,7 +365,7 @@ public static class McpServer
             Schema("""{"type":"object","properties":{"guid":{"type":"string"}},"required":["guid"]}"""),
             a => new(POST, $"/api/devices/{Str(a, "guid")}/read", null)),
 
-        new("device_action", "Run a lifecycle action: read, write, writeall, burn, sleep, wakeup, bootloader, or uploadlua (push the Lua stored on the record — e.g. from an offline deploy_cross_module — to the now-live module and wait until it is read back and committed, ~30 s per 3 KB; 409 if it did not verify. Run uploads one module at a time. Pair with writeall to also push output bindings).",
+        new("device_action", "Run a lifecycle action: read, write, writeall, burn, sleep, wakeup, bootloader, or uploadlua. write/writeall/burn wait for the module to confirm (CRC of what it received / burn reply; 409 if it did not, the module keeps its previous config) (push the Lua stored on the record — e.g. from an offline deploy_cross_module — to the now-live module and wait until it is read back and committed, ~30 s per 3 KB; 409 if it did not verify. Run uploads one module at a time. Pair with writeall to also push output bindings).",
             Schema("""{"type":"object","properties":{"guid":{"type":"string"},"action":{"type":"string","enum":["read","write","writeall","burn","sleep","wakeup","bootloader","uploadlua"]}},"required":["guid","action"]}"""),
             a => new(POST, $"/api/devices/{Str(a, "guid")}/{Str(a, "action")}", null)),
 

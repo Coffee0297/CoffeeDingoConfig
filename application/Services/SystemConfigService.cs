@@ -180,7 +180,7 @@ public class SystemConfigService(DeviceManager devices, ILogger<SystemConfigServ
                 bool burnThis = devEl.TryGetProperty("burn", out var bl) ? bl.ValueKind != JsonValueKind.False : burnGlobal;
                 if (burnThis)
                 {
-                    if (live) { devices.BurnSettings(dev.Guid); notes.Add($"{dev.Name}: burned"); }
+                    if (live) { if (await devices.BurnSettingsConfirmed(dev.Guid)) notes.Add($"{dev.Name}: burned"); else errors.Add($"{dev.Name}: burn not confirmed by the module"); }
                     else notes.Add($"{dev.Name}: not burned — module offline");
                 }
             }
