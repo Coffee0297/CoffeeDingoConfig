@@ -80,4 +80,17 @@ public class SRecordImageTests
     {
         Assert.Throws<InvalidDataException>(() => SRecordImage.ParseText("S00600004844521B"));
     }
+
+    [Fact]
+    public void BoardMarker_ReadFromImage_AndMatchedToDeviceType()
+    {
+        var bytes = new byte[] { 1, 2 }.Concat(System.Text.Encoding.ASCII.GetBytes("DINGO_BOARD=Dingo Electronics dingoPDM-Max v1")).Concat(new byte[] { 0, 9 }).ToArray();
+        var img = SRecordImage.ParseText(S3(0x08004000, bytes));
+        Assert.Equal("dingoPDM-Max v1", img.BoardMarker());
+        Assert.True(SRecordImage.BoardMatches("dingoPDM-Max v1", "dingoPDM-Max"));
+        Assert.False(SRecordImage.BoardMatches("dingoPDM-Max v1", "dingoPDM"));
+        Assert.True(SRecordImage.BoardMatches("dingoPDM v7", "dingoPDM"));
+        Assert.True(SRecordImage.BoardMatches("CANBoard v2", "CANBoard"));
+        Assert.Null(SRecordImage.ParseText(S3(0x08004000, 1, 2, 3)).BoardMarker());
+    }
 }

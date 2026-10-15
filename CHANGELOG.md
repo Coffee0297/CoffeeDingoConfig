@@ -5,6 +5,16 @@ All notable changes to **dingoConfig** are recorded here. Versions follow [SemVe
 
 ## [Unreleased]
 
+### Added
+- **⬆ Update all over CAN** (System view): pick the release `.srec` files, one per board type; every module on
+  the bus with the CAN bootloader gets the file named for its board and is flashed in turn. Modules already on
+  that version are skipped; one that fails is reported and the rest carry on.
+
+### Fixed
+- **Flash over CAN refuses a `.srec` built for another board** (from its `DINGO_BOARD` marker): a dingoPDM v7
+  and a -Max share the MCU and app address, so nothing else told their images apart.
+- A PDM flashed over CAN now reports its new version at the end (only the CANBoard did).
+
 ## [0.10.3] — 2026-10-15
 
 ### Fixed

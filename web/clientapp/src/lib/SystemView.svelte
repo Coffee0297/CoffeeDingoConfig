@@ -172,6 +172,37 @@
   function openFlash(guid) { flashMode = 'dfu'; flashGuid = guid; fwFile = null; flashLog = ''; flashOk = null; flashPct = 0; flashPhase = ''; dfuScan = null; flashDrawer = true }
   function openFlashBlank() { openFlash('blank') }   // flash a new module not on the bus, via DFU
   function openFlashCan(guid) { openFlash(guid); flashMode = 'can' }   // reflash over CAN (no USB needed)
+  // ---- Update all over CAN: one .srec per board type, matched by the release file name, one module at a time ----
+  let allFiles = $state([])
+  const boardKey = (d) => /canboard/i.test(d.type) ? 'canboard' : /max/i.test(d.type) ? 'dingopdmmax' : 'dingopdm_v7'
+  const fileVer = (f) => f?.name.match(/v(\d+)-(\d+)-(\d+)/)?.slice(1).join('.')
+  let canAllPlan = $derived(devices.filter((d) => flashTarget(d) === 'can' && d.connected).map((d) => {
+    const file = allFiles.find((x) => x.name.toLowerCase().startsWith(boardKey(d)))
+    const skip = !file ? 'no file for this board' : fileVer(file) && (d.version || '').replace(/^v/, '') === fileVer(file) ? 'already on v' + fileVer(file) : ''
+    return { d, file, skip }
+  }))
+  let canAllTodo = $derived(canAllPlan.filter((p) => !p.skip))
+  function openFlashAll() { openFlash('all'); flashMode = 'canAll'; allFiles = [] }
+  async function doFlashAll() {
+    if (!canAllTodo.length || flashBusy) return
+    const todo = [...canAllTodo]
+    flashBusy = true; flashOk = null; flashLog = ''
+    const poll = setInterval(async () => { try { const st = await api.flashCanStatus(); if (flashBusy && st.busy) flashPct = st.percent } catch {} }, 300)
+    let failed = 0
+    try {
+      for (const [i, { d, file }] of todo.entries()) {
+        flashPct = 0; flashPhase = `${i + 1}/${todo.length} ${d.name}`
+        flashLog += `${flashLog ? '\n\n' : ''}── ${d.name}: ${file.name}\n`
+        try {
+          const r = await api.flashCan(d.guid, await file.arrayBuffer())
+          if (!r.ok) failed++
+          flashLog += (r.log || '').trimEnd().split('\n').at(-1) || (r.ok ? '✓ Done' : '✗ Failed')
+        } catch (err) { failed++; flashLog += '✗ ' + err.message }
+      }
+    } finally { clearInterval(poll); flashBusy = false }
+    flashOk = failed === 0; flashPct = 100; flashPhase = failed ? `${failed} failed` : 'Done'
+    toast(failed ? `${failed} of ${todo.length} module(s) failed to update` : `${todo.length} module(s) updated over CAN`, failed ? 'error' : 'ok')
+  }
   async function scanDfu() {
     dfuScanning = true
     try { dfuScan = await api.flashScan() }
@@ -179,7 +210,7 @@
     finally { dfuScanning = false }
   }
   function pickFile() { fwInput?.click() }
-  function onFwFile(e) { fwFile = e.target.files?.[0] ?? null; e.target.value = '' }
+  function onFwFile(e) { const fl = [...(e.target.files ?? [])]; if (flashMode === 'canAll') allFiles = fl; else fwFile = fl[0] ?? null; e.target.value = '' }
   async function doFlash() {
     if (!fwFile || !flashGuid || flashBusy) return
     if (simAdapter) { flashOk = false; flashPhase = 'Failed'; flashLog = progTip + '.'; toast(progTip, 'error'); return }
@@ -440,6 +471,7 @@
     <p class="sub">All modules on the CAN bus. Click a module to open it; drag a pin to match your install.</p></div>
   <div style="display:flex;align-items:center;gap:14px">
     <button class="btn ghost" disabled={flashBusy || simAdapter} title={simAdapter ? progTip : "Flash a module that isn't in the project over USB DFU (one running dingo firmware is put into DFU for you; a blank one needs BOOT0 + reset)"} onclick={openFlashBlank}>⬆ Flash new module</button>
+    <button class="btn ghost" disabled={flashBusy || simAdapter || !connected} title={simAdapter ? progTip : !connected ? 'Connect to the CAN bus first' : 'Update every module on the bus that has the CAN bootloader, one at a time (pick the release .srec files)'} onclick={openFlashAll}>⬆ Update all over CAN</button>
     <div class="stat" style="text-align:right" title="Sum across every module of every enabled output's current limit — worst case if the whole vehicle's loads switch on at their trip point at once">
       <div class="v">{sysMaxA} A</div><div class="k">Max load (trip-sum)</div>
     </div>
@@ -492,7 +524,7 @@
   {/each}
   <div class="pdm add-module" use:clickable onclick={addModule}>+ Add module</div>
 </div>
-<input type="file" accept={flashMode === 'can' ? '.srec,.s19' : '.bin'} bind:this={fwInput} onchange={onFwFile} style="display:none" />
+<input type="file" accept={flashMode === 'dfu' ? '.bin' : '.srec,.s19'} multiple={flashMode === 'canAll'} bind:this={fwInput} onchange={onFwFile} style="display:none" />
 
 {#if setDrawer}
   <div class="scrim show" onclick={() => { if (!setBusy) setDrawer = false }}></div>
@@ -596,10 +628,23 @@
 {#if flashDrawer}
   <div class="scrim show" onclick={() => { if (!flashBusy) flashDrawer = false }}></div>
   <aside class="drawer show" use:dialog={{ onclose: closeDrawer }}>
-    <div class="dh"><div><div class="nm">{flashGuid === 'blank' ? 'Flash a new / blank module' : (flashMode === 'can' ? 'Update firmware over CAN' : 'Update firmware')}</div>
-      <div class="meta">{flashGuid === 'blank' ? 'blank module in DFU' : dName(flashGuid)} — {flashMode === 'can' ? 'reflashes the app over CAN (.srec)' : 'flashes over USB DFU (.bin)'}</div></div>
+    <div class="dh"><div><div class="nm">{flashGuid === 'blank' ? 'Flash a new / blank module' : flashMode === 'canAll' ? 'Update all over CAN' : (flashMode === 'can' ? 'Update firmware over CAN' : 'Update firmware')}</div>
+      <div class="meta">{flashGuid === 'blank' ? 'blank module in DFU' : flashMode === 'canAll' ? 'every module with the CAN bootloader' : dName(flashGuid)} — {flashMode === 'dfu' ? 'flashes over USB DFU (.bin)' : 'reflashes the app over CAN (.srec)'}</div></div>
       <button class="x" aria-label="Close" onclick={() => { if (!flashBusy) flashDrawer = false }}>✕</button></div>
     <div class="dbody" use:labelFields>
+      {#if flashMode === 'canAll'}
+      <p class="lbl">Firmware files (.srec, one per board type)</p>
+      <button class="btn ghost" disabled={flashBusy} onclick={pickFile}>📂 Choose .srec files…</button>
+      <p class="hint" style="margin-top:8px">Pick the release files, e.g. <b>dingopdm_v7_…</b>, <b>dingopdmmax_v1_…</b> and <b>canboard_v2_…</b>.srec.
+        Each module gets the file named for its board and is flashed in turn; one already on that version is skipped.
+        Keep the bus powered until all are done. A module that fails stays in its bootloader and can simply be run again.</p>
+      <table style="width:100%;font-size:13px;margin-top:6px"><tbody>
+        {#each canAllPlan as p (p.d.guid)}
+          <tr><td><b>{p.d.name}</b> <span class="muted">{p.d.type} · {p.d.version || '?'}</span></td>
+            <td style="text-align:right">{#if p.skip}<span class="muted">{p.skip}</span>{:else}→ {p.file.name}{/if}</td></tr>
+        {:else}<tr><td class="muted">No module on the bus has the CAN bootloader.</td></tr>{/each}
+      </tbody></table>
+      {:else}
       <p class="lbl">Firmware file ({flashMode === 'can' ? '.srec' : '.bin'})</p>
       <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
         <button class="btn ghost" disabled={flashBusy} onclick={pickFile}>📂 Choose {flashMode === 'can' ? '.srec' : '.bin'}…</button>
@@ -621,7 +666,8 @@
           <b>BOOT0</b> and reset, then flash. The ROM bootloader is always recoverable via BOOT0.</p>
       {/if}
 
-      {#if flashMode !== 'can'}<div style="display:flex;align-items:center;gap:10px;margin-top:10px">
+      {/if}
+      {#if flashMode === 'dfu'}<div style="display:flex;align-items:center;gap:10px;margin-top:10px">
         <button class="btn ghost" disabled={flashBusy || dfuScanning} onclick={scanDfu}>{dfuScanning ? 'Scanning…' : '🔍 Scan for DFU device'}</button>
         {#if dfuScan}
           {#if dfuScan.devices > 0}<span style="color:var(--ok,#3aa)">✓ {dfuScan.devices} board{dfuScan.devices === 1 ? '' : 's'} in DFU, ready to flash</span>
@@ -649,7 +695,11 @@
     </div>
     <div class="dfoot"><span style="margin-left:auto"></span>
       <button class="btn ghost" disabled={flashBusy} onclick={() => (flashDrawer = false)}>Close</button>
-      <button class="btn primary" disabled={flashBusy || !fwFile} onclick={doFlash}>{flashBusy ? 'Flashing…' : 'Flash firmware'}</button></div>
+      {#if flashMode === 'canAll'}
+        <button class="btn primary" disabled={flashBusy || !canAllTodo.length} onclick={doFlashAll}>{flashBusy ? 'Flashing…' : `Update ${canAllTodo.length} module${canAllTodo.length === 1 ? '' : 's'}`}</button>
+      {:else}
+        <button class="btn primary" disabled={flashBusy || !fwFile} onclick={doFlash}>{flashBusy ? 'Flashing…' : 'Flash firmware'}</button>
+      {/if}</div>
   </aside>
 {/if}
 

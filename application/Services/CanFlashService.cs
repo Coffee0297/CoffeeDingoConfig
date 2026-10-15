@@ -52,8 +52,18 @@ public sealed class CanFlashService(
         int maxBytes = (isCanboard ? 46 : 368) * 1024;
         if (image.TotalBytes < 1024 || image.TotalBytes > maxBytes)
             return new(false, $"Refused: image size {image.TotalBytes} bytes is outside the {dev.Type} app range (1 KB–{maxBytes / 1024} KB).");
+        // A v7 and a -Max share the MCU and app base, so only the marker tells their images apart.
+        if (image.BoardMarker() is string board && !SRecordImage.BoardMatches(board, dev.Type))
+            return new(false, $"Refused: this .srec is built for a {board}, not a {dev.Type}.");
 
         int baseId = dev.BaseId;
+        string? Ver() => dm.GetDevice(deviceId) switch
+        {
+            domain.Devices.Canboard.CanboardDevice cb => cb.Version,
+            domain.Devices.dingoPdm.PdmDevice p => p.Version,
+            _ => null,
+        } is { Length: > 0 } v && v != "v0.0.0" ? v : null;
+        var before = Ver();
         _busy = true; Set("Entering bootloader", 2);
         using var lifetime = ct.CanBeCanceled ? null : new CancellationTokenSource(TimeSpan.FromMinutes(4));
         var token = lifetime?.Token ?? ct;
@@ -137,15 +147,16 @@ public sealed class CanFlashService(
             // would still show the default until the next manual query.)
             Set("Re-discovering", 98);
             await Task.Delay(1500, token);          // let the app boot and rejoin the bus
+            // The old version stays until the new app answers, so wait for it to change; a reflash of the
+            // same version never changes it, and then the (identical) version it had is the answer.
             string? version = null;
             for (int i = 0; i < 10 && version is null; i++)
             {
                 if (i % 4 == 0) dm.RequestVersion(deviceId);   // (re)ask every ~1.2 s
                 await Task.Delay(300, token);
-                if (dm.GetDevice(deviceId) is domain.Devices.Canboard.CanboardDevice cb &&
-                    cb.Version is { Length: > 0 } v && v != "v0.0.0")
-                    version = v;
+                if (Ver() is string v && v != before) version = v;
             }
+            version ??= Ver();
             Set("Done", 100);
             log.AppendLine(version is not null ? $"✓ Done — module reports {version}." : "✓ Done — module rebooting (version not yet reported).");
             logger.LogInformation("CAN flash ok ({Bytes} bytes) for {Name}", written, dev.Name);

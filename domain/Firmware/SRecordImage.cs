@@ -1,4 +1,6 @@
 using System.Globalization;
+using System.Text;
+using System.Text.RegularExpressions;
 
 namespace domain.Firmware;
 
@@ -25,6 +27,28 @@ public sealed class SRecordImage
         MinAddress = segments.Count > 0 ? segments[0].Address : 0;
         TotalBytes = segments.Sum(s => s.Data.Length);
     }
+
+    /// <summary>
+    /// The board the image is built for, from dingoFW's "DINGO_BOARD=" marker (v5.5.109 on) without the vendor
+    /// prefix, e.g. "dingoPDM v7". Null for an older image with no marker.
+    /// </summary>
+    public string? BoardMarker()
+    {
+        var key = "DINGO_BOARD="u8;
+        foreach (var s in Segments)
+        {
+            int i = s.Data.AsSpan().IndexOf(key);
+            if (i < 0) continue;
+            int start = i + key.Length, end = Array.IndexOf(s.Data, (byte)0, start);
+            var name = Encoding.ASCII.GetString(s.Data, start, (end < 0 ? s.Data.Length : end) - start);
+            return name.StartsWith("Dingo Electronics ") ? name["Dingo Electronics ".Length..] : name;
+        }
+        return null;
+    }
+
+    /// <summary>"dingoPDM v7" fits a "dingoPDM", "dingoPDM-Max v1" a "dingoPDM-Max", "CANBoard v2" a "CANBoard".</summary>
+    public static bool BoardMatches(string marker, string deviceType) =>
+        Regex.Replace(marker, @"\s+v\d+$", "").Equals(deviceType, StringComparison.OrdinalIgnoreCase);
 
     public static SRecordImage ParseText(string text) => Parse(text.Split('\n'));
 
