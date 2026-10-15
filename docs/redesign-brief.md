@@ -467,9 +467,10 @@ Order: research + design system → IA + parity checklist (**review**) → block
 
 ## Constraints
 
-- Web app in the browser, served locally; must work offline. Built in Svelte 5 on the existing REST API; no
-  heavy design dependencies needed, but propose freely (any library must be small, offline-capable and fit
-  Svelte).
+- Web app in the browser, served locally; must work offline. Built in **Svelte 5** on the existing REST API,
+  with **Svelte Flow** for the canvas and **Bits UI** (headless, accessible, unstyled; styled only by our tokens)
+  for every combobox, command palette, dialog/drawer, menu, popover/tooltip, tabs, toggle group, switch and
+  slider. Specify components in Bits UI terms (e.g. "Combobox, state: filtering, 0 results") so they map 1:1.
 - Hardware limits are real: block counts per module are fixed by the firmware (show them, don't hide them).
 - Live data arrives at roughly 10–15 updates per second per module; design for it without flicker.
 - Several modules, one project file = one car.
