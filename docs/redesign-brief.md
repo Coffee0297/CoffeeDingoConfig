@@ -415,7 +415,8 @@ The work follows https://github.com/corygrant/dingoElec/blob/main/CONTRIBUTING.m
 **Feature parity from the first deliverable.** The very first version of the new design must cover
 **everything the current UI does**: every item in the *Full feature inventory*, no "phase 2" for existing
 features. Nothing a user can do today may be missing, hidden without a path, or left for later. The *New
-features to design in* section may follow in a later round, but the IA must already have a place for them.
+features to design in* are **also part of the first round**: design them fully, marked in the parity checklist
+as "new" (they need firmware that is not released yet, so they show as "needs firmware vX" on older modules).
 Include a **parity checklist**: each inventory item → the screen and level (Simple / Custom / Expert) where it
 lives in the new design.
 
