@@ -128,16 +128,20 @@
   const series = $derived.by(() => { tick; return resample(hist.samples(), 60_000, 150) })
   const tone = $derived(state === 'On' ? 'on' : state === 'Fault' || state === 'Overcurrent' ? 'fault' : state === 'Warning' || state === 'OpenLoad' ? 'warn' : 'off')
 
-  let trips = $state(null), tripErr = $state('')
-  $effect(() => {
-    if (isCb || !dev || !connected) return
-    let alive = true
-    api.overloads(guid).then((r) => { if (alive) { trips = (r?.events ?? []).filter((e) => e.output === n).length; tripErr = '' } }).catch((e) => { if (alive) tripErr = e?.message ?? String(e) })
-    return () => { alive = false }
-  })
-
   // ---- bench test ----
   const bench = createBench({ guid: () => guid, n: () => n, connected: () => connected, current: () => (isCb ? 0 : pdmOut?.current ?? 0) })
+
+  // Trip count: read once per module + connection. Reading the trip log talks to the module, and doing it
+  // while a bench test runs cancels the test on the module, so it is never read during a test.
+  let trips = $state(null), tripErr = $state('')
+  const hasDev = $derived(!!dev)
+  const testing = $derived(bench.state.phase === 'running' || bench.state.phase === 'lost')
+  $effect(() => {
+    if (isCb || !hasDev || !connected || testing) return
+    let alive = true
+    untrack(() => api.overloads(guid)).then((r) => { if (alive) { trips = (r?.events ?? []).filter((e) => e.output === n).length; tripErr = '' } }).catch((e) => { if (alive) tripErr = e?.message ?? String(e) })
+    return () => { alive = false }
+  })
   $effect(() => () => bench.dispose())
   const blocker = $derived.by(() => {
     if (!live.connected) return 'Connect to the car first. Tests run only while connected.'

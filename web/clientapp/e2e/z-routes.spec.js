@@ -12,8 +12,8 @@ async function routes() {
   return [
     'car', 'connect', 'functions', 'functions/add', 'functions/flow', `functions/flow/${pdm.guid}`, 'functions/whole-car',
     'power', 'power/ignition', 'power/sleep', 'power/roles',
-    'hardware', `hardware/module/${pdm.guid}`, `hardware/module/${pdm.guid}/output/1`, `hardware/module/${cb.guid}/input/digital/1`,
-    `hardware/module/${cb.guid}/input/analog/1`, `hardware/module/${pdm.guid}/input/can/1`,
+    'hardware', `hardware/module/${pdm.guid}`, `hardware/module/${pdm.guid}/output/1`, `hardware/module/${cb.guid}/input/input/1`,
+    `hardware/module/${cb.guid}/input/analoginput/1`, `hardware/module/${pdm.guid}/input/caninput/1`,
     'hardware/outputs', 'hardware/keypads', 'hardware/firmware',
     'live', 'live/plot', 'live/trips', 'live/logs',
     'expert/lua', 'expert/can', 'expert/tools',

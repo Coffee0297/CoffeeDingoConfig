@@ -259,11 +259,13 @@
     {:else}
       <span class="muted hint">{needWrite.length ? 'Writes live now. Lost at power-off until you store.' : needStore.length ? 'Store keeps the written values after power-off.' : ''}</span>
       <Button onclick={() => doRead(listed.filter((d) => d.connected).map((d) => d.guid))} disabled={!listed.some((d) => d.connected)} data-testid="apply-read">Read from modules</Button>
+      {#if needStore.length}
+        <!-- modules already written can be stored while others still wait to be applied -->
+        <Button variant={needWrite.length ? 'secondary' : 'primary'} onclick={() => ask('burn', needStore.map((d) => d.guid))} disabled={!!cantProgram} title={cantProgram} data-testid="apply-store">Store on modules ({needStore.length})</Button>
+      {/if}
       {#if needWrite.length}
         <Button variant="primary" onclick={() => ask('write', needWrite.map((d) => d.guid))} disabled={!!cantProgram} title={cantProgram} data-testid="apply-go">Apply to car ({needWrite.length} module{needWrite.length === 1 ? '' : 's'})</Button>
-      {:else if needStore.length}
-        <Button variant="primary" onclick={() => ask('burn', needStore.map((d) => d.guid))} disabled={!!cantProgram} title={cantProgram} data-testid="apply-store">Store on modules ({needStore.length})</Button>
-      {:else}
+      {:else if !needStore.length}
         <Button variant="primary" onclick={() => (ui.panel = null)}>Done</Button>
       {/if}
     {/if}

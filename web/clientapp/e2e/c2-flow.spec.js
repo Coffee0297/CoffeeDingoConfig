@@ -3,6 +3,7 @@
 // "+ Add" claims the highest free slot, so on PDM-04 it lands on exactly those slots. Every test reads the
 // slots first and puts them back in `finally`.
 import { test, expect } from '@playwright/test'
+import { near } from './api.js'
 import { open, watchErrors } from './helpers.js'
 import { apiJson, deviceByName, waitFor } from './api.js'
 
@@ -114,7 +115,7 @@ test('+ Add a Compare, edit it with hysteresis, Delete removes it and Undo bring
     await insp(page).getByText('Separate off point (hysteresis)').click()
     await insp(page).getByLabel('Off again at').fill('12.2')
     await save(page)
-    await waitFor(async () => { const r = await row('conditions', 32); return r.name === 'c2 battery low' && r.arg === 11.5 && r.argOff === 12.2 && r.input === 4 }, 15_000, 'compare saved')
+    await waitFor(async () => { const r = await row('conditions', 32); return r.name === 'c2 battery low' && near(r.arg, 11.5) && near(r.argOff, 12.2) && r.input === 4 }, 15_000, 'compare saved')
     // the incomplete marker went away once it had an input
     await expect(node(page, 'condition:32')).not.toContainText('needs an input')
     // Delete key on the focused block → confirm → slot freed

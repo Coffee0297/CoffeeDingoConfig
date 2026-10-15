@@ -1,5 +1,6 @@
 // CAN input detail (hardware/module/<guid>/input/caninput/<n>). Writes: PDM-05 CAN inputs 29 to 32 only; restored after each test.
 import { test, expect } from '@playwright/test'
+import { near } from './api.js'
 import { open, watchErrors } from './helpers.js'
 import { deviceByName, funcRow, withFunc, stepper, pickSelect, waitFor, apiJson } from './b-helpers.js'
 
@@ -52,7 +53,7 @@ test('picking another module\'s signal fills the frame fields and saves them', a
     await expect(page.getByTestId('name')).toHaveValue(/PDM-02 /)
     await expect(page.getByRole('switch', { name: 'Input in use' })).toBeChecked()
     await save(page)
-    await waitFor(async () => { const r = await row(29); return r.enabled && r.id === p2.baseId + s.offset && r.startBit === s.startBit && r.bitLength === s.bitLength && r.factor === s.factor }, 20_000, 'CAN input 29 on the module')
+    await waitFor(async () => { const r = await row(29); return r.enabled && r.id === p2.baseId + s.offset && r.startBit === s.startBit && r.bitLength === s.bitLength && near(r.factor, s.factor) }, 20_000, 'CAN input 29 on the module')
     await expect(page.getByTestId('in-state')).toContainText(/0x/)
   })
   expect(errors).toEqual([])

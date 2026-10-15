@@ -1,5 +1,6 @@
 // Output detail (hardware/module/<guid>/output/<n>). Config writes use PDM-05 out 1 and out 8 only; every test restores them.
 import { test, expect } from '@playwright/test'
+import { near } from './api.js'
 import { open, watchErrors } from './helpers.js'
 import { deviceByName, outputOf, withOutput, putOutput, stepper, pickSelect, saveAndWait, waitFor, apiJson } from './b-helpers.js'
 
@@ -83,7 +84,7 @@ test('protection save writes limits, retry rule, warn and open-load to the modul
     await saveAndWait(page)
     await waitFor(async () => {
       const o = (await out(1)).o
-      return o.currentLimit === 7 && o.inrushLimit === 40 && o.inrushTime === 500 && o.resetMode === 1 && o.resetCountLimit === 5 && o.resetTime === 800 && o.warnLimit === 5.5 && o.openLoadLimit === 0.3 && o.openLoadTime === 900
+      return o.currentLimit === 7 && o.inrushLimit === 40 && o.inrushTime === 500 && o.resetMode === 1 && o.resetCountLimit === 5 && o.resetTime === 800 && near(o.warnLimit, 5.5) && near(o.openLoadLimit, 0.3) && o.openLoadTime === 900
     }, 15_000, 'protection values on the module')
     await expect(page.getByTestId('save-status')).toContainText('Saved to the module')
   })

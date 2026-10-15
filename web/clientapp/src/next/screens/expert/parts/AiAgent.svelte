@@ -93,7 +93,7 @@
     <Card title="What an assistant can do" subtitle={info ? `${info.tools?.length ?? 0} tools, read from the server` : ''}>
       <Field label="Search the tools" bind:value={q} placeholder="for example lua" data-testid="ai-search" />
       <p class="muted gap"><Chip tone="muted" dashed>Not available yet</Chip> Which tools ask you first. The server has no approval setting yet (gap G22), so every tool below runs when the assistant calls it.</p>
-      <ul class="tools" data-testid="ai-tools">
+      <ul class="tools" data-testid="ai-tools" tabindex="0" aria-label="Tools the AI agent can use">
         {#each tools as t (t.name)}
           <li><code class="mono">{t.name}</code><span class="muted">{t.description}</span></li>
         {:else}<li class="muted">{info ? 'No tool matches.' : 'The tools show here when the server answers.'}</li>{/each}

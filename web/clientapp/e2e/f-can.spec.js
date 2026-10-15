@@ -110,7 +110,7 @@ test('the CAN map logic merges neighbours and finds collisions, overlaps and res
 // ---------------------------------------------------------------- DBC devices
 const FAKE = '11111111-2222-3333-4444-555555555555'
 const SIGS = [
-  { name: 'CoolantTemp', id: 0x3e0, ide: false, messageName: 'EngineTemps', startBit: 0, length: 8, byteOrder: 0, isSigned: false, factor: 1, offset: -40, unit: 'C', min: -40, max: 215, value: 87 },
+  { name: 'E2eCoolant', id: 0x3e1, ide: false, messageName: 'EngineTemps', startBit: 0, length: 8, byteOrder: 0, isSigned: false, factor: 1, offset: -40, unit: 'C', min: -40, max: 215, value: 87 },
   { name: 'EngineRpm', id: 0xc9, ide: false, messageName: 'EngineSpeed', startBit: 8, length: 16, byteOrder: 1, isSigned: false, factor: 0.25, offset: 0, unit: 'rpm', min: 0, max: 8000, value: 1200 },
   { name: 'ThrottlePos', id: 0x5f0, ide: false, messageName: 'Throttle', startBit: 0, length: 8, byteOrder: 0, isSigned: false, factor: 0.4, offset: 0, unit: '%', min: 0, max: 100, value: 12 },
 ]
@@ -146,7 +146,7 @@ test('DBC devices: list, search, and use a signal as a CAN input on PDM-05 slot 
     await goTab(page, 'DBC devices')
     await expect(page.getByTestId('dbc-list')).toContainText('MCPVAL_ECU')
     await expect(page.getByTestId('dbc-list')).toContainText('3 signals')
-    await expect(page.getByTestId('dbc-hits')).toContainText('CoolantTemp')
+    await expect(page.getByTestId('dbc-hits')).toContainText('E2eCoolant')
     // search sends the term to the backend and narrows the table
     const req = page.waitForRequest((r) => r.url().includes('/dbc/search') && r.url().includes('q=rpm'))
     await page.getByTestId('dbc-search').fill('rpm')
@@ -159,7 +159,7 @@ test('DBC devices: list, search, and use a signal as a CAN input on PDM-05 slot 
     await page.getByRole('option', { name: 'PDM-05' }).click()
     await page.getByTestId('dbc-slot').click()
     await page.getByRole('option', { name: 'CAN input 29' }).click()
-    const row = page.getByTestId('dbc-hits').locator('tbody tr', { hasText: 'CoolantTemp' })
+    const row = page.getByTestId('dbc-hits').locator('tbody tr', { hasText: 'E2eCoolant' })
     // the bus is shared and busy: when the module does not confirm the 11 writes in time the screen shows the error and
     // the button stays, so click again (a second click finds the slot already decoding this frame and says "Already")
     for (let i = 0; i < 3; i++) {
@@ -169,10 +169,10 @@ test('DBC devices: list, search, and use a signal as a CAN input on PDM-05 slot 
     }
     await expect(row).toContainText(/(Added|Already) · PDM-05 CAN in 29/)
     const ci = await waitFor(async () => { const c = await canInput(g, 29); return c.enabled ? c : null }, 10_000, 'CAN input 29 enabled')
-    expect(ci.id).toBe(0x3e0)
+    expect(ci.id).toBe(0x3e1)
     expect(ci.startBit).toBe(0)
     expect(ci.bitLength).toBe(8)
-    expect(ci.name).toBe('CoolantTemp')
+    expect(ci.name).toBe('E2eCoolant')
     // undo frees the slot again (only offered when this click made the input)
     const undo = row.getByRole('button', { name: 'Undo' })
     if (await undo.count()) {
@@ -187,9 +187,10 @@ test('DBC devices: list, search, and use a signal as a CAN input on PDM-05 slot 
     await goTab(page, 'DBC devices')
     await page.getByTestId('dbc-target').click()
     await page.getByRole('option', { name: 'PDM-05' }).click()
-    const row2 = page.getByTestId('dbc-hits').locator('tbody tr', { hasText: 'CoolantTemp' })
+    const row2 = page.getByTestId('dbc-hits').locator('tbody tr', { hasText: 'E2eCoolant' })
     await row2.getByTestId('dbc-use').dispatchEvent('click')
-    await expect(row2).toContainText('Already · PDM-05 CAN in 29')
+    // the car itself may already read this signal on another input; the first match is shown
+    await expect(row2).toContainText(/Already · PDM-05 CAN in \d+/)
   } finally {
     for (let i = 0; i < 6 && (await canInput(g, 29)).enabled; i++) {
       await apiJson('POST', `/api/devices/${g}/function/caninput/29`, before).catch(() => {})

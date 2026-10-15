@@ -30,3 +30,6 @@ export async function deviceByName(name) {
   if (!d) throw new Error(`No module named ${name} in the project`)
   return d
 }
+
+/** Values the module stores as 32-bit floats read back as e.g. 0.30000001 — compare with a tolerance. */
+export const near = (a, b, eps = 1e-4) => Math.abs(Number(a) - Number(b)) <= eps * Math.max(1, Math.abs(Number(b)))

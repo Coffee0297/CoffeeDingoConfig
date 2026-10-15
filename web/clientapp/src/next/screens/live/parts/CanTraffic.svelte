@@ -156,7 +156,7 @@
     {#if stale}<Banner tone="warn" title="The CAN list is not updating.">The app could not read the traffic. It keeps trying.</Banner>{/if}
 
     <section aria-label="CAN traffic by ID" class="tbl">
-      <div class="nx-scroll">
+      <div class="nx-scroll" tabindex="0" role="region" aria-label="CAN traffic table">
         <table class="nx-table" data-testid="can-table">
           <thead><tr><th scope="col">ID</th><th scope="col">Dir</th><th scope="col">Name</th><th scope="col">DLC</th><th scope="col">Data (bytes 0 to 7)</th><th scope="col" class="r">Rate</th><th scope="col" class="r">Count</th></tr></thead>
           <tbody>

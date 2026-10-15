@@ -41,6 +41,8 @@ test('on / off threshold is saved: level, switch type and invert', async ({ page
     await page.getByRole('radio', { name: /Latching/ }).click()
     await page.getByRole('checkbox', { name: /Invert/ }).click()
     await expect(page.getByRole('img', { name: /Line graph of the input voltage/ })).toBeVisible()
+    const inUse = page.getByRole('switch', { name: 'Input in use' })
+    if (!(await inUse.isChecked())) await inUse.click()
     await save(page)
     await waitFor(async () => { const r = await row(5); return r.enabled && r.switch.enabled && r.switch.threshold === 2500 && r.switch.mode === 1 && r.switch.invert && !r.scale.enabled && !r.rotary.enabled }, 20_000, 'threshold on the module')
   })
