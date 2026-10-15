@@ -36,6 +36,7 @@ jobs:
         run: |
           npm ci
           npm run build
+          npm test
 
       - name: Restore .NET solution
         run: dotnet restore dingoConfig-redesign.sln
