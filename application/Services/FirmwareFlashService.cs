@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Text;
 using System.Text.RegularExpressions;
+using domain.Firmware;
 using domain.Interfaces;
 using Microsoft.Extensions.Logging;
 
@@ -41,17 +42,18 @@ public partial class FirmwareFlashService(
         return exe;   // assume on PATH
     }
 
-    /// <param name="flashAddr">
-    /// Where dfu-util writes the binary. Use 0x08004000 (the relocated app base) to update a module that
-    /// carries the OpenBLT bootloader — that erases only sectors 1+, leaving the bootloader in sector 0
-    /// intact (the only no-SWD recovery path). Use 0x08000000 only for a BLANK module / full image that
-    /// includes the bootloader. Flashing a relocated app at 0x08000000 would overwrite the bootloader AND
-    /// misplace the app — a brick.
-    /// </param>
-    public async Task<FlashResult> FlashAsync(Guid deviceId, byte[] binary, uint flashAddr)
+    /// <param name="deviceId">The project entry being updated, or Guid.Empty for "Flash new module".</param>
+    /// <remarks>
+    /// The write address comes from the image (<see cref="DfuImage.FlashAddress"/>): a relocated app goes to
+    /// 0x08004000 — erasing only sectors 1+, so the OpenBLT bootloader in sector 0 survives — and a full
+    /// image to 0x08000000.
+    /// </remarks>
+    public async Task<FlashResult> FlashAsync(Guid deviceId, byte[] binary)
     {
         if (binary.Length < 1024 || binary.Length > 512 * 1024)
             return new(false, $"Refused: binary size {binary.Length} bytes is outside the sane 1KB–512KB range.");
+        if (DfuImage.FlashAddress(binary) is not uint flashAddr)
+            return new(false, "Refused: not an STM32 firmware .bin (its reset vector doesn't point into flash).");
 
         var dfu = ResolveDfuUtil();
         var tmp = Path.Combine(Path.GetTempPath(), $"dingo_fw_{Guid.NewGuid():N}.bin");
@@ -60,17 +62,36 @@ public partial class FirmwareFlashService(
         _busy = true; Set("Commanding DFU", 0);
         try
         {
-            // 1. If the device is on the bus, command it into the DFU bootloader.
-            if (dm.GetDevice(deviceId) != null)
+            // 1. Command the module on USB into its DFU bootloader. USB DFU only reaches that module, so address
+            //    it at the id it reports ('I' identify), not the project record's — they differ for a fresh or
+            //    un-burned module, and "Flash new module" has no record at all. Telemetry isn't needed: a module
+            //    whose status never reaches USB (≤ v5.5.109 alone on a bench) still takes the command.
+            log.AppendLine($"Image is {(flashAddr == DfuImage.AppBase ? "a bootloader-relocated app" : "a full image")} → writing at 0x{flashAddr:X8}.");
+            // Asked right now, straight from the adapter: no "connected" gate (a module with no telemetry reads as
+            // disconnected) and no fallback to an id remembered from earlier — that one may be another module's.
+            var usb = adapters.ActiveAdapter;
+            int? gw = usb != null ? await usb.IdentifyBridgeBaseIdAsync() : null;
+            var dev = dm.GetDevice(deviceId);
+            if (gw is int g)
             {
-                // USB DFU can only reach the module on the USB link, so address it at the id that module reports
-                // ('I' identify), not the project record's — they differ for a fresh or un-burned module.
-                var gw = await adapters.ReidentifyAsync();   // fresh: a re-address since connect moves it
-                if (dm.RequestBootloader(deviceId, atBaseId: gw))
-                    log.AppendLine(gw is int g && g != dm.GetDevice(deviceId)!.BaseId
-                        ? $"Sent bootloader command to the module on USB (0x{g:X}; the project has it at 0x{dm.GetDevice(deviceId)!.BaseId:X})…"
-                        : "Sent bootloader command…");
-                else log.AppendLine("Device did not accept a bootloader command (continuing — may already be in DFU).");
+                dm.RequestUsbBootloaderAt(g);
+                log.AppendLine(dev != null && dev.BaseId != g
+                    ? $"Sent bootloader command to the module on USB (0x{g:X}; the project has it at 0x{dev.BaseId:X})…"
+                    : $"Sent bootloader command to the module on USB (0x{g:X})…");
+                // A module that took the command has reset off the link within a few ms; one still answering ignored it.
+                await Task.Delay(500);
+                if (await usb!.IdentifyBridgeBaseIdAsync() is int still)
+                {
+                    Set("Failed", 0);
+                    log.AppendLine($"✗ The module on USB is still running (answers as 0x{still:X}) — it ignored the bootloader command" +
+                        (still != g ? $" sent to 0x{g:X}." : ".") + " Retry; if it keeps refusing, put it in DFU by hand (BOOT0 + reset).");
+                    return new(false, log.ToString());
+                }
+            }
+            else if (dev != null && dm.RequestBootloader(deviceId)) log.AppendLine("Sent bootloader command…");
+            else log.AppendLine("No module answered on USB — waiting for one already in DFU (BOOT0 + reset).");
+            if (gw != null || dev != null)
+            {
                 await Task.Delay(250);              // let the command transmit…
                 await adapters.DisconnectAsync();   // …then release the port BEFORE the device re-enumerates as DFU
             }

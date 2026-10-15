@@ -328,7 +328,8 @@ It gets ${src.name}'s full config + Lua, is re-addressed to 0x${src.baseId.toStr
       for (let i = 0; i < 40 && !devices.find((d) => d.guid === src.guid)?.connected; i++) await new Promise((r) => setTimeout(r, 250))
       try { const lua = await luaForDeploy(src.guid); if (lua.trim() && !(await api.luaUpload(src.guid, lua))?.written) luaOk = false } catch { luaOk = false }
       if (made) { await api.remove(made); made = null }   // the module is now src; an entry that was already in the project stays
-      if (!same) usbGw = src.baseId
+      // Re-ask the module, not just the local copy: the backend's bridge id picks USB vs CAN flashing.
+      if (!same) usbGw = (await api.usbIdentify().catch(() => null))?.gatewayBaseId ?? src.baseId
       toast(`Module on USB is now "${src.name}" at 0x${src.baseId.toString(16).toUpperCase()}` + (luaOk ? '' : ' — but the Lua upload failed; re-upload it from the Lua tab.'), luaOk ? 'ok' : 'error', luaOk ? 4000 : 8000)
       usbDeployOpen = false
     } catch (e) {

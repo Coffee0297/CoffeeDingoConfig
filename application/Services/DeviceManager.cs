@@ -1350,19 +1350,13 @@ public class DeviceManager(ILogger<DeviceManager> logger, ILoggerFactory loggerF
     /// <param name="atBaseId">Send to this base id instead of the project record's — the USB bridge's real id
     /// (from its 'I' identify), which differs when the record and the module disagree (a fresh 0xDE module,
     /// a re-address that wasn't burned).</param>
-    public bool RequestBootloader(Guid deviceId, bool canUpdate = false, int? atBaseId = null)
+    public bool RequestBootloader(Guid deviceId, bool canUpdate = false)
     {
         var device = GetDevice(deviceId);
         if (device is not IDeviceConfigurable configurable)
             return false;
 
         var bootloaderMsg = configurable.GetBootloaderMsg(canUpdate);
-        if (bootloaderMsg != null && atBaseId is int at && at != device.BaseId)
-        {
-            bootloaderMsg.Frame = bootloaderMsg.Frame with { Id = bootloaderMsg.Frame.Id - device.BaseId + at };
-            bootloaderMsg.DeviceBaseId = at;
-        }
-
         if (bootloaderMsg == null)
         {
             logger.LogInformation("No bootloader msg for {DeviceName} (Guid: {Guid})", device.Name, deviceId);
@@ -1373,6 +1367,16 @@ public class DeviceManager(ILogger<DeviceManager> logger, ILoggerFactory loggerF
 
         logger.LogInformation("Enter bootloader on {DeviceName} (Guid: {Guid})", device.Name, deviceId);
         return true;
+    }
+
+    /// <summary>
+    /// Command the PDM on the USB link (at the base id its 'I' identify reported) into USB-DFU. Needs no project
+    /// entry and no telemetry — the USB-DFU flash path, for a fresh module as much as a known one.
+    /// </summary>
+    public void RequestUsbBootloaderAt(int baseId)
+    {
+        QueueMessage(PdmDevice.BootloaderMsg(baseId, canUpdate: false));
+        logger.LogInformation("Enter USB-DFU bootloader on the module on USB (0x{BaseId:X})", baseId);
     }
 
     private void OnDeviceAdded(DeviceEventArgs e)

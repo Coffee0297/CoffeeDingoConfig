@@ -439,7 +439,7 @@
   <div><h1>System — {devices.length} module{devices.length === 1 ? '' : 's'}</h1>
     <p class="sub">All modules on the CAN bus. Click a module to open it; drag a pin to match your install.</p></div>
   <div style="display:flex;align-items:center;gap:14px">
-    <button class="btn ghost" disabled={flashBusy || simAdapter} title={simAdapter ? progTip : "Flash a brand-new / blank module over USB DFU (no CAN bus needed — put it in DFU with BOOT0 + reset)"} onclick={openFlashBlank}>⬆ Flash new module</button>
+    <button class="btn ghost" disabled={flashBusy || simAdapter} title={simAdapter ? progTip : "Flash a module that isn't in the project over USB DFU (one running dingo firmware is put into DFU for you; a blank one needs BOOT0 + reset)"} onclick={openFlashBlank}>⬆ Flash new module</button>
     <div class="stat" style="text-align:right" title="Sum across every module of every enabled output's current limit — worst case if the whole vehicle's loads switch on at their trip point at once">
       <div class="v">{sysMaxA} A</div><div class="k">Max load (trip-sum)</div>
     </div>
@@ -606,9 +606,10 @@
         {#if fwFile}<span class="muted">{fwFile.name} · {(fwFile.size / 1024).toFixed(0)} KB</span>{/if}
       </div>
       {#if flashGuid === 'blank'}
-        <p class="hint" style="margin-top:10px">For a <b>brand-new / blank module</b> (no firmware yet, not on the CAN bus):
-          connect it by <b>USB</b>, put it in DFU — hold <b>BOOT0</b> while powering on / resetting — then Flash.
-          dfu-util writes the binary and the module reboots into it. No CAN connection needed.</p>
+        <p class="hint" style="margin-top:10px">For a module that isn't in the project. If it already runs dingo firmware,
+          just <b>connect to it over USB</b> and Flash — it is put into DFU for you. A <b>blank</b> one (no firmware yet):
+          hold <b>BOOT0</b> while powering on / resetting, then Flash. The address comes from the file: an app .bin is
+          written above the bootloader (kept), a full image from the start of flash.</p>
       {:else if flashMode === 'can'}
         <p class="hint" style="margin-top:10px">No USB needed: the module is told to restart into its <b>OpenBLT bootloader</b>,
           the <b>.srec</b> is written over the CAN bus (XCP), then it restarts into the new firmware.

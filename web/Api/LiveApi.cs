@@ -948,26 +948,25 @@ public static class LiveApi
             return Results.Ok(new { ok = true });
         });
 
-        // In-app firmware update: upload the relocated app .bin (raw body); commands DFU + flashes via
-        // dfu-util at the app base 0x08004000, so the OpenBLT bootloader in sector 0 is preserved.
+        // In-app firmware update over USB DFU (raw .bin body): commands the module on USB into DFU and flashes
+        // it with dfu-util at the address the image's vector table calls for (relocated app → 0x08004000, the
+        // OpenBLT bootloader in sector 0 kept; full image → 0x08000000).
         api.MapPost("/devices/{guid}/flash", async (string guid, HttpRequest req, FirmwareFlashService flasher) =>
         {
             if (!Guid.TryParse(guid, out var g)) return Results.BadRequest();
             using var ms = new MemoryStream();
             await req.Body.CopyToAsync(ms);
-            var res = await flasher.FlashAsync(g, ms.ToArray(), 0x08004000u);
+            var res = await flasher.FlashAsync(g, ms.ToArray());
             return Results.Ok(new { ok = res.Ok, log = res.Log });
         });
 
-        // Flash a BLANK / new module (no firmware on the bus yet). The operator puts it in DFU by hand
-        // (BOOT0 + reset, USB connected); we skip the CAN bootloader command (Guid.Empty = no bus device)
-        // and let dfu-util flash whatever STM32 ROM-DFU device is present.
+        // Flash a new module that isn't in the project (Guid.Empty). If it runs dingo firmware and answers on
+        // USB it is commanded into DFU like any other; a blank one must be put in DFU by hand (BOOT0 + reset).
         api.MapPost("/flash/blank", async (HttpRequest req, FirmwareFlashService flasher) =>
         {
             using var ms = new MemoryStream();
             await req.Body.CopyToAsync(ms);
-            // Blank module = full image that includes the bootloader → write from flash base 0x08000000.
-            var res = await flasher.FlashAsync(Guid.Empty, ms.ToArray(), 0x08000000u);
+            var res = await flasher.FlashAsync(Guid.Empty, ms.ToArray());
             return Results.Ok(new { ok = res.Ok, log = res.Log });
         });
 

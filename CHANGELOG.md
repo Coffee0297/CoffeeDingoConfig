@@ -5,6 +5,20 @@ All notable changes to **dingoConfig** are recorded here. Versions follow [SemVe
 
 ## [Unreleased]
 
+## [0.10.3] — 2026-10-15
+
+### Fixed
+- **Flash new module** now puts a module that runs dingo firmware into USB DFU itself. It used to just wait
+  for one already in DFU (BOOT0 + reset) and failed with "bootloader not entered".
+- **USB flashing writes at the address the image is built for**: a bootloader-relocated app (dingoFW
+  v5.5.109+) goes to 0x08004000, so the OpenBLT bootloader in sector 0 survives; a full image goes to
+  0x08000000. A file that isn't an STM32 firmware image is refused.
+- **The bootloader command goes to the module actually on USB**: the id is asked right before flashing, not
+  taken from the project or an earlier connect, so a swapped or re-addressed module is reached. If the
+  module keeps running, the flash stops at once and says which id it answered as.
+- **After Deploy to USB module** the card no longer offers Flash over CAN for the re-addressed module (the
+  USB bridge id is refreshed).
+
 ## [0.10.2] — 2026-10-13
 
 ### Changed

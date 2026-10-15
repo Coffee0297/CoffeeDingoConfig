@@ -1323,16 +1323,18 @@ public class PdmDevice : IDeviceConfigurable
         };
     }
 
-    public DeviceCanFrame GetBootloaderMsg(bool canUpdate = false)
+    public DeviceCanFrame GetBootloaderMsg(bool canUpdate = false) => BootloaderMsg(BaseId, canUpdate);
+
+    public static DeviceCanFrame BootloaderMsg(int baseId, bool canUpdate)
     {
         // byte 6 selects the path on the PDM firmware: 0 = USB-DFU, 1 = OpenBLT CAN update.
         return new DeviceCanFrame
         {
             SendOnly = true,
-            DeviceBaseId = BaseId,
+            DeviceBaseId = baseId,
             Frame = new CanFrame
             (
-                Id: BaseId + ConfigTxOffset,
+                Id: baseId + ConfigTxOffset,
                 Len: 8,
                 Payload: [
                     Convert.ToByte(MessageCommand.Bootloader), (byte)'B', (byte)'O', (byte)'O', (byte)'T', (byte)'L',
