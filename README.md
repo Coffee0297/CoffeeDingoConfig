@@ -12,7 +12,7 @@ AI agent can do all of it too.
 
 > **Firmware:** built for [CoffeeDingoFW](https://github.com/Coffee0297/CoffeeDingoFW). It expects
 > **≥ 5.5.108** (PWM inputs, confirmed writes), **≥ 5.5.110** for a module alone on USB on the bench (latest
-> v5.5.111); older builds show a "firmware needs updating" notice and
+> v5.5.112); older builds show a "firmware needs updating" notice and
 > hide what they can't do. Want to try it without hardware? Point it at
 > [CoffeeDingoSim](https://github.com/Coffee0297/CoffeeDingoSim), which runs the real firmware on a virtual bus.
 
