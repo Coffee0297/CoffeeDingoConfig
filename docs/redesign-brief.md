@@ -195,6 +195,12 @@ drawing and a signal-links drawing before applying; applied templates can be edi
 - Read from module(s), write (live, lost at power-off), burn (permanent), write-all with CRC check, confirmed
   single writes (shows when a module refused a value and what it kept).
 - Project file: open, save, save as (the whole car in one file).
+  **Required change from today:** today the user types a file name and saves every time, which works like
+  "save as". In the new design, **opening (or saving) a project keeps it as the current file**: its name is
+  always visible, **Save (Ctrl+S) overwrites that same file** in one click, **Save as…** is a separate action
+  for a new name, and unsaved changes are marked (e.g. a dot by the name) and warned about before opening another
+  project or closing. A new project's first Save asks for a name, then behaves the same. (Backend: `GET /api/project`
+  already returns the open file as `current` (and `dir`); an "unsaved changes" flag is an *API gap* to list.)
 
 **Firmware**
 - Flash over USB (DFU), flash a new/blank module, scan for DFU device, flash over CAN (per module), **update
@@ -324,6 +330,8 @@ with no guided path; modal error pop-ups; one-device-at-a-time thinking.
    keyboard only.
 5. **Firmware update of the whole car**: one button, shows each module's progress, what to do if one fails.
 6. **Installer**: set up 5 identical cars from one project; print pinouts, wiring lists and logic sheets.
+6b. **Edit and save the same car project**: open last week's project → change two things → Ctrl+S → it is saved
+   to the same file, no name typed; "Save as…" only when a copy is wanted.
 7. **Expert**: open Lua, raw CAN log, or the AI-agent panel without leaving the current context.
 8. **Push-button start setup**: choose start button + clutch, pick ECU / accessory / starter / dash outputs,
    door switch, dash shutdown, sleep; then watch the live state diagram while pressing the button.
