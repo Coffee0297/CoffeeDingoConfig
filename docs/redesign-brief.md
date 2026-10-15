@@ -571,6 +571,13 @@ These are missing (S / M / L = size); each is its own small PR, firmware ones as
 | G19 | CAN input: value to use after a timeout (safe default) | CanInput has timeoutEnabled and timeout but no value on timeout. Add timeoutValue (firmware param + CanInput.cs + UI). | S |
 | G20 | Recent projects with modified time and car name | GET /api/project returns files as names only. Return [{name, modifiedAt, moduleCount}]. | S |
 | G21 | Board facts in /definitions: connector pin map, driver chip name, board revision | Pin labels (pinmap.js) and the "BTS7008" text are static client data and the firmware reports only BOARD_ID 0/1/2. Move them into pdm-definitions.json so there is one source; add a revision once the firmware can report one. | S |
+| G22 | AI agent safety: approval before load-switching or flashing, and an activity journal with undo | The MCP server (58 tools) runs `flash_firmware`, `flash_firmware_can` and `set_output` directly. Add a pending-approval queue those calls wait in (approve / refuse in the app), plus a per-session log of agent writes with an undo snapshot; expose server status, URL and connected clients. | M |
+
+Facts the round-2 screens were corrected to (from the backend): sleep delay is 1–60 s (`sleepTimeoutMs`, clamped);
+dingoPDM has 2 digital inputs and CANBoards 8; CANBoards already have sleep and wake settings (5.5.111) but no live
+sleep state; there is no USB-wake parameter; block limits per dingoPDM are 8 timers, 32 conditions, 32 CAN in /
+out, 16 virtual inputs, 4 flashers, 4 counters, 2 tables (CANBoard: 4 timers, 8 conditions, 8 CAN in / out);
+dingoPDM v7 channels are rated 14 A (o1, o2) and 8 A (o3–o8), the Max has 4 × 26 A.
 
 Two board details were corrected to match the backend: the trip waveform is the module's real log (−10 s … +3 s,
 40 ms points, 0.5 A steps), and NOT is only available on Combine inputs (a NOT anywhere else costs a Combine).
