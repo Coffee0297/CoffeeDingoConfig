@@ -298,6 +298,14 @@ and the last wake reason per module so a car that drains its battery can be diag
 | **Toggle / latch** | Press, Set, Reset | Out | Toggle or set/reset; remember through sleep |
 | **Pulse** | In | Rising, Falling | Pulse length |
 | **Signal from CAN** | – | Value (number), Fresh | ID, start bit, length, scale; timeout → fallback value |
+| **Fog lights** | Front fog, Rear fog, Position, Low beam, High beam | Front fog, Rear fog, Indicator lamp | Front fog needs position / low beam; off with high beam; rear fog needs low beam or front fog; hold or toggle, remember after ignition off |
+| **Horn** | Button, Chirp, Panic | Horn | Chirp length; panic pulse pattern and duration; max on time |
+| **Cooling fan** | ECU request, Thermo switch, Temperature (number), A/C on, Ignition | Fan, Speed % (number) | On/off points; speed from a temperature table or on/off; run-on after ignition off; A/C forces on / minimum speed |
+| **Fuel pump** | Ignition, ECU request, Running | Pump | Prime time on ignition; then ECU request or engine running; off after a crash input |
+| **Blower speeds** | Speed switch (number), Ignition, Cranking | Duty % (number), On | Duty per switch position; soft start; off while cranking |
+| **Aux lights** (light bar, spots, work lights) | Switch, High beam, Ignition | Lights, Indicator lamp | Only with high beam; only with ignition; toggle or hold |
+| **Timed heater** (seats, mirrors, rear screen) | Press, Ignition, Running | Level (number), On, Level lamps | Levels 1–3 stepped by presses, PWM per level; auto-off time; only with engine running |
+| **Battery saver** | Battery V (number), Ignition, In use | Allow, Low battery | Cut below a voltage for a time; cut after a time with ignition off; warn first |
 
 - Design the **block sheet** (every function and helper block: ports, settings, inside, an example mapping) and
   a **whole-car canvas** built only from function blocks, showing that one car's 17 functions fit on one screen.
