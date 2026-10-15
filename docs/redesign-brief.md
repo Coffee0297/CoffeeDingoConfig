@@ -1,8 +1,8 @@
 # Design brief: a completely new dingoConfig
 
-> Paste this whole document into the design tool. Attach the current screenshots from `docs/img/`
-> (system, dashboard, outputs, signals, wiring, lua, plot, logs, settings, flash, mcp) as
-> **"what exists today — do not copy this layout"**.
+> Paste this whole document into the design tool. Attach the current screenshots (a set of 31: every view,
+> editor and drawer, light + dark, and phone width, taken live from the simulator) as
+> **"what exists today — do not copy this layout"**. They show what the app does, not how it should look.
 
 ## Your role and the ask
 
@@ -330,6 +330,78 @@ with no guided path; modal error pop-ups; one-device-at-a-time thinking.
 9. **"My battery is flat"**: see each module's sleep status, what woke it last, and which module kept the bus
    awake.
 
+## Implementation contract (so the design gets built, not thrown away)
+
+A design that arrives as a stand-alone HTML mock-up with its own made-up data has failed before (it could not be
+implemented). This one must be **built into the real app** screen by screen. So:
+
+**Target.** This fork's app: a **Svelte 5** single-page app (Vite) on a .NET 10 backend, talking to the
+**existing REST API** (list below), with live data polled about 10–15 times a second. The upstream dingoConfig is
+.NET / Blazor Server, so keep the design stack-neutral in what it *shows*, but deliver it in the forms below, which
+map onto Svelte components here (and onto Razor components if it is ever upstreamed).
+
+**What every design must come with**
+1. **Design tokens as code**: one `tokens.css` of CSS custom properties (colour for light + dark, type scale,
+   spacing, radii, shadows, motion). The app imports it as is: no values typed by hand from a picture.
+2. **Component specs**, not pictures: for each component its name, props, every state (default, hover, focus,
+   active, disabled, loading, live / stale / offline, error, empty), events it emits, keyboard behaviour and
+   accessible name/role. Reuse the same component everywhere; a new look needs a new prop, not a new component.
+3. **Screen specs** that bind to real data: for every value on a screen, the API field it comes from; for every
+   action, the API call it makes (from the list below). If a screen needs data the API does not have, list it
+   as an **API gap** instead of inventing it.
+4. **All states of every screen**: not connected, connecting, module not found, Sim adapter (programming
+   disabled), reading, writing, unsaved changes, write refused by the module, firmware too old, error.
+5. **Acceptance checks** per key flow, written as plain Playwright-style steps ("click X, expect Y") that can be
+   run against the simulator (CoffeeDingoSim) with the real firmware.
+6. **Realistic content**: use the attached screenshots' kind of data (7 modules, 8 outputs each, real signal
+   names, currents), never lorem ipsum, and always the worst case (32 CAN inputs, long names).
+
+**HTML prototypes** are fine as a way to show interaction, but only built from `tokens.css` and the specified
+components, and they are illustration, not the deliverable.
+
+**How it gets built** (plan for this): one **vertical slice** first (the block builder or the output screen, fully
+working against the Sim) before the rest goes hi-fi, so any gap shows up early. The new UI then grows **next to the
+old one** (its own route / toggle) screen by screen, with the old UI still there until the parity checklist is all
+ticked. No big-bang switch.
+
+**The existing API** (the data contract; group and rename for the user, never for the wire):
+- Connect: `GET /api/adapters`, `POST /api/connect`, `POST /api/disconnect`, `POST /api/usb/identify`, `GET /api/discover`, `GET /api/identify`
+- Modules: `GET/POST /api/devices`, `GET /api/definitions`, `POST /api/devices/{id}/rename|modify|remove|add-like`, `POST /api/devices/{id}/{read|readall|write|writeall|burn|sleep|wakeup|version|bootloader}`, `GET /api/devices/{id}/config-diff`
+- Outputs: `POST /api/devices/{id}/output`, `…/outputconfig`, `…/output/{n}/test`, `GET …/overloads` (trip log), `POST …/overloads/clear`
+- Signals & logic: `GET …/inputs`, `GET …/functions`, `POST …/function/{kind}/{n}`, `POST …/device-inputs`, `GET …/signals`, `GET …/broadcast-signals`, `POST …/link-remote`, `POST /api/probe`
+- Params: `POST …/readparam`, `POST …/writeparam`, `GET /api/config/schema`, `GET/POST /api/config`
+- Lua: `GET/POST …/lua`, `GET …/luaerror`
+- DBC / ECU: `GET …/dbc/signals`, `GET …/dbc/search`, `POST /api/devices/dbc-import`, `POST …/dbc/open`, `POST …/dbc/signal`
+- Templates: `POST /api/preview`, `POST /api/apply`, `POST /api/remove`, `GET/PUT /api/instances`
+- Cross-module: `GET /api/system/cross-module`, `POST /api/system/cross-module/deploy`, `GET /api/can-id-map`
+- Keypads: `POST /api/sdo/read|write|store`
+- Firmware: `POST …/flash`, `POST /api/flash/blank`, `GET /api/flash/status`, `GET /api/flash/dfu`, `POST …/flash-can`, `GET /api/flash-can/status`
+- Project: `GET /api/project`, `POST /api/project/save|open|new|upload`, `GET /api/project/download`, `POST …/apply-profile`
+- Logs: `GET /api/canlog`, `GET /api/syslog`, `…/export`, `POST /api/canlog/record/start|stop`, `GET …/record/status|download`, `GET /api/rawlog`
+- Sim replay: `POST /api/sim/load|play|pause|reset|loop|rate`, `GET /api/sim/status`
+- App: `GET /api/version`; the AI agent server is at `/mcp`.
+
+## Project rules (dingoElectronics CONTRIBUTING)
+
+The work follows https://github.com/corygrant/dingoElec/blob/main/CONTRIBUTING.md. For the design and the build:
+- **Small pieces**: plan the build as many small changes (one screen or one component each), each its own PR to a
+  `development` branch, never one giant change. Match the surrounding code style; no reformatting of untouched
+  files; no build output committed.
+- **No version bumps** in the work itself (the maintainer bumps versions at release).
+- **Firmware and app together**: anything that needs a new CAN message, parameter or enum (e.g. the Ignition
+  block) is a firmware change *and* an app change: two linked PRs, the DBC builder updated, and the matching page
+  in the dingoElec docs updated. Design those features so the screen also works (greyed out with "needs firmware
+  vX") on a module running older firmware.
+- **Docs**: every screen that changes what a user sees needs its user documentation updated. Deliver a short doc
+  outline per area (what it is for, how to do the common task, what can go wrong).
+- **Say what was tested**: each build step states whether it ran against the Sim or real hardware, on which
+  device and board revision.
+- **Safety first**: these modules switch real loads in vehicles. Every design that can switch an output, flash
+  firmware, change current limits or fault handling, or put modules to sleep must show **what happens when it
+  goes wrong** (link lost mid-flash, module refuses a value, a test left running, a wrong board's firmware), not
+  only the happy path. Destructive or load-switching actions are clearly marked, confirmable, and time-limited
+  where it makes sense.
+
 ## Deliverables
 
 **Feature parity from the first deliverable.** The very first version of the new design must cover
@@ -352,11 +424,39 @@ lives in the new design.
 5. Desktop-first (1280–1920 wide laptop), usable on a 13" laptop; a reduced tablet/phone layout for live
    monitoring and testing next to the car.
 6. A short rationale per major decision, tied to the user types and the research.
+7. **Build-ready package** (see *Implementation contract*): `tokens.css`; a component spec per component; a
+   screen spec per screen with its data bindings and API calls; the list of **API gaps**; acceptance checks per
+   key flow; a doc outline per area; and a proposed **build order** of small PRs, vertical slice first.
+
+## How to run this: agents, models, and what each delivers
+
+Run it as an orchestrated job, one phase at a time, with a review stop after each phase. Models: **Opus 5.5** where
+judgment and the big picture matter, **Sonnet 5.5** for focused design and build work, **Haiku 5.5** for fast
+mechanical checks.
+
+| Level | Role | Model | Delivers |
+|---|---|---|---|
+| Orchestrator | Lead designer: owns the brief, the IA, the parity checklist and every review | Opus 5.5 | Phase plan, IA map, parity checklist, the final review of each phase |
+| Subagent | Research: competitor screenshots and videos, beyond the summary here | Sonnet 5.5 | Annotated reference board per vendor ("steal / avoid") |
+| Subagent | Design system: tokens and components | Opus 5.5 | `tokens.css`, component specs, component sheet (light + dark) |
+| Subagent | Block builder (the hardest screen) | Opus 5.5 | Sentence view, canvas view, simulate, live states, specs and acceptance checks |
+| Subagent, one per flow | Flow designer: one key flow each (first car setup, add a function, why did it trip, pit-lane change, firmware, installer, expert, push-button start, flat battery) | Sonnet 5.5 | Low-fi wireframes, then hi-fi screens and screen specs for that flow |
+| Subagent | Parity and data checker | Sonnet 5.5 | Every inventory item mapped to a screen; every value bound to an API field; API gaps listed |
+| Sub-subagent (under each flow designer) | Accessibility check: contrast, focus order, names, colour-only signals | Haiku 5.5 | Pass/fail list per screen |
+| Sub-subagent (under each flow designer) | Token and component lint: only tokens and existing components used | Haiku 5.5 | List of hard-coded values or one-off components to fix |
+| Sub-subagent (under the parity checker) | Inventory diff: checklist vs. the inventory, line by line | Haiku 5.5 | Missing or duplicated items |
+| Subagent (build phase) | Implementer: one screen or component per PR, in the real app, against the Sim | Sonnet 5.5 (Opus 5.5 for the block builder) | A small PR with tests and the "tested on" note |
+| Sub-subagent (under the implementer) | Code review and silent-failure review of that PR | Sonnet 5.5 | Review findings fixed before the PR is opened |
+
+Order: research + design system → IA + parity checklist (**review**) → block builder low-fi + flows low-fi
+(**review**) → hi-fi (**review**) → parity / data / accessibility pass (**review**) → vertical slice built
+(**review**) → the remaining screens as small PRs.
 
 ## Constraints
 
-- Web app in the browser, served locally; must work offline. Built in Svelte; no heavy design dependencies
-  needed, but propose freely.
+- Web app in the browser, served locally; must work offline. Built in Svelte 5 on the existing REST API; no
+  heavy design dependencies needed, but propose freely (any library must be small, offline-capable and fit
+  Svelte).
 - Hardware limits are real: block counts per module are fixed by the firmware (show them, don't hide them).
 - Live data arrives at roughly 10–15 updates per second per module; design for it without flicker.
 - Several modules, one project file = one car.
