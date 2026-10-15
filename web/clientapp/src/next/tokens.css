@@ -1,0 +1,120 @@
+/* dingoConfig design tokens: "Garage Instrument".
+   EVERY colour in the app comes from this file. Components and screens use only var(--…) names;
+   re-colour the whole app by editing the two theme blocks below. Dark is the default theme. */
+
+:root,
+[data-theme="dark"] {
+  color-scheme: dark;
+  /* Surfaces */
+  --color-bg: #0f1113;            /* app background */
+  --color-surface: #16191c;       /* panels, cards */
+  --color-raised: #1d2125;        /* hover, inputs, nested */
+  --color-line: #2b3036;          /* borders, dividers */
+  --color-line-strong: #686d73;   /* 3:1 on every ground: control borders, ports, idle wires */
+  /* Text */
+  --color-text: #eceef0;
+  --color-text-muted: #a3acb6;    /* 4.5:1+ on surface */
+  --color-text-faint: #7d8792;    /* only >= 18px or decorative */
+  /* Brand / interaction */
+  --color-accent: #f2a93b;        /* sodium amber: primary actions, focus */
+  --color-accent-strong: #ffc266;
+  --color-on-accent: #1a1204;
+  --color-focus: #ffc266;
+  /* Live states: differ in lightness and shape, not hue alone */
+  --color-on: #5cc8ff;            /* output on / signal true (blue) */
+  --color-on-soft: #12384b;
+  --color-off: #656d76;           /* output off / false · 3:1 */
+  --color-warn: #ffd166;          /* warning, open load */
+  --color-warn-soft: #3d3110;
+  --color-fault: #ff7a45;         /* trip, fault, error (orange) */
+  --color-fault-soft: #45200f;
+  --color-ok: #8fe388;            /* saved, verified */
+  --color-stale: #6b7480;         /* no data / module not seen */
+  /* Chart series (Plot) */
+  --color-series-1: #5cc8ff;
+  --color-series-2: #f2a93b;
+  --color-series-3: #c792ea;
+  --color-series-4: #8fe388;
+  --color-series-5: #ff7a45;
+  --color-series-6: #e6e6e6;
+  /* Block builder families */
+  --color-block-input: #4fb3a9;
+  --color-block-logic: #c792ea;
+  --color-block-time: #f2a93b;
+  --color-block-output: #5cc8ff;
+  --color-block-code: #a3acb6;
+  /* Overlays */
+  --color-scrim: rgba(5, 6, 7, 0.6);
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-2: 0 8px 28px rgba(0, 0, 0, 0.45);
+}
+
+[data-theme="light"] {
+  color-scheme: light;
+  --color-bg: #f4f3ef;
+  --color-surface: #ffffff;
+  --color-raised: #f0efeb;
+  --color-line: #dcdad3;
+  --color-line-strong: #898780;
+  --color-text: #15181b;
+  --color-text-muted: #545c65;
+  --color-text-faint: #6f7781;
+  --color-accent: #a05a00;
+  --color-accent-strong: #8a4d00;
+  --color-on-accent: #ffffff;
+  --color-focus: #a05a00;
+  --color-on: #0a6aa1;
+  --color-on-soft: #dcefff;
+  --color-off: #828992;
+  --color-warn: #876800;
+  --color-warn-soft: #fff3cc;
+  --color-fault: #b8410c;
+  --color-fault-soft: #ffe4d6;
+  --color-ok: #2d7b31;
+  --color-stale: #83898f;
+  --color-series-1: #0a6aa1;
+  --color-series-2: #a05a00;
+  --color-series-3: #7b4bb3;
+  --color-series-4: #2d7b31;
+  --color-series-5: #b8410c;
+  --color-series-6: #3a3f45;
+  --color-block-input: #1e786f;
+  --color-block-logic: #7b4bb3;
+  --color-block-time: #a05a00;
+  --color-block-output: #0a6aa1;
+  --color-block-code: #545c65;
+  --color-scrim: rgba(20, 22, 24, 0.35);
+  --shadow-1: 0 1px 2px rgba(20, 22, 24, 0.12);
+  --shadow-2: 0 8px 28px rgba(20, 22, 24, 0.16);
+}
+
+:root {
+  /* Type: IBM Plex Sans for UI, IBM Plex Mono for values, IDs and pins */
+  --font-ui: "IBM Plex Sans", system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, monospace;
+  --text-xs: 12px;
+  --text-sm: 14px;
+  --text-md: 16px;   /* body */
+  --text-lg: 20px;
+  --text-xl: 26px;
+  --text-2xl: 34px;
+  --text-3xl: 48px;
+  /* Spacing (4 px grid) */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+  --space-7: 48px;
+  --space-8: 64px;
+  /* Shape */
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 16px;
+  --target-min: 44px;  /* touch / click target */
+  /* Motion */
+  --ease: cubic-bezier(0.2, 0.7, 0.2, 1);
+  --dur-fast: 120ms;
+  --dur-mid: 220ms;
+}

@@ -10,13 +10,17 @@
     "test": "node src/lib/ladder.test.js && node src/lib/table.test.js && node src/lib/trip.test.js && node src/lib/pinmap.test.js && node src/lib/businputs.test.js && node src/lib/templates.test.js && node src/lib/apply.test.js"
   },
   "devDependencies": {
+    "@playwright/test": "^1.64.1",
     "@sveltejs/vite-plugin-svelte": "^7.1.2",
     "svelte": "^5.55.5",
     "vite": "^8.0.12"
   },
   "dependencies": {
+    "@fontsource/ibm-plex-mono": "^5.3.0",
+    "@fontsource/ibm-plex-sans": "^5.3.0",
     "@microsoft/signalr": "^10.0.0",
     "@xyflow/svelte": "^1.6.0",
+    "bits-ui": "^2.19.5",
     "luaparse": "^0.3.1"
   }
 }

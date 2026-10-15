@@ -96,3 +96,7 @@ web/wwwroot/
 .DS_Store
 Thumbs.db
 .playwright-mcp/
+
+# e2e test output
+web/clientapp/e2e-results/
+web/clientapp/test-results/
