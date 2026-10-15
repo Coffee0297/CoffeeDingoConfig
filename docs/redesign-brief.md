@@ -428,7 +428,11 @@ lives in the new design.
 3. A small component library: block, port, wire, live value, status chip, sentence token, signal picker,
    output row, connector-pin label, notification bar, empty states.
 4. Light **and** dark themes (garage in daylight; night at the track), WCAG AA contrast, colour never the only
-   signal (on/off/fault also by shape or text).
+   signal (on/off/fault also by shape or text). **Visual identity is free hand** (only the dingoConfig name is
+   kept), but **every colour is a global token** in `tokens.css`: semantic names (`--color-surface`,
+   `--color-text`, `--color-accent`, `--color-on`, `--color-fault`, `--color-warn`, wire colours, chart series…)
+   defined once per theme. No colour value appears anywhere else in components or screens, so the whole look
+   can be re-coloured later by editing that one file.
 5. Desktop-first (1280–1920 wide laptop), usable on a 13" laptop; a reduced tablet/phone layout for live
    monitoring and testing next to the car.
 6. A short rationale per major decision, tied to the user types and the research.
@@ -471,3 +475,4 @@ Order: research + design system → IA + parity checklist (**review**) → block
 - Big touch/click targets for the garage; full keyboard control for the pit lane; a command palette (Ctrl+K)
   that can reach every action and setting.
 - Don't name any real vehicle model in examples; use generic cars.
+- **English only** (no translation layer needed).
