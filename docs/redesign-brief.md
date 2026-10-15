@@ -221,6 +221,8 @@ open PRs and branches). Design them as first-class parts of the new app, not bol
 - Three modes: **key switch** (ON position held, START momentary); **ignition switch + start button** (a
   maintained switch powers the ignition, the button only cranks, and only with the ignition on; crank while held
   or one press until running); or **start button only** (the button does ignition and start, as below).
+- **Switch off while cranking**: a setting on every output (keep running / switch off while cranking), so loads
+  like fans, blower, lights and audio drop out during cranking and come back afterwards, without extra blocks.
 - **Start button light** (optional output): lit when the ignition is on and the engine is not running (ready to
   start); dark with the engine running or the ignition off.
 - Start-button behaviour, like a modern car:
