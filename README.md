@@ -10,8 +10,9 @@ rebuilt as one self-contained app (lean ASP.NET .NET 10 backend + Svelte SPA in 
 module on the bus, the wiring between them, Lua programs, firmware updates over CAN, and an MCP server so an
 AI agent can do all of it too.
 
-> **Firmware:** built for [CoffeeDingoFW](https://github.com/Coffee0297/CoffeeDingoFW). v0.9.0 expects
-> **≥ 5.5.108** (PWM inputs, confirmed writes; latest v5.5.109); older builds show a "firmware needs updating" notice and
+> **Firmware:** built for [CoffeeDingoFW](https://github.com/Coffee0297/CoffeeDingoFW). It expects
+> **≥ 5.5.108** (PWM inputs, confirmed writes), **≥ 5.5.110** for a module alone on USB on the bench (latest
+> v5.5.111); older builds show a "firmware needs updating" notice and
 > hide what they can't do. Want to try it without hardware? Point it at
 > [CoffeeDingoSim](https://github.com/Coffee0297/CoffeeDingoSim), which runs the real firmware on a virtual bus.
 
@@ -107,8 +108,8 @@ of it per board: `.srec` (CAN), `.bin` (USB), `.hex` / `.elf`, and the OpenBLT b
 
 - A module running CoffeeDingoFW with the CAN bootloader: **⬆ Flash over CAN** on its System card, pick the
   `.srec`. No USB, the module stays in the car.
-- Otherwise **⬆ Flash over USB** (`.bin`), or **⬆ Flash new module** for a blank board held in DFU (BOOT0 +
-  reset).
+- Otherwise **⬆ Flash over USB** (`.bin`), or **⬆ Flash new module** for a board on USB that isn't in the
+  project: one running dingo firmware is put into DFU for you, a blank one needs BOOT0 + reset.
 - A batch of blank boards, or a CANBoard's first flash (SWD only, it has no USB):
   [`flash-dingo.ps1`](https://github.com/Coffee0297/CoffeeDingoFW#flashing-boards-with-flash-dingops1) in the
   firmware repo. It downloads the release, installs the bootloader + firmware over SWD or the PDM's USB-C,
@@ -249,7 +250,10 @@ Per-module sleep behaviour, written and burned to the device:
 Each module's System card offers **⬆ Flash over CAN** when it runs the OpenBLT CAN bootloader: the app
 restarts it into the bootloader and writes the `.srec` over the bus (XCP), with no USB connection. Otherwise
 **⬆ Flash over USB** commands it into DFU and writes the `.bin` with dfu-util, and **⬆ Flash new module**
-programs a blank board held in DFU. Both show a live progress bar; BOOT0 recovery is always available.
+does the same for whatever module is on USB (asked for its id right then), or a blank board held in DFU. The
+`.bin` goes where it was built for: a bootloader-relocated app to `0x08004000`, so the OpenBLT bootloader
+stays, a full image to `0x08000000`. If the module ignores the DFU command the flash stops at once and says
+which id it answered as. Both show a live progress bar; BOOT0 recovery is always available.
 
 ### Keypads (Blink Marine / Grayhill)
 Configure keypad buttons (action, LED colour, what the LED mirrors) and the keypad's own persistent
