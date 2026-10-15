@@ -532,6 +532,66 @@ Order: research + design system → IA + parity checklist (**review**) → block
 (**review**) → hi-fi (**review**) → parity / data / accessibility pass (**review**) → vertical slice built
 (**review**) → the remaining screens as small PRs.
 
+## Results of the parity, data and accessibility pass
+
+The pass checked the canvas against this brief and the real backend. Full detail is on the canvas page
+*Pass · Parity, data, accessibility*; what the build needs is here.
+
+**Parity.** 113 inventory items: 50 drawn in hi-fi, 30 only in low-fi, 33 only named, 0 missing. Still to draw in
+hi-fi before the build: the Expert drawer (Lua, CAN & DBC map, parameters, AI agent, Sim replay), Plot / CAN log /
+system log, Apply status + Project menu (Save / Save as / Recent, unsaved warning, write / burn / CRC result,
+refused value), the Connect panel with every adapter and bitrate, Add module / CAN-ID clash fix / re-address /
+deploy to USB, input screens other than rotary (digital incl. PWM, threshold, linear sensor, ladder designer,
+CAN / DBC), sleep and wake settings, keypads, the builder's sentence view, slots meter, incomplete state and fault
+injection, output roles and the bench-test running state.
+
+**Data: API gaps.** Every value and action on the hi-fi screens was traced to `web/Api/LiveApi.cs` and the models.
+These are missing (S / M / L = size); each is its own small PR, firmware ones as linked firmware + app PRs:
+
+| Id | Needed | Proposal | Size |
+|---|---|---|---|
+| G1 | Unsaved-changes flag for the project, and a way to know the file is saved | Server counts mutating calls since the last save/open/new; add dirty:bool (and optional modifiedAt) to GET /api/project. Clear on /project/save/open/new/upload. | S |
+| G2 | Count of changes not sent to the car and a staged "Apply to car" model | Today each edit writes live at once (or stays record-only offline). Either add a frontend draft layer that queues the existing POSTs until Apply, or add GET /api/devices/{id}/pending = diff of the project record against the last read/written module config (reuse ConfigDiffEntry). Pick one; the screens assume "nothing reaches the car until Apply". | M |
+| G3 | Per-module "written but not burned" status (sent, lost at power-off vs stored on module) | Add storedOnModule:bool to DeviceDto: set false by any successful write, true by a confirmed burn or a Read whose CRC matches the burned image. | S |
+| G4 | Persist client state with the project: car-map positions, canvas node positions, template/function instances, groups, dismissed suggestions, first-run flag, signal choices | Today this lives in localStorage and is only added to the browser-download copy (dingoConfigClient). /api/project/save and /open ignore it and /api/templates/instances is server RAM. Let /project/save accept and /project/open return a client blob, and persist the instances list in it. | M |
+| G5 | Server-side refusal of programming actions under the Sim adapter | Return 400 "Sim adapter: programming disabled" from write, burn, flash, deploy and output test when the active adapter is Sim, and expose programmingAllowed:bool on GET /api/adapters. Today only the client blocks it. | S |
+| G6 | Trip time, history window, and non-trip events (warning, open load) | The on-device log has no time. App side: poll overloads on connect and store events with a first-seen timestamp (GET /api/trips aggregated across modules, kept in the project). Firmware side (S): add an uptime/ticks stamp per event so ordering and age are exact. Open-load and warning events need a log entry type in firmware. | M |
+| G7 | Firmware release catalog, download/offline cache, release notes and a batch pre-flight check | New GET /api/firmware/releases (bundled or fetched and cached, with per-board images and notes) and POST /api/firmware/check (image -> board, version, compatible modules). Today the operator picks .srec files by hand and only the flash call checks the board marker. | M |
+| G8 | Firmware version in module discovery results | GET /api/identify already gets a Version reply per candidate; include version (and bootloader flag) in found[]. | S |
+| G9 | Detect a module that is sitting in its bootloader (after a failed flash) | Probe OpenBLT (XCP connect) on the known base ids and report inBootloader:true in devices[]/identify; or have the bootloader announce itself. Lets "run it again from here" actually find the module. | M |
+| G10 | Adapter auto-reconnect and remembered connection | Backend remembers the last adapter/port/bitrate, reconnects when the link drops, and exposes state (connected/reconnecting) on GET /api/adapters and telemetry. Today the port is remembered in localStorage and nothing reconnects. | M |
+| G11 | WiFi-CAN bridge discovery | New adapter kind plus GET /api/adapters/discover (mDNS or UDP) returning name/address; remember the last one. SLCAN over TCP exists, discovery does not. | M |
+| G12 | Identify a module (blink its LED) | New protocol command (MessageCommand) and POST /api/devices/{id}/identify. Firmware change plus API. | S |
+| G13 | Ignition and start-button block: modes, crank rules and limits, output roles, switch-off-while-cranking per output, start-button light, master/follower, live ignition state and dash state | New firmware function (params + status frame bits) and API: ignition config under GET /devices/{id}/functions, output role and offWhileCranking fields on OutputDto/OutputConfigReq, ignition:{state, dashState, master, masterLinkOk} on DeviceDto. Greyed with "needs firmware" below the minimum version. Two linked PRs (firmware + app) and DBC update. | L |
+| G14 | Sleep status, countdown, last wake reason, quiet-bus sequencing, asleep vs absent | Firmware reports wakeReason (can/input N/usb/timer), wakeCount and a sleep countdown in a status or on-request frame; module announces "going to sleep" before it goes quiet. DeviceDto gets asleep:bool, lastWake, sleepCountdownMs. CANBoard needs the same (it has no sleep state today). | M |
+| G15 | Math block and CAN Message block (whole user frame while a signal is true) | Two new firmware function kinds with slots in /definitions, entries in FunctionMap (kind math / canmsg) and arrays in GET /functions. CanOutput today sends one signal (id, startBit, bitLength, factor, interval) and cannot send fixed bytes. | L |
+| G16 | Function-block / helper-block groups: record, membership, port mapping, settings, custom flag with original snapshot, bundle ports, category, suggestion matching, recipe catalog | Metadata only, no firmware. (1) Extend the instances record (GET/PUT /api/templates/instances accepts any JSON array today) with kind function/helper, recipe key, parent, members [{guid,kind,number}], ports map, settings, original snapshot, bundles, group/category, custom:bool, dismissed. (2) Make instances survive restart and ride in the project file (G4). (3) Recipe catalog (FC7) in templates.js or blocks.js; the server runs templates.js in Jint, so new recipes need a rebuild. (4) Suggestion matcher in the frontend over /functions and the var-index graph (subgraph match, one block in at most one group). (5) Replace/undo = record write plus normal function POSTs; /api/templates/remove would delete the members, so a dissolve action must not use it. The block-name prefix trick used by the sleep designer ("Sleep - ...") works as a fallback but names are project-only and are lost if the module is read into a fresh project. | L |
+| G17 | Learn a switch from the CAN bus (timestamped frame history) | GET /api/canlog gives only last data and a count per id and GET /api/rawlog has no timestamps. Add GET /api/canlog/changes?since= (id, byte/bit change events with ms times) or use record start/stop plus the CSV; the "pick the bit that followed the switch" logic stays in the frontend. | S |
+| G18 | Module over-temperature threshold (and other safe limits) for tile bars | Expose tempLimitC (firmware constant) in /api/definitions per board, or fix a documented client constant. | S |
+| G19 | CAN input: value to use after a timeout (safe default) | CanInput has timeoutEnabled and timeout but no value on timeout. Add timeoutValue (firmware param + CanInput.cs + UI). | S |
+| G20 | Recent projects with modified time and car name | GET /api/project returns files as names only. Return [{name, modifiedAt, moduleCount}]. | S |
+| G21 | Board facts in /definitions: connector pin map, driver chip name, board revision | Pin labels (pinmap.js) and the "BTS7008" text are static client data and the firmware reports only BOARD_ID 0/1/2. Move them into pdm-definitions.json so there is one source; add a revision once the firmware can report one. | S |
+
+Two board details were corrected to match the backend: the trip waveform is the module's real log (−10 s … +3 s,
+40 ms points, 0.5 A steps), and NOT is only available on Combine inputs (a NOT anywhere else costs a Combine).
+
+**Charts.** All graphs are **line graphs** (current, trip waveform, sparklines, Plot), drawn as SVG lines, with
+an area tint for current and the over-limit part of the line in the warn / fault colour. Big charts carry
+`role="img"` and a sentence that states the numbers; the Plot screen has a "Show as table" toggle.
+
+**Accessibility rules for the build** (WCAG 2.2 AA in both themes; `tokens.css` was adjusted so every text and
+control colour passes, checked by script and by axe-core on every hi-fi board):
+- Every control is a real `<button>` / input / Bits UI part: tabs = Tabs, AND / OR / NOR and similar = ToggleGroup
+  (radio semantics), status readouts = `role="status"`. Visible `:focus-visible` ring (3 px, `--color-focus`).
+- Canvas nodes (Svelte Flow) are focusable with an aria-label of name + state; Tab walks blocks, Enter opens the
+  inspector, Delete removes (Undo), arrows move; ports: Enter starts a wire, Tab to the target, Enter connects,
+  Esc cancels. Wires are also listed in the inspector, never only drawn.
+- Colour is never the only signal: on / off / fault / stale = colour + shape + text. `--color-off` and
+  `--color-line-strong` are for dots, borders and wires (3:1), never text; `--color-text-faint` only at 18 px+.
+- Smallest text 11 px (tags, pills). Targets 44 px next to the car. Live values update without aria-live; only
+  trips, faults and refused writes are announced. Blinking never faster than 3 per second; reduced motion shows a
+  steady "BLINKING" label.
+
 ## Constraints
 
 - Web app in the browser, served locally; must work offline. Built in **Svelte 5** on the existing REST API,
