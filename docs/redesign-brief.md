@@ -256,7 +256,51 @@ and the last wake reason per module so a car that drains its battery can be diag
   reverse/rear fog; turn signals + hazards; interior light with several doors; horn; wipers; blower speeds or
   PWM blower; ECU power with hold-on after ignition off; fuel pump from ECU or prime + run; coolant fan from ECU,
   thermo switch, A/C or temperature with on/off points and run-on). They must stay **generic, not one car's
-  wiring** (the upstream maintainer's concern): show them as transparent, editable block groups.
+  wiring** (the upstream maintainer's concern): show them as transparent, editable block groups. See
+  **Function blocks and helper blocks** below for the set.
+
+**Function blocks and helper blocks** (two levels above the plain blocks)
+- A **function block** does one job on the car (Lights, Wipers…). A **helper block** is a small reusable
+  piece (US rear lamp, Keep on after…). Function blocks are built from helper blocks, and helpers from plain
+  blocks. Both are block groups the firmware runs as ordinary blocks: no new firmware needed unless a helper
+  says so.
+- Every port is **generic and mappable**: any switch, CAN signal, other block or output can connect, on any
+  module. The block never assumes one car's wiring; car-specific choices are **settings**.
+- **Open inside**: any function or helper block expands to the blocks it is made of, editable. Editing the
+  inside turns it into a custom group (clearly marked, can be reset to the original).
+- New port type **bundle** (◆, thick wire): several on/off signals in one wire, e.g. *Turn signals* = left
+  active, right active, left lamp, right lamp, hazard. Keeps canvases tidy; can be split into its signals.
+- Function blocks look different from plain blocks (accent border, "FUNCTION" tag) and show the slots they use
+  in the budget meter.
+
+| Function block | In | Out | Settings |
+|---|---|---|---|
+| **Lights** | Park, Headlights, High beam, Flash to pass, Ignition | Position, Low beam, High beam, DRL | High beam replaces low (H4) or adds to it; only with ignition; DRL none / own lamp / dimmed position |
+| **Indicators & hazard** | Left, Right, Hazard | Left lamps, Right lamps, Turn signals ◆ | On/off time; shared clock master + backup modules; lane change (3 flashes on a tap) |
+| **Brake lights** | Brake, Turn signals ◆ | Left rear, Right rear, Centre / 3rd | Rear lamps separate, or combined stop/turn (US); centre lamp follows the pedal |
+| **Reverse** | Reverse, Ignition | Lamps, Camera | Off delay; only with ignition |
+| **Wipers & washer** | INT, Low, High, Washer, Ignition, Park switch, INT dial (number) | Run, Fast, Motor supply, Washer pump | Park type: self-park / relays / concealed park (hold RUN to the end of the sweep); INT time or from a dial; after-wash time; pump delay |
+| **Courtesy light** | Doors (any number), Ignition, Unlock | Light, Dim level (number) | Hold after close; off at once with ignition; battery saver time |
+| **Accessory power** (dash computer, radio) | Wake, Ignition | Power, Shutdown pulse, Wake pulse | Hold time; shutdown pulse length and when; wake pulse when back after a set time |
+| **Car sleep** | In use (add any number), Force awake | Sleep now, In use | Wait after last use; quiet-bus time; which modules follow. Sends one sleep frame to every module |
+
+| Helper block | In | Out | Settings |
+|---|---|---|---|
+| **US rear lamp** | Brake, Turn active, Turn lamp | Lamp, Brake only, Turn only | While indicating: blink and ignore brake (US) / blink over brake; tail dims instead of off |
+| **Shared flasher** | Run | Blink, Phase (number) | On/off time; master module + backups in order (all modules blink in step) |
+| **Switch positions** | Position (number) | One on/off per position (up to 16) | Name per position; "between detents" is its own position |
+| **Left / right pair** | On, Left only, Right only | Left, Right, Either failed | Mirror both, or per side |
+| **Keep on after** | In, Cancel | Out, Time left (number) | Hold time; restart while held |
+| **Engine running** | RPM (number), Charge lamp, Oil pressure | Running, Cranking | Running above N rpm with hysteresis; cranking = starter on and below N |
+| **Ready to start** | Ignition, In park / neutral, Clutch, Running | Ready | Needs park or clutch (drives the start button light) |
+| **Ignition load** | Ignition, Cranking, Request | On | Off while cranking; delay on (stagger inrush) |
+| **Threshold** | Value (number) | Above, Below | On point, off point; minimum time in state |
+| **Toggle / latch** | Press, Set, Reset | Out | Toggle or set/reset; remember through sleep |
+| **Pulse** | In | Rising, Falling | Pulse length |
+| **Signal from CAN** | – | Value (number), Fresh | ID, start bit, length, scale; timeout → fallback value |
+
+- Design the **block sheet** (every function and helper block: ports, settings, inside, an example mapping) and
+  a **whole-car canvas** built only from function blocks, showing that one car's 17 functions fit on one screen.
 
 **Learn a switch from the CAN bus**: a record button next to any input. The app listens while the user works
 the switch and picks the bit that followed it, ignoring counters and noisy bits. Huge beginner win: no CAN
