@@ -1,9 +1,9 @@
 <script>
-  import { Page, PageHeader, Empty } from '../../ui/index.js'
-  let props = $props()
+  // Route: hardware/module/<guid>/output/<n>. The page is keyed so every output starts with fresh state.
+  import OutputPage from './parts/OutputPage.svelte'
+  let { guid, n } = $props()
 </script>
 
-<Page>
-  <PageHeader title="Output" />
-  <Empty title="This screen is being built" text="It lands in the redesign one screen at a time." />
-</Page>
+{#key guid + ':' + n}
+  <OutputPage {guid} {n} />
+{/key}

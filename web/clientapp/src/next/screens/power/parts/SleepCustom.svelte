@@ -1,0 +1,101 @@
+<script>
+  // "Custom" card: per-module sleep input and mute-transmit input, what counts as in use, force awake.
+  import { Card, Chip, Select, Button, Banner } from '../../../ui/index.js'
+  import { live, api } from '../../../lib/live.svelte.js'
+  import { canSleep, writeDeviceInput } from './sleepLogic.js'
+  import Confirm from './Confirm.svelte'
+
+  const mods = $derived(live.devices.filter((d) => /pdm|canboard/i.test(d.type ?? '')))
+  let selGuid = $state('')
+  $effect(() => { if (!selGuid || !mods.some((d) => d.guid === selGuid)) selGuid = mods[0]?.guid ?? '' })
+  const d = $derived(mods.find((x) => x.guid === selGuid) ?? null)
+
+  let signals = $state([]), sigState = $state('loading')
+  $effect(() => {
+    const g = selGuid
+    if (!g) return
+    sigState = 'loading'
+    api.inputs(g, 'bool').then((v) => { if (g === selGuid) { signals = (v ?? []).filter((x) => x.kind !== 'sys'); sigState = 'ok' } })
+      .catch(() => { if (g === selGuid) sigState = 'error' })
+  })
+  const sigItems = (cur) => {
+    const items = [{ value: '0', label: 'No driver' }, ...signals.map((s) => ({ value: String(s.index), label: s.name }))]
+    if (cur && !items.some((i) => i.value === String(cur))) items.push({ value: String(cur), label: `Signal #${cur}` })
+    return items
+  }
+  const modItems = $derived(mods.map((x) => ({ value: x.guid, label: x.name })))
+  const forceItems = $derived(sigItems(d?.forceSleepInput))
+  const muteItems = $derived(sigItems(d?.muteTxInput))
+
+  let pending = $state(null), confirmOpen = $state(false), busy = $state(false), status = $state('')
+  const labelOf = (items, v) => items.find((i) => i.value === String(v))?.label ?? `#${v}`
+  function pick(kind, value) {
+    const n = Number(value)
+    const cur = kind === 'force' ? d.forceSleepInput : d.muteTxInput
+    if (n === cur) return
+    if (n === 0) { commit({ kind, n }); return }
+    pending = { kind, n }; confirmOpen = true
+  }
+  async function commit(p) {
+    busy = true; status = ''
+    const ok = await writeDeviceInput(d, p.kind === 'force' ? { forceSleepInput: p.n } : { muteTxInput: p.n })
+    busy = false; confirmOpen = false
+    status = ok ? `${d.name}: ${p.kind === 'force' ? 'sleep input' : 'mute-transmit input'} ${p.n ? 'set to “' + labelOf(p.kind === 'force' ? forceItems : muteItems, p.n) + '”' : 'cleared'}.` : ''
+  }
+  const usb = $derived(/usb/i.test(live.adapter ?? ''))
+</script>
+
+<Card title="Custom" aria-label="Custom sleep settings">
+  {#snippet tag()}<Chip tone="muted">CUSTOM</Chip>{/snippet}
+  {#if !mods.length}
+    <p class="muted">No modules in the project.</p>
+  {:else}
+    <div class="sel"><Select label="Module" items={modItems} bind:value={selGuid} data-testid="sleep-custom-module" /></div>
+    {#if d && !d.connected}<Banner tone="warn" title="This module is not on the bus">Changes are saved in the project and sent when it comes back.</Banner>{/if}
+    <div class="grid">
+      <div class="f">
+        <Select label="Sleep input: sleep as soon as this is true" items={forceItems} value={String(d?.forceSleepInput ?? 0)} disabled={!d || !canSleep(d) || busy || sigState !== 'ok'} onchange={(v) => pick('force', v)} data-testid="sleep-input" />
+        {#if d && !canSleep(d)}<span class="muted note">This board's firmware has no sleep, so it has no sleep input.</span>{/if}
+        <Button size="sm" disabled title="Not available yet: the backend cannot give a timestamped frame history (gap G17)">Learn a switch</Button>
+      </div>
+      <div class="f">
+        <Select label="Mute-transmit input: stop talking on the bus while this is true" items={muteItems} value={String(d?.muteTxInput ?? 0)} disabled={!d || busy || sigState !== 'ok'} onchange={(v) => pick('mute', v)} data-testid="mute-input" />
+        <span class="muted note">Config replies and your own CAN outputs are not muted.</span>
+        <Button size="sm" disabled title="Not available yet: the backend cannot give a timestamped frame history (gap G17)">Learn a switch</Button>
+      </div>
+    </div>
+    {#if sigState === 'error'}<p class="err" role="alert">■ Could not read this module's signal list.</p>{/if}
+    {#if status}<p class="muted" role="status" data-testid="sleep-custom-status">{status}</p>{/if}
+
+    <div class="blk">
+      <strong>What counts as in use</strong>
+      <p class="muted">A module counts as in use while an output is on, USB is connected, or CAN traffic is seen.</p>
+      <p class="muted note">Not available yet: a list of your own "in use" signals needs the function groups record (gap G16).</p>
+    </div>
+    <div class="blk">
+      <strong>Force awake</strong>
+      <p class="muted" data-testid="force-awake">{usb ? 'dingoConfig is connected over USB, so the module does not sleep while you work on it.' : 'dingoConfig is not connected over USB. Modules can sleep while you work, then stop answering.'}</p>
+    </div>
+  {/if}
+</Card>
+
+<Confirm bind:open={confirmOpen} title={pending?.kind === 'force' ? 'Sleep on this signal?' : 'Mute the bus on this signal?'} {busy}
+  confirmLabel={pending?.kind === 'force' ? 'Use as sleep input' : 'Use as mute input'}
+  consequence={pending?.kind === 'force' ? 'The module can sleep with outputs on and only wakes from the ticked wake sources or USB. Set it back to No driver to undo.' : 'The module goes quiet on the bus and looks unplugged until the signal ends. Set it back to No driver to undo.'}
+  onconfirm={() => commit(pending)}>
+  {#if pending && d}
+    <p>{pending.kind === 'force'
+      ? `While “${labelOf(forceItems, pending.n)}” is true, ${d.name} goes to sleep straight away, even with outputs on or a busy bus.`
+      : `While “${labelOf(muteItems, pending.n)}” is true, ${d.name} stops sending its cyclic frames.`}</p>
+  {/if}
+</Confirm>
+
+<style>
+  .sel { max-width: 320px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: var(--space-4); }
+  .f { display: flex; flex-direction: column; gap: var(--space-2); align-items: flex-start; }
+  .f :global(.f) { width: 100%; }
+  .note { font-size: var(--text-xs); }
+  .blk { display: flex; flex-direction: column; gap: 4px; padding-top: var(--space-2); border-top: 1px solid var(--color-line); }
+  .err { color: var(--color-fault); font-weight: 600; }
+</style>

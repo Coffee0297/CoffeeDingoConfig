@@ -1,0 +1,200 @@
+// Apply panel (apply pill): which modules differ, Read, Apply to car (write), Store on modules (burn).
+// Non-exclusive tests write only PDM-02, and never burn.
+import { test, expect } from '@playwright/test'
+
+// A write or read can be lost while another run is hammering the shared bus: try those again.
+test.describe.configure({ retries: 1 })
+import { open, watchErrors } from './helpers.js'
+import { apiJson, devices, deviceByName, waitFor } from './api.js'
+import { restoreConnection, ready } from './a-util.js'
+
+const panel = (page) => page.getByRole('dialog', { name: 'Apply to car' })
+async function openPanel(page) {
+  await page.getByTestId('apply-pill').click()
+  await expect(panel(page)).toBeVisible()
+}
+/** Make a module's controls visible: pending ones are cards, the others sit in the folded "no changes" list. */
+async function reveal(page, name) {
+  if (await panel(page).getByTestId('apply-' + name).count()) return panel(page).getByTestId('apply-' + name)
+  await panel(page).getByTestId('apply-quiet').click()
+  return panel(page).getByTestId('apply-quiet-' + name)
+}
+
+test('the pill and the panel list exactly the connected modules that differ', async ({ page }) => {
+  const errors = watchErrors(page)
+  await open(page, 'hardware')
+  const devs = await devices()
+  const pending = devs.filter((d) => d.connected && d.configMismatch)
+  const pill = page.getByTestId('apply-pill')
+  if (pending.length) await expect(pill).toContainText(`${pending.length} module${pending.length === 1 ? '' : 's'} differ`)
+  else await expect(pill).toContainText('Nothing to apply')
+  await openPanel(page)
+  for (const d of pending) await expect(panel(page).getByTestId('apply-' + d.name)).toBeVisible()
+  const quiet = devs.filter((d) => d.connected && !d.configMismatch)
+  if (quiet.length) await expect(panel(page).getByTestId('apply-quiet')).toContainText(`${quiet.length} more module`)
+  else await expect(panel(page).getByTestId('apply-quiet')).toHaveCount(0)
+  if (pending.length) await expect(panel(page).getByText(new RegExp(`${pending.length} modules? (may differ|is|are)`)).first()).toBeVisible()
+  else await expect(panel(page).getByText('Nothing to apply.')).toBeVisible()
+  // the three steps are named
+  for (const s of ['Apply to car', 'Store on modules', 'Check']) await expect(panel(page).getByRole('list', { name: 'Steps' })).toContainText(s)
+  expect(errors).toEqual([])
+})
+
+test('a module that differs shows its Read-found differences or says it has not been compared', async ({ page }) => {
+  await open(page, 'hardware')
+  const pending = (await devices()).filter((d) => d.connected && d.configMismatch)
+  test.skip(!pending.length, 'no module is flagged as differing right now')
+  await openPanel(page)
+  for (const d of pending) {
+    const card = panel(page).getByTestId('apply-' + d.name)
+    await expect(card).toContainText('Not sent')
+    if (d.configDiffCount > 0) {
+      const diff = await apiJson('GET', `/api/devices/${d.guid}/config-diff`)
+      await expect(card.locator('.df')).toHaveCount(Math.min(6, diff.length))
+    } else {
+      await expect(card).toContainText('Not compared with the module yet.')
+    }
+    await expect(card).toContainText('○ Written')
+    await expect(card).toContainText('○ Stored on module')
+    await expect(card).toContainText('○ Not checked yet')
+  }
+})
+
+test('Apply asks first, names the consequence, and Cancel sends nothing', async ({ page }) => {
+  await ready('PDM-02')
+  const errors = watchErrors(page)
+  await open(page, 'hardware')
+  await openPanel(page)
+  const row = await reveal(page, 'PDM-02')
+  await row.getByRole('button', { name: 'Apply PDM-02' }).click()
+  const ask = panel(page).getByTestId('apply-confirm')
+  await expect(ask).toContainText("Write the project's settings to 1 module now?")
+  await expect(ask).toContainText('lost at power-off until you store them')
+  await ask.getByRole('button', { name: 'Cancel' }).click()
+  await expect(ask).toHaveCount(0)
+  // Store asks too, with a different warning
+  await row.getByRole('button', { name: 'Store PDM-02' }).click()
+  await expect(ask).toContainText("Store the current settings permanently in the flash of 1 module?")
+  await ask.getByRole('button', { name: 'Cancel' }).click()
+  await expect(panel(page).getByTestId('apply-PDM-02').getByText('Written, not stored')).toHaveCount(0)
+  expect(errors).toEqual([])
+})
+
+test('Apply to car writes PDM-02 and then offers Store (nothing is stored)', async ({ page }) => {
+  await ready('PDM-02')
+  const errors = watchErrors(page)
+  await open(page, 'hardware')
+  await openPanel(page)
+  const row = await reveal(page, 'PDM-02')
+  await row.getByRole('button', { name: 'Apply PDM-02' }).click()
+  await panel(page).getByTestId('apply-confirm-yes').click()
+  const card = panel(page).getByTestId('apply-PDM-02')
+  await expect(card).toContainText(/Written, not stored|Refused|Failed/, { timeout: 60_000 })
+  if ((await card.innerText()).includes('Failed')) {
+    // the Sim sometimes never confirms a write: the panel must say so plainly and keep the module out of the "written" state
+    await expect(card).toContainText("The module didn't confirm the write")
+    await expect(card).toContainText('○ Written')
+    await expect(panel(page).getByTestId('apply-store')).toHaveCount(0)
+    return
+  }
+  await expect(card).toContainText('Written, not stored')
+  await expect(card).toContainText('✓ Written')
+  await expect(card).toContainText('○ Stored on module')
+  await expect(panel(page).getByText('PDM-02 loses these changes at power-off.')).toBeVisible()
+  // the second step is now the one to take
+  await expect(panel(page).getByTestId('apply-store')).toContainText('Store on modules (1)')
+  await expect(panel(page).getByRole('list', { name: 'Steps' }).locator('li').first()).toHaveClass(/done/)
+  expect(errors).toEqual([])
+})
+
+test('Read from one module reads it and reports whether it matches the project', async ({ page }) => {
+  await ready('PDM-02')
+  const errors = watchErrors(page)
+  await open(page, 'hardware')
+  await openPanel(page)
+  const row = await reveal(page, 'PDM-02')
+  await row.getByRole('button', { name: 'Read PDM-02' }).click()
+  await expect(panel(page).getByText(/Read 1 module\./)).toBeVisible({ timeout: 40_000 })
+  await waitFor(async () => !(await deviceByName('PDM-02')).configMismatch, 15_000, 'read cleared the flag')
+  expect(errors).toEqual([])
+})
+
+test('Done closes the panel when nothing differs', async ({ page }) => {
+  await open(page, 'hardware')
+  const pending = (await devices()).filter((d) => d.connected && d.configMismatch)
+  test.skip(pending.length !== 0, 'reading every module would change other modules; this runs in the exclusive test')
+  await openPanel(page)
+  await expect(panel(page).getByText('Nothing to apply.')).toBeVisible()
+  await panel(page).getByRole('button', { name: 'Done' }).click()
+  await expect(page.getByRole('dialog')).toHaveCount(0)
+})
+
+test('Close and Escape close the panel', async ({ page }) => {
+  await open(page, 'hardware')
+  await openPanel(page)
+  await panel(page).getByRole('button', { name: 'Close' }).click()
+  await expect(page.getByRole('dialog')).toHaveCount(0)
+  await openPanel(page)
+  await page.keyboard.press('Escape')
+  await expect(page.getByRole('dialog')).toHaveCount(0)
+})
+
+// ----- whole-bus actions and burning: run alone ------------------------------------------------------
+
+test('Apply to car for every module, then Store on modules, then the read-back check @exclusive', async ({ page }) => {
+  const errors = watchErrors(page)
+  await open(page, 'hardware')
+  await openPanel(page)
+  const pending = (await devices()).filter((d) => d.connected && d.configMismatch)
+  test.skip(!pending.length, 'nothing differs, so there is no batch to apply')
+  await panel(page).getByTestId('apply-go').click()
+  await panel(page).getByTestId('apply-confirm-yes').click()
+  await expect(panel(page).getByTestId('apply-store').or(panel(page).getByRole('button', { name: 'Done' }))).toBeVisible({ timeout: 180_000 })
+  for (const d of pending) await expect(panel(page).getByTestId('apply-' + d.name)).toContainText(/Written, not stored|Refused|Failed/)
+  // Store the ones that were written
+  if (await panel(page).getByTestId('apply-store').count()) {
+    await panel(page).getByTestId('apply-store').click()
+    await panel(page).getByTestId('apply-confirm-yes').click()
+    await expect(panel(page).getByText(/stored and read back|Written, not stored/).first()).toBeVisible({ timeout: 240_000 })
+    for (const d of pending) {
+      const card = panel(page).getByTestId('apply-' + d.name)
+      if ((await card.innerText()).includes('Refused')) continue
+      await expect(card).toContainText('Stored', { timeout: 120_000 })
+      await expect(card).toContainText('Read back')
+    }
+  }
+  expect(errors).toEqual([])
+})
+
+test('Read from modules reads every listed module @exclusive', async ({ page }) => {
+  const errors = watchErrors(page)
+  await open(page, 'hardware')
+  await openPanel(page)
+  await panel(page).getByTestId('apply-read').click()
+  await expect(panel(page).getByText(/Read \d+ module/)).toBeVisible({ timeout: 180_000 })
+  await waitFor(async () => (await devices()).every((d) => !d.connected || !d.configMismatch), 30_000, 'every module compared')
+  expect(errors).toEqual([])
+})
+
+test('Stop after this module leaves the rest unchanged @exclusive', async ({ page }) => {
+  await open(page, 'hardware')
+  await openPanel(page)
+  const pending = (await devices()).filter((d) => d.connected && d.configMismatch)
+  test.skip(pending.length < 2, 'needs at least two modules that differ')
+  await panel(page).getByTestId('apply-go').click()
+  await panel(page).getByTestId('apply-confirm-yes').click()
+  await panel(page).getByTestId('apply-stop').click()
+  await expect(panel(page).getByText('Stopped. Modules not reached yet are unchanged.')).toBeVisible({ timeout: 120_000 })
+})
+
+test('With no connection the panel says programming is off and disables Apply @exclusive', async ({ page }) => {
+  await open(page, 'hardware')
+  try {
+    await apiJson('POST', '/api/disconnect')
+    await expect(page.getByTestId('connection-pill')).toContainText('Not connected', { timeout: 15_000 })
+    await openPanel(page)
+    await expect(panel(page).getByText('Programming is off')).toBeVisible()
+    await expect(panel(page).getByText('Not connected. Connect first.')).toBeVisible()
+    await expect(panel(page).getByRole('button', { name: /^Apply to car/ })).toBeDisabled()
+  } finally { await restoreConnection() }
+})

@@ -11,7 +11,7 @@
   {#each items as it (it.value)}
     <RadioGroup.Item value={String(it.value)} disabled={it.disabled} class="nx-seg-item">
       {#snippet children({ checked })}
-        {#if checked}<span aria-hidden="true">✓ </span>{/if}<span>{it.label}</span>{#if it.sub}<small>{it.sub}</small>{/if}
+        <span class="nx-seg-l">{#if checked}<span aria-hidden="true">✓ </span>{/if}{it.label}</span>{#if it.sub}<small>{it.sub}</small>{/if}
       {/snippet}
     </RadioGroup.Item>
   {/each}

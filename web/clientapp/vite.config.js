@@ -19,9 +19,12 @@ export default defineConfig({
   },
   server: {
     port: 5173,
+    // e2e runs write traces/screenshots here; watching them would reload the page mid-test.
+    watch: { ignored: ['**/e2e-results/**', '**/test-results/**', '**/playwright-report/**'] },
     proxy: {
       '/api': { target: 'http://localhost:5000', changeOrigin: true },
       '/hub': { target: 'http://localhost:5000', ws: true, changeOrigin: true },
+      '/mcp': { target: 'http://localhost:5000', changeOrigin: true },
     },
   },
 })

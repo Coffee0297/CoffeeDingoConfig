@@ -1,0 +1,76 @@
+<script>
+  /**
+   * "+ Add" a block. Each item claims the first free slot of its kind on this module (the firmware has a
+   * fixed number of each) and opens it in the inspector. Items the released firmware can't run yet
+   * (Math, CAN Message) are shown disabled with the firmware they need.
+   */
+  import { Dialog, FwBadge, Button } from '../../../ui/index.js'
+  import { FAM_COLOR } from './model.js'
+
+  let { open = $bindable(false), funcs, cb = false, slots = [], onadd, onremote, hardwareHref } = $props()
+  const free = (arr) => (funcs?.[arr] ?? []).filter((x) => !x.enabled).length
+  const has = (arr) => Array.isArray(funcs?.[arr])
+  const GROUPS = $derived([
+    { name: 'INPUTS', fam: 'in', items: [
+      { label: 'CAN input', sub: 'a value or bit from a frame', kind: 'caninput', arr: 'canInputs' },
+      { label: 'Signal from another module', sub: 'over CAN, set up for you', remote: true, arr: 'canInputs' },
+      { label: 'Switch or sensor on a pin', sub: 'set up on the Hardware screen', hw: true },
+    ] },
+    { name: 'LOGIC', fam: 'logic', items: [
+      { label: 'Compare', sub: 'on above / below a value, with hysteresis', kind: 'condition', arr: 'conditions', body: { operator: 2 } },
+      { label: 'Combine AND / OR / NOR', sub: 'up to 3 signals, NOT per input', kind: 'virtualinput', arr: 'virtualInputs' },
+      { label: 'Push-button toggle', sub: 'press on, press off (a counter 0–1)', kind: 'counter', arr: 'counters', body: { minCount: 0, maxCount: 1, wrapAround: true, incEdge: 0 } },
+      { label: 'Math', sub: 'A + − × ÷ B, then scale', fw: '5.6' },
+    ] },
+    { name: 'TIME & STATE', fam: 'time', items: [
+      { label: 'On-delay', sub: 'on after a time', kind: 'timer', arr: 'timers', body: { mode: 0, preset: 2000 } },
+      { label: 'Keep on after', sub: 'stays on for a time', kind: 'timer', arr: 'timers', body: { mode: 1, preset: 60000 } },
+      { label: 'Pulse / limit', sub: 'one pulse of a set length', kind: 'timer', arr: 'timers', body: { mode: 2, preset: 1000 } },
+      { label: 'Flasher', sub: 'blink on / off', kind: 'flasher', arr: 'flashers', body: { onTime: 500, offTime: 500 } },
+      { label: 'Counter', sub: 'count presses up / down', kind: 'counter', arr: 'counters' },
+      { label: 'Table', sub: 'a value from a curve or map', kind: 'table', arr: 'tables', pdmOnly: true },
+    ] },
+    { name: 'OUTPUTS', fam: 'out', items: [
+      { label: 'CAN output', sub: 'send a value on the bus', kind: 'canoutput', arr: 'canOutputs', body: { interval: 100, bitLength: 8 } },
+      { label: 'CAN message', sub: 'a whole frame while a signal is on', fw: '5.6' },
+      { label: 'Output', sub: 'a load on this module: set it up on Hardware', hw: true },
+    ] },
+  ])
+  const slotOf = (arr) => slots.find((s) => s.arr === arr)
+</script>
+
+<Dialog bind:open title="Add a block" description="Each block uses one slot of this module. The slots meter shows what is left." width={720}>
+  {#each GROUPS as g (g.name)}
+    <div class="grp">
+      <span class="gn" style="color: {FAM_COLOR[g.fam]}">{g.name}</span>
+      <div class="items">
+        {#each g.items as it (it.label)}
+          {@const avail = it.fw ? false : it.hw ? true : has(it.arr) && free(it.arr) > 0}
+          {@const absent = it.arr && !has(it.arr)}
+          {#if it.hw}
+            <a class="it" href={hardwareHref} style="--fam: {FAM_COLOR[g.fam]}"><span class="l">{it.label}</span><span class="s">{it.sub}</span></a>
+          {:else}
+            <button type="button" class="it" style="--fam: {FAM_COLOR[g.fam]}" disabled={!avail} onclick={() => (it.remote ? onremote?.() : onadd?.(it))} data-testid={'add-' + it.label}>
+              <span class="l">{it.label}</span>
+              <span class="s">{it.sub}</span>
+              {#if it.fw}<FwBadge version={it.fw} />{:else if absent}<span class="cnt">not on this board</span>{:else}<span class="cnt">{free(it.arr)} of {slotOf(it.arr)?.max ?? (funcs?.[it.arr] ?? []).length} free</span>{/if}
+            </button>
+          {/if}
+        {/each}
+      </div>
+    </div>
+  {/each}
+  {#snippet footer()}<Button onclick={() => (open = false)}>Close</Button>{/snippet}
+</Dialog>
+
+<style>
+  .grp { display: flex; flex-direction: column; gap: 6px; }
+  .gn { font-size: 11px; font-weight: 700; letter-spacing: 0.08em; }
+  .items { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+  .it { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; min-height: 64px; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--color-line); border-left: 3px solid var(--fam); background: var(--color-raised); color: var(--color-text); text-align: left; text-decoration: none; }
+  .it:hover:not(:disabled) { border-color: var(--color-line-strong); border-left-color: var(--fam); }
+  .it:disabled { opacity: 0.6; }
+  .l { font-weight: 600; }
+  .s { font-size: var(--text-xs); color: var(--color-text-muted); }
+  .cnt { font-family: var(--font-mono); font-size: 11px; color: var(--color-text-muted); margin-top: 2px; }
+</style>

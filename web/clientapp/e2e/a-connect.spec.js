@@ -1,0 +1,173 @@
+// Connect panel (top-bar connection pill): adapters, speed, connect / disconnect, USB identify.
+import { test, expect } from '@playwright/test'
+import { open, watchErrors } from './helpers.js'
+import { apiJson, devices, waitFor } from './api.js'
+import { restoreConnection, SIM_PORT } from './a-util.js'
+
+const panel = (page) => page.getByRole('dialog', { name: 'Connection' })
+const radio = (page, re) => panel(page).getByRole('radio', { name: re })
+
+async function openPanel(page) {
+  await page.getByTestId('connection-pill').click()
+  await expect(panel(page)).toBeVisible()
+}
+
+test('shows the live connection through SLCAN over TCP', async ({ page }) => {
+  const errors = watchErrors(page)
+  await open(page, 'hardware')
+  await openPanel(page)
+  const ad = await apiJson('GET', '/api/adapters')
+  const status = page.getByTestId('connect-status')
+  await expect(status).toContainText('Connected through SLCAN')
+  await expect(status).toContainText(ad.activePort)
+  const devs = await devices()
+  await expect(status).toContainText(`${devs.length} of ${devs.length} modules answering`)
+  await expect(radio(page, /SLCAN over TCP/)).toBeChecked()
+  await expect(panel(page).getByText('In use')).toBeVisible()
+  // the host and port fields show the live address
+  await expect(panel(page).getByRole('textbox', { name: 'Host' })).toHaveValue('127.0.0.1')
+  await expect(panel(page).getByRole('textbox', { name: 'Port', exact: true })).toHaveValue('7778')
+  expect(errors).toEqual([])
+})
+
+test('every adapter choice shows its own fields', async ({ page }) => {
+  const errors = watchErrors(page)
+  await open(page, 'hardware')
+  await openPanel(page)
+  const heading = panel(page).getByRole('heading', { level: 3 })
+  await radio(page, /USB, straight to a module/).check()
+  await expect(heading).toHaveText('USB, straight to a module')
+  await expect(panel(page).getByText('dingoConfig opens the first dingoPDM')).toBeVisible()
+  await radio(page, /PCAN/).check()
+  await expect(panel(page).getByRole('textbox', { name: 'Channel' })).toBeVisible()
+  await radio(page, /SLCAN, serial port/).check()
+  await expect(panel(page).getByText('Serial port').first()).toBeVisible()
+  await radio(page, /SLCAN over TCP/).check()
+  await expect(panel(page).getByRole('textbox', { name: 'Host' })).toBeVisible()
+  await radio(page, /Simulator replay/).check()
+  await expect(panel(page).getByText('Programming is off with the simulator replay').first()).toBeVisible()
+  await expect(panel(page).getByRole('button', { name: 'Connect to simulator' })).toBeVisible()
+  await radio(page, /Kvaser/).check()
+  await expect(panel(page).getByRole('textbox', { name: 'Channel' })).toBeVisible()
+  // WiFi (gap G11) and SocketCAN are visibly not available
+  await expect(radio(page, /WiFi bridge/)).toBeDisabled()
+  await expect(panel(page).getByText('Not available yet').first()).toBeVisible()
+  await expect(radio(page, /SocketCAN/)).toBeDisabled()
+  expect(errors).toEqual([])
+})
+
+test('adapter list comes from the backend', async ({ page }) => {
+  await open(page, 'hardware')
+  await openPanel(page)
+  const ad = await apiJson('GET', '/api/adapters')
+  for (const [name, re] of [['USB', /USB, straight/], ['PCAN', /^PCAN/], ['SLCAN', /SLCAN, serial/], ['Sim', /Simulator replay/], ['Kvaser', /Kvaser/]]) {
+    if (ad.adapters.includes(name)) await expect(radio(page, re)).toBeEnabled()
+  }
+  // the serial port choice lists the real ports
+  await radio(page, /SLCAN, serial port/).check()
+  if (ad.ports.length) await expect(panel(page).getByText('Serial port').first()).toBeVisible()
+})
+
+test('CAN speed choice, auto-detect note, and the not-available-yet switches', async ({ page }) => {
+  const errors = watchErrors(page)
+  await open(page, 'hardware')
+  await openPanel(page)
+  const group = panel(page).getByRole('radiogroup', { name: 'CAN speed' })
+  for (const l of ['125 k', '250 k', '500 k', '1000 k', 'Auto-detect']) {
+    await group.getByRole('radio', { name: l }).click()
+    await expect(group.getByRole('radio', { name: l })).toBeChecked()
+  }
+  await expect(panel(page).getByText('Auto-detect tries 500 k')).toBeVisible()
+  await group.getByRole('radio', { name: '500 k' }).click()
+  // auto-connect and auto-reconnect: gap G10
+  await expect(panel(page).getByRole('switch', { name: /Connect automatically/ })).toBeDisabled()
+  await expect(panel(page).getByRole('switch', { name: /Reconnect if the link drops/ })).toBeDisabled()
+  await expect(panel(page).getByText(/gap G10/).first()).toBeVisible()
+  expect(errors).toEqual([])
+})
+
+test('bad TCP port or host blocks Connect and says why', async ({ page }) => {
+  await open(page, 'hardware')
+  await openPanel(page)
+  await radio(page, /SLCAN over TCP/).check()
+  const port = panel(page).getByRole('textbox', { name: 'Port', exact: true })
+  await port.fill('99999')
+  await expect(panel(page).getByText('The port is a number from 1 to 65535.')).toBeVisible()
+  await expect(panel(page).getByRole('button', { name: 'Reconnect' })).toBeDisabled()
+  await port.fill('7778')
+  await panel(page).getByRole('textbox', { name: 'Host' }).fill('')
+  await expect(panel(page).getByText('Type the host, for example 127.0.0.1.')).toBeVisible()
+  await panel(page).getByRole('textbox', { name: 'Host' }).fill('127.0.0.1')
+  await expect(panel(page).getByRole('button', { name: 'Reconnect' })).toBeEnabled()
+})
+
+test('Identify the module on USB asks the backend and shows the base ID', async ({ page }) => {
+  const errors = watchErrors(page)
+  await open(page, 'hardware')
+  await openPanel(page)
+  await panel(page).getByTestId('usb-identify').click()
+  const r = await apiJson('POST', '/api/usb/identify')
+  if (r.gatewayBaseId != null) await expect(panel(page).getByText(`answers on 0x${r.gatewayBaseId.toString(16).toUpperCase().padStart(3, '0')}`)).toBeVisible()
+  else await expect(panel(page).getByText(/No module answered on USB/)).toBeVisible()
+  expect(errors).toEqual([])
+})
+
+test('Close button and Escape close the panel', async ({ page }) => {
+  await open(page, 'hardware')
+  await openPanel(page)
+  await panel(page).getByRole('button', { name: 'Close', exact: true }).first().click()
+  await expect(page.getByRole('dialog')).toHaveCount(0)
+  await openPanel(page)
+  await page.keyboard.press('Escape')
+  await expect(page.getByRole('dialog')).toHaveCount(0)
+})
+
+test('Disconnect then Connect over TCP @exclusive', async ({ page }) => {
+  const errors = watchErrors(page)
+  await open(page, 'hardware')
+  try {
+    await openPanel(page)
+    await panel(page).getByTestId('disconnect').click()
+    await expect(page.getByTestId('connection-pill')).toContainText('Not connected', { timeout: 15_000 })
+    await expect(panel(page).getByTestId('connect-status')).toContainText('Not connected')
+    expect((await apiJson('GET', '/api/adapters')).connected).toBe(false)
+    // reconnect through the form
+    await radio(page, /SLCAN over TCP/).check()
+    await panel(page).getByRole('textbox', { name: 'Host' }).fill('127.0.0.1')
+    await panel(page).getByRole('textbox', { name: 'Port', exact: true }).fill('7778')
+    await panel(page).getByRole('radiogroup', { name: 'CAN speed' }).getByRole('radio', { name: '500 k' }).click()
+    await panel(page).getByTestId('connect').click()
+    await expect(page.getByTestId('connection-pill')).toContainText(/of \d+ live/, { timeout: 30_000 })
+    const ad = await apiJson('GET', '/api/adapters')
+    expect(ad.connected).toBe(true)
+    expect(ad.activePort).toBe(SIM_PORT)
+    await expect(panel(page).getByTestId('connect-status')).toContainText('Connected through SLCAN')
+  } finally { await restoreConnection() }
+  expect(errors).toEqual([])
+})
+
+test('Connecting to a closed TCP port shows a plain error @exclusive', async ({ page }) => {
+  await open(page, 'hardware')
+  try {
+    await openPanel(page)
+    await radio(page, /SLCAN over TCP/).check()
+    await panel(page).getByRole('textbox', { name: 'Port', exact: true }).fill('1')
+    await panel(page).getByRole('button', { name: 'Reconnect' }).click()
+    await expect(panel(page).getByTestId('connect-status')).toHaveAttribute('data-tone', 'fault', { timeout: 30_000 })
+  } finally { await restoreConnection() }
+})
+
+test('Auto-detect keeps the speed where frames arrive @exclusive', async ({ page }) => {
+  const errors = watchErrors(page)
+  await open(page, 'hardware')
+  try {
+    await openPanel(page)
+    await radio(page, /SLCAN over TCP/).check()
+    await panel(page).getByRole('radiogroup', { name: 'CAN speed' }).getByRole('radio', { name: 'Auto-detect' }).click()
+    await panel(page).getByRole('button', { name: 'Reconnect' }).click()
+    await expect(panel(page).getByTestId('connect-status')).toContainText('Connected through SLCAN', { timeout: 40_000 })
+    await waitFor(async () => (await devices()).every((d) => d.connected), 30_000, 'modules answering')
+    await expect(panel(page).getByRole('radiogroup', { name: 'CAN speed' }).getByRole('radio', { name: '500 k' })).toBeChecked()
+  } finally { await restoreConnection() }
+  expect(errors).toEqual([])
+})
