@@ -307,6 +307,15 @@ and the last wake reason per module so a car that drains its battery can be diag
 | **Timed heater** (seats, mirrors, rear screen) | Press, Ignition, Running | Level (number), On, Level lamps | Levels 1–3 stepped by presses, PWM per level; auto-off time; only with engine running |
 | **Battery saver** | Battery V (number), Ignition, In use | Allow, Low battery | Cut below a voltage for a time; cut after a time with ignition off; warn first |
 
+- **Replace with helper**, everywhere it fits: the builder recognises plain-block patterns that a function or
+  helper block covers (e.g. brake + turn ANDs/ORs = 2 × US rear lamp; door hold + ignition = Courtesy light), and
+  also plain wiring a helper would improve (ignition → loads = Ignition load with off-while-cranking). It shows a
+  suggestion banner with the matched blocks outlined: *Replace* / *Not now*; after replacing: *Open inside* /
+  *Undo*. The function list marks pages with a pending suggestion, and *Replace all* applies every one. Replacing
+  never changes behaviour unless the banner says what it adds; until applied, the car is unchanged.
+- **One job per function page**: functions are small and named after one job (Wipers, Washer, Brake lights,
+  Turn signals & hazard, Car sleep, Ignition loads…). Signals that cross pages use **link** nodes
+  (*→ Brake lights*, *← Washer*, dashed), clickable to jump to the other page; never one big page per area.
 - Design the **block sheet** (every function and helper block: ports, settings, inside, an example mapping) and
   a **whole-car canvas** built only from function blocks, showing that one car's 17 functions fit on one screen.
 
