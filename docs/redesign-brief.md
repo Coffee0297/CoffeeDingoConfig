@@ -218,7 +218,11 @@ These come from the upstream projects (corygrant/dingoFW + dingoConfig roadmap a
 open PRs and branches). Design them as first-class parts of the new app, not bolted on.
 
 **Ignition & start button** (the car's "power" centre; upstream dingoFW#67–#74)
-- Two modes: **key switch** (ON position held, START momentary) or **start button**.
+- Three modes: **key switch** (ON position held, START momentary); **ignition switch + start button** (a
+  maintained switch powers the ignition, the button only cranks, and only with the ignition on; crank while held
+  or one press until running); or **start button only** (the button does ignition and start, as below).
+- **Start button light** (optional output): lit when the ignition is on and the engine is not running (ready to
+  start); dark with the engine running or the ignition off.
 - Start-button behaviour, like a modern car:
   - Door opens → the dash boots (timed, so a door left open doesn't keep it running).
   - Button **without** clutch/brake → ignition (ECU power) on. Then clutch + button → starter cranks.
