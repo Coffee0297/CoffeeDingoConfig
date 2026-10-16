@@ -65,19 +65,25 @@
   )
 
   // ---- OUTPUTS group ----
+  // An output stays in OUTPUTS ON for 5 s after it switches off, so a short pulse or a flasher can be seen.
+  const LINGER_MS = 5000
+  const lastOn = {}   // tile id -> when it was last seen on (plain: telemetry ticks re-run the list)
   const outputTiles = $derived.by(() => {
-    const shown = [], hidden = []
+    const shown = [], hidden = [], now = Date.now()
     for (const d of devs) for (const o of d.outputs ?? []) {
       const tripped = isTripped(o), on = isOn(o)
+      const id = `${d.guid}:${o.number}`
+      if (d.connected && (on || tripped)) lastOn[id] = now
+      const lingering = d.connected && !on && !tripped && now - (lastOn[id] ?? -Infinity) < LINGER_MS
       const tile = {
         id: `${d.guid}:${o.number}`, name: o.name?.trim() || `Output ${o.number}`, mod: d.name,
         value: !d.connected ? 'No data' : tripped ? o.state : q(num(o.current)), unit: !d.connected || tripped ? '' : 'A',
         pct: d.connected && o.currentLimit ? (num(o.current) / o.currentLimit) * 100 : null,
-        sub: !d.connected ? 'module not answering' : tripped ? `limit ${o.currentLimit} A` : on ? `of ${o.currentLimit} A${o.warnLimit ? ' · warn at ' + o.warnLimit + ' A' : ''}` : o.enabled === false ? 'not enabled' : 'off',
+        sub: !d.connected ? 'module not answering' : tripped ? `limit ${o.currentLimit} A` : lingering ? `off ${Math.round((now - lastOn[id]) / 1000)} s ago` : on ? `of ${o.currentLimit} A${o.warnLimit ? ' · warn at ' + o.warnLimit + ' A' : ''}` : o.enabled === false ? 'not enabled' : 'off',
         tone: !d.connected ? 'stale' : tripped ? 'fault' : on ? 'on' : 'off', key: keys.out(d.guid, o.number),
         href: href('hardware', 'module', d.guid, 'output', o.number), graph: href('live', 'plot', { signal: keys.out(d.guid, o.number) }),
       }
-      if (d.connected && o.enabled !== false && (on || tripped)) shown.push(tile)
+      if (d.connected && o.enabled !== false && (on || tripped || lingering)) shown.push(tile)
       else hidden.push({ ...tile, key: null })
     }
     return { shown, hidden }
