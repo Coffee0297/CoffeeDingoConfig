@@ -37,7 +37,7 @@ test('trips are listed per module and picking one shows its waveform, reason and
   const rows = page.getByTestId('trip-row')
   await expect(rows).toHaveCount(2)
   await expect(page.getByText('PDM-01').first()).toBeVisible()
-  await expect(page.getByText(/do not record when a trip happened/)).toBeVisible()
+  await expect(page.getByText(/older than 5\.6 do not record when a trip happened/)).toBeVisible()
   // detail of the newest (last in the log)
   await expect(page.getByTestId('trip-title')).toContainText('faulted: 41.0 A')
   const chart = page.getByRole('img', { name: /Current around the trip: peak 41\.0 A/ })
@@ -50,6 +50,31 @@ test('trips are listed per module and picking one shows its waveform, reason and
   // reason and fixes in plain words
   await expect(page.getByText('MOST LIKELY')).toBeVisible()
   await expect(page.getByText('THEN')).toBeVisible()
+  expect(errors).toEqual([])
+})
+
+test('firmware 5.6: trips show when they happened, newest first, and notices are listed apart', async ({ page }) => {
+  const errors = watchErrors(page)
+  const { p1, outs } = await target(page)
+  const at = (h) => new Date(Date.UTC(2026, 9, 16, h, 5, 9)).toISOString()
+  const p = (n) => String(n).padStart(2, '0')
+  const local = (h) => { const d = new Date(at(h)); return `16 Oct ${p(d.getHours())}:05:09` }
+  await mockTrips(page, p1.guid, [
+    { ...steadyEvent(outs[0].number), at: at(13) },
+    { ...steadyEvent(outs[1].number), state: 'Fault', peakA: 41, at: at(9) },
+    { output: outs[0].number, state: 'Warning', peakA: 0, limitA: 0, samples: [], kind: 'warning', at: at(12) },
+    { output: outs[1].number, state: 'OpenLoad', peakA: 0, limitA: 0, samples: [], kind: 'openload', at: at(11) },
+  ])
+  await open(page, 'live/trips')
+  const rows = page.getByTestId('trip-row')
+  await expect(rows).toHaveCount(2)                                   // notices are not trips
+  await expect(rows.nth(0)).toContainText(local(13))                   // newest first by time, not log order
+  await expect(rows.nth(1)).toContainText(local(9))
+  const notices = page.getByTestId('notices')
+  await expect(notices.locator('li')).toHaveCount(2)
+  await expect(notices.locator('li').nth(0)).toContainText(`${local(12)} · PDM-01`)
+  await expect(notices).toContainText('went over its warning level')
+  await expect(notices).toContainText('had nothing connected (open load)')
   expect(errors).toEqual([])
 })
 

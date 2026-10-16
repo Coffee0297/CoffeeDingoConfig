@@ -3,6 +3,7 @@
 // old Settings drawer used (device param index 0, sub-index below). Nothing here burns: a change is live
 // on the module at once and is stored with Apply to car.
 import { api, project, toast, defs, isPdm } from '../../../lib/live.svelte.js'
+import { spanAfter } from '../../../../lib/canids.js'
 
 export const SUB = { enabled: 2, timeout: 5, ignoreAlwaysOn: 9, forceSleep: 10, muteTx: 11, wakeMask: 12, wakeCan: 13 }
 export const TIMEOUT_MIN_S = 1
@@ -57,17 +58,36 @@ export function sleepStatus(d, connectedBus) {
   if (!connectedBus) return { key: 'stale', glyph: '◌', word: 'No connection', detail: 'Connect to the car first.' }
   if (d.connected) {
     const outs = (d.outputs ?? []).filter((o) => /^on|overcurrent|warning/i.test(o.state ?? ''))
-    const detail = outs.length ? `in use: ${outs.length} output${outs.length === 1 ? '' : 's'} on` : (d.current > 0.05 ? `drawing ${d.current.toFixed(1)} A` : 'nothing in use')
+    // firmware 5.6 says what keeps it awake and how long until it sleeps
+    const why = blockerWords(d.sleepBlockers)
+    const detail = d.sleepCountdownS != null ? `sleeps in ${d.sleepCountdownS} s`
+      : why.length ? `kept awake: ${why.join(', ')}`
+      : outs.length ? `in use: ${outs.length} output${outs.length === 1 ? '' : 's'} on` : (d.current > 0.05 ? `drawing ${d.current.toFixed(1)} A` : 'nothing in use')
     return { key: 'on', glyph: '●', word: 'Awake', detail }
   }
-  if (/sleep/i.test(d.state ?? '')) return { key: 'off', glyph: '○', word: 'Asleep', detail: 'last report before it went quiet' }
+  // firmware 5.6 says goodbye before it sleeps, so "asleep" and "unplugged" differ
+  if (d.asleep || /sleep/i.test(d.state ?? '')) return { key: 'off', glyph: '○', word: 'Asleep', detail: d.asleep ? 'said it was going to sleep' : 'last report before it went quiet' }
   return { key: 'stale', glyph: '◌', word: 'Not seen', detail: 'asleep or unplugged: cannot tell' }
+}
+
+/** What keeps a module awake (firmware 5.6 bits: 1 sleep off, 2 outputs on, 4 USB, 8 CAN traffic). */
+export function blockerWords(bits) {
+  if (!bits) return []
+  return [[1, 'sleep is off'], [2, 'outputs on'], [4, 'USB connected'], [8, 'CAN traffic']].filter(([b]) => bits & b).map(([, w]) => w)
+}
+
+/** Why a module last woke (firmware 5.6), or '' when it did not say. */
+export function wakeWords(d) {
+  const w = d?.lastWake
+  if (!w) return ''
+  const what = w.reason === 'can' ? 'CAN traffic' : w.reason === 'input' ? `digital input ${w.source || '?'}` : w.reason === 'usb' ? 'USB' : 'power-on'
+  return w.count > 0 ? `${what} (${w.count} wake${w.count === 1 ? '' : 's'} since power-on)` : what
 }
 
 /** Which module a CAN id belongs to (base-1 .. base+span), or null. */
 export function moduleOfId(id, devices) {
   for (const d of devices) {
-    const span = /canboard/i.test(d.type ?? '') ? 13 : 29
+    const span = spanAfter(d.type)
     if (id >= d.baseId - 1 && id <= d.baseId + span) return d
   }
   return null

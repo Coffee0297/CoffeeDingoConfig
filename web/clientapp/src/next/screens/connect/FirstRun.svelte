@@ -2,13 +2,14 @@
   // First run (board H13): connect, find the modules, name them, place them on the car map.
   // Steps 3 to 6 of the board (what the car has, questions, wiring list, apply and test) are the
   // Functions screens; "Next" goes there. Backed by telemetry, GET /api/adapters, POST /api/connect,
-  // POST /api/devices/{id}/rename. Blink LED needs firmware 5.6 (gap G12).
-  import { Page, PageHeader, Card, Button, Banner, Chip, StateDot, Empty, FwBadge } from '../../ui/index.js'
-  import { live, api, toast, mutate, moduleState, hex } from '../../lib/live.svelte.js'
+  // POST /api/devices/{id}/rename, /identify (Blink LED, firmware 5.6).
+  import { Page, PageHeader, Card, Button, Banner, Chip, StateDot, Empty } from '../../ui/index.js'
+  import { live, api, toast, mutate, moduleState, hex, blinkModule } from '../../lib/live.svelte.js'
   import { go, href } from '../../router.svelte.js'
   import { ui } from '../../shell/ui.svelte.js'
   import CarMap from '../car/parts/CarMap.svelte'
   import { fwText } from '../hardware/parts/ids.js'
+  import { olderThan } from '../hardware/parts/util.js'
 
   let { query } = $props()
 
@@ -95,7 +96,7 @@
           <div class="list" role="list" aria-label="Modules">
             <div class="lh muted" aria-hidden="true"><span></span><span>Module</span><span>Name</span><span>Where</span><span>Identify</span></div>
             {#each mods as d (d.guid)}
-              {@const st = moduleState(d)}
+              {@const st = moduleState(d)} {@const oldFw = olderThan(d.version, [5, 6, 0])}
               <div class="mrow" role="listitem" data-testid={'first-' + d.name}>
                 <StateDot tone={st.key} shape={st.shape} label={st.word} />
                 <span class="ty"><strong>{d.type}</strong><span class="mono muted">{hex(d.baseId)} · {fwText(d)}</span></span>
@@ -106,12 +107,12 @@
                   {#if nameErr[d.guid]}<span class="err" role="alert">■ {nameErr[d.guid]}</span>{/if}
                 </label>
                 <span class={placed[d.guid] ? '' : 'muted'}>{placed[d.guid] ? 'placed ✓' : 'not placed'}</span>
-                <Button size="sm" disabled title="Needs firmware 5.6: there is no identify command yet (gap G12)" aria-label={`Blink the LED of ${d.name}`}>Blink LED</Button>
+                <Button size="sm" disabled={oldFw || !d.connected || !live.connected} title={oldFw ? `Needs firmware 5.6: ${d.name} runs ${fwText(d)}` : 'Blink its LEDs for 10 s'} onclick={() => blinkModule(d)} aria-label={`Blink the LED of ${d.name}`}>Blink LED</Button>
               </div>
             {/each}
           </div>
           {#if unplaced.length}<p class="muted" role="status">Unplaced: {unplaced.map((d) => d.name).join(', ')}. Drag {unplaced.length === 1 ? 'it' : 'them'} onto the car.</p>{/if}
-          <p class="muted"><FwBadge version="5.6" /> Blink LED needs a firmware with an identify command (gap G12).</p>
+          <p class="muted">Blink LED needs firmware 5.6. A CANBoard has no LED: it only answers.</p>
         {/if}
 
         <div class="row">

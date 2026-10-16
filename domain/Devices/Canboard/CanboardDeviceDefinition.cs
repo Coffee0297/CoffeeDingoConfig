@@ -26,5 +26,8 @@ public record CanboardDeviceDefinition(
     int TempWarnC = 55,
     int TempCritC = 80,
     // G21: board facts for the UI (see PdmDeviceDefinition.Board).
-    System.Text.Json.JsonElement? Board = null
+    System.Text.Json.JsonElement? Board = null,
+    // Math and CAN Message blocks (firmware 5.6; fewer than a PDM: the 2 KB config sector)
+    int NumMath = 4,
+    int NumCanMessages = 2
 );

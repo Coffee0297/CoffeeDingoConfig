@@ -102,6 +102,13 @@ export async function mutate(fn, ok) {
   }
 }
 
+/** Identify (firmware 5.6): blink the module's status LEDs for 10 s. A CANBoard has none; it only answers. */
+export async function blinkModule(d) {
+  const r = await read(() => api.blink(d.guid, 10))
+  if (r?.ok) toast(r.hasLed ? `${d.name} is blinking its LEDs for 10 s.` : `${d.name} answered. It has no status LED to blink.`, 'info', 4000)
+  return r
+}
+
 /** Run a read-only API call with an error toast. */
 export async function read(fn) {
   try { return await fn() } catch (e) { toast(e?.message ?? String(e), 'error', 6000); return undefined }

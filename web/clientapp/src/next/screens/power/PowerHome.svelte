@@ -1,10 +1,11 @@
 <script>
-  import { Page, PageHeader, Button, Card, FwBadge } from '../../ui/index.js'
+  import { Page, PageHeader, Button, Card, FwBadge, Chip } from '../../ui/index.js'
   import { href } from '../../router.svelte.js'
   import { live } from '../../lib/live.svelte.js'
   import PowerDown from './parts/PowerDown.svelte'
   import ModuleSleepTable from './parts/ModuleSleepTable.svelte'
   import { canSleep } from './parts/sleepLogic.js'
+  import { has56, ignitionMain } from './parts/ignition.js'
   import { onDestroy } from 'svelte'
   import { watchSequence } from './parts/sequence.svelte.js'
   let props = $props()
@@ -13,10 +14,15 @@
 
   const modules = $derived(live.devices.filter((d) => /pdm|canboard/i.test(d.type ?? '')))
   const sleepers = $derived(modules.filter((d) => canSleep(d) && d.sleepEnabled))
+  // firmware 5.6: the main module's ignition state (from its own state frame)
+  const ignMain = $derived(ignitionMain(modules))
+  const ign = $derived(ignMain?.ignition ?? null)
+  const anyNew = $derived(modules.some(has56))
+  const nowKey = $derived(!ign?.live ? '' : ign.state === 'off' ? 'Off' : ign.state === 'on' ? 'Ignition' : ign.state === 'cranking' ? 'Cranking' : 'Running')
   const sub = $derived(!modules.length ? 'No modules in the project yet.'
-    : `${modules.length} modules` + (sleepers.length ? ` · ${sleepers.length} sleep on their own after about ${Math.round(Math.min(...sleepers.map((d) => d.sleepTimeoutMs)) / 1000)} s of nothing in use` : ' · none sleep on their own') + ' · ignition setup needs firmware 5.6')
+    : `${modules.length} modules` + (sleepers.length ? ` · ${sleepers.length} sleep on their own after about ${Math.round(Math.min(...sleepers.map((d) => d.sleepTimeoutMs)) / 1000)} s of nothing in use` : ' · none sleep on their own') + (ignMain ? ` · ignition on ${ignMain.name}` : anyNew ? ' · ignition not set up' : ' · ignition setup needs firmware 5.6'))
   const STATES = [
-    { name: 'Off', out: 'door opens: dash on 3 min', next: 'press button' },
+    { name: 'Off', out: 'dash on for the dash hold time', next: 'switch or button' },
     { name: 'Ignition', out: 'ignition + accessory + dash', next: 'clutch + press' },
     { name: 'Cranking', out: 'starter on, accessory off', next: 'engine runs' },
     { name: 'Running', out: 'ignition + accessory + dash', next: '' },
@@ -32,14 +38,20 @@
   </PageHeader>
 
   <Card title="Ignition, live" aria-label="Ignition state">
-    {#snippet tag()}<FwBadge version="5.6" />{/snippet}
-    <p class="muted" role="status" data-testid="ignition-gap">Not available yet: the modules do not report an ignition state, a main module or the last change time until firmware 5.6 (gap G13). The four states are shown as designed.</p>
+    {#snippet tag()}{#if ign?.live}<Chip tone="on" symbol="●">LIVE</Chip>{:else if !anyNew}<FwBadge version="5.6" />{/if}{/snippet}
+    {#if ignMain}
+      <p class="muted" role="status" data-testid="ignition-gap">{ign.live ? `${ignMain.name} runs the ignition. Now: ${nowKey}.` : `${ignMain.name} runs the ignition but its state frame is not heard right now.`}</p>
+    {:else if anyNew}
+      <p class="muted" role="status" data-testid="ignition-gap">The ignition is not set up yet. Pick the main module and its switch and button in the ignition setup.</p>
+    {:else}
+      <p class="muted" role="status" data-testid="ignition-gap">The modules report an ignition state from firmware 5.6. The four states are shown as designed.</p>
+    {/if}
     <ol class="states" aria-label="Ignition states">
       {#each STATES as s (s.name)}
-        <li class="st"><div class="box"><strong>{s.name}</strong><span class="muted">{s.out}</span><span class="mono muted">now: unknown</span></div>{#if s.next}<div class="arrow" aria-hidden="true"><span class="muted">{s.next}</span><span class="line"></span></div>{/if}</li>
+        <li class="st"><div class="box"><strong>{s.name}</strong><span class="muted">{s.out}</span><span class="mono muted">{nowKey === s.name ? '● now' : ''}</span></div>{#if s.next}<div class="arrow" aria-hidden="true"><span class="muted">{s.next}</span><span class="line"></span></div>{/if}</li>
       {/each}
     </ol>
-    <p class="muted">From Running, one press of the button turns everything off and starts the power-down below. Cranking stops by itself after 8 s or when the engine runs.</p>
+    <p class="muted">Cranking stops by itself after the max crank time or when the engine runs. In "start button only" mode, a press while running turns everything off.</p>
   </Card>
 
   <div class="two">

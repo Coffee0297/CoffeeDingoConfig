@@ -92,6 +92,12 @@ export function createSim(model, snapshot) {
       } else if (n.kind === 'table') {
         const out = port(n, 'Value'); if (!out) continue
         vals[out] = interpolate(r.xSize, r.ySize, r.xAxis ?? [], r.yAxis ?? [], r.cells ?? [], asNum(val(r.xInput)), (r.ySize ?? 1) > 1 ? asNum(val(r.yInput)) : 0)
+      } else if (n.kind === 'math') {
+        // same as the firmware's MathEval: B a signal or the constant, ÷0 gives 0, then × factor + offset
+        const out = port(n, 'Value'); if (!out) continue
+        const a = asNum(val(r.inputA)), b = r.inputB ? asNum(val(r.inputB)) : +r.constB || 0
+        const v = [a + b, a - b, a * b, b === 0 ? 0 : a / b, Math.min(a, b), Math.max(a, b), (a + b) / 2][Number(r.op) || 0] ?? 0
+        vals[out] = v * (r.factor ?? 1) + (+r.offset || 0)
       }
     }
   }

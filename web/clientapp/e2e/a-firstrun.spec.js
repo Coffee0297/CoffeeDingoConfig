@@ -22,12 +22,12 @@ test('connected: step 2 lists every module with type, address, state and an edit
   expect(errors).toEqual([])
 })
 
-test('Blink LED is off and says it needs firmware 5.6', async ({ page }) => {
+test('Blink LED asks the module to blink (firmware 5.6)', async ({ page }) => {
   await open(page, 'connect')
   const b = page.getByRole('button', { name: /Blink the LED of PDM-01/ })
-  await expect(b).toBeDisabled()
-  await expect(b).toHaveAttribute('title', /firmware 5\.6/)
-  await expect(page.getByText('Needs firmware 5.6')).toBeVisible()
+  await expect(b).toBeEnabled()
+  await b.click()
+  await expect(page.getByText('PDM-01 is blinking its LEDs for 10 s.')).toBeVisible({ timeout: 5000 })
 })
 
 test('the car map is here and "placed" follows where a module was put', async ({ page }) => {

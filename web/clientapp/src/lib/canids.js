@@ -15,10 +15,11 @@ export const OBD_RESERVED = (() => {
 // (base+2..+29); both also own +0/+1 (config) and the CANBoard +12/+13 (bootloader). +1 guard ID below
 // base (the settings-request id). See spanAfter() for the exact spans.
 export const ID_BEFORE = 1
-// CANBoard owns base..base+13: +0/+1 config, +2..+11 cyclic, +12/+13 OpenBLT XCP bootloader
-// (command/response). dingoPDM owns base..base+29 (firmware ≥ 5.5.107 adds Msg 27 = table outputs
-// at +29; its +12/+13 already fall inside that span).
-export const spanAfter = (type) => (/canboard/i.test(type || '') ? 13 : 29)
+// CANBoard owns base..base+14: +0/+1 config, +2..+11 cyclic, +12/+13 OpenBLT XCP bootloader
+// (command/response), +14 the ignition state frame (firmware 5.6). dingoPDM owns base..base+30
+// (firmware ≥ 5.5.107 adds Msg 27 = table outputs at +29; +30 is the 5.6 ignition state frame; its
+// +12/+13 already fall inside that span). At the usual 0x10 / 0x20 spacing both still fit.
+export const spanAfter = (type) => (/canboard/i.test(type || '') ? 14 : 30)
 export const isModule = (type) => /pdm|canboard/i.test(type || '')
 
 export function nextPow2(n) {

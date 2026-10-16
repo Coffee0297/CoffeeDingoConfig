@@ -30,6 +30,8 @@ public class PdmDevice : IDeviceConfigurable
     [JsonIgnore] protected int NumCounters { get; private set; } = 4;
     [JsonIgnore] protected int NumConditions { get; private set; } = 32;
     [JsonIgnore] protected int NumTimers { get; private set; } = 8;
+    [JsonIgnore] protected int NumMath { get; private set; } = 8;
+    [JsonIgnore] protected int NumCanMessages { get; private set; } = 4;
     [JsonIgnore] protected int NumTables { get; private set; } = 2;
     [JsonIgnore] protected int NumKeypads { get; private set; } = 2;
     [JsonIgnore] protected const int LuaOutputSlots = 32;  // matches firmware NUM_LUA_OUTPUTS
@@ -98,6 +100,26 @@ public class PdmDevice : IDeviceConfigurable
     [JsonIgnore] public int OvlDataRxIdx { get; set; } = -1;
     [JsonIgnore] public int OvlDataRxOff { get; set; } = -1;
     [JsonIgnore] public byte[] OvlDataRxBytes { get; } = new byte[4];
+    // Firmware 5.6 (G6): the module's uptime when it answered OvlCount, its notice count, trip times and notices
+    [JsonIgnore] public long OvlUptimeRx { get; set; } = -1;
+    [JsonIgnore] public int OvlNoticeCountRx { get; set; }
+    [JsonIgnore] public int OvlTimeRxIdx { get; set; } = -1;
+    [JsonIgnore] public long OvlTimeRxMs { get; set; }
+    [JsonIgnore] public int OvlNoticeRxIdx { get; set; } = -1;
+    [JsonIgnore] public int OvlNoticeOut { get; set; }
+    [JsonIgnore] public int OvlNoticeKind { get; set; }
+    [JsonIgnore] public long OvlNoticeMs { get; set; }
+
+    public DeviceCanFrame GetOvlTimeMsg(int idx) => new()
+    {
+        DeviceBaseId = BaseId, SendOnly = true, Name = "OvlTime",
+        Frame = new CanFrame(BaseId + ConfigTxOffset, 8, [(byte)MessageCommand.OvlTime, (byte)idx, 0, 0, 0, 0, 0, 0])
+    };
+    public DeviceCanFrame GetOvlNoticeMsg(int idx) => new()
+    {
+        DeviceBaseId = BaseId, SendOnly = true, Name = "OvlNotice",
+        Frame = new CanFrame(BaseId + ConfigTxOffset, 8, [(byte)MessageCommand.OvlNotice, (byte)idx, 0, 0, 0, 0, 0, 0])
+    };
 
     public DeviceCanFrame GetOvlCountMsg() => new()
     {
@@ -162,10 +184,17 @@ public class PdmDevice : IDeviceConfigurable
     [JsonPropertyName("counters")] public List<Counter> Counters { get; init; } = [];
     [JsonPropertyName("conditions")] public List<Condition> Conditions { get; init; } = [];
     [JsonPropertyName("timers")] public List<TimerFunction> Timers { get; init; } = [];
+    // firmware 5.6
+    [JsonPropertyName("maths")] public List<MathFunction> Maths { get; init; } = [];
+    [JsonPropertyName("canMessages")] public List<CanMessage> CanMessages { get; init; } = [];
+    [JsonPropertyName("ignition")] public Ignition Ignition { get; set; } = null!;
     [JsonPropertyName("tables")] public List<LookupTable> Tables { get; init; } = [];
     [JsonPropertyName("keypads")] public List<KeypadMaster> Keypads { get; init; } = [];
     
     [JsonIgnore] private DateTime LastRxTime { get; set; }
+    // G14: seconds until auto-sleep from the status frame (firmware 5.6), null = not counting / unknown
+    [JsonIgnore] public int SleepCountdownRaw { get; set; } = 63;
+    [JsonIgnore] public int? SleepCountdownS => domain.Common.Firmware.Has(Version, Functions.MathFunction.Since) && SleepCountdownRaw < 63 ? SleepCountdownRaw : null;
 
     [JsonIgnore] private Dictionary<int, List<(DbcSignal Signal, Action<double> SetValue)>> StatusSigs { get; set; } = null!;
 
@@ -218,6 +247,8 @@ public class PdmDevice : IDeviceConfigurable
         NumCounters = definition.NumCounters;
         NumConditions = definition.NumConditions;
         NumTimers = definition.NumTimers;
+        NumMath = definition.NumMath;
+        NumCanMessages = definition.NumCanMessages;
         NumTables = definition.NumTables;
         NumKeypads = definition.NumKeypads;
         InitFunctions();
@@ -248,6 +279,8 @@ public class PdmDevice : IDeviceConfigurable
         NumCounters = Counters.Count;
         NumConditions = Conditions.Count;
         NumTimers = Timers.Count;
+        NumMath = Maths.Count;
+        NumCanMessages = CanMessages.Count;
         NumTables = Tables.Count;
         NumKeypads = Keypads.Count;
         // The JsonConstructor sizes the starter-disable for the default 8 outputs before the saved
@@ -288,6 +321,12 @@ public class PdmDevice : IDeviceConfigurable
         for (var i = 0; i < NumTimers; i++)
             Timers.Add(new TimerFunction(i + 1, "timer" + (i + 1)));
 
+        for (var i = 0; i < NumMath; i++)
+            Maths.Add(new MathFunction(i + 1, "math" + (i + 1)));
+        for (var i = 0; i < NumCanMessages; i++)
+            CanMessages.Add(new CanMessage(i + 1, "canMessage" + (i + 1)));
+        Ignition = new Ignition("ignition");
+
         for (var i = 0; i < NumTables; i++)
             Tables.Add(new LookupTable(i + 1, "table" + (i + 1)));
 
@@ -319,6 +358,9 @@ public class PdmDevice : IDeviceConfigurable
         }
         StatusSigs[cyclicIndex].AddRange(new List<(DbcSignal, Action<double>)>
         {
+            // firmware 5.6: seconds until auto-sleep, 63 = not counting (reads 0 on older firmware: see SleepCountdownS)
+            (new DbcSignal { Name = "SleepCountdown", StartBit = 2, Length = 6, Unit = "s" },
+                val => SleepCountdownRaw = (int)val),
             (new DbcSignal { Name = "DeviceState", StartBit = 8, Length = 4 },
                 val => DeviceState = (DeviceState)val),
             (new DbcSignal { Name = "PdmType", StartBit = 12, Length = 4 },
@@ -890,6 +932,24 @@ public class PdmDevice : IDeviceConfigurable
                 PropertyName = "PWM Frequency", DataType = "float", VariableIndex = index++, SingleVariable = false
             });
         }
+
+        // Firmware 5.6, appended last like the firmware: Math blocks, CAN Message blocks, then the ignition roles
+        var since56 = MathFunction.Since;
+        for (var i = 0; i < NumMath; i++)
+        {
+            var num = i;
+            VarMap.Add(new DeviceVariable { GetName = () => Maths[num].Name, OwnerKind = "math", OwnerNumber = num + 1,
+                PropertyName = "Value", DataType = "float", VariableIndex = index++, SingleVariable = false, MinFirmware = since56 });
+        }
+        for (var i = 0; i < NumCanMessages; i++)
+        {
+            var num = i;
+            VarMap.Add(new DeviceVariable { GetName = () => CanMessages[num].Name, OwnerKind = "canmsg", OwnerNumber = num + 1,
+                PropertyName = "Sending", DataType = "bool", VariableIndex = index++, SingleVariable = false, MinFirmware = since56 });
+        }
+        foreach (var role in new[] { "Ignition", "Accessory", "Cranking", "Running", "Ready", "Dash", "Link OK" })
+            VarMap.Add(new DeviceVariable { GetName = () => "Ignition", OwnerKind = "ignition", OwnerNumber = 1,
+                PropertyName = role, DataType = "bool", VariableIndex = index++, SingleVariable = false, MinFirmware = since56 });
     }
 
     private void InitParams()
@@ -984,6 +1044,9 @@ public class PdmDevice : IDeviceConfigurable
         foreach (var flasher in Flashers) allParams.AddRange(flasher.Params);
         foreach (var table in Tables) allParams.AddRange(table.Params);
         foreach (var timer in Timers) allParams.AddRange(timer.Params);
+        foreach (var m in Maths) allParams.AddRange(m.Params);
+        foreach (var m in CanMessages) allParams.AddRange(m.Params);
+        allParams.AddRange(Ignition.Params);
         allParams.AddRange(StarterDisable.Params);
         allParams.AddRange(Wipers.Params);
         foreach (var canOutput in CanOutputs) allParams.AddRange(canOutput.Params);
@@ -1039,7 +1102,8 @@ public class PdmDevice : IDeviceConfigurable
     
     public bool InIdRange(int id)
     {
-        return (id >= BaseId) && (id <= MaxCyclicId + BaseId);
+        // + the ignition state frame (firmware 5.6), the first id after the module's own range
+        return (id >= BaseId) && (id <= MaxCyclicId + BaseId || id == BaseId + Functions.Ignition.StateOffsetFor(Type));
     }
     
     public void Read(int id, byte[] data, 
@@ -1047,6 +1111,15 @@ public class PdmDevice : IDeviceConfigurable
             List<DeviceCanFrame> outgoing)
     {
         var offset = id - BaseId;
+
+        // Ignition state frame (firmware 5.6), sent by a main module: ['I', state, flags]
+        if (offset == Functions.Ignition.StateOffsetFor(Type) && data.Length >= 3 && data[0] == 'I')
+        {
+            Ignition.State = (Functions.IgnitionState)data[1];
+            Ignition.Dash = (data[2] & 0x10) != 0;
+            Ignition.LastStateFrame = DateTime.UtcNow;
+            return;
+        }
 
         // Use dictionary lookup for status messages
         if (StatusSigs.TryGetValue(offset, out var signals))
@@ -1085,7 +1158,23 @@ public class PdmDevice : IDeviceConfigurable
 
                 // Overload-log read-back replies.
                 if (((MessageCommand)data[0]) == MessageCommand.OvlCount && data.Length >= 2)
+                {
+                    // 5.6: bytes 2-5 the uptime now (ms), 6 the notice count; an older reply has 2 bytes
+                    OvlUptimeRx = data.Length >= 7 ? BitConverter.ToUInt32(data, 2) : -1;
+                    OvlNoticeCountRx = data.Length >= 7 ? data[6] : 0;
                     OvlCountRx = data[1];
+                }
+                if (((MessageCommand)data[0]) == MessageCommand.OvlTime && data.Length >= 6)
+                {
+                    OvlTimeRxMs = BitConverter.ToUInt32(data, 2);
+                    OvlTimeRxIdx = data[1];
+                }
+                if (((MessageCommand)data[0]) == MessageCommand.OvlNotice && data.Length >= 8)
+                {
+                    OvlNoticeOut = data[2]; OvlNoticeKind = data[3];
+                    OvlNoticeMs = BitConverter.ToUInt32(data, 4);
+                    OvlNoticeRxIdx = data[1];
+                }
                 if (((MessageCommand)data[0]) == MessageCommand.OvlHeader && data.Length >= 8)
                 {
                     OvlHdrOut = data[2];   // 0xFF = invalid index

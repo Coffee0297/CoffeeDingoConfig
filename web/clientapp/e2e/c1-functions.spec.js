@@ -171,9 +171,9 @@ test.describe('add function', () => {
     await page.getByTestId('tpl-search').fill('qqqq')
     await expect(page.getByText('No function matches')).toBeVisible()
     await page.getByTestId('tpl-search').fill('')
-    // blank function and the ignition card are visibly not available
+    // blank function is visibly not available; the ignition card opens the ignition setup (firmware 5.6)
     await expect(page.getByRole('button', { name: /Blank function/ })).toBeDisabled()
-    await expect(page.getByText('Needs firmware 5.6')).toBeVisible()
+    await expect(page.getByRole('link', { name: 'Ignition & start button' })).toHaveAttribute('href', /power\/ignition/)
     // a card opens the wizard
     await page.getByRole('link', { name: 'Headlights', exact: true }).click()
     await expect(page).toHaveURL(/#\/next\/functions\/setup\/headlights$/)

@@ -5,6 +5,8 @@
 // `v<index>` and a wire is simply "target field = that index". The var map's own type (bool | int | float)
 // decides the port: round = on/off, square = number.
 
+import { olderThan } from '../../hardware/parts/util.js'
+
 export const isCb = (dev) => /can.?board/i.test(dev?.type ?? '')
 
 // Block families (colours come from tokens.css --color-block-*).
@@ -33,6 +35,10 @@ export const KINDS = {
   output: { label: 'Output', fam: 'out', ins: OUT_INS },
   digitaloutput: { label: 'Output', fam: 'out', arr: 'digitalOut', ins: OUT_INS },
   canoutput: { label: 'CAN output', fam: 'out', arr: 'canOutputs', def: 'numCanOutputs', addable: true, ins: [['input', 'Value', 'num']] },
+  // firmware 5.6
+  math: { label: 'Math', fam: 'logic', arr: 'maths', def: 'numMath', addable: true, fw: [5, 6, 0], ins: [['inputA', 'A', 'num'], ['inputB', 'B', 'num']] },
+  canmsg: { label: 'CAN message', fam: 'out', arr: 'canMessages', def: 'numCanMessages', addable: true, fw: [5, 6, 0], ins: [['input', 'While', 'bool']] },
+  ignition: { label: 'Ignition', fam: 'fn', ins: [['ignitionInput', 'Ignition switch', 'bool'], ['startInput', 'Start button', 'bool'], ['crankAllowInput', 'Crank allowed', 'bool'], ['runningInput', 'Engine running', 'bool']] },
 }
 export const arrOf = (kind, dev) => (kind === 'input' ? (isCb(dev) ? 'digitalIn' : 'inputs') : KINDS[kind]?.arr)
 
@@ -42,6 +48,14 @@ export const JOIN = ['AND', 'OR', 'NOR']
 export const TIMER_MODES = ['On-delay', 'Off-delay', 'Pulse']
 export const EDGES = ['Rising', 'Falling', 'Both']
 export const isRelational = (op) => [2, 3, 4, 5].includes(Number(op))
+// Math block operations (firmware MathOp order); `fn` shows it with A and B
+export const MATH_OPS = [
+  { label: 'A + B', fn: (a, b) => `${a} + ${b}` }, { label: 'A − B', fn: (a, b) => `${a} − ${b}` },
+  { label: 'A × B', fn: (a, b) => `${a} × ${b}` }, { label: 'A ÷ B', fn: (a, b) => `${a} ÷ ${b}` },
+  { label: 'Smaller of A, B', fn: (a, b) => `the smaller of ${a} and ${b}` }, { label: 'Larger of A, B', fn: (a, b) => `the larger of ${a} and ${b}` },
+  { label: 'Average of A, B', fn: (a, b) => `the average of ${a} and ${b}` },
+]
+export const CANMSG_MODES = ['Repeat while on', 'Once each time it turns on']
 
 // Port labels from the var map's property names.
 const PROP_LABEL = { 'Rotary Position': 'Position', Millivolts: 'Voltage (mV)', 'Switch Value': 'Switch', 'Scaled Value': 'Scaled', 'PWM Duty': 'PWM duty %', 'PWM Frequency': 'PWM Hz', Current: 'Current (A)', 'Raw ADC': 'Raw ADC' }
@@ -100,6 +114,9 @@ function subline(kind, n, row, dev) {
     case 'counter': return `Counter · ${row?.minCount ?? 0} to ${row?.maxCount ?? 0}` + (row?.wrapAround ? ' · wraps' : '')
     case 'table': return `Table · ${row?.xSize ?? 1}${(row?.ySize ?? 1) > 1 ? ' × ' + row.ySize : ''} points`
     case 'canoutput': return `CAN ${hexId(row?.id)}${row?.ide ? ' ext' : ''} · every ${row?.interval ?? 0} ms`
+    case 'math': return `Math · ${MATH_OPS[row?.op ?? 0]?.fn('A', row?.inputB ? 'B' : (row?.constB ?? 0))}` + ((row?.factor ?? 1) !== 1 || (row?.offset ?? 0) !== 0 ? ` · ×${row?.factor ?? 1} ${(row?.offset ?? 0) < 0 ? '−' : '+'} ${Math.abs(row?.offset ?? 0)}` : '')
+    case 'canmsg': return `CAN ${hexId(row?.id)}${row?.ide ? ' ext' : ''} · ` + (row?.mode === 1 ? 'once' : `every ${row?.intervalMs ?? 0} ms`)
+    case 'ignition': return `Ignition · ${row?.role === 1 ? 'follows the main module' : ['switch + button', 'button only', 'key'][row?.mode ?? 0]}`
     case 'output': return `Output ${n} · ${row?.currentLimit ?? '?'} A` + (row?.enabled === false ? ' · switched off' : row?.pwmEnabled ? ' · PWM' : '')
     case 'digitaloutput': return `Digital out ${n}` + (row?.pwmEnabled ? ' · PWM' : '')
     case 'lua': return 'Lua outputs on this module'
@@ -150,6 +167,8 @@ export function incompleteReasons(kind, row, enabled) {
     }
     case 'canoutput': if (!row.input) r.push('needs a value to send'); if (!row.id) r.push('needs a CAN ID'); break
     case 'caninput': if (!row.id) r.push('needs a CAN ID'); if (!row.bitLength) r.push('needs a bit length'); break
+    case 'math': if (!row.inputA) r.push('needs an A input'); break
+    case 'canmsg': if (!row.input) r.push('needs a signal to send on'); if (!row.id) r.push('needs a CAN ID'); break
     case 'output': if (!row.inputVal) r.push('has no input, so it never switches'); break
     case 'digitaloutput': if (!row.input) r.push('has no input, so it never switches'); break
   }
@@ -175,9 +194,10 @@ export function buildModel(dev, funcs, vmap) {
   const physIn = isCb(dev) ? funcs?.digitalIn : funcs?.inputs
   for (const r of physIn ?? []) add('input', r.number, r, !!r.enabled)
   for (const r of funcs?.analogIn ?? []) add('analoginput', r.number, r, !!r.enabled)
-  for (const k of ['caninput', 'virtualinput', 'condition', 'counter', 'flasher', 'timer', 'table', 'canoutput', 'digitaloutput']) {
+  for (const k of ['caninput', 'virtualinput', 'condition', 'counter', 'flasher', 'timer', 'table', 'canoutput', 'digitaloutput', 'math', 'canmsg']) {
     for (const r of funcs?.[KINDS[k].arr] ?? []) add(k, r.number, r, !!r.enabled)
   }
+  if (funcs?.ignition) add('ignition', 1, funcs.ignition, !!funcs.ignition.enabled)
   for (const o of isCb(dev) ? [] : dev?.outputs ?? []) add('output', o.number, o, !!o.enabled)
   for (const kp of funcs?.keypads ?? []) add('keypad', kp.number, kp, !!kp.enabled)
   if (funcs?.wiper) add('wiper', 1, funcs.wiper, !!funcs.wiper.enabled)
@@ -189,6 +209,7 @@ export function buildModel(dev, funcs, vmap) {
     if (!c.enabled && c.kind !== 'output') return []   // a switched-off PDM output still shows (and keeps) its input
     let ins = KINDS[c.kind]?.ins ?? []
     if (c.kind === 'table' && (c.row?.ySize ?? 1) <= 1) ins = ins.filter(([f]) => f !== 'yInput')
+    if (c.kind === 'ignition' && c.row?.role === 1) ins = []   // a follower copies the main module's state
     if (c.kind === 'output' || c.kind === 'digitaloutput') ins = ins.filter(([f]) => f === 'input' || (f === 'dutyCycleInput' && c.row?.variableDutyCycle) || (f === 'freqInput' && c.row?.variableFreq))
     return ins
   }
@@ -219,7 +240,7 @@ export function buildModel(dev, funcs, vmap) {
     const ins = targetsOf(c).map(([field, label, accepts], i) => ({
       id: field, label, accepts, src: Number(fieldOf(c.kind, c.row, field)) || 0,
       not: c.kind === 'virtualinput' ? !!c.row?.['not' + i] : false,
-      optional: (c.kind === 'virtualinput' && field === 'var2') || (c.kind === 'counter' && field !== 'incInput') || c.kind === 'sys',
+      optional: (c.kind === 'virtualinput' && field === 'var2') || (c.kind === 'counter' && field !== 'incInput') || c.kind === 'sys' || (c.kind === 'math' && field === 'inputB') || c.kind === 'ignition',
     }))
     const outs = outPortsFor(c.kind, c.row, varsOf.get(c.id) ?? [], consumed)
     const physical = c.kind === 'input' || c.kind === 'analoginput' || c.kind === 'output' || c.kind === 'digitaloutput' || c.kind === 'sys' || c.kind === 'lua' || c.kind === 'keypad'
@@ -314,6 +335,7 @@ export function slotUsage(dev, funcs, defs) {
     ['Compare', 'conditions', 'numConditions'], ['Combine', 'virtualInputs', 'numVirtualInputs'], ['Timers', 'timers', 'numTimers'],
     ['Flashers', 'flashers', 'numFlashers'], ['Counters', 'counters', 'numCounters'], ['Tables', 'tables', 'numTables'],
     ['CAN inputs', 'canInputs', 'numCanInputs'], ['CAN outputs', 'canOutputs', 'numCanOutputs'],
+    ...(olderThan(dev?.version, [5, 6, 0]) ? [] : [['Math', 'maths', 'numMath'], ['CAN messages', 'canMessages', 'numCanMessages']]),
   ]
   return rows.filter(([, arr]) => Array.isArray(funcs?.[arr])).map(([label, arr, key]) => {
     const list = funcs[arr]

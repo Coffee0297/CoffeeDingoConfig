@@ -28,5 +28,8 @@ public record PdmDeviceDefinition(
     int TempCritC = 80,
     // G21: board facts passed through to the UI as written in pdm-definitions.json (name with revision,
     // output side, driver chip per output, Lua space, connector pin map). null = not documented.
-    System.Text.Json.JsonElement? Board = null
+    System.Text.Json.JsonElement? Board = null,
+    // Math and CAN Message blocks (firmware 5.6)
+    int NumMath = 8,
+    int NumCanMessages = 4
     );

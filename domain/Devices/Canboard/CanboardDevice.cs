@@ -30,6 +30,8 @@ public class CanboardDevice : IDeviceConfigurable
     [JsonIgnore] protected int NumCounters { get; private set; } = 4;
     [JsonIgnore] protected int NumConditions { get; private set; } = 8;
     [JsonIgnore] protected int NumTimers { get; private set; } = 4;
+    [JsonIgnore] protected int NumMath { get; private set; } = 4;
+    [JsonIgnore] protected int NumCanMessages { get; private set; } = 2;
     
     [JsonIgnore] public bool CanSleep { get; } = false;
     [JsonPropertyName("canBootloader")] public bool CanBootloader { get; } = true;   // OpenBLT XCP-over-CAN bootloader
@@ -110,6 +112,14 @@ public class CanboardDevice : IDeviceConfigurable
     [JsonPropertyName("counters")] public List<Counter> Counters { get; init; } = [];
     [JsonPropertyName("conditions")] public List<Condition> Conditions { get; init; } = [];
     [JsonPropertyName("timers")] public List<TimerFunction> Timers { get; init; } = [];
+    // G14: from status msg 1 (firmware 5.6)
+    [JsonIgnore] public int SleepCountdownRaw { get; set; } = 255;
+    [JsonIgnore] public int SleepBlockersRaw { get; set; }
+    [JsonIgnore] public int? SleepCountdownS => domain.Common.Firmware.Has(Version, Functions.MathFunction.Since) && SleepCountdownRaw < 255 ? SleepCountdownRaw : null;
+    // firmware 5.6
+    [JsonPropertyName("maths")] public List<MathFunction> Maths { get; init; } = [];
+    [JsonPropertyName("canMessages")] public List<CanMessage> CanMessages { get; init; } = [];
+    [JsonPropertyName("ignition")] public Ignition Ignition { get; set; } = null!;
 
     [JsonIgnore] private Dictionary<int, List<(DbcSignal Signal, Action<double> SetValue)>> StatusSigs { get; set; } = null!;
 
@@ -144,6 +154,8 @@ public class CanboardDevice : IDeviceConfigurable
         NumCounters = definition.NumCounters;
         NumConditions = definition.NumConditions;
         NumTimers = definition.NumTimers;
+        NumMath = definition.NumMath;
+        NumCanMessages = definition.NumCanMessages;
 
         InitFunctions();
         ApplyDefinition(definition);
@@ -173,6 +185,8 @@ public class CanboardDevice : IDeviceConfigurable
         NumCounters = definition.NumCounters;
         NumConditions = definition.NumConditions;
         NumTimers = Timers.Count;
+        NumMath = Maths.Count;
+        NumCanMessages = CanMessages.Count;
 
         InitStatusSigs();
         InitVarMap();
@@ -211,6 +225,12 @@ public class CanboardDevice : IDeviceConfigurable
         for (var i = 0; i < NumTimers; i++)
             Timers.Add(new TimerFunction(i + 1, "timer" + (i + 1)));
 
+        for (var i = 0; i < NumMath; i++)
+            Maths.Add(new MathFunction(i + 1, "math" + (i + 1)));
+        for (var i = 0; i < NumCanMessages; i++)
+            CanMessages.Add(new CanMessage(i + 1, "canMessage" + (i + 1)));
+        Ignition = new Ignition("ignition");
+
         InitStatusSigs();
     }
 
@@ -239,6 +259,11 @@ public class CanboardDevice : IDeviceConfigurable
         [
             (new DbcSignal { Name = "AnalogInput5.Millivolts", StartBit = 0, Length = 16, Unit = "mV"},
                 val => AnalogInputs[4].Millivolts = val),
+            // firmware 5.6: seconds until auto-sleep (255 = not counting) and what keeps it awake (SleepInfo bits)
+            (new DbcSignal { Name = "SleepCountdown", StartBit = 16, Length = 8, Unit = "s" },
+                val => SleepCountdownRaw = (int)val),
+            (new DbcSignal { Name = "SleepBlockers", StartBit = 24, Length = 8 },
+                val => SleepBlockersRaw = (int)val),
             (new DbcSignal { Name = "BoardTemp", StartBit = 48, Length = 16, Unit = "°C" },
                 val => BoardTemp = val)
         ];
@@ -637,6 +662,24 @@ public class CanboardDevice : IDeviceConfigurable
                 PropertyName = "PWM Frequency", DataType = "float", VariableIndex = index++, SingleVariable = false
             });
         }
+
+        // Firmware 5.6, appended last like the firmware: Math blocks, CAN Message blocks, then the ignition roles
+        var since56 = MathFunction.Since;
+        for (var i = 0; i < NumMath; i++)
+        {
+            var num = i;
+            VarMap.Add(new DeviceVariable { GetName = () => Maths[num].Name, OwnerKind = "math", OwnerNumber = num + 1,
+                PropertyName = "Value", DataType = "float", VariableIndex = index++, SingleVariable = false, MinFirmware = since56 });
+        }
+        for (var i = 0; i < NumCanMessages; i++)
+        {
+            var num = i;
+            VarMap.Add(new DeviceVariable { GetName = () => CanMessages[num].Name, OwnerKind = "canmsg", OwnerNumber = num + 1,
+                PropertyName = "Sending", DataType = "bool", VariableIndex = index++, SingleVariable = false, MinFirmware = since56 });
+        }
+        foreach (var role in new[] { "Ignition", "Accessory", "Cranking", "Running", "Ready", "Dash", "Link OK" })
+            VarMap.Add(new DeviceVariable { GetName = () => "Ignition", OwnerKind = "ignition", OwnerNumber = 1,
+                PropertyName = role, DataType = "bool", VariableIndex = index++, SingleVariable = false, MinFirmware = since56 });
     }
 
     private void InitParams()
@@ -728,6 +771,9 @@ public class CanboardDevice : IDeviceConfigurable
         foreach (var counter in Counters) allParams.AddRange(counter.Params);
         foreach (var flasher in Flashers) allParams.AddRange(flasher.Params);
         foreach (var timer in Timers) allParams.AddRange(timer.Params);
+        foreach (var m in Maths) allParams.AddRange(m.Params);
+        foreach (var m in CanMessages) allParams.AddRange(m.Params);
+        allParams.AddRange(Ignition.Params);
         foreach (var canOutput in CanOutputs) allParams.AddRange(canOutput.Params);
         foreach (var digitalOutput in DigitalOutputs) allParams.AddRange(digitalOutput.Params);
         foreach (var analogInput in AnalogInputs) allParams.AddRange(analogInput.Params);
@@ -776,7 +822,8 @@ public class CanboardDevice : IDeviceConfigurable
 
     public bool InIdRange(int id)
     {
-        return (id >= BaseId) && (id <= MaxCyclicId + BaseId);
+        // + the ignition state frame (firmware 5.6), the first id after the module's own range
+        return (id >= BaseId) && (id <= MaxCyclicId + BaseId || id == BaseId + Functions.Ignition.StateOffsetFor(Type));
     }
 
     public void Read(int id, byte[] data, 
@@ -784,6 +831,15 @@ public class CanboardDevice : IDeviceConfigurable
                      List<DeviceCanFrame> outgoing)
     {
         var offset = id - BaseId;
+
+        // Ignition state frame (firmware 5.6), sent by a main module: ['I', state, flags]
+        if (offset == Functions.Ignition.StateOffsetFor(Type) && data.Length >= 3 && data[0] == 'I')
+        {
+            Ignition.State = (Functions.IgnitionState)data[1];
+            Ignition.Dash = (data[2] & 0x10) != 0;
+            Ignition.LastStateFrame = DateTime.UtcNow;
+            return;
+        }
 
         // Use dictionary lookup for status messages
         if (StatusSigs.TryGetValue(offset, out var signals))

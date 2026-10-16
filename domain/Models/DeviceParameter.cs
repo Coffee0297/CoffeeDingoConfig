@@ -17,6 +17,9 @@ public class DeviceParameter
     // has no storage for it. The I/O loops skip these.
     public bool LocalOnly { get; init; } = false;
     public object DefaultValue { get; init; } = null!;
+    // The firmware that first has this param (null = every supported firmware). An older module never
+    // gets it: reads, writes and the config CRC skip it, so a 5.5 module still writes and checks cleanly.
+    public System.Version? MinFirmware { get; init; }
 
     [JsonIgnore]
     public bool IsModified => !Equals(GetValue(), DefaultValue);

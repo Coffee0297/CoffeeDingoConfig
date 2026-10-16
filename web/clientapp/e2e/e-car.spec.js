@@ -24,7 +24,7 @@ test('stats match what the modules report', async ({ page }) => {
   await expect(page.getByTestId('stat-outputs')).toContainText(`of ${enabled.length}`)
   const worst = enabled.reduce((s, o) => s + o.currentLimit, 0)
   await expect(page.getByText(`of ${Math.round(worst)} A if every output hit its limit`)).toBeVisible()
-  await expect(page.getByText('Needs firmware 5.6')).toBeVisible()
+  await expect(page.getByTestId('stat-ignition')).toHaveText(/Not set up|Off|On|Cranking|Running|—/)
   expect(errors).toEqual([])
 })
 

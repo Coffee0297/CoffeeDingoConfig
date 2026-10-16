@@ -30,6 +30,7 @@
   import { buildFlow } from './flow/flowgraph.js'
   import { writeBlock, prevBody, clearsFor, landed } from './flow/ops.js'
   import { linkRemote } from './flow/net.js'
+  import { olderThan } from '../hardware/parts/util.js'
 
   let { guid: guidProp, fn: fnKey, query } = $props()
 
@@ -536,7 +537,7 @@
   </div>
 </div>
 
-<AddDialog bind:open={addOpen} {funcs} {slots} onadd={addBlock} onremote={() => { addOpen = false; remoteOpen = true }} hardwareHref={href('hardware', 'module', guid)} />
+<AddDialog bind:open={addOpen} {funcs} {slots} fwOld={olderThan(dev?.version, [5, 6, 0])} onadd={addBlock} onremote={() => { addOpen = false; remoteOpen = true }} hardwareHref={href('hardware', 'module', guid)} />
 <RemoteDialog bind:open={remoteOpen} {dev} {funcs} {busy} onlink={addRemote} />
 <BlockSheet bind:open={sheetOpen} />
 <ApplyCheck bind:open={applyAsk} items={incomplete} onapply={() => (ui.panel = 'apply')} onfinish={(id) => id && select(id, true)} />

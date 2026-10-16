@@ -16,7 +16,7 @@ test('dashboard shows car, output and signal tiles from live data', async ({ pag
   await open(page, 'live')
   const car = page.getByRole('region', { name: 'Car', exact: true })
   for (const n of ['Battery', 'Total current', 'Hottest module']) await expect(car.getByRole('link', { name: n, exact: true })).toBeVisible()
-  await expect(car.getByText('Needs firmware 5.6')).toBeVisible()
+  await expect(car.getByText('Ignition', { exact: true })).toBeVisible()   // firmware 5.6: a real tile
   // the temperature limits come from /api/definitions (G18) and fill the hottest-module bar
   const def = await apiJson('GET', '/api/definitions')
   const lim = def.pdms[0]

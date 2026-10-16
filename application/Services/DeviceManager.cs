@@ -294,6 +294,7 @@ public class DeviceManager(ILogger<DeviceManager> logger, ILoggerFactory loggerF
                 if (outgoing.Count > 0)
                     _batchTransmitCallback?.Invoke(outgoing);
                 if (frame.Id == device.BaseId) RecordConfirm(device, frame, outgoing);
+                else NoteAwake(device);
             }
         }
     }
@@ -315,8 +316,24 @@ public class DeviceManager(ILogger<DeviceManager> logger, ILoggerFactory loggerF
             ok = device is IDeviceConfigurable { ConfigMismatch: false };    // ParamProtocol cleared it on a CRC match
         }
         else if (cmd == domain.Enums.MessageCommand.BurnParams) ok = frame.Payload[4] == 1;
+        else if (cmd == domain.Enums.MessageCommand.Identify) { GetDeviceUiState(device.Guid).HasLed = frame.Payload[2] != 0; ok = true; }
+        else if (cmd == domain.Enums.MessageCommand.SleepInfo)
+        {
+            var ui = GetDeviceUiState(device.Guid);
+            ui.WakeReason = frame.Payload[1]; ui.WakeSource = frame.Payload[2];
+            ui.WakeCount = frame.Payload[3] | frame.Payload[4] << 8;
+            ui.SleepBlockers = frame.Payload[6];
+            return;
+        }
+        // "going to sleep" (firmware 5.6): [Sleep, 'Z', 'Z', 'Z', why, ...]
+        else if (cmd == domain.Enums.MessageCommand.Sleep && frame.Payload[1] == 'Z' && frame.Payload[2] == 'Z' && frame.Payload[3] == 'Z')
+        {
+            var ui = GetDeviceUiState(device.Guid);
+            ui.Asleep = true; ui.AsleepSince = DateTime.UtcNow; ui.SleepInfoAsked = false;
+            return;
+        }
         else { if (cmd == domain.Enums.MessageCommand.Write) GetDeviceUiState(device.Guid).StoredOnModule = false; return; }
-        if (ok) GetDeviceUiState(device.Guid).StoredOnModule = cmd == domain.Enums.MessageCommand.BurnParams;
+        if (ok && cmd != domain.Enums.MessageCommand.Identify) GetDeviceUiState(device.Guid).StoredOnModule = cmd == domain.Enums.MessageCommand.BurnParams;
         if (_confirms.TryRemove((device.BaseId, cmd), out var tcs)) tcs.TrySetResult(ok);
     }
 
@@ -335,6 +352,52 @@ public class DeviceManager(ILogger<DeviceManager> logger, ILoggerFactory loggerF
     public Task<bool> WriteDeviceConfigConfirmed(Guid deviceId, bool all) => GetDevice(deviceId) is { } d
         ? Confirmed(d, domain.Enums.MessageCommand.WriteAllComplete, () => all ? WriteAllDeviceConfig(deviceId) : WriteDeviceConfig(deviceId), 30000)
         : Task.FromResult(false);
+
+    /// <summary>G12 (firmware 5.6): blink the module's LEDs for <paramref name="seconds"/> s. Waits for the reply
+    /// (2 s); the reply says whether the board has an LED (a CANBoard has none).</summary>
+    public Task<bool> IdentifyConfirmed(Guid deviceId, int seconds) => GetDevice(deviceId) is { } d
+        ? Confirmed(d, domain.Enums.MessageCommand.Identify, () =>
+        {
+            QueueMessage(new DeviceCanFrame
+            {
+                SendOnly = true, DeviceBaseId = d.BaseId, Name = "Identify",
+                Frame = new CanFrame(d.BaseId + PdmDevice.ConfigTxOffset, 8,
+                    [Convert.ToByte(domain.Enums.MessageCommand.Identify), (byte)Math.Clamp(seconds, 1, 60), 0, 0, 0, 0, 0, 0])
+            });
+            return true;
+        }, 2000)
+        : Task.FromResult(false);
+
+    /// <summary>G14 (firmware 5.6): ask why the module last woke; the reply lands in its DeviceUiState.</summary>
+    public void RequestSleepInfo(Guid deviceId)
+    {
+        if (GetDevice(deviceId) is not { } d) return;
+        QueueMessage(new DeviceCanFrame
+        {
+            SendOnly = true, DeviceBaseId = d.BaseId, Name = "Sleep info",
+            Frame = new CanFrame(d.BaseId + PdmDevice.ConfigTxOffset, 8, [Convert.ToByte(domain.Enums.MessageCommand.SleepInfo), 0, 0, 0, 0, 0, 0, 0])
+        });
+    }
+
+    // A status frame: the module is awake. A 5.6 module is asked once per wake why it woke (one frame, right
+    // after it started talking again, so it never keeps a sleeping car awake).
+    private void NoteAwake(IDevice device)
+    {
+        var ui = GetDeviceUiState(device.Guid);
+        ui.Asleep = false;
+        if (device is not IDeviceConfigurable c) return;
+        // version unknown (no Read since the project opened): ask once, so firmware 5.6 features show up
+        if (domain.Common.Firmware.Of(c.Version).Major == 0)
+        {
+            if (DateTime.UtcNow - ui.VersionAskedAt > TimeSpan.FromSeconds(30)) { ui.VersionAskedAt = DateTime.UtcNow; RequestVersion(device.Guid); }
+            return;
+        }
+        if (!ui.SleepInfoAsked && domain.Common.Firmware.Has(c.Version, domain.Devices.Functions.MathFunction.Since))
+        {
+            ui.SleepInfoAsked = true;
+            RequestSleepInfo(device.Guid);
+        }
+    }
 
     /// <summary>Burn and wait for the module's burn reply; false if it reported a failure or never answered (10 s).</summary>
     public Task<bool> BurnSettingsConfirmed(Guid deviceId) => GetDevice(deviceId) is { } d
@@ -1218,7 +1281,19 @@ public class DeviceManager(ILogger<DeviceManager> logger, ILoggerFactory loggerF
         QueueMessage(p.GetOvlCountMsg());
         int waited = 0;
         while (p.OvlCountRx < 0 && waited < 500) { await Task.Delay(10); waited += 10; }
-        if (p.OvlCountRx <= 0) return result;
+        if (p.OvlCountRx < 0) return result;
+        // 5.6: a time in the module's uptime becomes a clock time against the uptime it just reported
+        var answeredAt = DateTime.UtcNow;
+        long uptime = p.OvlUptimeRx;
+        DateTime? At(long t) => uptime >= 0 && t > 0 && t <= uptime ? answeredAt.AddMilliseconds(t - uptime) : null;
+        async Task<DateTime?> TripTime(int idx)
+        {
+            if (uptime < 0) return null;
+            p.OvlTimeRxIdx = -1;
+            QueueMessage(p.GetOvlTimeMsg(idx));
+            for (int w = 0; p.OvlTimeRxIdx != idx && w < 500; w += 10) await Task.Delay(10);
+            return p.OvlTimeRxIdx == idx ? At(p.OvlTimeRxMs) : null;
+        }
 
         int count = Math.Min(p.OvlCountRx, 16);
         for (int idx = 0; idx < count; idx++)
@@ -1252,7 +1327,18 @@ public class DeviceManager(ILogger<DeviceManager> logger, ILoggerFactory loggerF
                 double dt = (k - PdmDevice.OvlPreSamples) * (PdmDevice.OvlSampleMs / 1000.0);
                 pts.Add(new OvlPoint(Math.Round(dt, 3), samples[k] * PdmDevice.OvlAmpStep));
             }
-            result.Add(new OverloadLogEntry(outNum + 1, state.ToString(), peak, limit, pts));
+            result.Add(new OverloadLogEntry(outNum + 1, state.ToString(), peak, limit, pts, await TripTime(idx)));
+        }
+
+        // 5.6 notices: an output went into Warning or OpenLoad (time and kind only)
+        for (int j = 0; j < Math.Min(p.OvlNoticeCountRx, 16); j++)
+        {
+            p.OvlNoticeRxIdx = -1;
+            QueueMessage(p.GetOvlNoticeMsg(j));
+            for (int w = 0; p.OvlNoticeRxIdx != j && w < 500; w += 10) await Task.Delay(10);
+            if (p.OvlNoticeRxIdx != j || p.OvlNoticeOut == 0xFF) continue;
+            var kind = p.OvlNoticeKind == 2 ? "openload" : "warning";
+            result.Add(new OverloadLogEntry(p.OvlNoticeOut + 1, kind == "openload" ? "OpenLoad" : "Warning", 0, 0, [], At(p.OvlNoticeMs), kind));
         }
         logger.LogInformation("ReadOverloadLog: {N} events from {Name}", result.Count, p.Name);
         return result;
@@ -1400,4 +1486,7 @@ public class DeviceEventArgs(IDevice device) : EventArgs
 public record OvlPoint(double Dt, double I);
 
 /// <summary>A single on-device overload (trip) event read back over CAN.</summary>
-public record OverloadLogEntry(int Output, string State, double PeakA, double LimitA, List<OvlPoint> Samples);
+// At (firmware 5.6) = when it happened (UTC), from the module's uptime; null on older firmware. Kind: "trip", or
+// "warning" / "openload" for a notice (no waveform).
+public record OverloadLogEntry(int Output, string State, double PeakA, double LimitA, List<OvlPoint> Samples,
+    DateTime? At = null, string Kind = "trip");

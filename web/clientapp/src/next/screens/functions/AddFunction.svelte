@@ -2,6 +2,8 @@
   // Add a function: every ready-made template as a card (what it does, what it needs). Picking one opens the
   // setup wizard. "in use" comes from the applied templates; the cards come from templates.js.
   import { Page, PageHeader, Button, Chip, FwBadge, Empty } from '../../ui/index.js'
+  import { has56 } from '../power/parts/ignition.js'
+  import { live } from '../../lib/live.svelte.js'
   import { href } from '../../router.svelte.js'
   import { TEMPLATES } from '../../../lib/templates.js'
   import { templateInstances, syncTemplates } from '../../../lib/store.js'
@@ -53,11 +55,12 @@
       </article>
     {/each}
     {#if !q && (chip === 'all' || chip === 'power')}
-      <article class="card off">
-        <div class="top"><span class="grp">STARTING & POWER</span><FwBadge version="5.6" /></div>
-        <h2>Ignition & start button</h2>
+      {@const ign56 = live.devices.some(has56)}
+      <article class="card" class:off={!ign56}>
+        <div class="top"><span class="grp">STARTING & POWER</span>{#if !ign56}<FwBadge version="5.6" />{/if}</div>
+        <h2>{#if ign56}<a href={href('power', 'ignition')}>Ignition & start button</a>{:else}Ignition & start button{/if}</h2>
         <p class="what">Key or start button with clutch / brake, crank limit, output roles, dash power-down.</p>
-        <p class="need muted">Not available yet: the modules have no ignition block in the released firmware.</p>
+        <p class="need muted">{ign56 ? 'You need: the ignition switch or key, and the start button, wired to one module.' : 'Needs firmware 5.6: the modules have no ignition block yet.'}</p>
       </article>
     {/if}
   </div>

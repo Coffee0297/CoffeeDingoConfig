@@ -1,8 +1,8 @@
 <script>
   // Every module: its role in sleeping, live sleep status, last wake (firmware 5.6).
-  import { Card, StateDot, FwBadge } from '../../../ui/index.js'
+  import { Card, StateDot } from '../../../ui/index.js'
   import { live, hex } from '../../../lib/live.svelte.js'
-  import { sleepStatus, canSleep } from './sleepLogic.js'
+  import { sleepStatus, canSleep, wakeWords } from './sleepLogic.js'
   let { seq } = $props()
   const mods = $derived(live.devices.filter((d) => /pdm|canboard/i.test(d.type ?? '')))
   function role(d) {
@@ -18,7 +18,7 @@
 <Card title="Every module: sleep and last wake" aria-label="Modules">
   <div class="nx-scroll">
     <table class="nx-table" data-testid="power-modules">
-      <thead><tr><th>Module</th><th>Role</th><th>Sleep</th><th>Last woke from <FwBadge version="5.6" /></th></tr></thead>
+      <thead><tr><th>Module</th><th>Role</th><th>Sleep</th><th>Last woke from</th></tr></thead>
       <tbody>
         {#each mods as d (d.guid)}
           {@const st = sleepStatus(d, live.connected)}
@@ -26,7 +26,7 @@
             <td><strong>{d.name}</strong> <span class="muted mono">{hex(d.baseId)}</span></td>
             <td class="muted">{role(d)}</td>
             <td><StateDot tone={st.key} shape={st.key === 'on' ? 'dot' : st.key === 'off' ? 'ring' : 'diamond'} label={st.word} /> <span class="muted">{st.detail}</span></td>
-            <td class="muted">Not reported yet</td>
+            <td class="muted">{wakeWords(d) || (d.version && !/^v?0\.0\.0$/.test(d.version) ? 'Needs firmware 5.6' : 'Not reported')}</td>
           </tr>
         {/each}
       </tbody>

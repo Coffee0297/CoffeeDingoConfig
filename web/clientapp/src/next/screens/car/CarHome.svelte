@@ -1,11 +1,12 @@
 <script>
   import { Page, PageHeader, Button, Banner, Empty, StateDot, FwBadge } from '../../ui/index.js'
   import { live, project, pendingModules } from '../../lib/live.svelte.js'
+  import { ignitionTile } from '../power/parts/ignition.js'
   import { ui } from '../../shell/ui.svelte.js'
   import { href } from '../../router.svelte.js'
   import { worstCaseA, outputCounts, isTripped, isOn, fmt1, num, olderFirmware } from './parts/summary.js'
   import CarMap from './parts/CarMap.svelte'
-  import { readAllTrips } from '../live/parts/trips.js'
+  import { readAllTrips, whenText } from '../live/parts/trips.js'
   import { useEcu } from '../live/parts/ecu.svelte.js'
 
   const ecu = useEcu()
@@ -25,7 +26,7 @@
   const differing = $derived(pendingModules())
   const older = $derived(olderFirmware(devices))
 
-  // ---- trip log (read from the modules; they record no time, API gap G6) ----
+  // ---- trip log (read from the modules; firmware 5.6 adds when each trip happened) ----
   let trips = $state({ items: [], errors: [], loaded: false })
   const trippedNow = $derived(answering.flatMap((d) => (d.outputs ?? []).filter(isTripped).map((o) => ({ d, o }))))
   const trippedKey = $derived(trippedNow.map((t) => t.d.guid + ':' + t.o.number + ':' + t.o.state).join(','))
@@ -62,7 +63,8 @@
     const stored = trips.items.length
     if (stored) {
       const mods = [...new Set(trips.items.map((t) => t.dev))].join(', ')
-      list.push({ id: 'stored', tone: 'warn', title: `${stored} ${stored === 1 ? 'trip is' : 'trips are'} in the module logs`, detail: `${mods} · the modules do not record when it happened`, label: 'Open trips', href: href('live', 'trips') })
+      const latest = trips.items.map((t) => t.at).filter(Boolean).sort().at(-1)
+      list.push({ id: 'stored', tone: 'warn', title: `${stored} ${stored === 1 ? 'trip is' : 'trips are'} in the module logs`, detail: `${mods} · ${latest ? 'newest ' + whenText(latest) : 'these modules do not record when it happened'}`, label: 'Open trips', href: href('live', 'trips') })
     }
     if (differing.length) {
       list.push({ id: 'diff', tone: 'warn', title: `${differing.length} ${differing.length === 1 ? 'module differs' : 'modules differ'} from the project`, detail: differing.map((d) => d.name).join(', '), label: 'Review', onclick: () => (ui.panel = 'apply') })
@@ -119,7 +121,9 @@
       <div class="stat"><span class="l">Hottest module</span><span class="n mono" data-testid="stat-temp">{hottest ? Math.round(hottest.temp) : dash}<small> °C</small></span><span class="s">{hottest ? hottest.name : 'no module answering'}</span></div>
       <div class="stat"><span class="l">Outputs on</span><span class="n mono" data-testid="stat-outputs">{counts.on}<small> of {counts.total}</small></span><span class="s">enabled outputs that are switched on</span></div>
       <div class="stat"><span class="l">Matches the project</span><span class="n mono">{differing.length ? differing.length + ' differ' : 'All'}</span><span class="s" class:warn={differing.length}>{differing.length ? 'Apply to car sends them' : 'modules hold the project settings'}</span></div>
-      <div class="stat dis"><span class="l">Ignition</span><span class="n"><FwBadge version="5.6" /></span><span class="s">start button and ignition state</span></div>
+      {#if ignitionTile(live.devices)}{@const ig = ignitionTile(live.devices)}
+        <div class="stat"><span class="l">Ignition</span><span class="n" data-testid="stat-ignition">{ig.value}</span><span class="s">{ig.sub}</span></div>
+      {:else}<div class="stat dis"><span class="l">Ignition</span><span class="n"><FwBadge version="5.6" /></span><span class="s">start button and ignition state</span></div>{/if}
     </div>
 
     <div class="cols">

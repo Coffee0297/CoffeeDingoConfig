@@ -3,13 +3,13 @@
   import { live, api, defs, read, toast } from '../../lib/live.svelte.js'
   import { href } from '../../router.svelte.js'
   import { outputRatingA } from '../../../lib/apply.js'
-  import { readAllTrips, tripTitle } from './parts/trips.js'
+  import { readAllTrips, tripTitle, whenText, noticeText } from './parts/trips.js'
   import { tripFixes } from './parts/tripFixes.js'
   import LiveTabs from './parts/LiveTabs.svelte'
 
   let { guid = undefined, index = undefined } = $props()
 
-  let data = $state({ items: [], errors: [], loaded: false })
+  let data = $state({ items: [], notices: [], errors: [], loaded: false })
   let reading = $state(false)
   let sel = $state('')
   // follow the URL: a link to another trip while this page is open changes the selection
@@ -122,7 +122,7 @@
   {:else if current}
     <div class="cols">
       <nav class="list" aria-label="Trips">
-        <p class="muted small">The modules do not record when a trip happened, so trips are listed by module in log order, newest first.</p>
+        <p class="muted small">Listed by module, newest first. Modules on firmware older than 5.6 do not record when a trip happened; theirs are in log order.</p>
         {#each grouped as g (g.dev.guid)}
           <div class="gh"><strong>{g.dev.name}</strong><span class="muted">{g.items.length} {g.items.length === 1 ? 'trip' : 'trips'}</span>
             <Button size="sm" variant="danger" disabled={!g.dev.connected || !g.items.length} onclick={() => (confirmFor = g.dev)} aria-label={`Clear trip log on ${g.dev.name}`}>Clear log</Button>
@@ -130,7 +130,7 @@
           {#each g.items as t (t.index)}
             <a class="trip" class:on={current.guid === t.guid && current.index === t.index} href={href('live', 'trips', t.guid, t.index)} aria-current={current.guid === t.guid && current.index === t.index ? 'true' : undefined} onclick={(e) => pick(t, e)} data-testid="trip-row">
               <StateDot tone="fault" shape={t.state === 'Fault' ? 'square' : 'diamond'} />
-              <span class="tx"><strong>{t.outName || 'Output ' + t.output}</strong><span class="muted">{t.state} · {t.peakA.toFixed(1)} A · limit {t.limitA} A · out {t.output}</span></span>
+              <span class="tx"><strong>{t.outName || 'Output ' + t.output}</strong><span class="muted">{t.at ? whenText(t.at) + ' · ' : ''}{t.state} · {t.peakA.toFixed(1)} A · limit {t.limitA} A · out {t.output}</span></span>
             </a>
           {/each}
         {/each}
@@ -140,7 +140,7 @@
         <header class="dh">
           <nav aria-label="Breadcrumb" class="cr muted"><a href="#/next/live">Live</a> › <a href="#/next/live/trips">Trips</a> › <span>{current.dev} · {current.outName || 'Output ' + current.output}</span></nav>
           <h2 data-testid="trip-title">{tripTitle(current)}: {current.peakA.toFixed(1)} A, limit {current.limitA} A</h2>
-          <p class="muted">{current.dev} out {current.output}{current.kind === 'inrush' ? ' · judged against the inrush limit' : ''} · {current.text}{current.clears ? ' · ' + current.clears : ''}</p>
+          <p class="muted">{current.at ? whenText(current.at) + ' · ' : ''}{current.dev} out {current.output}{current.kind === 'inrush' ? ' · judged against the inrush limit' : ''} · {current.text}{current.clears ? ' · ' + current.clears : ''}</p>
           <div class="chips"><Chip tone="fault" symbol="■">{current.state}</Chip>{#if current.out?.resetMode}<Chip tone="muted">auto retry on</Chip>{/if}</div>
         </header>
 
@@ -178,6 +178,16 @@
       </div>
     </div>
   {/if}
+
+  {#if data.notices?.length}
+    <Card title="Notices" subtitle="Outputs that went over their warning level or had nothing connected (firmware 5.6). No waveform: they did not trip." aria-label="Notices">
+      <ul class="notices" data-testid="notices">
+        {#each data.notices as n (n.guid + ':' + n.index)}
+          <li><StateDot tone="warn" shape="diamond" /> <span>{n.at ? whenText(n.at) + ' · ' : ''}<strong>{n.dev}</strong> · {noticeText(n)}</span></li>
+        {/each}
+      </ul>
+    </Card>
+  {/if}
 </Page>
 
 <Dialog bind:open={() => !!confirmFor, (v) => { if (!v) confirmFor = null }} title={`Clear the trip log on ${confirmFor?.name ?? ''}?`} description="The log is the only record of these trips. Clearing it cannot be undone.">
@@ -188,6 +198,7 @@
 </Dialog>
 
 <style>
+  .notices { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--space-2); }
   .cols { display: grid; grid-template-columns: 340px minmax(0, 1fr); gap: var(--space-5); align-items: start; }
   @media (max-width: 1000px) { .cols { grid-template-columns: minmax(0, 1fr); } }
   .list { display: flex; flex-direction: column; gap: var(--space-2); }
