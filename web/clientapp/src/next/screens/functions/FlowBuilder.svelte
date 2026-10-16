@@ -210,8 +210,8 @@
     const w = el?.clientWidth ?? 800, h = el?.clientHeight ?? 600
     const xs = nodes.map((n) => n.position.x), ys = nodes.map((n) => n.position.y)
     const bw = Math.max(...xs) - Math.min(...xs) + 260, bh = Math.max(...ys) - Math.min(...ys) + 300
-    if (Math.min(w / bw, h / bh) >= 0.6) flow.fitView({ padding: 0.06, maxZoom: 1 })
-    else flow.setViewport({ x: 16 - Math.min(...xs) * 0.7, y: 16 - Math.min(...ys) * 0.7, zoom: 0.7 })
+    if (Math.min(w / bw, h / bh) >= 0.75) flow.fitView({ padding: 0.06, maxZoom: 1 })
+    else flow.setViewport({ x: 16 - Math.min(...xs) * 0.85, y: 16 - Math.min(...ys) * 0.85, zoom: 0.85 })
   }
   function savePos() {
     const p = { ...pos }
@@ -399,6 +399,10 @@
 
   // ---- views / slots / apply ----
   let view = $state(untrack(() => query?.view) === 'sentence' ? 'sentence' : 'canvas')
+  // the block list is hidden by default so the canvas gets the room; the inspector shows when a block is picked
+  let palOpen = $state((() => { try { return localStorage.getItem('fb.pal') === '1' } catch { return false } })())
+  $effect(() => { const v = palOpen ? '1' : '0'; try { localStorage.setItem('fb.pal', v) } catch {} })
+  const inspOpen = $derived(!!selNode || !!lv.sim)
   const slots = $derived(dev && funcs ? slotUsage(dev, funcs, defs) : [])
   const incomplete = $derived(model ? [...model.nodes.values()].filter((n) => n.incomplete?.length && !n.disabledSource).map((n) => ({ id: n.id, title: n.title, why: n.incomplete.join('; ') })) : [])
   let applyAsk = $state(false)
@@ -427,6 +431,7 @@
     <StateDot tone={mstate.key} shape={mstate.shape} label={mstate.word} />
     <span class="grow"></span>
     <Segmented label="Builder view" items={[{ value: 'canvas', label: 'Canvas' }, { value: 'sentence', label: 'Sentence view' }]} bind:value={view} size="sm" />
+    <Button size="sm" onclick={() => (palOpen = !palOpen)} aria-pressed={palOpen} data-testid="tool-palette">{palOpen ? 'Hide' : 'Show'} block list{!palOpen && suggestions.length ? ` · ${suggestions.length} suggestion${suggestions.length === 1 ? '' : 's'}` : ''}</Button>
     <Button size="sm" onclick={() => (addOpen = true)} data-testid="tool-add">+ Add</Button>
     <Button size="sm" onclick={tidy} disabled={view !== 'canvas'}>Tidy</Button>
     <Button size="sm" onclick={undoLast} disabled={!undo.length} title={undo.at(-1) ? 'Undo: ' + undo.at(-1).label : 'Nothing to undo'} data-testid="tool-undo">Undo{undo.length ? ' · ' + undo.at(-1).label.slice(0, 22) : ''}</Button>
@@ -439,8 +444,8 @@
   {#if dev.reading}<Banner tone="info" title="Reading {devName}">Reading the module's settings ({dev.readDone ?? 0} of {dev.readTotal ?? '?'}).</Banner>{/if}
   {#if loadErr}<Banner tone="fault" title="Could not load the blocks">{loadErr}{#snippet actions()}<Button size="sm" onclick={reload}>Try again</Button>{/snippet}</Banner>{/if}
 
-  <div class="cols">
-    <aside class="fb-pal" aria-label="Blocks">
+  <div class="cols" class:nopal={!palOpen} class:noinsp={!inspOpen}>
+    {#if palOpen}<aside class="fb-pal" aria-label="Blocks">
       <Field label="Find a block or signal" bind:value={q} placeholder="coolant, timer, CAN 0x0C9…" data-testid="find" />
       {#if q.trim()}
         <ul class="hits" aria-label="Matching blocks">
@@ -470,7 +475,7 @@
         <button type="button" class="remote" onclick={() => (remoteOpen = true)} data-testid="add-remote">+ Signal from another module (over CAN)</button>
         <a class="small" href={href('functions', 'whole-car')}>Whole car on one canvas ›</a>
       </div>
-    </aside>
+    </aside>{/if}
 
     <section class="stage" aria-label={view === 'canvas' ? 'Canvas' : 'Sentence view'}>
       {#if lv.sim}<div class="simbar" role="status">Simulating: nothing is sent to the car. Change inputs on the right; values and wires update.</div>{/if}
@@ -502,7 +507,7 @@
             proOptions={{ hideAttribution: true }} defaultEdgeOptions={{ type: 'wire' }}>
             <FlowApi {onready} />
             <Background bgColor="var(--color-bg)" patternColor="var(--color-line)" gap={22} />
-            <MiniMap pannable zoomable nodeColor={minimapColor} bgColor="var(--color-surface)" maskColor="var(--color-scrim)" ariaLabel="Mini map" />
+            <MiniMap width={160} height={100} pannable zoomable nodeColor={minimapColor} bgColor="var(--color-surface)" maskColor="var(--color-scrim)" ariaLabel="Mini map" />
             <Panel position="bottom-left">
               <div class="zoom">
                 <button type="button" aria-label="Zoom in" onclick={() => flow?.zoomIn()}>+</button>
@@ -516,11 +521,11 @@
             <div class="edgebar" role="status">Wire selected. <Button size="sm" variant="danger" onclick={() => { unwire(selEdge); selEdge = null }}>Disconnect</Button> <Button size="sm" variant="ghost" onclick={() => (selEdge = null)}>Keep</Button></div>
           {/if}
         </div>
-        <div class="legend" aria-hidden="true">{#each famLegend as [f, l] (f)}<span><span class="lg" style="background: {FAM_COLOR[f]}"></span>{l}</span>{/each}<span>■ number wire (dashed)</span><span>CAN = travels over CAN</span><span>Drag from an output ● to an input ● · Tab walks blocks, Enter opens one, Delete removes (Undo), / adds a block</span></div>
+        <details class="legend"><summary>Legend and keys</summary>{#each famLegend as [f, l] (f)}<span><span class="lg" style="background: {FAM_COLOR[f]}"></span>{l}</span>{/each}<span>■ number wire (dashed)</span><span>CAN = travels over CAN</span><span>Drag from an output ● to an input ● · Tab walks blocks, Enter opens one, Delete removes (Undo), / adds a block</span></details>
       {/if}
     </section>
 
-    <aside class="insp" aria-label="Inspector">
+    {#if inspOpen}<aside class="insp" aria-label="Inspector">
       {#if lv.sim && sim && model}<SimPanel {model} {sim} {lv} />{/if}
       {#if model}
         {#if selNode?.kind === 'link'}
@@ -532,7 +537,7 @@
           <Inspector {model} node={selNode} {dev} {lv} links={inspLinks} idMap={car?.idMap} {busy} onsave={save} onremove={askRemove} onselect={(id, c) => select(id, c)} onungroup={groupAction} onopenlink={openLink} />
         {/if}
       {/if}
-    </aside>
+    </aside>{/if}
   </div>
 </div>
 
@@ -547,7 +552,7 @@
 {/if}
 
 <style>
-  .fb { height: 100%; min-height: 620px; display: flex; flex-direction: column; gap: var(--space-2); }
+  .fb { height: 100%; min-height: 720px; display: flex; flex-direction: column; gap: var(--space-2); }
   .bar { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; }
   .cr { display: flex; gap: 6px; font-size: var(--text-sm); color: var(--color-text-muted); width: 100%; }
   .cr a { color: var(--color-text-muted); text-decoration: none; }
@@ -556,7 +561,10 @@
   .msel { width: 220px; }
   .grow { flex: 1 1 auto; }
   .warnc { color: var(--color-on-accent); font-weight: 700; }
-  .cols { flex: 1 1 auto; min-height: 0; display: grid; grid-template-columns: 240px minmax(0, 1fr) 380px; border: 1px solid var(--color-line); border-radius: var(--radius-lg); overflow: hidden; background: var(--color-surface); }
+  .cols { flex: 1 1 auto; min-height: 0; display: grid; grid-template-columns: 240px minmax(0, 1fr) 360px; border: 1px solid var(--color-line); border-radius: var(--radius-lg); overflow: hidden; background: var(--color-surface); }
+  .cols.nopal { grid-template-columns: minmax(0, 1fr) 360px; }
+  .cols.noinsp { grid-template-columns: 240px minmax(0, 1fr); }
+  .cols.nopal.noinsp { grid-template-columns: minmax(0, 1fr); }
   .fb-pal { border-right: 1px solid var(--color-line); padding: var(--space-3); display: flex; flex-direction: column; gap: var(--space-3); overflow: auto; }
   .sec { display: flex; flex-direction: column; gap: 6px; padding-top: var(--space-2); border-top: 1px solid var(--color-line); }
   .sh { font-size: 11px; font-weight: 700; letter-spacing: 0.08em; color: var(--color-text-muted); }
@@ -582,7 +590,9 @@
   .zoom { display: flex; gap: 6px; }
   .zoom button { min-width: 36px; height: 36px; padding: 0 10px; border-radius: 8px; border: 1px solid var(--color-line); background: var(--color-surface); color: var(--color-text); }
   .edgebar { position: absolute; top: 10px; left: 50%; transform: translateX(-50%); z-index: 5; display: flex; align-items: center; gap: 8px; padding: 6px 10px; border-radius: var(--radius-md); border: 1px solid var(--color-line-strong); background: var(--color-surface); box-shadow: var(--shadow-2); }
-  .legend { display: flex; gap: 14px; flex-wrap: wrap; padding: 6px 14px; font-size: 12px; color: var(--color-text-muted); border-top: 1px solid var(--color-line); background: var(--color-surface); }
+  .legend { padding: 6px 14px; font-size: 13px; color: var(--color-text-muted); border-top: 1px solid var(--color-line); background: var(--color-surface); }
+  .legend summary { cursor: pointer; min-height: 24px; }
+  .legend > span { display: inline-block; margin: 4px 14px 0 0; }
   .lg { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 5px; vertical-align: -1px; }
   .insp { border-left: 1px solid var(--color-line); padding: var(--space-4); display: flex; flex-direction: column; gap: var(--space-3); overflow: auto; }
   .fam { font-size: 11px; font-weight: 700; letter-spacing: 0.08em; color: var(--color-text-muted); }

@@ -98,7 +98,13 @@
   const counts = $derived({ blocks: graph.nodes.filter((n) => !n.data.head).length, groups: graph.nodes.filter((n) => n.data.n?.kind === 'group').length, links: links.length })
   let flow = null
   let fitted = false
-  $effect(() => { if (nodes.length && flow && !fitted) { fitted = true; setTimeout(() => flow?.fitView({ padding: 0.05 }), 80) } })
+  $effect(() => { if (nodes.length && flow && !fitted) { fitted = true; setTimeout(readable, 80) } })
+  // fitting all modules makes the text unreadable; start at the top-left at a readable zoom, Fit gives the overview
+  function readable() {
+    if (!flow || !nodes.length) return
+    const x = Math.min(...nodes.map((n) => n.position.x)), y = Math.min(...nodes.map((n) => n.position.y))
+    flow.setViewport({ x: 16 - x * 0.75, y: 16 - y * 0.75, zoom: 0.75 })
+  }
   const openNode = (node) => { if (node?.data?.guid) go('functions', 'flow', node.data.guid, node.data.nodeId) }
   function onkey(e) {
     if (e.key !== 'Enter') return
@@ -127,7 +133,7 @@
         onnodeclick={({ node }) => !node.data.head && openNode(node)} proOptions={{ hideAttribution: true }}>
         <FlowApi onready={(f) => (flow = f)} />
         <Background bgColor="var(--color-bg)" patternColor="var(--color-line)" gap={22} />
-        <MiniMap pannable zoomable nodeColor={(n) => FAM_COLOR[n.data?.n?.fam] ?? 'var(--color-line-strong)'} bgColor="var(--color-surface)" maskColor="var(--color-scrim)" ariaLabel="Mini map" />
+        <MiniMap width={160} height={100} pannable zoomable nodeColor={(n) => FAM_COLOR[n.data?.n?.fam] ?? 'var(--color-line-strong)'} bgColor="var(--color-surface)" maskColor="var(--color-scrim)" ariaLabel="Mini map" />
         <Panel position="bottom-left"><div class="zoom">
           <button type="button" aria-label="Zoom in" onclick={() => flow?.zoomIn()}>+</button>
           <button type="button" aria-label="Zoom out" onclick={() => flow?.zoomOut()}>−</button>
@@ -140,7 +146,7 @@
 </Page>
 
 <style>
-  .wc { height: calc(100vh - 230px); min-height: 520px; border: 1px solid var(--color-line); border-radius: var(--radius-lg); overflow: hidden; }
+  .wc { height: calc(100vh - 190px); min-height: 640px; border: 1px solid var(--color-line); border-radius: var(--radius-lg); overflow: hidden; }
   .wc :global(.svelte-flow) { --xy-background-color: var(--color-bg); background: var(--color-bg); }
   .wc :global(.svelte-flow__node-car) { padding: 0; border: 0; background: transparent; }
   .zoom { display: flex; gap: 6px; }

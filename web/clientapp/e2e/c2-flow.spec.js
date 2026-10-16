@@ -296,9 +296,9 @@ test('spare output o2: wire its input from the inspector and by dragging on the 
     await settle(page)
     await waitFor(async () => (await deviceByName('PDM-04')).outputs.find((o) => o.number === 2).inputVal === snap.o2.inputVal, 15_000, 'undo o2')
     // drag a wire: Brake state → o2 input
-    const brakeIdx = (await apiJson('GET', `/api/devices/${pdm4.guid}/inputs`)).find((v) => v.name === 'Brake').index
+    const brake = (await apiJson('GET', `/api/devices/${pdm4.guid}/inputs`)).find((v) => v.name === 'Brake'), brakeIdx = brake.index
     await page.getByRole('button', { name: 'Tidy' }).click()
-    const src = page.locator(`.svelte-flow__node[data-id="caninput:4"] .svelte-flow__handle[data-handleid="v${brakeIdx}"]`)
+    const src = page.locator(`.svelte-flow__node[data-id="caninput:${brake.number}"] .svelte-flow__handle[data-handleid="v${brakeIdx}"]`)
     const dst = page.locator('.svelte-flow__node[data-id="output:2"] .svelte-flow__handle[data-handleid="input"]')
     await src.scrollIntoViewIfNeeded()
     await src.dragTo(dst)
@@ -371,6 +371,7 @@ test('suggestion banner: Replace groups blocks (a record on the server), Open in
     await page.getByTestId('tool-undo').click()
     await settle(page)
     await expect(sug).toContainText('Ready to start')
+    if (!(await page.getByTestId('replace-all').isVisible())) await page.getByTestId('tool-palette').click()
     await page.getByTestId('replace-all').click()
     await expect(page.locator('.svelte-flow__node[data-id^="grp:"]')).toHaveCount(3)
     // the blocks on the module did not change
@@ -401,6 +402,7 @@ test('keyboard: Tab walks blocks, Enter opens the inspector, / opens Add; search
   await expect(page.getByRole('dialog', { name: 'Add a block' })).toBeVisible()
   await expect(page.getByRole('dialog', { name: 'Add a block' }).getByTestId('add-Math')).toBeEnabled()   // firmware 5.6 on the Sim
   await page.keyboard.press('Escape')
+  await page.getByTestId('tool-palette').click()
   await page.getByTestId('find').fill('gear in')
   await page.getByRole('list', { name: 'Matching blocks' }).getByRole('button', { name: /Gear in P/ }).click()
   await expect(insp(page).getByRole('heading', { level: 2 })).toHaveText('Gear in P')
@@ -450,6 +452,7 @@ test('signal from another module adds a CAN input that reads it over CAN @exclus
   test.skip(before.enabled, 'PDM-04 CAN input 32 is in use')
   try {
     await openFlow(page)
+    if (!(await page.getByTestId('add-remote').isVisible())) await page.getByTestId('tool-palette').click()
     await page.getByTestId('add-remote').click()
     const dlg = page.getByRole('dialog', { name: 'Signal from another module' })
     await dlg.getByRole('button', { name: 'From module', exact: true }).click()
