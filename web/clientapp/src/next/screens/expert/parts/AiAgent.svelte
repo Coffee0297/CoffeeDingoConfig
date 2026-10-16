@@ -1,10 +1,38 @@
 <script>
-  // AI agent tab (board H29, tab 1). The MCP server runs inside this app at /mcp. What the backend can
-  // report today: its address, name, tool list and a live handshake. Server status, connected clients,
-  // per-tool approval and the activity journal are gap G22 and are shown as not available yet.
+  // AI agent tab (board H29, tab 1). The MCP server runs inside this app at /mcp. GET /api/agent (G22) gives
+  // its on/off state, connected assistants, the tools that ask first, requests waiting and the journal of
+  // what an assistant changed, each with Undo (the project goes back; Apply to car sends it).
   import { onMount } from 'svelte'
-  import { Card, Button, Chip, StateDot, Banner, Field, Empty } from '../../../ui/index.js'
-  import { toast } from '../../../lib/live.svelte.js'
+  import { Card, Button, StateDot, Banner, Field, Empty, Checkbox } from '../../../ui/index.js'
+  import { toast, live } from '../../../lib/live.svelte.js'
+  import { ago } from '../../functions/parts/catalog.js'
+  import Confirm from '../../power/parts/Confirm.svelte'
+
+  let agent = $state(null)
+  async function loadAgent() { try { agent = await (await fetch('/api/agent')).json() } catch { agent = null } }
+  onMount(() => { loadAgent(); const t = setInterval(loadAgent, 2000); return () => clearInterval(t) })
+  $effect(() => { live.agentPending; loadAgent() })
+  const post = async (url, body) => {
+    const r = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body ?? {}) })
+    const j = await r.json().catch(() => null)
+    if (!r.ok) throw new Error(j?.error ?? 'HTTP ' + r.status)
+    return j
+  }
+  async function setEnabled(on) {
+    try { await post('/api/agent/enabled', { enabled: on }); toast(on ? 'AI agent server started.' : 'AI agent server stopped. Assistants are turned away.', 'info', 3000) }
+    catch (e) { toast(e.message, 'error', 6000) }
+    loadAgent()
+  }
+  async function setAsk(tool, ask) { try { await post('/api/agent/ask', { tool, ask }) } catch (e) { toast(e.message, 'error', 6000) } loadAgent() }
+  async function answer(id, approve) { try { await post(`/api/agent/approvals/${id}`, { approve }) } catch (e) { toast(e.message, 'warn', 4000) } loadAgent() }
+  let undoOf = $state(null), undoOpen = $state(false)
+  async function undo() {
+    const e = undoOf; undoOpen = false
+    try { await post(`/api/agent/undo/${e.id}`); toast(`Undone: the project is back as it was before ${e.tool}. Apply to car sends it to the modules.`, 'info', 6000) }
+    catch (err) { toast(err.message, 'error', 6000) }
+    loadAgent()
+  }
+  const asks = (name) => !!agent?.ask?.includes(name)
 
   let info = $state(null)
   let loadErr = $state('')
@@ -61,7 +89,7 @@
       {:else if !info}<p class="muted" role="status">Asking the server…</p>
       {:else}
         <div class="run" data-testid="ai-status">
-          <StateDot tone="on" shape="dot" label="Running" />
+          {#if agent?.enabled === false}<StateDot tone="off" shape="ring" label="Stopped" />{:else}<StateDot tone="on" shape="dot" label="Running" />{/if}
           <span class="muted">{info.name} {info.version} · listening on this computer</span>
         </div>
         <div class="url">
@@ -70,9 +98,10 @@
         </div>
         <div class="row">
           <Button variant="primary" onclick={testConnection} busy={testing} data-testid="ai-test">Test connection</Button>
-          <Button disabled title="Not available yet: the server starts and stops with the app.">Stop server</Button>
+          {#if agent?.enabled === false}<Button onclick={() => setEnabled(true)} data-testid="ai-start">Start server</Button>
+          {:else}<Button onclick={() => setEnabled(false)} disabled={!agent} data-testid="ai-stop">Stop server</Button>{/if}
         </div>
-        <p class="muted gap"><Chip tone="muted" dashed>Not available yet</Chip> Start and stop. The backend has no switch for the server, so it always runs while the app runs (gap G22).</p>
+        <p class="muted gap">Stopped, the server turns every assistant away until you start it again. It runs again when the app restarts.</p>
         {#if test}<Banner tone={test.ok ? 'ok' : 'fault'} data-testid="ai-test-result">{test.text}</Banner>{/if}
       {/if}
     </Card>
@@ -84,25 +113,53 @@
       {:else}<p class="muted">Available when the server answers.</p>{/if}
     </Card>
 
+    {#if agent?.pending?.length}
+      <Card title="Waiting for you" aria-label="Requests waiting">
+        <ul class="list" data-testid="ai-pending">
+          {#each agent.pending as p (p.id)}
+            <li><span><code class="mono">{p.tool}</code> · {p.client}</span>
+              <span class="row"><Button size="sm" onclick={() => answer(p.id, false)}>Refuse</Button><Button size="sm" variant="primary" onclick={() => answer(p.id, true)}>Allow</Button></span></li>
+          {/each}
+        </ul>
+      </Card>
+    {/if}
+
     <Card title="Connected assistants">
-      <Empty title="Not available yet" text="The server does not keep a list of connected assistants yet (gap G22), so who is connected and when they last called cannot be shown." />
+      {#if agent?.clients?.length}
+        <ul class="list" data-testid="ai-clients">
+          {#each agent.clients as c (c.id)}
+            <li><span><strong>{c.name}</strong> <span class="muted mono">{c.id}</span></span><span class="muted"><time datetime={c.lastCall}>{ago(c.lastCall)}</time> · {c.calls} call{c.calls === 1 ? '' : 's'}</span></li>
+          {/each}
+        </ul>
+      {:else}<Empty title="No assistant yet" text="An assistant shows here after its first call to the address above." />{/if}
     </Card>
   </div>
 
   <div class="stack">
     <Card title="What an assistant can do" subtitle={info ? `${info.tools?.length ?? 0} tools, read from the server` : ''}>
       <Field label="Search the tools" bind:value={q} placeholder="for example lua" data-testid="ai-search" />
-      <p class="muted gap"><Chip tone="muted" dashed>Not available yet</Chip> Which tools ask you first. The server has no approval setting yet (gap G22), so every tool below runs when the assistant calls it.</p>
+      <p class="muted gap">Tick a tool to be asked before it runs. Flashing and output changes ask by default.</p>
       <ul class="tools" data-testid="ai-tools" tabindex="0" aria-label="Tools the AI agent can use">
         {#each tools as t (t.name)}
-          <li><code class="mono">{t.name}</code><span class="muted">{t.description}</span></li>
+          <li><span class="th"><code class="mono">{t.name}</code><Checkbox label="Ask me first" checked={asks(t.name)} onchange={(v) => setAsk(t.name, v)} data-testid={'ask-' + t.name} /></span><span class="muted">{t.description}</span></li>
         {:else}<li class="muted">{info ? 'No tool matches.' : 'The tools show here when the server answers.'}</li>{/each}
       </ul>
     </Card>
 
-    <Card title="Activity journal and undo">
-      <Empty title="Not available yet" text="The server does not record what an assistant changed (gap G22), so there is no list of its actions and nothing to undo here. Save the project often while an assistant works." />
+    <Card title="Activity journal and undo" subtitle="What an assistant changed since the app started">
+      {#if agent?.journal?.length}
+        <ul class="list" data-testid="ai-journal">
+          {#each agent.journal as e (e.id)}
+            <li class:undone={e.undone}><span><code class="mono">{e.tool}</code> · {e.client} · <time datetime={e.at}>{ago(e.at)}</time></span>
+              <span class="row"><span class:muted={e.ok} class:fault={!e.ok}>{e.undone ? 'undone' : e.status}</span>
+                {#if e.undoable}<Button size="sm" onclick={() => { undoOf = e; undoOpen = true }} data-testid={'undo-' + e.id}>Undo</Button>{/if}</span></li>
+          {/each}
+        </ul>
+      {:else}<Empty title="Nothing changed yet" text="Each change an assistant makes shows here, and the recent ones can be undone." />{/if}
     </Card>
+    <Confirm bind:open={undoOpen} title="Undo this change?" confirmLabel="Undo" onconfirm={undo}>
+      {#if undoOf}The project goes back to how it was before <code class="mono">{undoOf.tool}</code>, and every later change by an assistant is undone too. The modules keep what they have until you Apply to car.{/if}
+    </Confirm>
   </div>
 </div>
 
@@ -118,5 +175,10 @@
   .cfg { margin: 0; padding: var(--space-3); border: 1px solid var(--color-line); border-radius: var(--radius-md); background: var(--color-raised); overflow-x: auto; font-size: var(--text-xs); }
   .tools { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; max-height: 520px; overflow: auto; }
   .tools li { display: flex; flex-direction: column; gap: 2px; padding: var(--space-2) 0; border-bottom: 1px solid var(--color-line); }
+  .th { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); }
+  .list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+  .list li { display: flex; justify-content: space-between; align-items: center; gap: var(--space-3); padding: var(--space-2) 0; border-bottom: 1px solid var(--color-line); flex-wrap: wrap; }
+  .list li.undone { opacity: 0.6; }
+  .fault { color: var(--color-fault); font-weight: 600; }
   .tools code { font-weight: 700; }
 </style>
