@@ -165,6 +165,8 @@ test('firmware: the image check names an image without a board marker (G7)', asy
   expect(c.board).toBe('dingoPDM'); expect(c.version).toBe('5.5.112'); expect(c.kind).toBe('srec')
   expect(c.problems.join(' ')).toMatch(/no board marker/)
   expect(c.modules.length).toBeGreaterThan(0)
+})
+
 // Sim module reset through the Sim's MCP endpoint (cleanup only)
 async function simReset(module) {
   await fetch('http://127.0.0.1:8787/mcp', { method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'application/json, text/event-stream' },
