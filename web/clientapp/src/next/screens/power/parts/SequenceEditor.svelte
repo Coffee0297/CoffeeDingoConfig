@@ -6,6 +6,7 @@
   import { Dialog, Button, Select, Stepper, Checkbox, Banner } from '../../../ui/index.js'
   import { api, live, hex, toast } from '../../../lib/live.svelte.js'
   import { compileSequence, N_SLEEP, N_HOLD, N_FRAME, tIdx } from '../../../../lib/sleepSeq.js'
+  import { remoteItems, resolveRemote } from '../../../lib/remote.js'
   let { open = $bindable(false), seq } = $props()
 
   const mods = $derived(live.devices.filter((d) => /pdm|canboard/i.test(d.type ?? '')))
@@ -35,12 +36,21 @@
     Promise.all([api.functions(g), api.inputs(g)]).then(([f, v]) => {
       if (!alive) return
       mf = f; mv = v
-      ign = (f?.timers ?? []).find((t) => t.enabled && t.name === N_SLEEP)?.input ?? 0
+      ign = String((f?.timers ?? []).find((t) => t.enabled && t.name === N_SLEEP)?.input ?? 0)
     }).catch((e) => (err = e.message))
     return () => { alive = false }
   })
   const own = (v) => v.kind === 'timer' && /^Sleep · /.test((mf?.timers ?? []).find((t) => t.number === v.number)?.name ?? '')
-  const ignItems = $derived(mv.filter((v) => v.kind !== 'sys' && v.type !== 'float' && !own(v)).map((v) => ({ value: v.index, label: v.name })))
+  // on/off signals on other modules and ECUs; Stage links the picked one to a CAN input on the master
+  let remote = $state([])
+  $effect(() => {
+    const g = masterGuid
+    if (!open || !g) return
+    let alive = true
+    untrack(() => remoteItems(g, 'bool')).then((r) => { if (alive) remote = r })
+    return () => { alive = false }
+  })
+  const ignItems = $derived([...mv.filter((v) => v.kind !== 'sys' && v.type !== 'float' && !own(v)).map((v) => ({ value: String(v.index), label: v.name })), ...remote])
 
   function move(i, d) {
     const j = i + d
@@ -53,7 +63,7 @@
   const resort = () => (followers = [...followers].sort((a, b) => a.delay - b.delay))
 
   function validate() {
-    if (!ign) return 'Pick the ignition signal of the master module.'
+    if (!ign || ign === '0') return 'Pick the ignition signal of the master module.'
     if (!(sleepS >= 1 && sleepS <= 3600)) return 'The master sleep time must be 1–3600 s.'
     if (quietOn && !(quietS >= 0 && quietS < sleepS)) return 'The bus must go quiet before the master sleeps.'
     if (!(frameS >= 0 && frameS < sleepS)) return 'The shutdown frame must go out before the master sleeps.'
@@ -69,11 +79,13 @@
     const done = []
     try {
       const m = mods.find((d) => d.guid === masterGuid)
+      ign = String(await resolveRemote(m.guid, ign, 'bool'))
       const f = await api.functions(m.guid), v = await api.inputs(m.guid)
+      mv = v
       // keep the held outputs the old designer may have set up
       const tH = (f.timers ?? []).find((t) => t.enabled && t.name === N_HOLD), o = outsOf(m, f)
       const held = tH ? o.filter((x) => x.inputIdx === tIdx(tH.number, v)).map((x) => x.number) : []
-      await compileSequence(m.guid, f, v, o, isCb(m), { name: m.name, role: 'master', ign, frameId, sleepS, quietOn, quietS, holdOn: !!tH && held.length > 0, holdS: tH ? Math.round(tH.preset / 1000) : 0, held, frameS }, live.devices)
+      await compileSequence(m.guid, f, v, o, isCb(m), { name: m.name, role: 'master', ign: Number(ign), frameId, sleepS, quietOn, quietS, holdOn: !!tH && held.length > 0, holdS: tH ? Math.round(tH.preset / 1000) : 0, held, frameS }, live.devices)
       done.push(m.name)
       for (const x of followers.filter((x) => x.on)) {
         const d = mods.find((y) => y.guid === x.guid)

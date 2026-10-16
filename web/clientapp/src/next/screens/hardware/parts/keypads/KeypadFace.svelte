@@ -1,6 +1,8 @@
 <script>
   // The keypad face: every key with its LED state, backlight, dimming signal, remove.
+  import { untrack } from 'svelte'
   import { Card, Banner, Button, Select, StateDot } from '../../../../ui/index.js'
+  import { remoteItems, resolveRemote, isRemoteKey } from '../../../../lib/remote.js'
   import { hex } from '../../../../lib/live.svelte.js'
   import { modelOf, COLORS, SWATCH, MAX_BRIGHT, pct, write } from './keypadLogic.js'
   import Confirm from '../../../power/parts/Confirm.svelte'
@@ -9,7 +11,15 @@
   const m = $derived(modelOf(pad.kp.model))
   const keys = $derived(pad.kp.buttons.slice(0, m.buttons))
   const h = $derived(heard(pad.kp.id))
-  const sigItems = $derived([{ value: '0', label: 'Never dim' }, ...signals.map((s) => ({ value: String(s.index), label: s.name }))])
+  // signals on other modules and ECUs: a pick claims a CAN input on the module that holds the keypad
+  let remote = $state([])
+  $effect(() => {
+    const g = pad.pdm.guid
+    let alive = true
+    untrack(() => remoteItems(g, 'bool')).then((r) => { if (alive) remote = r }).catch(() => {})   // untracked: reads the polled device list
+    return () => { alive = false }
+  })
+  const sigItems = $derived([{ value: '0', label: 'Never dim' }, ...signals.map((s) => ({ value: String(s.index), label: s.name })), ...remote])
   let level = $state(63), dragging = $state(false), msg = $state(''), removeOpen = $state(false), busy = $state(false)
   $effect(() => { if (!dragging) level = pad.kp.backlightBrightness })
 
@@ -19,6 +29,10 @@
     if (r) { msg = `Backlight set to ${pct(level)} %.`; await onchanged?.() }
   }
   async function setDim(v) {
+    if (isRemoteKey(v)) {
+      busy = true
+      try { v = await resolveRemote(pad.pdm.guid, v, 'bool') } catch (e) { msg = e?.message ?? String(e); return } finally { busy = false }
+    }
     const r = await write(pad.pdm.guid, 'keypad', pad.slot, { dimmingVar: Number(v) })
     if (r) { msg = Number(v) ? 'The backlight dims while that signal is true.' : 'The backlight no longer dims.'; await onchanged?.() }
   }
@@ -58,7 +72,7 @@
     <input id="backlight" type="range" min="0" max={MAX_BRIGHT} bind:value={level} oninput={() => (dragging = true)} onchange={setBacklight} data-testid="backlight" aria-valuetext={`${pct(level)} percent`} />
     <span class="mono" data-testid="backlight-pct">{pct(level)} %</span>
   </div>
-  <Select label="Dim the backlight while this signal is true" items={sigItems} value={String(pad.kp.dimmingVar ?? 0)} onchange={setDim} data-testid="dim-signal" />
+  <Select label="Dim the backlight while this signal is true" items={sigItems} value={String(pad.kp.dimmingVar ?? 0)} onchange={setDim} disabled={busy} data-testid="dim-signal" />
   {#if msg}<p class="muted" role="status" data-testid="keypad-msg">{msg}</p>{/if}
   <div><Button variant="danger" size="sm" onclick={() => (removeOpen = true)} data-testid="remove-keypad">Remove this keypad</Button></div>
 </Card>

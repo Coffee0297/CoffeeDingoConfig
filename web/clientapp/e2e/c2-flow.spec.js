@@ -455,7 +455,7 @@ test('signal from another module adds a CAN input that reads it over CAN @exclus
     if (!(await page.getByTestId('add-remote').isVisible())) await page.getByTestId('tool-palette').click()
     await page.getByTestId('add-remote').click()
     const dlg = page.getByRole('dialog', { name: 'Signal from another module' })
-    await dlg.getByRole('button', { name: 'From module', exact: true }).click()
+    await dlg.getByRole('button', { name: 'From module or ECU', exact: true }).click()
     await page.getByRole('option', { name: /^CB-1/ }).click()
     await dlg.getByLabel('Find a signal').fill('DigitalInput8')
     await dlg.getByRole('radio').first().click()

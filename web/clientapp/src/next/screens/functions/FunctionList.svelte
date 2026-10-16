@@ -60,6 +60,7 @@
       <label class="srch"><span class="sr-only">Search functions</span>
         <input class="nx-input" type="search" bind:value={q} placeholder="name, signal, pin (J3-7), module" aria-label="Search functions" data-testid="fn-search" />
       </label>
+      <Button href={href('functions', 'cross-module')} data-testid="cross-module-link" title="A switch on one module drives outputs on other modules">Cross-module</Button>
       <Button variant="primary" href={href('functions', 'add')} data-testid="add-function">+ Add function</Button>
     {/snippet}
   </PageHeader>

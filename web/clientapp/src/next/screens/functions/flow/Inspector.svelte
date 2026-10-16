@@ -4,12 +4,14 @@
    * sentence. Edits are a draft until "Save" (one partial POST; it reaches the car with Apply, G2). Physical channels (outputs,
    * analog inputs) link to their Hardware screen for protection / calibration settings.
    */
+  import { untrack } from 'svelte'
   import { Button, Chip, Field, Select, Segmented, Checkbox, Banner } from '../../../ui/index.js'
   import { href } from '../../../router.svelte.js'
   import { FAM_COLOR, FAM_NAME, OPS, OP_WORDS, JOIN, TIMER_MODES, EDGES, MATH_OPS, isRelational, sourceOptions, canWire, hexId, parseId } from './model.js'
   import { sentenceFor } from './sentence.js'
   import { fmt } from './livevals.js'
   import { olderThan } from '../../hardware/parts/util.js'
+  import { remoteItems, isRemoteKey } from '../../../lib/remote.js'
 
   let { model, node, dev, lv, links = [], idMap = null, busy = false, onsave, onremove, onselect, onungroup, onopenlink } = $props()
 
@@ -113,12 +115,24 @@
     err = validate()
     if (err) return
     const body = { ...dirtyBody }
-    for (const k of Object.keys(body)) if (typeof base[k] === 'number' || ['input', 'var0', 'var1', 'var2', 'xInput', 'yInput', 'incInput', 'decInput', 'resetInput', 'inputA', 'inputB', 'leftInput', 'rightInput', 'clockInput'].includes(k)) body[k] = Number(body[k])
+    for (const k of Object.keys(body)) if (!isRemoteKey(body[k]) && typeof base[k] === 'number' || ['input', 'var0', 'var1', 'var2', 'xInput', 'yInput', 'incInput', 'decInput', 'resetInput', 'inputA', 'inputB', 'leftInput', 'rightInput', 'clockInput'].includes(k)) body[k] = Number(body[k])
     await onsave?.(node.id, body, `${node.title}: ${Object.keys(body).join(', ')}`)
   }
 
   // ---- inputs ----
-  const optsFor = (accepts) => sourceOptions(model, accepts, node?.id)
+  // signals on other modules and ECUs; Save claims a CAN input here that reads the picked one
+  const devGuid = $derived(dev?.guid ?? '')
+  let remote = $state({ bool: [], num: [] })
+  $effect(() => {
+    const g = devGuid
+    if (!g) return
+    let alive = true
+    remote = { bool: [], num: [] }
+    untrack(() => Promise.all([remoteItems(g, 'bool'), remoteItems(g, 'num')])).then(([b, n]) => { if (alive) remote = { bool: b, num: n } })   // untracked: it reads the polled device list
+    return () => { alive = false }
+  })
+  const remoteFor = (accepts) => (accepts === 'bool' ? remote.bool : [...remote.num, ...remote.bool.filter((i) => !i.value.startsWith('d:'))])
+  const optsFor = (accepts) => [...sourceOptions(model, accepts, node?.id), ...remoteFor(accepts)]
   const inputRows = $derived((node?.ins ?? []).filter((p) => fields.includes(p.id)))
   const typeOfIdx = (idx) => (model.byIdx.get(Number(idx))?.type === 'bool' ? 'bool' : 'num')
   const fromLabel = (idx) => optsFor('num').find((o) => o.value === String(idx))?.label ?? (idx ? '#' + idx : 'not connected')
@@ -209,14 +223,15 @@
         {@const opts = optsFor(p.accepts)}
         <div class="inrow">
           <div class="ip">
-            <Select label={p.label + (p.optional ? ' (optional)' : '')} items={opts.some((o) => o.value === String(draft[p.id] ?? 0)) ? opts : [...opts, { value: String(draft[p.id]), label: fromLabel(draft[p.id]) }]} bind:value={() => String(draft[p.id] ?? 0), (v) => (draft[p.id] = Number(v))} data-testid={'src-' + p.id} />
+            <Select label={p.label + (p.optional ? ' (optional)' : '')} items={opts.some((o) => o.value === String(draft[p.id] ?? 0)) ? opts : [...opts, { value: String(draft[p.id]), label: fromLabel(draft[p.id]) }]} bind:value={() => String(draft[p.id] ?? 0), (v) => (draft[p.id] = isRemoteKey(v) ? v : Number(v))} data-testid={'src-' + p.id} />
           </div>
           {#if node.kind === 'virtualinput'}
             <button type="button" class="not" aria-pressed={!!draft['not' + p.id.slice(3)]} aria-label={'NOT on ' + p.label} onclick={() => (draft['not' + p.id.slice(3)] = !draft['not' + p.id.slice(3)])}>NOT</button>
           {/if}
           <span class="iv mono" title="Live value">{fmt(lv.v[draft[p.id]])}</span>
         </div>
-        {#if draft[p.id] && !canWire(typeOfIdx(draft[p.id]), p.accepts)}<p class="hint bad">▲ That is a number; an on/off input needs a Compare in between.</p>{/if}
+        {#if isRemoteKey(draft[p.id])}<p class="hint">◆ Over CAN: Save adds a CAN input on {dev?.name} that reads it.</p>
+        {:else if draft[p.id] && !canWire(typeOfIdx(draft[p.id]), p.accepts)}<p class="hint bad">▲ That is a number; an on/off input needs a Compare in between.</p>{/if}
       {/each}
     {/if}
 

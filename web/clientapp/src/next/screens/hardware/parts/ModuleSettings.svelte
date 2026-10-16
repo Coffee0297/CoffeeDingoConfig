@@ -5,13 +5,15 @@
   import { untrack } from 'svelte'
   import { Button, Banner, Chip, Field, Switch, StateDot } from '../../../ui/index.js'
   import Confirm from '../../../shell/parts/Confirm.svelte'
-  import { live, api, toast, mutate, device, moduleState, hex } from '../../../lib/live.svelte.js'
+  import { live, api, toast, mutate, device, moduleState, hex, project } from '../../../lib/live.svelte.js'
   import { href, go } from '../../../router.svelte.js'
   import { ui } from '../../../shell/ui.svelte.js'
   import { addLike } from '../../../shell/parts/addmodule.svelte.js'
   import { postAction, waitRead } from '../../../shell/parts/act.js'
   import { parseId, hexId, clashOf, freeBases, hitsObd, spanText, fwText, busIds } from './ids.js'
   import { deployToUsb } from './deploy.js'
+  import { loadCar, carLinks } from '../../functions/flow/car.js'
+  import { linkRemote } from '../../functions/flow/net.js'
 
   let { guid, full = false, onremoved } = $props()
 
@@ -57,17 +59,35 @@
   const baseProblem = $derived(base == null ? 'Use a hex ID from 0x001 to 0x7FF, like 0x6C0.' : '')
   const canSetBase = $derived(!!d && edited && base != null && !clash && !reBusy)
 
-  function askBase() {
+  async function askBase() {
     const live_ = d.connected && live.connected
-    dlg = { title: live_ ? `Re-address ${d.name} to ${hexId(base)}?` : `Change ${d.name}'s base ID in the project?`, kind: 'base', confirm: live_ ? `Re-address to ${hexId(base)}` : 'Change in project', run: setBase }
+    // CAN inputs on other modules that read this module's frames: re-pointed at the new ID after the change
+    reBusy = true
+    let links = []
+    try { links = carLinks(await loadCar(live.devices), live.devices).filter((l) => l.from.guid === guid && l.sig) } catch { /* no links known: nothing to re-point */ } finally { reBusy = false }
+    dlg = { title: live_ ? `Re-address ${d.name} to ${hexId(base)}?` : `Change ${d.name}'s base ID in the project?`, kind: 'base', confirm: live_ ? `Re-address to ${hexId(base)}` : 'Change in project', links, run: () => setBase(links) }
   }
-  async function setBase() {
+  /** Re-point other modules' CAN inputs at this module's new ID; toast what happened. */
+  async function relink(links) {
+    if (!links.length) return
+    const failed = []
+    for (const l of links) {
+      const who = live.devices.find((x) => x.guid === l.to.guid)?.name ?? 'a module'
+      try { await linkRemote(l.to.guid, Number(l.to.node.split(':')[1]), guid, l.sig.name) } catch (e) { failed.push(`${who} CAN input ${l.to.node.split(':')[1]}: ${e?.message ?? e}`) }
+    }
+    project.dirty = true
+    const ok = links.length - failed.length
+    if (failed.length) toast(`Updated ${ok} of ${links.length} CAN inputs on other modules. Not updated: ${failed.join('; ')}`, 'error', 10000)
+    else toast(`Updated ${ok} CAN input${ok === 1 ? '' : 's'} on other modules to the new ID. Apply to car to send them.`, 'info', 5000)
+  }
+  async function setBase(links = []) {
     reBusy = true; reMsg = ''
     const wasLive = d.connected && live.connected
     const name = d.name
     const target = base
     try {
       if (!(await mutate(() => api.modify(guid, name, hexId(target)), wasLive ? undefined : `Base ID of ${name} changed to ${hexId(target)} in the project. The module itself is not changed.`))) return
+      await relink(links)
       if (!wasLive) { reMsg = `The project now expects ${name} at ${hexId(target)}. The module was not answering, so it was not told.`; return }
       reMsg = `Sent. ${name} restarts and should answer on ${hexId(target)} in a few seconds…`
       let ok = false
@@ -286,6 +306,7 @@
     {:else}
       <p>{d?.name} is not answering, so only the project changes: it will expect the module at <span class="mono">{base != null ? hexId(base) : ''}</span>. Re-address the module itself when it is on the bus.</p>
     {/if}
+    {#if dlg.links?.length}<p data-testid="base-relinks">{dlg.links.length} CAN input{dlg.links.length === 1 ? '' : 's'} on other modules read{dlg.links.length === 1 ? 's' : ''} this module; {dlg.links.length === 1 ? 'it' : 'they'} will be updated to the new ID.</p>{/if}
   {:else if dlg?.kind === 'deploy'}
     <p>The module plugged into USB ({usb?.label} at {usb ? hexId(usb.base) : ''}) gets the saved settings of {d?.name}{dlg.same ? '' : ` and restarts on base ID ${d ? hexId(d.baseId) : ''}`}. Its current settings are replaced. Read it into the project first if you want to keep them.</p>
     {#if d?.connected && !dlg.same}<p class="warn">▲ {d.name} is also live on the bus right now. Power it down first, or two modules will fight over its ID.</p>{/if}

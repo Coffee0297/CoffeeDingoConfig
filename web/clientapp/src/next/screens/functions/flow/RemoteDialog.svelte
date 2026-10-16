@@ -2,10 +2,11 @@
   /**
    * "Signal from another module": pick a module and one of the signals it broadcasts; the builder claims
    * a free CAN input here and fills it to decode that frame (POST /devices/{id}/link-remote). Nothing is
-   * written to the source module: it already broadcasts the signal.
+   * written to the source module: it already broadcasts the signal. An ECU (DBC device) works the same way:
+   * its signals are searched on the server and the CAN input is filled from the DBC record.
    */
   import { Dialog, Button, Select, Field } from '../../../ui/index.js'
-  import { live, isPdm, isCanboard } from '../../../lib/live.svelte.js'
+  import { live, api, isPdm, isCanboard } from '../../../lib/live.svelte.js'
   import { broadcastOf } from './car.js'
 
   let { open = $bindable(false), dev, funcs, busy = false, onlink } = $props()
@@ -13,37 +14,54 @@
   let q = $state('')
   let sigs = $state([])
   let pick = $state('')
-  const others = $derived(live.devices.filter((d) => d.guid !== dev?.guid && (isPdm(d) || isCanboard(d))))
+  const others = $derived(live.devices.filter((d) => d.guid !== dev?.guid && (isPdm(d) || isCanboard(d) || /dbc/i.test(d.type ?? ''))))
+  const srcIsEcu = $derived(/dbc/i.test(others.find((d) => d.guid === src)?.type ?? ''))
   const freeSlot = $derived((funcs?.canInputs ?? []).findLast((x) => !x.enabled))
   $effect(() => { if (open && !src && others.length) src = others[0].guid })
+  // a module's broadcast list is small: filter it here. A float32 can't be decoded by a CAN input.
   $effect(() => {
-    const g = src
-    if (!g) { sigs = []; return }
+    const g = src, ecu = srcIsEcu
+    pick = ''
+    if (!g || ecu) { sigs = []; return }
     let alive = true
-    broadcastOf(g).then((s) => { if (alive) sigs = s.filter((x) => x.inUse) })
+    broadcastOf(g).then((s) => { if (alive) sigs = s.filter((x) => x.inUse && !x.isFloat).map((x) => ({ ...x, key: x.name })) })
     return () => { alive = false }
   })
-  const shown = $derived(sigs.filter((s) => !q || ((s.label ?? '') + ' ' + s.name).toLowerCase().includes(q.toLowerCase())).slice(0, 80))
+  // an ECU's DBC can hold thousands of signals: search on the server (name or message), 60 at a time
+  $effect(() => {
+    const g = src, ecu = srcIsEcu, term = q
+    if (!g || !ecu) return
+    let alive = true
+    const t = setTimeout(() => api.dbcSearch(g, term, 60).then((r) => { if (alive) sigs = (r?.items ?? []).map((x) => ({ ...x, key: `${x.id}:${x.name}`, label: x.name, sub: `${x.messageName ?? ''} · 0x${x.id.toString(16).toUpperCase()}` })) }).catch(() => { if (alive) sigs = [] }), term ? 250 : 0)
+    return () => { alive = false; clearTimeout(t) }
+  })
+  const shown = $derived(srcIsEcu ? sigs : sigs.filter((s) => !q || ((s.label ?? '') + ' ' + s.name).toLowerCase().includes(q.toLowerCase())).slice(0, 80))
+  const picked = $derived(sigs.find((s) => s.key === pick))
+  function link() {
+    if (!picked) return
+    if (srcIsEcu) onlink?.({ dbc: picked, label: picked.name })
+    else onlink?.({ sourceGuid: src, signal: picked.name, canInput: freeSlot.number, label: picked.label })
+  }
 </script>
 
 <Dialog bind:open title="Signal from another module" description="Travels over CAN. The source already broadcasts it; this module gets a CAN input that reads it." width={620}>
   {#if !freeSlot}
     <p class="bad" role="alert">■ All CAN inputs on {dev?.name} are in use. Remove one first.</p>
   {/if}
-  <Select label="From module" items={others.map((d) => ({ value: d.guid, label: d.name + (d.connected ? '' : ' (not found)') }))} bind:value={src} />
+  <Select label="From module or ECU" items={others.map((d) => ({ value: d.guid, label: d.name + (/dbc/i.test(d.type ?? '') ? ' (ECU)' : d.connected ? '' : ' (not found)') }))} bind:value={src} />
   <Field label="Find a signal" bind:value={q} placeholder="e.g. headlights, brake, output 3" />
   <div class="list" role="radiogroup" aria-label="Signal">
-    {#each shown as s (s.name)}
-      <button type="button" role="radio" aria-checked={pick === s.name} class="sig" class:on={pick === s.name} onclick={() => (pick = s.name)}>
-        <span>{s.label ?? s.name}</span><span class="muted mono">{s.name}{s.unit ? ' · ' + s.unit : ''}</span>
+    {#each shown as s (s.key)}
+      <button type="button" role="radio" aria-checked={pick === s.key} class="sig" class:on={pick === s.key} onclick={() => (pick = s.key)}>
+        <span>{s.label ?? s.name}</span><span class="muted mono">{s.sub ?? s.name}{s.unit ? ' · ' + s.unit : ''}</span>
       </button>
     {/each}
-    {#if !shown.length}<p class="muted">No broadcast signal matches.</p>{/if}
+    {#if !shown.length}<p class="muted">{srcIsEcu ? 'No ECU signal matches.' : 'No broadcast signal matches.'}</p>{/if}
   </div>
-  <p class="muted hint">Uses CAN input {freeSlot?.number ?? '—'} on {dev?.name}. The ID and bits come from {others.find((d) => d.guid === src)?.name ?? 'the source'}'s base ID.</p>
+  <p class="muted hint">Uses CAN input {freeSlot?.number ?? '—'} on {dev?.name}. {srcIsEcu ? 'The ID and bits come from the ECU’s DBC.' : `The ID and bits come from ${others.find((d) => d.guid === src)?.name ?? 'the source'}'s base ID.`}</p>
   {#snippet footer()}
     <Button onclick={() => (open = false)}>Cancel</Button>
-    <Button variant="primary" disabled={!pick || !freeSlot || busy} {busy} onclick={() => onlink?.({ sourceGuid: src, signal: pick, canInput: freeSlot.number, label: sigs.find((s) => s.name === pick)?.label })}>Add CAN input</Button>
+    <Button variant="primary" disabled={!pick || !freeSlot || busy} {busy} onclick={link}>Add CAN input</Button>
   {/snippet}
 </Dialog>
 

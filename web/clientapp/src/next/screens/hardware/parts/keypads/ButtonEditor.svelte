@@ -1,11 +1,21 @@
 <script>
   // Map one button: enabled, name, momentary / toggle, up to 4 LED states, fault LED. Every change writes at once.
+  import { untrack } from 'svelte'
   import { Card, Banner, Checkbox, Field, Segmented, Select } from '../../../../ui/index.js'
+  import { remoteItems, resolveRemote, isRemoteKey } from '../../../../lib/remote.js'
   import { COLORS, pad4, write } from './keypadLogic.js'
   let { pad, btn, signals = [], onchanged } = $props()
 
   const colorItems = COLORS.map((c, i) => ({ value: String(i), label: c }))
-  const sigItems = $derived([{ value: '0', label: 'Not set' }, ...signals.map((s) => ({ value: String(s.index), label: s.name }))])
+  // signals on other modules and ECUs: a pick claims a CAN input on the module that holds the keypad
+  let remote = $state([])
+  $effect(() => {
+    const g = pad.pdm.guid
+    let alive = true
+    untrack(() => remoteItems(g, 'bool')).then((r) => { if (alive) remote = r }).catch(() => {})   // untracked: reads the polled device list
+    return () => { alive = false }
+  })
+  const sigItems = $derived([{ value: '0', label: 'Not set' }, ...signals.map((s) => ({ value: String(s.index), label: s.name })), ...remote])
   let name = $state(''), msg = $state(''), busy = $state(false)
   $effect(() => { name = btn.name })
   const number = $derived((pad.slot - 1) * 32 + btn.number)
@@ -18,6 +28,12 @@
     if (r) { msg = r.unconfirmed ? 'Saved in the project. The module did not confirm it.' : said; await onchanged?.() }
   }
   const setAt = (key, i, v, fill) => { const a = pad4(btn[key], fill); a[i] = v; return a }
+  /** A picked signal -> a local var index (a remote one links a CAN input first); null when that failed. */
+  async function local(v) {
+    if (!isRemoteKey(v)) return Number(v)
+    busy = true
+    try { return await resolveRemote(pad.pdm.guid, v, 'bool') } catch (e) { msg = e?.message ?? String(e); return null } finally { busy = false }
+  }
   const states = ['Default (state 0)', 'State 1', 'State 2', 'State 3']
 </script>
 
@@ -36,7 +52,7 @@
     <div class="led" data-testid={`led-${i}`}>
       <strong>{st}</strong>
       <Select label={`${st} colour`} hideLabel items={colorItems} value={String(pad4(btn.valColors, 0)[i])} disabled={busy} onchange={(v) => save({ valColors: setAt('valColors', i, Number(v), 0) }, `${st}: ${COLORS[Number(v)]}.`)} data-testid={`led-${i}-color`} />
-      <Select label={`${st} signal`} hideLabel items={sigItems} value={String(pad4(btn.valVars, 0)[i])} disabled={busy} onchange={(v) => save({ valVars: setAt('valVars', i, Number(v), 0) }, `${st}: signal changed.`)} data-testid={`led-${i}-signal`} />
+      <Select label={`${st} signal`} hideLabel items={sigItems} value={String(pad4(btn.valVars, 0)[i])} disabled={busy} onchange={async (v) => { const x = await local(v); if (x != null) save({ valVars: setAt('valVars', i, x, 0) }, `${st}: signal changed.`) }} data-testid={`led-${i}-signal`} />
       <Checkbox label="Blink" checked={!!pad4(btn.valBlink, false)[i]} disabled={busy} onchange={(v) => save({ valBlink: setAt('valBlink', i, v, false) }, `${st}: blink ${v ? 'on' : 'off'}.`)} data-testid={`led-${i}-blink`} />
       {#if pad4(btn.valBlink, false)[i]}
         <Select label={`${st} blink colour`} hideLabel items={colorItems} value={String(pad4(btn.blinkColors, 0)[i])} disabled={busy} onchange={(v) => save({ blinkColors: setAt('blinkColors', i, Number(v), 0) }, `${st}: blinks ${COLORS[Number(v)]}.`)} />
@@ -48,7 +64,7 @@
   <div class="led" data-testid="led-fault">
     <strong>Fault</strong>
     <Select label="Fault colour" hideLabel items={colorItems} value={String(btn.faultColor ?? 0)} disabled={busy} onchange={(v) => save({ faultColor: Number(v) }, `Fault LED: ${COLORS[Number(v)]}.`)} data-testid="led-fault-color" />
-    <Select label="Fault signal" hideLabel items={sigItems} value={String(btn.faultVar ?? 0)} disabled={busy} onchange={(v) => save({ faultVar: Number(v) }, 'Fault signal changed.')} data-testid="led-fault-signal" />
+    <Select label="Fault signal" hideLabel items={sigItems} value={String(btn.faultVar ?? 0)} disabled={busy} onchange={async (v) => { const x = await local(v); if (x != null) save({ faultVar: x }, 'Fault signal changed.') }} data-testid="led-fault-signal" />
     <Checkbox label="Blink" checked={!!btn.faultBlink} disabled={busy} onchange={(v) => save({ faultBlink: v }, `Fault blink ${v ? 'on' : 'off'}.`)} data-testid="led-fault-blink" />
     {#if btn.faultBlink}<Select label="Fault blink colour" hideLabel items={colorItems} value={String(btn.faultBlinkColor ?? 0)} disabled={busy} onchange={(v) => save({ faultBlinkColor: Number(v) }, `Fault blinks ${COLORS[Number(v)]}.`)} />{/if}
   </div>

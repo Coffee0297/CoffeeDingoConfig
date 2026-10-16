@@ -2,10 +2,12 @@
   // "What drives it": the chain of blocks behind each port of this output, the driving-input picker,
   // and the Compare / Combine builders. The picker edits the form (saved with the page's Save);
   // a builder writes its new block to a free slot at once, then points the form at it.
+  import { untrack } from 'svelte'
   import { Card, Button, Select, Switch, Dialog, Field, Checkbox, Chip, FwBadge, Empty } from '../../../ui/index.js'
   import { api, mutate, toast } from '../../../lib/live.svelte.js'
   import { href } from '../../../router.svelte.js'
   import { BLOCK, walkChain, funcArray, olderThan } from './util.js'
+  import { remoteItems, resolveRemote, isRemoteKey } from '../../../lib/remote.js'
 
   let { guid, dev, f = $bindable(), feed, connected = false, raw = null } = $props()
   let showRaw = $state(false)
@@ -18,6 +20,14 @@
     } catch (e) { loadErr = e?.message ?? String(e) } finally { loaded = true }
   }
   $effect(() => { guid; load() })
+  // signals on other modules and ECUs; a pick claims a CAN input on this module (staged like any edit)
+  let rBool = $state([]), rNum = $state([])
+  $effect(() => {
+    const g = guid
+    let alive = true
+    untrack(() => Promise.all([remoteItems(g, 'bool'), remoteItems(g, 'num')])).then(([b, n]) => { if (alive) { rBool = b; rNum = n } }).catch(() => {})   // untracked: reads the polled device list
+    return () => { alive = false }
+  })
 
   const lanes = $derived.by(() => {
     const L = [{ port: 'On', idx: f.input, key: 'input' }]
@@ -43,11 +53,18 @@
     const items = [{ value: '0', label: 'Nothing (stays off)' }, ...bools.filter((v) => v.index !== 0).map((v) => ({ value: String(v.index), label: v.name }))]
     const cur = Number(f.input) || 0
     if (cur && !items.some((i) => i.value === String(cur))) items.push({ value: String(cur), label: varmap.find((v) => v.index === cur)?.name ?? '#' + cur })
-    return items
+    return [...items, ...rBool]
   })
-  let driverVal = $state('0')
+  let driverVal = $state('0'), linking = $state(false)
   $effect(() => { driverVal = String(f.input ?? 0) })
-  function pickDriver(v) { f.input = Number(v); if (Number(v) && !f.enabled) { f.enabled = true; toast('Output turned on, because you gave it a rule.', 'info', 3000) } enableSource(Number(v)) }
+  async function pickDriver(v) {
+    let idx = Number(v)
+    if (isRemoteKey(v)) {
+      linking = true
+      try { idx = await resolveRemote(guid, v, 'bool'); await load() } catch (e) { toast(e?.message ?? String(e), 'error', 8000); driverVal = String(f.input ?? 0); return } finally { linking = false }
+    }
+    f.input = idx; if (idx && !f.enabled) { f.enabled = true; toast('Output turned on, because you gave it a rule.', 'info', 3000) } enableSource(idx)
+  }
 
   // A source that is switched off would drive nothing: switch it on (what the old editor did).
   async function enableSource(idx) {
@@ -68,8 +85,8 @@
   let cmp = $state({ name: '', input: '0', operator: '2', arg: 0, hyst: false, argOff: 0 })
   let comb = $state({ name: '', mode: '0', n0: false, v0: '0', c0: '0', n1: false, v1: '0', c1: '0', n2: false, v2: '0' })
   function open(kind) { bErr = ''; dlg = kind; if (kind === 'compare') cmp = { name: '', input: '0', operator: '2', arg: 0, hyst: false, argOff: 0 }; else comb = { name: '', mode: '0', n0: false, v0: '0', c0: '0', n1: false, v1: '0', c1: '0', n2: false, v2: '0' } }
-  const numItems = $derived([{ value: '0', label: 'Choose a value' }, ...nums.filter((v) => v.index !== 0).map((v) => ({ value: String(v.index), label: v.name }))])
-  const boolItems = $derived([{ value: '0', label: 'Not used' }, ...bools.filter((v) => v.index !== 0).map((v) => ({ value: String(v.index), label: v.name }))])
+  const numItems = $derived([{ value: '0', label: 'Choose a value' }, ...nums.filter((v) => v.index !== 0).map((v) => ({ value: String(v.index), label: v.name })), ...rNum])
+  const boolItems = $derived([{ value: '0', label: 'Not used' }, ...bools.filter((v) => v.index !== 0).map((v) => ({ value: String(v.index), label: v.name })), ...rBool])
 
   async function freeSlot(arr) {
     const fx = await api.functions(guid)
@@ -92,7 +109,8 @@
       if (!slot) { bErr = 'No free compare blocks on this module. Free one in the flow builder.'; return }
       const name = cmp.name.trim() || `condition${slot.number}`
       const arg = Number(cmp.arg)
-      const r = await api.setFunction(guid, 'condition', slot.number, { enabled: true, name, input: Number(cmp.input), operator: Number(cmp.operator), arg, argOff: cmp.hyst ? Number(cmp.argOff) : arg })
+      const input = await resolveRemote(guid, cmp.input, 'num')
+      const r = await api.setFunction(guid, 'condition', slot.number, { enabled: true, name, input, operator: Number(cmp.operator), arg, argOff: cmp.hyst ? Number(cmp.argOff) : arg })
       await bind('condition', slot.number, name, !!r?.written)
     } catch (e) { bErr = e?.message ?? String(e) } finally { busy = false }
   }
@@ -104,8 +122,10 @@
       const slot = await freeSlot('virtualInputs')
       if (!slot) { bErr = 'No free combine blocks on this module. Free one in the flow builder.'; return }
       const name = comb.name.trim() || `virtualInput${slot.number}`
+      const done = {}, at = async (v) => (done[v] ??= await resolveRemote(guid, v, 'bool'))   // one CAN input per distinct remote pick
+      const [var0, var1, var2] = [await at(comb.v0), await at(comb.v1), await at(comb.v2)]
       const r = await api.setFunction(guid, 'virtualinput', slot.number, { enabled: true, name, mode: Number(comb.mode),
-        not0: comb.n0, var0: Number(comb.v0), cond0: Number(comb.c0), not1: comb.n1, var1: Number(comb.v1), cond1: Number(comb.c1), not2: comb.n2, var2: Number(comb.v2) })
+        not0: comb.n0, var0, cond0: Number(comb.c0), not1: comb.n1, var1, cond1: Number(comb.c1), not2: comb.n2, var2 })
       await bind('virtualinput', slot.number, name, !!r?.written)
     } catch (e) { bErr = e?.message ?? String(e) } finally { busy = false }
   }
@@ -140,7 +160,7 @@
     {/each}
 
     <div class="pick">
-      <Select label="Change what turns it on" items={driverItems} bind:value={driverVal} onchange={pickDriver} data-testid="driver-select" />
+      <Select label="Change what turns it on" items={driverItems} bind:value={driverVal} onchange={pickDriver} disabled={linking} data-testid="driver-select" />
     </div>
 
     <div class="chips">

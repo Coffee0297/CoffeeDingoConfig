@@ -76,6 +76,11 @@ test('ignition: the setup is editable on firmware 5.6 and the rules follow the m
   await expect(page.getByTestId('ignition-banner')).toContainText(/Ignition is not set up|runs the ignition/)
   await expect(page.getByTestId('ign-main')).toBeEnabled()
   await expect(page.getByTestId('ignition-rules')).toContainText('Ignition switch on')
+  // the switch picker lists other modules' signals too, found with the list's search box (nothing is saved)
+  await page.getByTestId('ign-switch').click()
+  await page.getByRole('searchbox').fill('over CAN')
+  await expect(page.getByRole('option', { name: /· (CB|PDM)-\d+ \(over CAN/ }).first()).toBeVisible({ timeout: 15_000 })
+  await page.keyboard.press('Escape')
   // the two times are − / + steppers (nothing is saved until Save)
   await page.getByRole('button', { name: 'More Seconds of cranking at most' }).click()
   await expect(page.getByTestId('ign-crank')).toHaveValue(/\d/)
@@ -278,15 +283,21 @@ test('ignition on PDM-01 with the others following: live state, a Starter role, 
   const p1 = all.find((d) => d.name === 'PDM-01'), p4 = all.find((d) => d.name === 'PDM-04')
   const ign = async (d) => (await apiJson('GET', `/api/devices/${d.guid}/functions`)).ignition
   const o8 = p4.outputs.find((o) => o.number === 8)
+  const ciBefore = (await apiJson('GET', `/api/devices/${p1.guid}/functions`)).canInputs.filter((c) => c.enabled).map((c) => c.number)
   try {
     await open(page, 'power/ignition')
     await pick(page, 'ign-main', 'PDM-01')
     await page.getByRole('radio', { name: /Ignition switch \+ start button/ }).check()
     await pick(page, 'ign-switch', 'Always On')                      // ignition on as soon as it is saved
+    // start button: a signal on another module; Save links it to a CAN input on PDM-01
     await page.getByTestId('ign-start').click()
-    await page.getByRole('option').nth(2).click()                       // any real signal
+    await page.getByRole('searchbox').fill('over CAN')
+    await page.getByRole('option', { name: /\(over CAN\)$/ }).first().click()
     await page.getByTestId('ignition-save').click()
     await waitFor(async () => { const g = await ign(p1); return g.enabled && g.role === 0 && g.ignitionInput === 1 && g.startInput > 0 }, 30_000, 'PDM-01 main')
+    const startIdx = (await ign(p1)).startInput
+    const startVar = (await apiJson('GET', `/api/devices/${p1.guid}/inputs`)).find((v) => v.index === startIdx)
+    expect(startVar.kind).toBe('caninput')
     // the page saves to the project; Apply to car sends it (G2): write every module now
     for (const d of all) await apiJson('POST', `/api/devices/${d.guid}/write`).catch(() => {})
     for (const d of all.filter((x) => x.guid !== p1.guid)) await waitFor(async () => { const g = await ign(d); return g.enabled && g.role === 1 && g.mainStateId === p1.baseId + 30 }, 30_000, d.name + ' follows')
@@ -304,6 +315,8 @@ test('ignition on PDM-01 with the others following: live state, a Starter role, 
   } finally {
     await apiJson('POST', `/api/devices/${p4.guid}/outputconfig`, { Number: 8, Input: o8.inputVal, Enabled: o8.enabled }).catch(() => {})
     for (const d of all) await apiJson('POST', `/api/devices/${d.guid}/function/ignition/1`, { enabled: false, role: 0, mainStateId: 0, ignitionInput: 0, startInput: 0 }).catch(() => {})
+    for (const c of (await apiJson('GET', `/api/devices/${p1.guid}/functions`)).canInputs.filter((c) => c.enabled && !ciBefore.includes(c.number)))
+      await apiJson('POST', `/api/devices/${p1.guid}/function/caninput/${c.number}`, { enabled: false }).catch(() => {})
     for (const d of all) await apiJson('POST', `/api/devices/${d.guid}/write`).catch(() => {})
   }
   expect(errors).toEqual([])

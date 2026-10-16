@@ -1,6 +1,8 @@
 // Endpoints the shared `api` wrapper (src/lib/store.js) has no method for yet. Same JSON rules as store.js.
 export async function postJson(path, body) {
-  const r = await fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+  // the new UI stages edits until Apply (G2), like every store.js call made from #/next
+  const stage = location.hash.startsWith('#/next') ? { 'X-Dingo-Stage': '1' } : {}
+  const r = await fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json', ...stage }, body: JSON.stringify(body) })
   const t = await r.text()
   let d
   try { d = JSON.parse(t) } catch { d = t }

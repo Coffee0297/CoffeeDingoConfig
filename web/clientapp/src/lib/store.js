@@ -631,8 +631,8 @@ export function compileCrossModule() {
     const P = `_cmf${slot}`
     const blink = !!f.blink
     const ownerG = f.trigger?.guid
-    const masterG = blink ? f.clockMaster : null
-    const backupG = blink ? f.clockBackup : null
+    const masterG = blink ? (f.clockMaster || f.trigger?.guid) : null   // empty = the trigger module keeps the time
+    const backupG = blink ? (f.clockBackup || null) : null
 
     // --- trigger owner: read the switch locally and publish it on the bus ---
     if (ownerG != null && f.trigger?.varIndex != null) {

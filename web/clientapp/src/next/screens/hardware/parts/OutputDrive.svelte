@@ -1,6 +1,8 @@
 <script>
+  import { untrack } from 'svelte'
   import { Card, Segmented, Switch, Stepper, Select, Field } from '../../../ui/index.js'
-  import { api } from '../../../lib/live.svelte.js'
+  import { api, toast } from '../../../lib/live.svelte.js'
+  import { remoteItems, resolveRemote, isRemoteKey } from '../../../lib/remote.js'
   import { href } from '../../../router.svelte.js'
 
   let { guid, f = $bindable() } = $props()
@@ -10,7 +12,23 @@
     guid
     Promise.all([api.inputs(guid, 'float'), api.inputs(guid, 'int')]).then(([a, b]) => (nums = [...(a ?? []), ...(b ?? [])])).catch(() => (nums = []))
   })
-  const items = $derived([{ value: '0', label: 'Choose a value' }, ...nums.filter((v) => v.index !== 0).map((v) => ({ value: String(v.index), label: v.name }))])
+  // numbers on other modules and ECUs; a pick claims a CAN input on this module (staged like any edit)
+  let remote = $state([]), linking = $state(false)
+  $effect(() => {
+    const g = guid
+    let alive = true
+    untrack(() => remoteItems(g, 'num')).then((r) => { if (alive) remote = r }).catch(() => {})   // untracked: reads the polled device list
+    return () => { alive = false }
+  })
+  const items = $derived([{ value: '0', label: 'Choose a value' }, ...nums.filter((v) => v.index !== 0).map((v) => ({ value: String(v.index), label: v.name })), ...remote])
+  async function pickSrc(key, v) {
+    if (!isRemoteKey(v)) { f[key] = Number(v); return }
+    linking = true
+    try {
+      f[key] = await resolveRemote(guid, v, 'num')
+      const [a, b] = await Promise.all([api.inputs(guid, 'float'), api.inputs(guid, 'int')]); nums = [...(a ?? []), ...(b ?? [])]
+    } catch (e) { toast(e?.message ?? String(e), 'error', 8000) } finally { linking = false; dutySrc = String(f.dutyCycleInput ?? 0); freqSrc = String(f.freqInput ?? 0) }
+  }
 
   const mode = $derived(!f.pwmEnabled ? 'onoff' : f.variableDutyCycle ? 'signal' : 'fixed')
   let modeVal = $state('onoff')
@@ -38,14 +56,14 @@
   {#if f.pwmEnabled}
     <div class="grid">
       {#if f.variableDutyCycle}
-        <Select label="Duty comes from" items={items} bind:value={dutySrc} onchange={(v) => (f.dutyCycleInput = Number(v))} data-testid="duty-source" />
+        <Select label="Duty comes from" items={items} bind:value={dutySrc} onchange={(v) => pickSrc('dutyCycleInput', v)} disabled={linking} data-testid="duty-source" />
         <Field label="Signal value at 100 % duty" type="number" bind:value={dutyFull} min={100} step={100} onchange={setDutyFull} hint={'duty % = signal ÷ ' + (f.dutyCycleDenom || 1)} />
       {:else}
         <Stepper label="Duty" bind:value={f.fixedDuty} min={0} max={100} step={5} unit="%" data-testid="duty" />
       {/if}
       <Stepper label="Lowest duty" bind:value={f.minDuty} min={0} max={100} step={5} unit="%" />
       {#if f.variableFreq}
-        <Select label="Frequency comes from" items={items} bind:value={freqSrc} onchange={(v) => (f.freqInput = Number(v))} />
+        <Select label="Frequency comes from" items={items} bind:value={freqSrc} onchange={(v) => pickSrc('freqInput', v)} disabled={linking} />
         <Field label="Signal value at 400 Hz" type="number" bind:value={freqFull} min={400} step={400} onchange={setFreqFull} hint={'frequency = signal ÷ ' + (f.freqInputDenom || 1)} />
       {:else}
         <Stepper label="Frequency" bind:value={f.freq} min={15} max={400} step={5} unit="Hz" data-testid="freq" />

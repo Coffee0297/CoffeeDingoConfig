@@ -5,6 +5,7 @@
   import { toast } from './toast.js'
   import { untrack } from 'svelte'
   import { dialog, labelFields, clickable } from './a11y.js'
+  import { blankCrossFn, involvedOf, importBackendCrossFns, commitCrossFn } from './crossModule.js'
   import LuaEditor from './LuaEditor.svelte'
   import SearchSelect from './SearchSelect.svelte'
   import SleepSequence from './SleepSequence.svelte'
@@ -36,22 +37,7 @@
   // already in the list, so agent-deployed functions show up here as editable functions. By name.
   onMount(async () => {
     try {
-      const backend = await api.crossModuleGet()
-      if (!Array.isArray(backend) || !backend.length) return
-      let added = 0
-      crossFns.update((list) => {
-        const have = new Set((list ?? []).map((f) => f?.name))
-        let slot = nextCmfSlot(list)
-        const add = backend
-          .filter((f) => f && f.name && f.trigger?.guid && !have.has(f.name))
-          .map((f) => { added++; return {
-            name: f.name, mode: 'lua', blink: !!f.blink, blinkRateMs: f.blinkRateMs ?? 350,
-            trigger: { guid: f.trigger?.guid ?? '', varIndex: f.trigger?.varIndex ?? null, varName: f.trigger?.varName ?? '' },
-            targets: Array.isArray(f.targets) ? f.targets : [],
-            clockMaster: f.clockMaster ?? '', clockBackup: f.clockBackup ?? '', luaByModule: {}, slot: slot++,
-          } })
-        return add.length ? [...(list ?? []), ...add] : list
-      })
+      const added = await importBackendCrossFns()
       if (added) toast(`Imported ${added} cross-module function(s) deployed via MCP`, 'info')
     } catch {}
   })
@@ -60,27 +46,14 @@
   let fnDrawer = $state(false)
   let fnTab = $state('rule')      // 'rule' | 'lua'
   let editIdx = $state(-1)        // -1 = new
-  let f = $state(blank())
+  let f = $state(blankCrossFn())
   let triggerInputs = $state([])  // var-map of the selected trigger module
   let luaMod = $state('')         // which module's Lua is being edited
   let deploying = $state(false), deployMsg = $state(''), deployErr = $state(false)
 
-  function blank() {
-    return { name: '', mode: 'rule', blink: true, blinkRateMs: 350,
-      trigger: { guid: '', varIndex: null, varName: '' },
-      targets: [], clockMaster: '', clockBackup: '', luaByModule: {} }
-  }
-  // Modules this function touches (trigger owner + clock master + targets).
-  function involvedOf(fn) {
-    const s = new Set()
-    if (fn.trigger?.guid) s.add(fn.trigger.guid)
-    if (fn.clockMaster) s.add(fn.clockMaster)
-    for (const t of fn.targets ?? []) if (t.guid) s.add(t.guid)
-    return [...s]
-  }
   function openFn(idx = -1) {
     editIdx = idx
-    f = idx >= 0 ? structuredClone($crossFns[idx]) : blank()
+    f = idx >= 0 ? structuredClone($crossFns[idx]) : blankCrossFn()
     if (!f.luaByModule) f.luaByModule = {}
     fnTab = 'rule'
     luaMod = involvedOf(f)[0] ?? ''
@@ -111,21 +84,11 @@
 
   function saveFn() {
     // An unnamed function used to be dropped silently ("Add function" did nothing). Name it instead.
-    if (!f.name.trim()) f.name = 'Function ' + (editIdx >= 0 ? editIdx + 1 : $crossFns.length + 1)
     flushLua()   // persist the open Lua editor's buffer
-    // Written in Lua → deploy as Lua; otherwise it's a native rule.
-    f.mode = Object.values(f.luaByModule || {}).some((t) => t && t.trim()) ? 'lua' : 'rule'
     // capture the trigger signal's friendly name for display
-    if (f.trigger.varIndex != null) {
-      f.trigger.varName = triggerInputs.find((x) => x.index === Number(f.trigger.varIndex))?.name ?? ''
-      f.trigger.varIndex = Number(f.trigger.varIndex)
-    }
-    crossFns.update((list) => {
-      const next = [...list]
-      if (editIdx >= 0) next[editIdx] = f
-      else { if (typeof f.slot !== 'number') f.slot = nextCmfSlot(next); next.push(f) }   // stable CAN-ID slot
-      return next
-    })
+    if (f.trigger.varIndex != null) f.trigger.varName = triggerInputs.find((x) => x.index === Number(f.trigger.varIndex))?.name ?? ''
+    // names it, sets rule/Lua mode, gives a new function its stable CAN-ID slot (stores a plain copy)
+    crossFns.update((list) => commitCrossFn(list, f, editIdx))
     fnDrawer = false
   }
   // Preview the reserved CAN IDs for the function being edited (stable slot, not list position).

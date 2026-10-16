@@ -8,6 +8,7 @@ const S = {
   setup: () => import('./screens/functions/SetupWizard.svelte'),
   flow: () => import('./screens/functions/FlowBuilder.svelte'),
   wholeCar: () => import('./screens/functions/WholeCar.svelte'),
+  crossModule: () => import('./screens/functions/CrossModule.svelte'),
   power: () => import('./screens/power/PowerHome.svelte'),
   ignition: () => import('./screens/power/Ignition.svelte'),
   sleep: () => import('./screens/power/SleepWake.svelte'),
@@ -32,7 +33,7 @@ const S = {
 /**
  * URL scheme (#/next/...):
  *  car · connect
- *  functions · functions/add · functions/setup/<templateKey> · functions/flow[/<guid>[/<fnKey>]] · functions/whole-car
+ *  functions · functions/add · functions/setup/<templateKey> · functions/flow[/<guid>[/<fnKey>]] · functions/whole-car · functions/cross-module
  *  power · power/ignition · power/sleep · power/roles
  *  hardware (modules) · hardware/module/<guid> · hardware/module/<guid>/output/<n> · hardware/module/<guid>/input/<kind>/<n>
  *  hardware/outputs · hardware/keypads · hardware/firmware
@@ -50,6 +51,7 @@ export function match(parts) {
       if (b === 'setup') return { load: S.setup, params: { template: c } }
       if (b === 'flow') return { load: S.flow, params: { guid: c, fn: d } }
       if (b === 'whole-car') return { load: S.wholeCar, params: {} }
+      if (b === 'cross-module') return { load: S.crossModule, params: {} }
       break
     case 'power':
       if (!b) return { load: S.power, params: {} }
@@ -98,7 +100,7 @@ export const EXPERT = [
 /** Command palette entries: every screen reachable by name. */
 export const COMMANDS = [
   ['Car home', ['car']], ['Connect & find modules', ['connect']],
-  ['Functions', ['functions']], ['Add a function', ['functions', 'add']], ['Flow builder', ['functions', 'flow']], ['Whole car canvas', ['functions', 'whole-car']],
+  ['Functions', ['functions']], ['Add a function', ['functions', 'add']], ['Flow builder', ['functions', 'flow']], ['Whole car canvas', ['functions', 'whole-car']], ['Cross-module functions', ['functions', 'cross-module']],
   ['Power & ignition', ['power']], ['Ignition & start button', ['power', 'ignition']], ['Sleep & wake', ['power', 'sleep']], ['Output roles', ['power', 'roles']],
   ['Modules', ['hardware']], ['Every output on the car', ['hardware', 'outputs']], ['Keypads', ['hardware', 'keypads']], ['Firmware', ['hardware', 'firmware']],
   ['Live dashboard', ['live']], ['Plot', ['live', 'plot']], ['Trips', ['live', 'trips']], ['Logs', ['live', 'logs']],

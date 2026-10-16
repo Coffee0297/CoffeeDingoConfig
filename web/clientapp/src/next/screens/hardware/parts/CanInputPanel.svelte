@@ -3,10 +3,11 @@
   // see the decoded value live; set what happens when the frames stop; learn a switch from the bus.
   import { untrack } from 'svelte'
   import { Page, PageHeader, Card, Button, StateDot, Banner, Segmented, Switch, Stepper, Field, Checkbox, Select, LineChart, Chip, Empty } from '../../../ui/index.js'
-  import { live, api, device, hex, toast, mutate, isPdm } from '../../../lib/live.svelte.js'
+  import { live, api, device, hex, toast, mutate, isPdm, project } from '../../../lib/live.svelte.js'
   import { href } from '../../../router.svelte.js'
   import { setRemoteLink, clearRemoteLink, remoteLinkFor } from '../../../../lib/store.js'
   import { inputModel } from './input.svelte.js'
+  import { linkRemote } from '../../functions/flow/net.js'
   import { signalFeed, ring } from './feeds.svelte.js'
   import { resample, olderThan } from './util.js'
   import SaveBar from './SaveBar.svelte'
@@ -93,12 +94,24 @@
     clearRemoteLink(guid, n)
     toast(`Filled from ${s.messageName || 'the ECU file'} · ${s.name}. Save to keep.`, 'info', 4000)
   }
-  function pickModule(s) {
-    const src = modSrc
-    fill({ id: src.baseId + s.offset, ide: false, startBit: s.startBit, length: s.bitLength, byteOrder: s.byteOrder, factor: s.factor, offset: s.valueOffset, signed: s.signed })
-    if (!f.name || /^canInput\d+$/i.test(f.name)) f.name = `${src.name} ${s.label ?? s.name}`
-    setRemoteLink(guid, n, { sourceGuid: src.guid, signal: s.name, label: s.label ?? s.name, offset: s.offset, startBit: s.startBit, bitLength: s.bitLength, factor: s.factor, valueOffset: s.valueOffset, byteOrder: s.byteOrder, signed: s.signed })
-    toast(`Filled from ${src.name} · ${s.label ?? s.name}. Save to keep.`, 'info', 4000)
+  // Server-side link (staged like a save): the backend resolves the frame from the source's base ID, so a
+  // later base-ID change can re-point it. The form is reseeded from the result; unsaved timeout edits stay.
+  let linking = $state(false)
+  async function pickModule(s) {
+    const src = modSrc, keep = f
+    linking = true; M.state.saveErr = ''
+    try {
+      const r = await linkRemote(guid, n, src.guid, s.name)
+      project.dirty = true
+      await M.reload()
+      if (!row) return
+      snap = JSON.stringify(seed(row))
+      f = { ...seed(row), timeoutEnabled: keep.timeoutEnabled, timeout: keep.timeout, timeoutValue: keep.timeoutValue, operator: 1, operand: 0 }   // reads as ON when not zero
+      learnedNote = false
+      M.state.note = r?.staged ? 'Kept in the project. Not on the car yet.' : r?.written ? 'Kept in the project and sent to the module.' : 'Kept in the project. Not on the car yet: the module is offline, apply to car when it is back.'
+      setRemoteLink(guid, n, { sourceGuid: src.guid, signal: s.name, label: s.label ?? s.name, offset: s.offset, startBit: s.startBit, bitLength: s.bitLength, factor: s.factor, valueOffset: s.valueOffset, byteOrder: s.byteOrder, signed: s.signed })
+      toast(`Linked to ${src.name} · ${s.label ?? s.name}. Kept in the project.`, 'info', 4000)
+    } catch (e) { M.state.saveErr = e?.message ?? String(e) } finally { linking = false }
   }
   let learnOpen = $state(false)
   function useLearned(c) {
@@ -249,7 +262,7 @@
               <p class="muted small" role="status">{modBusy ? 'Reading…' : modErr ? modErr : `${modRows.length} of ${modSigs.length} signals`}</p>
               <div role="group" aria-label="Matching signals" class="rows">
                 {#each modRows as s (s.name)}
-                  <button type="button" class="pick" onclick={() => pickModule(s)} data-testid="module-row">
+                  <button type="button" class="pick" disabled={linking} onclick={() => pickModule(s)} data-testid="module-row">
                     <span class="a"><strong>{s.label ?? s.name}</strong><span class="mono">{hex((modSrc?.baseId ?? 0) + s.offset)}</span></span>
                     <span class="muted small">{modSrc?.name} · bit {s.startBit} · {s.bitLength === 1 ? '1 bit' : s.bitLength + ' bits'} · {scaleText(s.bitLength, s.factor, s.valueOffset, s.unit)}</span>
                   </button>

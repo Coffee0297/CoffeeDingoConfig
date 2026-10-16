@@ -3,23 +3,27 @@
    * Whole car (FC6): every module's blocks on one read-mostly canvas, one column per module, with the
    * signals that travel between modules over CAN drawn as thick dashed links. Click (or Enter) a block to
    * open it in its module's flow builder. Function / helper groups made in the flow builder show as one
-   * block here too (they are kept in this browser, see the flow builder).
+   * block here too (they are kept in this browser, see the flow builder). Dragging from a block on one module
+   * to a block on another wires it over CAN: a CAN input on the target reads the source's broadcast (or a new
+   * bridge frame for an on/off signal it does not broadcast).
    */
   import { SvelteFlow, Background, MiniMap, Panel } from '@xyflow/svelte'
   import '@xyflow/svelte/dist/style.css'
   import { untrack } from 'svelte'
   import { Page, PageHeader, Button, Banner, Empty, Chip, Checkbox } from '../../ui/index.js'
-  import { live, hub, project, api } from '../../lib/live.svelte.js'
+  import { live, hub, project, api, toast } from '../../lib/live.svelte.js'
   import { href, go } from '../../router.svelte.js'
   import { ui } from '../../shell/ui.svelte.js'
   import CarNode from './flow/CarNode.svelte'
   import FlowEdge from './flow/FlowEdge.svelte'
   import FlowApi from './flow/FlowApi.svelte'
-  import { loadCar, carLinks, carModels } from './flow/car.js'
+  import { loadCar, carLinks, carModels, broadcastOf, bcNode } from './flow/car.js'
   import { loadAllGroups, pruneGroups, kindWord } from './flow/helpers.js'
   import { writeLive } from './flow/livevals.js'
-  import { FAM_COLOR, isCb } from './flow/model.js'
+  import { FAM_COLOR, isCb, canWire } from './flow/model.js'
   import { portForSignal } from './flow/flowgraph.js'
+  import { resolveRemote } from '../../lib/remote.js'
+  import { applyGraphConnection } from '../../../lib/store.js'
 
   let car = $state.raw(null)
   let err = $state('')
@@ -92,7 +96,7 @@
         const id = g + '#' + n.id
         shownId[g + '|' + n.id] = id
         for (const mem of n.members ?? []) shownId[g + '|' + mem] = id
-        nodes.push({ id, type: 'car', position: { x, y: 70 + i * 60 }, data: { n, vals: vals[g] ?? {}, guid: g, nodeId: n.id, hl }, draggable: false, connectable: false, domAttributes: { 'aria-labelledby': `car-t-${id} car-s-${id}` } })
+        nodes.push({ id, type: 'car', position: { x, y: 70 + i * 60 }, data: { n, vals: vals[g] ?? {}, guid: g, nodeId: n.id, hl, wire: true }, draggable: false, domAttributes: { 'aria-labelledby': `car-t-${id} car-s-${id}` } })
       })
       // the expander closes a column that was opened on its own (Expand all opens every column)
       if (!onlyLinks && !expandAll && (hidden || opened[g]) && all.some((n) => !isLinked(n)))
@@ -151,6 +155,36 @@
     const n = nodes.find((x) => x.id === el.getAttribute('data-id'))
     if (n && !n.data.head) { e.preventDefault(); openNode(n) }
   }
+  // ---- wire a block on one module to a block on another ----
+  const ends = (c) => {
+    const a = nodes.find((x) => x.id === c.source)?.data, b = nodes.find((x) => x.id === c.target)?.data
+    if (!a?.guid || !b?.guid) return null
+    const p = a.n.outs?.find((x) => x.type === 'bool') ?? a.n.outs?.[0]
+    const ins = (b.n.ins ?? []).filter((x) => canWire(p?.type, x.accepts))
+    return p && ins.length ? { a, b, p, field: ins.find((x) => !x.src) ?? ins[0] } : null
+  }
+  const isValidConnection = (c) => { const e = ends(c); return !!e && e.a.guid !== e.b.guid }
+  let wiring = $state(false)
+  async function onconnect(c) {
+    const e = ends(c)
+    edges = graph.edges   // the real wire is drawn after the reload
+    if (!e || e.a.guid === e.b.guid) return
+    const { a, b, p, field } = e
+    const A = mods.find((m) => m.dev.guid === a.guid), B = mods.find((m) => m.dev.guid === b.guid)
+    // the signal A already broadcasts for that port, else a bridge frame (on/off only)
+    const sig = (await broadcastOf(a.guid)).find((x) => portForSignal(A.model.nodes.get(bcNode(x.name)), x.name)?.idx === p.idx)
+    const key = sig && !sig.isFloat ? `r:${a.guid}:${sig.name}` : p.type === 'bool' ? `b:${a.guid}:${p.idx}` : null
+    if (!key) { toast(`${A.dev.name} does not send ${a.n.title} on CAN${sig?.isFloat ? ' as a whole number' : ''}, so ${B.dev.name} can't read it. Use an on/off signal or a broadcast value.`, 'error', 8000); return }
+    wiring = true
+    try {
+      const idx = await resolveRemote(b.guid, key, field.accepts === 'bool' ? 'bool' : 'num')
+      if (!idx) throw new Error(`the CAN input on ${B.dev.name} got no signal number`)
+      await applyGraphConnection(b.guid, b.nodeId, field.id, idx, live.devices)
+      project.dirty = true
+      toast(`${b.n.title} (${field.label}) on ${B.dev.name} now follows ${a.n.title} on ${A.dev.name} over CAN. Apply to car sends it.`, 'info', 5000)
+    } catch (err) { toast(`Not wired: ${err?.message ?? err}`, 'error', 8000) }
+    finally { wiring = false; await load() }
+  }
   const nodeTypes = { car: CarNode }
   const edgeTypes = { wire: FlowEdge }
 </script>
@@ -173,7 +207,7 @@
       <span class="muted hint">Hover a block to light up its wires. Hold space or the middle mouse button and drag to pan.</span>
     </div>
     <div class="wc" bind:this={wcEl} onkeydown={onkey} onfocusin={(e) => light(nodeAt(e.target)?.getAttribute('data-id'))} onfocusout={() => light(null)} role="presentation" data-testid="whole-car">
-      <SvelteFlow bind:nodes bind:edges {nodeTypes} {edgeTypes} colorMode={ui.theme === 'light' ? 'light' : 'dark'} minZoom={0.4} maxZoom={1.5} nodesConnectable={false} deleteKey={null}
+      <SvelteFlow bind:nodes bind:edges {nodeTypes} {edgeTypes} colorMode={ui.theme === 'light' ? 'light' : 'dark'} minZoom={0.4} maxZoom={1.5} nodesConnectable={!wiring} {isValidConnection} {onconnect} deleteKey={null}
         panOnDrag={[0, 1]} panActivationKey="Space" onmove={(_, v) => (vp = v)}
         onnodeclick={({ node }) => !node.data.head && openNode(node)} onnodepointerenter={({ node }) => light(node.id)} onnodepointerleave={() => light(null)} proOptions={{ hideAttribution: true }}>
         <FlowApi onready={(f) => (flow = f)} />
@@ -191,7 +225,7 @@
         {/each}
       </nav>
     </div>
-    <div class="legend"><span><span class="lg on"></span> on</span><span>thick dotted wire = a signal that travels over CAN between modules</span><Chip tone="accent" solid>FUNCTION / HELPER</Chip><span>Click or press Enter on a block to open its module's flow builder.</span></div>
+    <div class="legend"><span><span class="lg on"></span> on</span><span>thick dotted wire = a signal that travels over CAN between modules</span><Chip tone="accent" solid>FUNCTION / HELPER</Chip><span>Click or press Enter on a block to open its module's flow builder. Drag from a block's right edge to a block on another module to send it over CAN.</span></div>
   {/if}
 </Page>
 

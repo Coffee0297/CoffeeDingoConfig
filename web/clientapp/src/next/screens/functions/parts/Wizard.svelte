@@ -7,9 +7,9 @@
   import { Button, Banner, Checkbox, Field, Dialog, Select, Chip, Empty } from '../../../ui/index.js'
   import { live, api, project, toast, deviceDefs } from '../../../lib/live.svelte.js'
   import { go, href } from '../../../router.svelte.js'
-  import { templateInstances } from '../../../../lib/store.js'
+  import { templateInstances, addCanInputFromDbc } from '../../../../lib/store.js'
   import { defaults, validate, previewTemplate, logicModule, shortfalls, freedBy, isInput, blank, OPS } from '../../../../lib/templates.js'
-  import { isMod, numOut, loadOutputOptions, loadInputOptions, applyTemplate, remoteShortfalls } from '../../../../lib/apply.js'
+  import { isMod, numOut, loadOutputOptions, loadInputOptions, applyTemplate, remoteShortfalls, undoTemplate } from '../../../../lib/apply.js'
   import SearchPick from './SearchPick.svelte'
   import PreviewAside from './PreviewAside.svelte'
   import Drawings from './Drawings.svelte'
@@ -66,8 +66,25 @@
       for (const k of kinds) loadInputOptions(api, d, live.devices, k).then((o) => { inOpts = { ...inOpts, [g + '|' + k]: o } }).catch(() => {})
     })
   })
-  const optsFor = (f) => [...(f.opt ? [{ value: '', label: '— none —' }] : []), ...(inOpts[logicGuid + '|' + f.t] ?? [])]
-  const inOpt = (k) => { const f = tpl.fields.find((x) => x.k === k); return (inOpts[logicGuid + '|' + f.t] ?? []).find((o) => o.value === sel[k] && o.value !== '') }
+  // ECU signals (DBC devices): Apply fills a CAN input on the logic module from the DBC record
+  let ecuOpts = $state([])
+  const ecuKey = $derived(live.devices.filter((d) => /dbc/i.test(d.type ?? '')).map((d) => d.guid).join())
+  $effect(() => {
+    if (!ecuKey) { ecuOpts = []; return }
+    let alive = true
+    untrack(async () => {
+      const out = []
+      for (const d of live.devices.filter((x) => /dbc/i.test(x.type ?? ''))) {
+        const r = await api.dbcSearch(d.guid, '', 500).catch(() => null)
+        for (const g of r?.items ?? []) out.push({ value: `ecu:${d.guid}:${g.id}:${g.name}`, label: `${d.name} · ${g.name} (ECU, over CAN)`, search: `${g.messageName ?? ''} ecu dbc`, local: false, module: d.name, dbc: g, sig: { label: g.name }, bit: g.length === 1 })
+      }
+      if (alive) ecuOpts = out
+    })
+    return () => { alive = false }
+  })
+  const ecuFor = (t) => (t === 'bool' ? ecuOpts.filter((o) => o.bit) : ecuOpts)
+  const optsFor = (f) => [...(f.opt ? [{ value: '', label: '— none —' }] : []), ...(inOpts[logicGuid + '|' + f.t] ?? []), ...ecuFor(f.t)]
+  const inOpt = (k) => { const f = tpl.fields.find((x) => x.k === k); return [...(inOpts[logicGuid + '|' + f.t] ?? []), ...ecuFor(f.t)].find((o) => o.value === sel[k] && o.value !== '') }
   const outOpt = (k) => outOpts.find((o) => o.value === sel[k])
   const outName = (v) => outOpts.find((x) => x.value === v)?.name || 'output ' + numOut(v)
 
@@ -150,14 +167,30 @@
     if (taken.length && !force) { confirmTake = true; return }
     busy = true
     const others = get(templateInstances).filter((i) => i.id !== editing?.id)
+    // ECU picks become CAN inputs on the logic module first; listed as a kept instance so an edit's undo of
+    // the old version leaves the ones this run reuses (it hands their slots over instead)
+    const ecu = { guid: logicGuid, created: [], cans: [] }
     try {
-      const { partial, ...inst } = await applyTemplate(api, { devices: live.devices, tpl, sel, relays, name, id: editing?.id ?? crypto.randomUUID(), old: editing, others, inOpt, outOpts })
+      const s = { ...sel }
+      for (const f of fIn) {
+        const o = inOpt(f.k)
+        if (!o?.dbc) continue
+        const r = await addCanInputFromDbc(logicGuid, o.dbc)
+        if (!r.reused) ecu.created.push({ kind: 'caninput', number: r.number, before: r.before })
+        ecu.cans.push(r.number)
+        s[f.k] = f.t === 'bool' ? (r.stateIndex ?? r.valueIndex) : (r.valueIndex ?? r.stateIndex)
+        if (s[f.k] == null) throw new Error(`${f.label}: created the CAN input but couldn't resolve its signal`)
+      }
+      const keep = ecu.cans.length ? [...others, ecu] : others
+      const { partial, ...inst } = await applyTemplate(api, { devices: live.devices, tpl, sel: s, relays, name, id: editing?.id ?? crypto.randomUUID(), old: editing, others: keep, inOpt, outOpts })
+      inst.created = [...(inst.created ?? []), ...ecu.created]; inst.cans = [...(inst.cans ?? []), ...ecu.cans]
       templateInstances.set([...others, inst])
       project.dirty = true
       result = { inst, partial, outs: inst.wired?.length ?? 0, blocks: inst.created?.length ?? 0 }
       if (partial) toast(partial + '.', 'error')
       else toast(`Applied “${inst.name}” on ${logic?.name}.`, 'info', 3000)
     } catch (e) {
+      if (ecu.created.length) await undoTemplate(api, live.devices, ecu, others).catch(() => {})
       if (editing) templateInstances.set(others)   // the previous version was undone before the failure
       applyErr = 'Failed: ' + e.message + (/roll-back/.test(e.message) ? ' Some changes may still be on the modules. Apply again, or remove the function from the list.' : editing ? ' The previous version was removed. Fix it and apply again.' : ' Nothing was left half-built. You can apply again.')
     } finally { busy = false; await loadOutputs() }

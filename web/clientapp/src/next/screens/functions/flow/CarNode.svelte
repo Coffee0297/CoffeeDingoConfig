@@ -1,6 +1,7 @@
 <script>
   /**
    * Compact block for the whole-car canvas: name, kind, one live state. data: { n, vals, guid, head? }.
+   * data.wire: its handles take a drag to another module's block (whole-car wiring).
    * A module header node (head: true) has no ports; an expander node (more: true) opens / closes its column.
    * data.hl (shared): { on, n: { [nodeId]: true } } lights the blocks at either end of a hovered block's wires.
    */
@@ -23,14 +24,14 @@
   <div class="more" class:open={data.open} id={'car-t-' + id}>{n.title}</div>
 {:else}
   <div class="cn" class:sel={selected} class:hi={data.hl?.on && data.hl.n[id]} class:on={val === true} class:fn={!!n.tag} class:inc={n.incomplete?.length} style="--fam: {FAM_COLOR[n.fam] ?? FAM_COLOR.dev}">
-    <Handle type="target" position={Position.Left} class="cp" isConnectable={false} />
+    <Handle type="target" position={Position.Left} class="cp" isConnectable={!!data.wire && !!n.ins?.length} />
     <span class="bar" aria-hidden="true"></span>
     <span class="tt">
       <span class="t" id={'car-t-' + id}>{n.title}</span>
       <span class="s">{n.tag ? n.tag + ' · ' : ''}{n.kindLabel}{n.remote ? ' · ◆ CAN' : ''}</span>
     </span>
     <span class="pill" class:pon={val === true} id={'car-s-' + id}>{val === undefined ? '' : fmt(val)}</span>
-    <Handle type="source" position={Position.Right} class="cp" isConnectable={false} />
+    <Handle type="source" position={Position.Right} class="cp" isConnectable={!!data.wire && !!n.outs?.length} />
   </div>
 {/if}
 

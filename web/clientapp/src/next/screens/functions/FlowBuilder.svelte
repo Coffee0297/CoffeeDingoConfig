@@ -30,6 +30,8 @@
   import { buildFlow } from './flow/flowgraph.js'
   import { writeBlock, prevBody, clearsFor, landed } from './flow/ops.js'
   import { linkRemote } from './flow/net.js'
+  import { resolveRemote, isRemoteKey } from '../../lib/remote.js'
+  import { addCanInputFromDbc } from '../../../lib/store.js'
 
   let { guid: guidProp, fn: fnKey, query } = $props()
 
@@ -285,9 +287,9 @@
     chain = run.catch(() => {})
     return run
   }
-  async function applyNow(label, ops, okMsg) {
+  async function applyNow(label, ops, okMsg, pre = []) {
     busy = true
-    const done = []
+    const done = [...pre]   // writes already made for this step (CAN inputs claimed for a remote signal)
     let ok = true
     try {
       let last
@@ -359,6 +361,17 @@
     busy = true
     const prev = prevBody(dev, funcs, 'caninput:' + r.canInput, { enabled: 0, id: 0, ide: 0, startBit: 0, bitLength: 0, factor: 0, offset: 0, byteOrder: 0, signed: 0, name: '' })
     try {
+      if (r.dbc) {
+        // an ECU signal: fill a free CAN input from the DBC record (or reuse one that already decodes it)
+        const res = await mutate(() => addCanInputFromDbc(guid, r.dbc))
+        if (res !== undefined) {
+          if (!res.reused) pushUndo({ label: `Add ${r.label}`, guid, ops: [{ id: 'caninput:' + res.number, prev: prevBody(dev, funcs, 'caninput:' + res.number, CI_FIELDS) }] })
+          toast(res.reused ? `CAN input ${res.number} already reads ${r.label}.` : `CAN input ${res.number} now reads ${r.label}. Apply to car sends it.`, 'info', 4000)
+          remoteOpen = false
+          selId = 'caninput:' + res.number
+        }
+        return
+      }
       const res = await mutate(() => linkRemote(guid, r.canInput, r.sourceGuid, r.signal))
       if (res !== undefined) {
         pushUndo({ label: `Add ${r.label ?? r.signal}`, guid, ops: [{ id: 'caninput:' + r.canInput, prev }] })
@@ -399,7 +412,38 @@
   }
 
   // ---- inspector save ----
-  async function save(id, body, label) { await apply(label, [{ id, body }], `Saved ${model.nodes.get(id)?.title}`) }
+  // A source picked from another module / an ECU is a key ('r:…'); it is linked to a CAN input here first,
+  // and that claim joins the same Undo step as the save.
+  const CI_FIELDS = { enabled: false, id: 0, ide: false, startBit: 0, bitLength: 0, factor: 0, offset: 0, byteOrder: 0, signed: false, mode: 0, operator: 0, operand: 0, name: '' }
+  async function save(id, body, label) {
+    const title = model.nodes.get(id)?.title
+    const keys = Object.keys(body).filter((k) => isRemoteKey(body[k]))
+    if (!keys.length) return apply(label, [{ id, body }], `Saved ${title}`)
+    const run = chain.then(async () => {
+      busy = true
+      const before = funcs, n = model.nodes.get(id)
+      let err = null
+      try {
+        for (const k of keys) body[k] = await resolveRemote(guid, body[k], n?.ins.find((p) => p.id === k)?.accepts === 'bool' ? 'bool' : 'num')
+      } catch (e) { err = e }
+      // every CAN input slot that changed is a claim this step made
+      const after = await api.functions(guid).catch(() => null)
+      const pre = (before?.canInputs ?? []).filter((c) => { const a = (after?.canInputs ?? []).find((x) => x.number === c.number); return a && JSON.stringify(a) !== JSON.stringify(c) })
+        .map((c) => ({ id: 'caninput:' + c.number, prev: prevBody(dev, before, 'caninput:' + c.number, CI_FIELDS) }))
+      if (pre.length) project.dirty = true
+      if (err) {
+        if (pre.length) pushUndo({ label: `Link for ${title}`, guid, ops: pre })
+        toast(`${title} not saved: ${err?.message ?? err}`, 'error', 8000)
+        busy = false; await reload(); await reloadCar()
+        return false
+      }
+      const ok = await applyNow(label, [{ id, body }], `Saved ${title}`, pre)
+      if (pre.length) await reloadCar()
+      return ok
+    })
+    chain = run.catch(() => {})
+    return run
+  }
   function openLink(l) { if (l?.guid) go('functions', 'flow', l.guid, l.node ?? '') }
 
   // ---- views / slots / apply ----
