@@ -25,7 +25,7 @@ telemetry.subscribe((t) => {
 hubState.subscribe((s) => (hub.state = s))
 
 /** Project file state. `dirty` comes from the backend; edits also set it at once so the chip does not wait for the poll. */
-export const project = $state({ current: null, dir: '', files: [], dirty: false, loaded: false })
+export const project = $state({ current: null, dir: '', files: [], recent: [], dirty: false, loaded: false })
 
 export async function refreshProject() {
   try {
@@ -36,6 +36,7 @@ export async function refreshProject() {
     project.files = p?.files ?? []
     // an edit that landed while this request was out is newer than the answer
     if (typeof p?.dirty === 'boolean' && !(p.dirty === false && !was && project.dirty)) project.dirty = p.dirty
+    project.recent = p?.recent ?? []   // G20: [{ name, modifiedAt, moduleCount }], newest first
     project.loaded = true
   } catch { /* backend down: keep last */ }
 }

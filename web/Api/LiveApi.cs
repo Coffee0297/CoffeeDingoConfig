@@ -428,6 +428,22 @@ public static class LiveApi
         var (connected, active, _) = m.GetStatus();
         return connected && string.Equals(active, "Sim", StringComparison.OrdinalIgnoreCase);
     }
+    // G20: module count per project file, keyed by path + write time so the 5 s poll reads each file once.
+    static readonly System.Collections.Concurrent.ConcurrentDictionary<string, (DateTime At, int? Count)> _fileCounts = new();
+    static int? ModuleCount(FileInfo f) => _fileCounts.AddOrUpdate(f.FullName,
+        _ => (f.LastWriteTimeUtc, CountModules(f)),
+        (_, old) => old.At == f.LastWriteTimeUtc ? old : (f.LastWriteTimeUtc, CountModules(f))).Count;
+    static int? CountModules(FileInfo f)
+    {
+        try
+        {
+            using var doc = System.Text.Json.JsonDocument.Parse(File.ReadAllText(f.FullName));
+            return doc.RootElement.EnumerateObject()
+                .Where(p => p.Value.ValueKind == System.Text.Json.JsonValueKind.Array && (p.Name.EndsWith("Devices") || p.Name.EndsWith("Keypads")))
+                .Sum(p => p.Value.GetArrayLength());
+        }
+        catch { return null; }   // not a project file (or being written): no count
+    }
     public static void MapDingoApi(this WebApplication app)
     {
         var api = app.MapGroup("/api");
@@ -1518,9 +1534,13 @@ public static class LiveApi
         {
             var now = cfg.SerializeDevices(dm.GetDevices());
             _cleanProject ??= now;
+            var infos = cfg.ListFilesWithExtension("*.json");
             return Results.Ok(new {
                 current = cfg.CurrentFileName, dir = cfg.WorkingDirectory, dirty = now != _cleanProject,
-                files = cfg.ListFilesWithExtension("*.json").Select(f => f.Name).ToArray() });
+                files = infos.Select(f => f.Name).ToArray(),
+                // G20: newest first, with the time it changed and how many modules it holds
+                recent = infos.OrderByDescending(f => f.LastWriteTimeUtc).Select(f => new {
+                    name = f.Name, modifiedAt = f.LastWriteTimeUtc.ToString("yyyy-MM-ddTHH:mm:ssZ", System.Globalization.CultureInfo.InvariantCulture), moduleCount = ModuleCount(f) }).ToArray() });
         });
 
         // The function records and groups the server holds are the newest (the AI agent may have changed
