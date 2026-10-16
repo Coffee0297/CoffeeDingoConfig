@@ -24,5 +24,7 @@ public record CanboardDeviceDefinition(
     // Board temperature (°C): at TempWarnC the module reports OverTemp; at TempCritC it switches every output
     // off with a fatal error (BOARD_TEMP_WARN / BOARD_TEMP_CRIT in dingoFW core/device_config.h).
     int TempWarnC = 55,
-    int TempCritC = 80
+    int TempCritC = 80,
+    // G21: board facts for the UI (see PdmDeviceDefinition.Board).
+    System.Text.Json.JsonElement? Board = null
 );

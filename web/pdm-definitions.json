@@ -3,6 +3,15 @@
     {
       "pdmType": 0,
       "typeName": "dingoPDM",
+      "board": {
+        "name": "dingoPDM v7.5",
+        "side": "high",
+        "luaBytes": 4096,
+        "drivers": ["BTS7002-1EPP", "BTS7002-1EPP", "BTS7008-2EPA", "BTS7008-2EPA", "BTS7008-2EPA", "BTS7008-2EPA", "BTS7008-2EPA", "BTS7008-2EPA"],
+        "connectors": {"J1": "+12 V battery lug", "J2": "GND lug", "J3": "Deutsch DT 12-pin"},
+        "pins": {"di:1": ["J3", 8], "di:2": ["J3", 11], "out:1": ["J3", 7], "out:2": ["J3", 12], "out:3": ["J3", 10], "out:4": ["J3", 9], "out:5": ["J3", 6], "out:6": ["J3", 5], "out:7": ["J3", 4], "out:8": ["J3", 3]},
+        "power": {"+12V": ["J1", 1], "GND": ["J2", 1], "CAN-H": ["J3", 2], "CAN-L": ["J3", 1]}
+      },
       "icon": "Bolt",
       "numDigitalInputs": 2,
       "numOutputs": 8,
@@ -25,6 +34,15 @@
     {
       "pdmType": 1,
       "typeName": "dingoPDM-Max",
+      "board": {
+        "name": "dingoPDM-Max v1.2",
+        "side": "high",
+        "luaBytes": 4096,
+        "drivers": ["BTS70012-1ESP", "BTS70012-1ESP", "BTS70012-1ESP", "BTS70012-1ESP"],
+        "connectors": {"J1": "+12 V battery lug", "J3": "GND lug", "J4": "Deutsch DT 12-pin"},
+        "pins": {"di:1": ["J4", 9], "di:2": ["J4", 10], "out:1": ["J4", 7, 8], "out:2": ["J4", 11, 12], "out:3": ["J4", 5, 6], "out:4": ["J4", 1, 2]},
+        "power": {"+12V": ["J1", 1], "GND": ["J3", 1], "CAN-H": ["J4", 4], "CAN-L": ["J4", 3]}
+      },
       "icon": "OfflineBolt",
       "numDigitalInputs": 2,
       "numOutputs": 4,
@@ -71,6 +89,16 @@
     {
       "canboardType": 0,
       "typeName": "CANBoard",
+      "board": {
+        "name": "CANBoard v2",
+        "side": "low",
+        "luaBytes": 0,
+        "drivers": ["DMN2004WK", "DMN2004WK", "DMN2004WK", "DMN2004WK"],
+        "connectors": {"J1": "Power / CAN, 8-pin", "J2": "Analog inputs, 8-pin", "J3": "Digital inputs, 8-pin", "J4": "Outputs, 8-pin"},
+        "pins": {"di:1": ["J3", 1], "di:2": ["J3", 2], "di:3": ["J3", 3], "di:4": ["J3", 4], "di:5": ["J3", 5], "di:6": ["J3", 6], "di:7": ["J3", 7], "di:8": ["J3", 8], "ai:1": ["J2", 2], "ai:2": ["J2", 3], "ai:3": ["J2", 4], "ai:4": ["J2", 6], "ai:5": ["J2", 8], "out:1": ["J4", 2], "out:2": ["J4", 4], "out:3": ["J4", 6], "out:4": ["J4", 8]},
+        "supply": {"out:1": ["J4", 1], "out:2": ["J4", 3], "out:3": ["J4", 5], "out:4": ["J4", 7]},
+        "power": {"+12V": ["J1", 5], "GND": ["J1", 3], "CAN-H": ["J1", 1], "CAN-L": ["J1", 2], "+5V": ["J2", 1]}
+      },
       "icon": "",
       "numAnalogInputs": 5,
       "numDigitalInputs": 8,

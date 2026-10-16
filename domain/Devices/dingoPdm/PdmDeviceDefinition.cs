@@ -25,5 +25,8 @@ public record PdmDeviceDefinition(
     // Board temperature (°C): at TempWarnC the module reports OverTemp; at TempCritC it switches every output
     // off with a fatal error (BOARD_TEMP_WARN / BOARD_TEMP_CRIT in dingoFW core/device_config.h).
     int TempWarnC = 55,
-    int TempCritC = 80
+    int TempCritC = 80,
+    // G21: board facts passed through to the UI as written in pdm-definitions.json (name with revision,
+    // output side, driver chip per output, Lua space, connector pin map). null = not documented.
+    System.Text.Json.JsonElement? Board = null
     );
