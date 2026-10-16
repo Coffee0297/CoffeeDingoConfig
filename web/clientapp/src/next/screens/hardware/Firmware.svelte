@@ -1,7 +1,7 @@
 <script>
   // Firmware: version per module, update one or all over CAN, update the link module over USB,
   // flash a new board over DFU. Flashing always asks first and says what happens if it goes wrong.
-  import { Page, PageHeader, Card, Button, Banner, Chip, StateDot } from '../../ui/index.js'
+  import { Page, PageHeader, Card, Button, Banner, Chip, StateDot, Select } from '../../ui/index.js'
   import { live, api, toast, hex } from '../../lib/live.svelte.js'
   import Confirm from '../power/parts/Confirm.svelte'
   import FlashNewBoard from './parts/firmware/FlashNewBoard.svelte'
@@ -22,7 +22,51 @@
   const plan = $derived(mods.filter((d) => pathOf(d) === 'can' && d.connected).map((d) => ({ d, file: fileFor(d) })).filter((p) => p.file && !upToDate(p.d, p.file)))
   const anyFile = $derived(files.length > 0)
 
-  function onFiles(e) { files = [...(e.target.files ?? [])]; e.target.value = '' }
+  function onFiles(e) { files = [...(e.target.files ?? [])]; e.target.value = ''; checkAll() }
+
+  // ---- release list (G7): GitHub releases with notes; images download through the backend and are kept on
+  // this PC, so a release used once works offline. "Use this release" fills the same file list as picking files.
+  let rel = $state({ list: [], offline: false, error: '', loading: true }), relTag = $state(''), loadingRel = $state(false)
+  let checks = $state({})   // file name -> POST /api/firmware/check result
+  async function loadReleases(refresh = false) {
+    rel.loading = true
+    try {
+      const r = await fetch('/api/firmware/releases' + (refresh ? '?refresh=true' : ''))
+      const b = await r.json()
+      rel = { list: b.releases ?? [], offline: !!b.offline, error: b.error ?? '', loading: false }
+      if (!relTag || !rel.list.some((x) => x.tag === relTag)) relTag = rel.list.find((x) => !x.prerelease)?.tag ?? rel.list[0]?.tag ?? ''
+    } catch (e) { rel = { list: [], offline: true, error: e?.message ?? String(e), loading: false } }
+  }
+  loadReleases()
+  const release = $derived(rel.list.find((x) => x.tag === relTag) ?? null)
+  // the images this project needs: a .srec per board kind in it, and the .bin for PDMs (the USB link module)
+  const needed = $derived(release ? release.images.filter((i) => mods.some((d) => boardOf(d).label === i.board) && (i.kind === 'srec' || i.board !== 'CANBoard')) : [])
+  async function useRelease() {
+    if (!release) return
+    loadingRel = true
+    try {
+      const got = []
+      for (const i of needed) {
+        const r = await fetch(`/api/firmware/releases/${encodeURIComponent(release.tag)}/${encodeURIComponent(i.name)}`)
+        if (!r.ok) throw new Error((await r.json().catch(() => null))?.error ?? `${i.name}: HTTP ${r.status}`)
+        got.push(new File([await r.blob()], i.name))
+      }
+      files = got
+      toast(`Loaded ${got.length} file${got.length === 1 ? '' : 's'} of ${release.version}.`, 'info', 3000)
+      await checkAll()
+      loadReleases()   // they are on this PC now
+    } catch (e) { toast('Could not load the release: ' + (e?.message ?? e), 'error', 8000) } finally { loadingRel = false }
+  }
+  // pre-flight: what each image says it is (board marker), its version, and which modules it fits
+  async function checkAll() {
+    const out = {}
+    for (const f of files) {
+      try { out[f.name] = await (await fetch('/api/firmware/check?name=' + encodeURIComponent(f.name), { method: 'POST', body: f })).json() } catch { /* the module checks it again */ }
+    }
+    checks = out
+  }
+  const relDate = (iso) => (iso ? new Date(iso).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' }) : '')
+  const relItems = $derived(rel.list.map((r) => ({ value: r.tag, label: `${r.version}${r.prerelease ? ' (test)' : ''} · ${relDate(r.published)}${r.images.every((i) => i.cached) ? ' · on this PC' : ''}` })))
 
   async function readVersions() {
     reading = true
@@ -136,17 +180,33 @@
 
   <div class="three">
     <Card title="Release" aria-label="Release files">
+      {#if rel.loading}<p class="muted" role="status">Reading the release list…</p>
+      {:else if rel.list.length}
+        <Select label="Firmware release" items={relItems} bind:value={relTag} data-testid="fw-release" />
+        {#if rel.offline}<p class="muted note" role="status">{rel.error}</p>{/if}
+        {#if release}
+          <details class="notes"><summary>What is new in {release.version}</summary><div class="md" data-testid="fw-notes">{release.notes || 'No notes.'}</div></details>
+          <div class="row">
+            <Button variant="primary" onclick={useRelease} busy={loadingRel} disabled={busy || loadingRel || !needed.length} data-testid="fw-use-release">Use this release ({needed.length} file{needed.length === 1 ? '' : 's'})</Button>
+            <Button size="sm" variant="ghost" onclick={() => loadReleases(true)} disabled={rel.loading}>Check for new releases</Button>
+          </div>
+        {/if}
+      {:else}<p class="muted note" role="status">{rel.error || 'No releases found.'} Pick the files yourself instead.</p>{/if}
       <input bind:this={fileInput} type="file" multiple accept=".srec,.bin" class="sr-only" onchange={onFiles} data-testid="fw-files" aria-label="Release files" />
       <div class="row">
-        <Button onclick={() => fileInput.click()} disabled={busy}>Choose release files…</Button>
+        <Button size="sm" onclick={() => fileInput.click()} disabled={busy}>Or choose files…</Button>
         {#if anyFile}<Chip tone="ok" symbol="✓">{files.length} file{files.length === 1 ? '' : 's'}</Chip>{/if}
       </div>
       {#if anyFile}
         <ul class="files mono" data-testid="fw-file-list">
-          {#each files as f (f.name)}<li>{f.name} <span class="muted">· {boardOfFile(f.name)?.label ?? 'board not in the name'}{fileVersion(f.name) ? ' · ' + fileVersion(f.name) : ''}</span></li>{/each}
+          {#each files as f (f.name)}
+            {@const c = checks[f.name]}
+            <li>{f.name} <span class="muted">· {c?.board ?? boardOfFile(f.name)?.label ?? 'board not in the name'}{fileVersion(f.name) ? ' · ' + fileVersion(f.name) : ''}{c ? ` · fits ${c.modules.length ? c.modules.map((m) => m.name).join(', ') : 'no module in this project'}` : ''}</span>
+              {#each c?.problems ?? [] as p (p)}<br /><span class="warnT" data-testid="fw-check-problem">▲ {p}</span>{/each}</li>
+          {/each}
         </ul>
       {/if}
-      <p class="muted note">Pick one .srec per board for CAN (CANBoard, dingoPDM, dingoPDM-Max) and a .bin for the link module. Files are matched to boards by name. Not available yet: a release list with download, notes and a check of the whole set (gap G7).</p>
+      <p class="muted note">A .srec per board goes over CAN (CANBoard, dingoPDM, dingoPDM-Max) and a .bin to the link module over USB. Each file is checked for the board it was built for.</p>
     </Card>
     <Card title="If something fails" aria-label="If something fails">
       <p>The module stays in its bootloader and is safe. Run it again from here. The ones already done keep their new firmware.</p>
@@ -192,4 +252,7 @@
   .row { display: flex; align-items: center; gap: var(--space-3); flex-wrap: wrap; }
   .files { margin: 0; padding-left: 18px; font-size: var(--text-xs); display: flex; flex-direction: column; gap: 2px; }
   .note { font-size: var(--text-xs); }
+  .warnT { color: var(--color-warn); font-weight: 600; }
+  .notes summary { cursor: pointer; font-weight: 600; }
+  .md { white-space: pre-wrap; max-height: 220px; overflow: auto; font-size: var(--text-xs); margin-top: var(--space-2); }
 </style>

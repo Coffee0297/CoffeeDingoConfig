@@ -130,3 +130,39 @@ test('firmware: update all over CAN with real release files @exclusive', async (
   }
   for (const d of await apiJson('GET', '/api/devices')) expect(d.connected).toBe(true)
 })
+
+test('firmware: the release list loads a release\'s files through the backend and checks each image (G7)', async ({ page }) => {
+  test.setTimeout(180_000)
+  const errors = watchErrors(page)
+  const r = await fetch('http://127.0.0.1:5000/api/firmware/releases').then((x) => x.json()).catch(() => null)
+  test.skip(!r?.releases?.length, 'no release list: GitHub not reachable and none saved')
+  const rel = r.releases.find((x) => !x.prerelease) ?? r.releases[0]
+  await open(page, 'hardware/firmware')
+  await expect(page.getByTestId('fw-release')).toBeVisible()
+  await page.getByText(`What is new in ${rel.version}`).click()
+  await expect(page.getByTestId('fw-notes')).toContainText(rel.notes.trim().split('\n')[0].trim().slice(0, 30))
+  await page.getByTestId('fw-use-release').click()
+  const list = page.getByTestId('fw-file-list')
+  await expect(list).toBeVisible({ timeout: 120_000 })
+  // a .srec per board kind in the project, and the .bin for the PDMs
+  const devs = await apiJson('GET', '/api/devices')
+  const kinds = new Set(devs.map((d) => (/canboard/i.test(d.type) ? 'CANBoard' : /max/i.test(d.type) ? 'dingoPDM-Max' : 'dingoPDM')))
+  const want = rel.images.filter((i) => kinds.has(i.board) && (i.kind === 'srec' || i.board !== 'CANBoard'))
+  await expect(list.locator('li')).toHaveCount(want.length)
+  // each image was checked: the PDM .srec fits the dingoPDMs of the project
+  const pdmSrec = want.find((i) => i.board === 'dingoPDM' && i.kind === 'srec')
+  if (pdmSrec) await expect(list.locator('li').filter({ hasText: pdmSrec.name })).toContainText(devs.find((d) => d.type === 'dingoPDM').name)
+  await expect(page.getByTestId('fw-check-problem')).toHaveCount(0)
+  // the images are kept on this PC now
+  const again = await apiJson('GET', '/api/firmware/releases')
+  expect(again.releases.find((x) => x.tag === rel.tag).images.filter((i) => want.some((w) => w.name === i.name)).every((i) => i.cached)).toBe(true)
+  expect(errors).toEqual([])
+})
+
+test('firmware: the image check names an image without a board marker (G7)', async () => {
+  const body = 'S00F000068656C6C6F202020202000003C\nS1130000000102030405060708090A0B0C0D0E0F74\nS9030000FC\n'
+  const c = await fetch('http://127.0.0.1:5000/api/firmware/check?name=dingopdm_v7_FW_v5-5-112.srec', { method: 'POST', body }).then((x) => x.json())
+  expect(c.board).toBe('dingoPDM'); expect(c.version).toBe('5.5.112'); expect(c.kind).toBe('srec')
+  expect(c.problems.join(' ')).toMatch(/no board marker/)
+  expect(c.modules.length).toBeGreaterThan(0)
+})
