@@ -3,8 +3,8 @@
   // Store on modules (burn), and what each module said.
   // Backed by telemetry (configMismatch, configDiffCount, reading), GET /devices/{id}/config-diff and
   // POST /devices/{id}/read|write|burn.
-  // Gaps: "stored on module" is not reported by the backend (G3), so Written / Stored are tracked for this
-  // session only; there is no staged "not sent" list (G2): configMismatch means "not yet compared or written".
+  // Written / Stored: this panel's own steps, else the backend's storedOnModule (G3: false = written, lost at
+  // power-off). There is no staged "not sent" list (G2): configMismatch means "not yet compared or written".
   import { untrack } from 'svelte'
   import { Dialog, Button, Banner, StateDot, Chip } from '../ui/index.js'
   import { live, api, toast, hex, pendingModules } from '../lib/live.svelte.js'
@@ -17,6 +17,8 @@
 
   // session: guid → { name, state: 'working'|'written'|'refused'|'stored'|'failed', step, error, rejected[], checked }
   let session = $state({})
+  // a module written elsewhere (output page, AI agent) and not stored counts as written here
+  const stOf = (d) => session[d.guid] ?? (d.storedOnModule === false ? { name: d.name, state: 'written', written: true, rejected: [] } : undefined)
   let diffs = $state({}) // guid → ConfigDiffEntry[]
   let asking = $state(null) // { act: 'write'|'burn', guids[] }
   let busyAct = $state(null) // 'read'|'write'|'burn'
@@ -28,18 +30,19 @@
   const listed = $derived.by(() => {
     const byGuid = new Map()
     for (const d of pending) byGuid.set(d.guid, d)
+    for (const d of live.devices) if (d.connected && d.storedOnModule === false) byGuid.set(d.guid, d)
     for (const g of Object.keys(session)) { const d = live.devices.find((x) => x.guid === g); if (d) byGuid.set(g, d) }
     return [...byGuid.values()].sort((a, b) => a.name.localeCompare(b.name))
   })
   const quiet = $derived(live.devices.filter((d) => d.connected && !listed.some((x) => x.guid === d.guid)))
   const cantProgram = $derived(!live.connected ? 'Not connected. Connect first.' : /^sim$/i.test(live.adapter ?? '') ? 'The simulator replay cannot program modules.' : '')
-  const needWrite = $derived(listed.filter((d) => d.connected && !['written', 'stored'].includes(session[d.guid]?.state) && session[d.guid]?.state !== 'refused'))
-  const needStore = $derived(listed.filter((d) => d.connected && ['written', 'refused'].includes(session[d.guid]?.state)))
+  const needWrite = $derived(listed.filter((d) => d.connected && !['written', 'stored'].includes(stOf(d)?.state) && stOf(d)?.state !== 'refused'))
+  const needStore = $derived(listed.filter((d) => d.connected && ['written', 'refused'].includes(stOf(d)?.state)))
   // nothing listed: Read compares every connected module with the project
   const readTargets = $derived((listed.some((d) => d.connected) ? listed : live.devices).filter((d) => d.connected).map((d) => d.guid))
-  const allStored = $derived(listed.length > 0 && listed.every((d) => session[d.guid]?.state === 'stored'))
-  const refusedAny = $derived(listed.some((d) => session[d.guid]?.state === 'refused'))
-  const writtenNotStored = $derived(listed.filter((d) => session[d.guid]?.state === 'written'))
+  const allStored = $derived(listed.length > 0 && listed.every((d) => stOf(d)?.state === 'stored'))
+  const refusedAny = $derived(listed.some((d) => stOf(d)?.state === 'refused'))
+  const writtenNotStored = $derived(listed.filter((d) => stOf(d)?.state === 'written'))
 
   let wasOpen = false
   $effect(() => {
@@ -105,7 +108,7 @@
     for (const d of targets) {
       if (stop) break
       progress = { ...progress, name: d.name }
-      session[d.guid] = { ...(session[d.guid] ?? {}), name: d.name, state: 'working', step: act, error: '', rejected: [] }
+      session[d.guid] = { ...(stOf(d) ?? {}), name: d.name, state: 'working', step: act, error: '', rejected: [] }
       const r = await postAction(d.guid, act)
       const prev = session[d.guid]
       if (r.ok) {
@@ -131,7 +134,7 @@
   }
 
   const statusOf = (d) => {
-    const s = session[d.guid]
+    const s = stOf(d)
     if (!d.connected) return { tone: 'fault', shape: 'square', word: 'Not found: cannot apply' }
     if (!s) return { tone: 'warn', shape: 'diamond', word: 'Not sent' }
     return {
@@ -144,7 +147,7 @@
   }
 
   const steps = $derived([
-    { n: 1, t: 'Apply to car', d: 'write', done: listed.length > 0 && listed.every((d) => ['written', 'stored'].includes(session[d.guid]?.state)), on: needWrite.length > 0 && !busyAct },
+    { n: 1, t: 'Apply to car', d: 'write', done: listed.length > 0 && listed.every((d) => ['written', 'stored'].includes(stOf(d)?.state)), on: needWrite.length > 0 && !busyAct },
     { n: 2, t: 'Store on modules', d: 'burn', done: allStored, on: needStore.length > 0 && needWrite.length === 0 },
     { n: 3, t: 'Check', d: 'read back', done: allStored && listed.every((d) => session[d.guid]?.checked && !session[d.guid].checked.error), on: false },
   ])
@@ -195,7 +198,7 @@
   <div class="mods">
     {#each listed as d (d.guid)}
       {@const st = statusOf(d)}
-      {@const s = session[d.guid]}
+      {@const s = stOf(d)}
       {@const dl = diffs[d.guid] ?? []}
       <section class="mod" class:bad={s?.state === 'refused' || s?.state === 'failed'} aria-label={d.name} data-testid={'apply-' + d.name}>
         <div class="mh">

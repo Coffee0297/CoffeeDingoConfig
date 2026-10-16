@@ -25,15 +25,21 @@ test('the pill and the panel list exactly the connected modules that differ', as
   await open(page, 'hardware')
   const devs = await devices()
   const pending = devs.filter((d) => d.connected && d.configMismatch)
+  // written elsewhere and not stored (G3) is listed too: it still needs Store
+  const unstored = devs.filter((d) => d.connected && d.storedOnModule === false)
+  const listed = devs.filter((d) => pending.includes(d) || unstored.includes(d))
   const pill = page.getByTestId('apply-pill')
   if (pending.length) await expect(pill).toContainText(`${pending.length} module${pending.length === 1 ? '' : 's'} differ`)
+  else if (unstored.length) await expect(pill).toContainText(`${unstored.length} not stored`)
   else await expect(pill).toContainText('Nothing to apply')
   await openPanel(page)
-  for (const d of pending) await expect(panel(page).getByTestId('apply-' + d.name)).toBeVisible()
-  const quiet = devs.filter((d) => d.connected && !d.configMismatch)
+  for (const d of listed) await expect(panel(page).getByTestId('apply-' + d.name)).toBeVisible()
+  const quiet = devs.filter((d) => d.connected && !listed.includes(d))
   if (quiet.length) await expect(panel(page).getByTestId('apply-quiet')).toContainText(`${quiet.length} more module`)
   else await expect(panel(page).getByTestId('apply-quiet')).toHaveCount(0)
-  if (pending.length) await expect(panel(page).getByText(new RegExp(`${pending.length} modules? (may differ|is|are)`)).first()).toBeVisible()
+  const unstoredNow = listed.filter((d) => d.storedOnModule === false)
+  if (unstoredNow.length) await expect(panel(page).getByText(new RegExp(`${unstoredNow.length} modules? (is|are) written but not stored`)).first()).toBeVisible()
+  else if (listed.length) await expect(panel(page).getByText(new RegExp(`${listed.length} modules? (may differ|is|are)`)).first()).toBeVisible()
   else await expect(panel(page).getByText('Nothing to apply.')).toBeVisible()
   // the three steps are named
   for (const s of ['Apply to car', 'Store on modules', 'Check']) await expect(panel(page).getByRole('list', { name: 'Steps' })).toContainText(s)
@@ -63,6 +69,7 @@ test('a module that differs shows its Read-found differences or says it has not 
 test('Apply asks first, names the consequence, and Cancel sends nothing', async ({ page }) => {
   await ready('PDM-02')
   const errors = watchErrors(page)
+  const before = (await deviceByName('PDM-02')).storedOnModule
   await open(page, 'hardware')
   await openPanel(page)
   const row = await reveal(page, 'PDM-02')
@@ -76,7 +83,9 @@ test('Apply asks first, names the consequence, and Cancel sends nothing', async 
   await row.getByRole('button', { name: 'Store PDM-02' }).click()
   await expect(ask).toContainText("Store the current settings permanently in the flash of 1 module?")
   await ask.getByRole('button', { name: 'Cancel' }).click()
-  await expect(panel(page).getByTestId('apply-PDM-02').getByText('Written, not stored')).toHaveCount(0)
+  // nothing was sent: PDM-02 is as it was (it may still be written from an earlier test, G3)
+  await expect(panel(page).getByTestId('apply-PDM-02').getByText('Written, not stored')).toHaveCount(before === false ? 1 : 0)
+  expect((await deviceByName('PDM-02')).storedOnModule).toBe(before)
   expect(errors).toEqual([])
 })
 
@@ -100,9 +109,16 @@ test('Apply to car writes PDM-02 and then offers Store (nothing is stored)', asy
   await expect(card).toContainText('Written, not stored')
   await expect(card).toContainText('✓ Written')
   await expect(card).toContainText('○ Stored on module')
-  await expect(panel(page).getByText('PDM-02 loses these changes at power-off.')).toBeVisible()
+  // other modules written earlier and not stored are named alongside it
+  await expect(panel(page).getByText(/PDM-02.* loses? these changes at power-off\./)).toBeVisible()
   // the second step is now the one to take
-  await expect(panel(page).getByTestId('apply-store')).toContainText('Store on modules (1)')
+  await expect(panel(page).getByTestId('apply-store')).toContainText(/Store on modules \(\d+\)/)
+  // the backend knows it too (G3): closing and reopening the panel, or another page, still shows it
+  await waitFor(async () => (await deviceByName('PDM-02')).storedOnModule === false, 10_000, 'PDM-02 written, not stored')
+  await page.keyboard.press('Escape')
+  await expect(page.getByTestId('apply-pill')).toContainText(/differ|not stored/)
+  await openPanel(page)
+  await expect(panel(page).getByTestId('apply-PDM-02')).toContainText('Written, not stored')
   // step 1 is done once nothing else waits to be written; other modules may still differ
   await expect(panel(page).getByRole('list', { name: 'Steps' }).locator('li').first()).toHaveClass(/done|on/)
   expect(errors).toEqual([])
@@ -122,8 +138,8 @@ test('Read from one module reads it and reports whether it matches the project',
 
 test('Done closes the panel when nothing differs', async ({ page }) => {
   await open(page, 'hardware')
-  const pending = (await devices()).filter((d) => d.connected && d.configMismatch)
-  test.skip(pending.length !== 0, 'reading every module would change other modules; this runs in the exclusive test')
+  const pending = (await devices()).filter((d) => d.connected && (d.configMismatch || d.storedOnModule === false))
+  test.skip(pending.length !== 0, 'something differs or is not stored; storing every module runs in the exclusive test')
   await openPanel(page)
   await expect(panel(page).getByText('Nothing to apply.')).toBeVisible()
   await panel(page).getByRole('button', { name: 'Done' }).click()
@@ -162,6 +178,7 @@ test('Apply to car for every module, then Store on modules, then the read-back c
       if ((await card.innerText()).includes('Refused')) continue
       await expect(card).toContainText('Stored', { timeout: 120_000 })
       await expect(card).toContainText('Read back')
+      expect((await deviceByName(d.name)).storedOnModule).toBe(true)
     }
   }
   expect(errors).toEqual([])
