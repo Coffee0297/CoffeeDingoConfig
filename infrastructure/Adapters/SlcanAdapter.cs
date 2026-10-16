@@ -254,6 +254,12 @@ public class SlcanAdapter : ICommsAdapter
 
         _bitrate = ToSlcanBitrate(bitRate);
 
+        // A dingo bridge keeps its 'X' accept-filter until told otherwise: a session that ended mid read/write
+        // (app closed, crash) leaves it forwarding one id, so every other module looks gone. Start unfiltered.
+        _acceptLo = _acceptHi = -1;
+        _bridgeFilterId = -1;
+        SendRaw("X\r");
+
         return true;
     }
 

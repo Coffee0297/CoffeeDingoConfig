@@ -17,8 +17,10 @@
 
   // session: guid → { name, state: 'working'|'written'|'refused'|'stored'|'failed', step, error, rejected[], checked }
   let session = $state({})
-  // a module written elsewhere (output page, AI agent) and not stored counts as written here
-  const stOf = (d) => session[d.guid] ?? (d.storedOnModule === false ? { name: d.name, state: 'written', written: true, rejected: [] } : undefined)
+  // a module written elsewhere (output page, AI agent) and not stored counts as written here; edits saved since
+  // (G2, pendingEdits) make it a module to apply again, whatever was written before
+  const stOf = (d) => ((d.pendingEdits ?? 0) > 0 ? undefined
+    : session[d.guid] ?? (d.storedOnModule === false ? { name: d.name, state: 'written', written: true, rejected: [] } : undefined))
   let diffs = $state({}) // guid → ConfigDiffEntry[]
   let asking = $state(null) // { act: 'write'|'burn'|'read', guids[] }
   let busyAct = $state(null) // 'read'|'write'|'burn'

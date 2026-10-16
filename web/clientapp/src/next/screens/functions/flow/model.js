@@ -268,6 +268,9 @@ export function sourceOptions(model, accepts, selfId) {
       out.push({ value: String(p.idx), label: lbl, node: n.id, type: p.type })
     }
   }
+  // Lua outs: the canvas shows only the ones something reads, but every out of the program must be pickable
+  for (const v of model.byIdx.values())
+    if (v.kind === 'lua' && selfId !== 'lua' && canWire('bool', accepts) && !out.some((o) => o.value === String(v.index))) out.push({ value: String(v.index), label: v.name, node: 'lua', type: 'bool' })
   return out
 }
 
