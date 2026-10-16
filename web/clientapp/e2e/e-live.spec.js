@@ -17,6 +17,12 @@ test('dashboard shows car, output and signal tiles from live data', async ({ pag
   const car = page.getByRole('region', { name: 'Car', exact: true })
   for (const n of ['Battery', 'Total current', 'Hottest module']) await expect(car.getByRole('link', { name: n, exact: true })).toBeVisible()
   await expect(car.getByText('Needs firmware 5.6')).toBeVisible()
+  // the temperature limits come from /api/definitions (G18) and fill the hottest-module bar
+  const def = await apiJson('GET', '/api/definitions')
+  const lim = def.pdms[0]
+  expect([lim.tempWarnC, lim.tempCritC]).toEqual([55, 80])
+  const hot = car.getByTestId('tile').filter({ has: page.getByRole('link', { name: 'Hottest module', exact: true }) })
+  await expect(hot).toContainText(`OverTemp at ${lim.tempWarnC} °C · all off at ${lim.tempCritC} °C`)
   // one temperature tile per module that answers
   await expect.poll(async () => (await page.getByRole('region', { name: 'Modules', exact: true }).getByTestId('tile').count()) - (await devs()).filter((m) => m.connected).length).toBeLessThanOrEqual(1)
   await expect(page.getByRole('region', { name: 'Modules', exact: true }).getByTestId('tile').filter({ hasText: 'PDM-01' })).toContainText('°C')

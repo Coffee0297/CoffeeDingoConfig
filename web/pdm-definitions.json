@@ -18,6 +18,8 @@
       "minMajorVersion": 5,
       "minMinorVersion": 5,
       "minBuildVersion": 107,
+      "tempWarnC": 55,
+      "tempCritC": 80,
       "outputCurrentRatings": [14, 14, 8, 8, 8, 8, 8, 8]
     },
     {
@@ -38,6 +40,8 @@
       "minMajorVersion": 5,
       "minMinorVersion": 5,
       "minBuildVersion": 107,
+      "tempWarnC": 55,
+      "tempCritC": 80,
       "outputCurrentRatings": [26, 26, 26, 26]
     },
     {
@@ -58,6 +62,8 @@
       "minMajorVersion": 5,
       "minMinorVersion": 5,
       "minBuildVersion": 107,
+      "tempWarnC": 55,
+      "tempCritC": 80,
       "outputCurrentRatings": null
     }
   ],
@@ -79,6 +85,8 @@
       "minMajorVersion": 5,
       "minMinorVersion": 5,
       "minBuildVersion": 107,
+      "tempWarnC": 55,
+      "tempCritC": 80,
       "outputCurrentRatings": null
     }
   ]

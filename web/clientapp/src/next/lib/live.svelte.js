@@ -47,6 +47,14 @@ export const defs = $state({ pdms: [], canboards: [], loaded: false })
 api.definitions().then((d) => { defs.pdms = d?.pdms ?? []; defs.canboards = d?.canboards ?? []; defs.loaded = true }).catch(() => {})
 export { deviceDefs }
 
+/** The /api/definitions entry for a device (matched on its type name), or null. */
+export const defOf = (d) => (/canboard/i.test(d?.type ?? '') ? defs.canboards : defs.pdms).find((x) => x.typeName === d?.type) ?? null
+/** Board temperature thresholds (G18): OverTemp at warn, every output off at crit. null until definitions load. */
+export function tempLimits(d) {
+  const x = defOf(d)
+  return x?.tempCritC ? { warn: x.tempWarnC, crit: x.tempCritC } : null
+}
+
 export const isPdm = (d) => /pdm/i.test(d?.type ?? '')
 export const isCanboard = (d) => /canboard/i.test(d?.type ?? '')
 export const hex = (n) => '0x' + Number(n ?? 0).toString(16).toUpperCase().padStart(3, '0')
