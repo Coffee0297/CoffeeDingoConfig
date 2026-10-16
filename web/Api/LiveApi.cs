@@ -32,7 +32,9 @@ public record DeviceDto(string Guid, string Name, string Type, int BaseId, bool 
     bool CanBootloader, bool ConfigMismatch = false, int ConfigDiffCount = 0, bool IsGateway = false,
     bool CanFiltersEnabled = false, bool ConnectUsbToCan = true,
     // false on a CANBoard (firmware CAN_SLEEP off): the sleep / force-sleep / wake controls do nothing there.
-    bool CanSleep = true);
+    bool CanSleep = true,
+    // G3: null = nothing written this session; false = written, lost at power-off; true = stored on the module.
+    bool? StoredOnModule = null);
 public record AdaptersDto(string[] Adapters, string[] Ports, bool Connected, string? ActiveAdapter, string? ActivePort, int? GatewayBaseId);
 public record TelemetryDto(bool Connected, string? Adapter, long CanTotal, long CanRate, int[] Ids, DeviceDto[] Devices);
 public record ConnectReq(string Adapter, string Port, string Bitrate);
@@ -311,7 +313,7 @@ public static class DingoMap
                 p.Version, BitrateLabel(p.BitRate), outs, reading, readDone, readTotal,
                 p.SleepEnabled, p.SleepTimeoutMs, p.SleepIgnoreAlwaysOn, p.ForceSleepInput, p.MuteTxInput, p.WakeDigInputMask, p.WakeOnCan,
                 p.CanBootloader, p.Connected && p.ConfigMismatch, p.LastConfigDiff.Count, false,
-                p.CanFiltersEnabled, p.ConnectUsbToCan);
+                p.CanFiltersEnabled, p.ConnectUsbToCan, StoredOnModule: ui?.StoredOnModule);
         }
         if (d is domain.Devices.Canboard.CanboardDevice cb)
             // CANBoard has no battery/total-current sensing (those are PDM smart-output features) — leave
@@ -321,7 +323,7 @@ public static class DingoMap
             return new DeviceDto(cb.Guid.ToString(), cb.Name, cb.Type, cb.BaseId, cb.Connected,
                 0, 0, cb.BoardTempC, "", cb.Version, BitrateLabel(cb.BitRate), Array.Empty<OutputDto>(), reading, readDone, readTotal,
                 cb.SleepEnabled, cb.SleepTimeoutMs, cb.SleepIgnoreAlwaysOn, cb.ForceSleepInput, cb.MuteTxInput, cb.WakeDigInputMask, cb.WakeOnCan,
-                cb.CanBootloader, cb.Connected && cb.ConfigMismatch, cb.LastConfigDiff.Count, CanSleep: cb.CanSleep);
+                cb.CanBootloader, cb.Connected && cb.ConfigMismatch, cb.LastConfigDiff.Count, CanSleep: cb.CanSleep, StoredOnModule: ui?.StoredOnModule);
         return new DeviceDto(d.Guid.ToString(), d.Name, d.Type, d.BaseId, d.Connected,
             0, 0, 0, "", "", "", Array.Empty<OutputDto>(), reading, readDone, readTotal, false, 30000, true, 0, 0, 0, true,
             (d as IDeviceConfigurable)?.CanBootloader ?? false);

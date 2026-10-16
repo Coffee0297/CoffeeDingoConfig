@@ -315,7 +315,8 @@ public class DeviceManager(ILogger<DeviceManager> logger, ILoggerFactory loggerF
             ok = device is IDeviceConfigurable { ConfigMismatch: false };    // ParamProtocol cleared it on a CRC match
         }
         else if (cmd == domain.Enums.MessageCommand.BurnParams) ok = frame.Payload[4] == 1;
-        else return;
+        else { if (cmd == domain.Enums.MessageCommand.Write) GetDeviceUiState(device.Guid).StoredOnModule = false; return; }
+        if (ok) GetDeviceUiState(device.Guid).StoredOnModule = cmd == domain.Enums.MessageCommand.BurnParams;
         if (_confirms.TryRemove((device.BaseId, cmd), out var tcs)) tcs.TrySetResult(ok);
     }
 

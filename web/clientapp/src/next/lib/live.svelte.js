@@ -64,6 +64,11 @@ export function pendingModules() {
   return live.devices.filter((d) => d.configMismatch && d.connected)
 }
 
+/** Modules holding written values they lose at power-off (G3: storedOnModule false). */
+export function unstoredModules() {
+  return live.devices.filter((d) => d.storedOnModule === false && d.connected)
+}
+
 /**
  * Run a mutating API call: marks the project unsaved, shows a toast on error (and on success when
  * `ok` is given). Returns the result, or undefined on failure.

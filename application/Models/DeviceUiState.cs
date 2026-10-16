@@ -11,4 +11,9 @@ public class DeviceUiState
     public bool Reading { get; set; }
     public int ReadDone { get; set; }
     public int ReadTotal { get; set; }
+
+    // G3: null = nothing written this session; false = the module took a write it will lose at power-off;
+    // true = a confirmed burn stored it. ponytail: the firmware reports no stored-image CRC, so a power cycle
+    // (values lost) is not seen; add one to the burn reply / CheckCrc to make this exact.
+    public bool? StoredOnModule { get; set; }
 }
