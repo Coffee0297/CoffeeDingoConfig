@@ -105,6 +105,7 @@ app.UseCors("spa");
 
 app.MapHub<LiveHub>("/hub/live");
 app.MapDingoApi();
+app.MapFirmwareCatalog();
 app.MapTemplateApi(spaFiles);   // template list/preview/apply/remove (the SPA engine, in Jint) for MCP
 app.MapMcp();   // Streamable-HTTP MCP server at POST /mcp (+ GET /mcp/info, /mcp/skills)
 
