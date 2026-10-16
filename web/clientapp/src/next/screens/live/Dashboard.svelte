@@ -91,6 +91,13 @@
 
   // ---- SIGNALS group ----
   const word = (s) => (s.value === 'on' ? 'On' : s.value === 'off' ? 'Off' : s.value)
+  // where a signal tile leads: the pin or CAN input's own page, else the block in the flow builder (N = its slot)
+  const PAGE = { 'Digital input': 'input', 'Analog input': 'analoginput', 'Rotary position': 'analoginput', 'Analog switch': 'analoginput', 'CAN input': 'caninput' }
+  const BLOCK = { 'Virtual input': 'virtualinput', Condition: 'condition', Counter: 'counter', Flasher: 'flasher', Timer: 'timer', Table: 'table' }
+  const signalHref = (guid, s) => !s.n ? href('hardware', 'module', guid)
+    : PAGE[s.kind] ? href('hardware', 'module', guid, 'input', PAGE[s.kind], s.n)
+    : s.kind === 'Digital output' ? href('hardware', 'module', guid, 'output', s.n)
+    : BLOCK[s.kind] ? href('functions', 'flow', guid, `${BLOCK[s.kind]}:${s.n}`) : href('hardware', 'module', guid)
   const signalTiles = $derived.by(() => {
     feed.tick
     const shown = [], hidden = []
@@ -101,7 +108,7 @@
         const tile = {
           id: `${d.guid}:${s.name}`, name: s.name, mod: d.name, value: word(s), unit: s.kind === 'Analog input' ? 'mV' : '',
           sub: s.kind + (d.connected ? '' : ' · module not answering'), tone: !d.connected ? 'stale' : s.on ? 'on' : 'off', key: keys.sig(d.guid, s.name),
-          href: href('hardware', 'module', d.guid), graph: href('live', 'plot', { signal: keys.sig(d.guid, s.name) }),
+          href: signalHref(d.guid, s), graph: href('live', 'plot', { signal: keys.sig(d.guid, s.name) }),
         }
         if (enabled) shown.push(tile); else hidden.push({ ...tile, key: null })
       }

@@ -71,7 +71,7 @@
 
 <style>
   .face { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: var(--space-2); padding: var(--space-3); border-radius: var(--radius-lg); background: var(--color-bg); border: 1px solid var(--color-line); }
-  .face.dim { opacity: 0.6; }
+  .face.dim { border-style: dashed; border-color: var(--color-line-strong); }   /* not answering: no fading (the text must stay readable) */
   .key { display: flex; flex-direction: column; gap: 4px; align-items: flex-start; text-align: left; min-height: 92px; padding: var(--space-2) var(--space-3); border-radius: var(--radius-md); border: 2px solid var(--color-line-strong); background: var(--color-surface); color: var(--color-text); }
   .key.unmapped { border-style: dashed; border-color: var(--color-warn); }
   .key[aria-pressed='true'] { border: 3px solid var(--color-accent); }

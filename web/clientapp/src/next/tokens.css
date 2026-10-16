@@ -16,10 +16,10 @@
   --color-text-muted: #a3acb6;    /* 4.5:1+ on surface */
   --color-text-faint: #7d8792;    /* only >= 18px or decorative */
   /* Brand / interaction */
-  --color-accent: #f2a93b;        /* sodium amber: primary actions, focus */
-  --color-accent-strong: #ffc266;
-  --color-on-accent: #1a1204;
-  --color-focus: #ffc266;
+  --color-accent: #3ecf72;        /* green: primary actions, focus */
+  --color-accent-strong: #74e39b;
+  --color-on-accent: #04170b;
+  --color-focus: #74e39b;
   /* Live states: differ in lightness and shape, not hue alone */
   --color-on: #5cc8ff;            /* output on / signal true (blue) */
   --color-on-soft: #12384b;
@@ -59,10 +59,10 @@
   --color-text: #15181b;
   --color-text-muted: #545c65;
   --color-text-faint: #6f7781;
-  --color-accent: #a05a00;
-  --color-accent-strong: #8a4d00;
+  --color-accent: #157a3a;
+  --color-accent-strong: #0f6330;
   --color-on-accent: #ffffff;
-  --color-focus: #a05a00;
+  --color-focus: #157a3a;
   --color-on: #0a6aa1;
   --color-on-soft: #dcefff;
   --color-off: #828992;

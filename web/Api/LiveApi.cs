@@ -59,7 +59,8 @@ public record AddDeviceReq(string Type, string Name, string BaseId);
 public record ModifyReq(string Name, string BaseId);
 // Enabled = the owning function slot is configured (false for an unused timer/flasher/… slot), so a
 // dashboard can hide the dozens of blank slots a stock module exposes.
-public record SignalDto(string Kind, string Name, string Value, bool On, bool Enabled = true);
+// N = the slot number of the block or pin the signal comes from (0 when there is none, e.g. a DBC signal)
+public record SignalDto(string Kind, string Name, string Value, bool On, bool Enabled = true, int N = 0);
 public record CanLogDto(string Dir, int Id, bool Ide, int Len, string Data, int Count);
 public record SysLogDto(string Time, string Level, string Source, string Message);
 public record ProbeReq(string Base);
@@ -1517,15 +1518,15 @@ public static class LiveApi
             var s = new List<SignalDto>();
             if (dm.GetDevice(g) is PdmDevice p)
             {
-                foreach (var i in p.Inputs) s.Add(new("Digital input", i.Name, i.State ? "on" : "off", i.State, i.Enabled));
-                foreach (var c in p.CanInputs) s.Add(new("CAN input", c.Name, c.Value.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture), c.Value != 0, c.Enabled));
-                foreach (var v in p.VirtualInputs) s.Add(new("Virtual input", v.Name, v.Value ? "on" : "off", v.Value, v.Enabled));
-                foreach (var c in p.Conditions) s.Add(new("Condition", c.Name, c.Value.ToString(), c.Value != 0, c.Enabled));
-                foreach (var c in p.Counters) s.Add(new("Counter", c.Name, c.Value.ToString(), c.Value != 0, c.Enabled));
-                foreach (var f in p.Flashers) s.Add(new("Flasher", f.Name, f.Value ? "on" : "off", f.Value, f.Enabled));
-                foreach (var t in p.Timers) s.Add(new("Timer", t.Name, t.Value ? "on" : "off", t.Value, t.Enabled));
-                foreach (var t in p.Tables) s.Add(new("Table", t.Name, t.Value.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture), t.Value != 0, t.Enabled));
-                foreach (var o in p.Outputs) s.Add(new("Output", o.Name, o.State.ToString(), o.State.ToString() == "On", o.Enabled));
+                foreach (var i in p.Inputs) s.Add(new("Digital input", i.Name, i.State ? "on" : "off", i.State, i.Enabled, N: i.Number));
+                foreach (var c in p.CanInputs) s.Add(new("CAN input", c.Name, c.Value.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture), c.Value != 0, c.Enabled, N: c.Number));
+                foreach (var v in p.VirtualInputs) s.Add(new("Virtual input", v.Name, v.Value ? "on" : "off", v.Value, v.Enabled, N: v.Number));
+                foreach (var c in p.Conditions) s.Add(new("Condition", c.Name, c.Value.ToString(), c.Value != 0, c.Enabled, N: c.Number));
+                foreach (var c in p.Counters) s.Add(new("Counter", c.Name, c.Value.ToString(), c.Value != 0, c.Enabled, N: c.Number));
+                foreach (var f in p.Flashers) s.Add(new("Flasher", f.Name, f.Value ? "on" : "off", f.Value, f.Enabled, N: f.Number));
+                foreach (var t in p.Timers) s.Add(new("Timer", t.Name, t.Value ? "on" : "off", t.Value, t.Enabled, N: t.Number));
+                foreach (var t in p.Tables) s.Add(new("Table", t.Name, t.Value.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture), t.Value != 0, t.Enabled, N: t.Number));
+                foreach (var o in p.Outputs) s.Add(new("Output", o.Name, o.State.ToString(), o.State.ToString() == "On", o.Enabled, N: o.Number));
             }
             else if (dm.GetDevice(g) is CanboardDevice cb)
             {
@@ -1534,20 +1535,20 @@ public static class LiveApi
                 // count as enabled only when the input AND that mode are on.
                 foreach (var a in cb.AnalogInputs)
                 {
-                    s.Add(new("Analog input", a.Name, ((int)a.Millivolts).ToString(), a.Millivolts > 0, a.Enabled));
-                    s.Add(new("Rotary position", a.Name + " Pos", a.Rotary.Pos.ToString(), a.Rotary.Pos != 0, a.Enabled && a.Rotary.Enabled));
-                    s.Add(new("Analog switch", a.Name + " Switch", a.Switch.State ? "on" : "off", a.Switch.State, a.Enabled && a.Switch.Enabled));
+                    s.Add(new("Analog input", a.Name, ((int)a.Millivolts).ToString(), a.Millivolts > 0, a.Enabled, N: a.Number));
+                    s.Add(new("Rotary position", a.Name + " Pos", a.Rotary.Pos.ToString(), a.Rotary.Pos != 0, a.Enabled && a.Rotary.Enabled, N: a.Number));
+                    s.Add(new("Analog switch", a.Name + " Switch", a.Switch.State ? "on" : "off", a.Switch.State, a.Enabled && a.Switch.Enabled, N: a.Number));
                 }
-                foreach (var i in cb.DigitalInputs) s.Add(new("Digital input", i.Name, i.State ? "on" : "off", i.State, i.Enabled));
+                foreach (var i in cb.DigitalInputs) s.Add(new("Digital input", i.Name, i.State ? "on" : "off", i.State, i.Enabled, N: i.Number));
                 // PWM outputs report their live duty as the value (so the UI can show "ON · 45%");
                 // plain on/off outputs keep the textual state.
-                foreach (var o in cb.DigitalOutputs) s.Add(new("Digital output", o.Name, o.PwmEnabled ? Math.Clamp((int)o.CurrentDutyCycle, 0, 100).ToString() : (o.State ? "on" : "off"), o.State, o.Enabled));
-                foreach (var c in cb.CanInputs) s.Add(new("CAN input", c.Name, c.Value.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture), c.Value != 0, c.Enabled));
-                foreach (var v in cb.VirtualInputs) s.Add(new("Virtual input", v.Name, v.Value ? "on" : "off", v.Value, v.Enabled));
-                foreach (var c in cb.Conditions) s.Add(new("Condition", c.Name, c.Value.ToString(), c.Value != 0, c.Enabled));
-                foreach (var c in cb.Counters) s.Add(new("Counter", c.Name, c.Value.ToString(), c.Value != 0, c.Enabled));
-                foreach (var f in cb.Flashers) s.Add(new("Flasher", f.Name, f.Value ? "on" : "off", f.Value, f.Enabled));
-                foreach (var t in cb.Timers) s.Add(new("Timer", t.Name, t.Value ? "on" : "off", t.Value, t.Enabled));
+                foreach (var o in cb.DigitalOutputs) s.Add(new("Digital output", o.Name, o.PwmEnabled ? Math.Clamp((int)o.CurrentDutyCycle, 0, 100).ToString() : (o.State ? "on" : "off"), o.State, o.Enabled, N: o.Number));
+                foreach (var c in cb.CanInputs) s.Add(new("CAN input", c.Name, c.Value.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture), c.Value != 0, c.Enabled, N: c.Number));
+                foreach (var v in cb.VirtualInputs) s.Add(new("Virtual input", v.Name, v.Value ? "on" : "off", v.Value, v.Enabled, N: v.Number));
+                foreach (var c in cb.Conditions) s.Add(new("Condition", c.Name, c.Value.ToString(), c.Value != 0, c.Enabled, N: c.Number));
+                foreach (var c in cb.Counters) s.Add(new("Counter", c.Name, c.Value.ToString(), c.Value != 0, c.Enabled, N: c.Number));
+                foreach (var f in cb.Flashers) s.Add(new("Flasher", f.Name, f.Value ? "on" : "off", f.Value, f.Enabled, N: f.Number));
+                foreach (var t in cb.Timers) s.Add(new("Timer", t.Name, t.Value ? "on" : "off", t.Value, t.Enabled, N: t.Number));
             }
             else if (dm.GetDevice(g) is DbcDevice dbc)
             {

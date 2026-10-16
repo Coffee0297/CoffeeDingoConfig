@@ -250,8 +250,7 @@ test.describe('setup wizard', () => {
     await expect(page.getByText('STEP 1 OF 4')).toBeVisible()
     await pick(page, 'pick-output', 'PDM-03 o8', /PDM-03 · J3-3 OUT8/)
     const relay = page.getByRole('checkbox', { name: /Through a relay/ })
-    await expect(relay).toBeChecked()   // a fan goes through a relay by default
-    await relay.click(); await expect(relay).not.toBeChecked()
+    await expect(relay).not.toBeChecked()   // a PDM output drives a fan directly: no relay by default
     await page.getByTestId('wz-next').click()
     await pick(page, 'pick-trig', 'CB-2 DI7', /CB-2 · J3-7 DI7/)
     await page.getByTestId('wz-next').click()
@@ -397,7 +396,7 @@ test.describe('setup wizard', () => {
       await open(page, 'functions/setup/afterrun')
       await page.getByTestId('fn-name').fill(NAME)
       await pick(page, 'pick-output', 'PDM-03 o8', /PDM-03 · J3-3 OUT8/)
-      await page.getByRole('checkbox', { name: /Through a relay/ }).click()
+      await expect(page.getByRole('checkbox', { name: /Through a relay/ })).not.toBeChecked()
       await page.getByTestId('wz-next').click()
       await pick(page, 'pick-trig', 'CB-2 DI7', /CB-2 · J3-7 DI7/)
       await page.getByTestId('wz-next').click()

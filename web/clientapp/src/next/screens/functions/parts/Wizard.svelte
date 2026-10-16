@@ -17,7 +17,9 @@
   let { tpl, editId = '', fromId = '' } = $props()
 
   const src = untrack(() => (editId || fromId ? get(templateInstances).find((i) => i.id === (editId || fromId)) : null))
-  const relayDefaults = () => Object.fromEntries(tpl.fields.filter((f) => f.t === 'out').map((f) => [f.k, f.load !== 'load']))
+  // No relay by default: a PDM output drives lamps, motors and pumps directly (it handles their kick-back). Only an
+  // output the template itself names a relay (a relay-switched wiper, a starter relay) starts with one.
+  const relayDefaults = () => Object.fromEntries(tpl.fields.filter((f) => f.t === 'out').map((f) => [f.k, /relay/i.test(f.label ?? '')]))
   const init = () => {
     const s = { ...defaults(tpl), ...(src?.sel ?? {}) }
     if (src && !editId) for (const f of tpl.fields) if (f.t === 'out') s[f.k] = ''   // a copy needs its own outputs
@@ -210,7 +212,7 @@
           <div class="fld" data-field={f.k}>
             <SearchPick label={f.label + (f.opt ? ' (optional)' : '')} options={[...(f.opt ? [{ value: '', label: '— none —' }] : []), ...outOpts]} bind:value={sel[f.k]}
               placeholder="Search: module, J3-7, OUT1, name…" data-testid={'pick-' + f.k} />
-            <Checkbox bind:checked={relays[f.k]} label="Through a relay" hint="Lamps, motors and pumps usually go through one. The drawing shows how to wire it." data-testid={'relay-' + f.k} />
+            <Checkbox bind:checked={relays[f.k]} label="Through a relay" hint="Not needed on a PDM output: it drives lamps, motors and pumps directly. Use one on a CANBoard output, or for a load above the output's rating. The drawing shows how to wire it." data-testid={'relay-' + f.k} />
           </div>
         {/each}
         {#if takenNames.length}<Banner tone="warn" title="Already driven by something else">{takenNames.join(', ')}. Applying takes {takenNames.length > 1 ? 'them' : 'it'} over. Removing the function gives {takenNames.length > 1 ? 'them' : 'it'} back.</Banner>{/if}
