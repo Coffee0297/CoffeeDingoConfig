@@ -252,7 +252,8 @@ test('firmware 5.6: Math and CAN message blocks write the module, and the CAN me
     await insp(page).getByLabel('Every').fill('200')
     await save(page)
     await waitFor(async () => { const r = await row('canMessages', 4); return r.id === 0x7a6 && r.dlc === 3 && r.data[0] === 0x11 && r.data[2] === 0x33 && r.intervalMs === 200 && r.input === 1 }, 15_000, 'canmsg saved')
-    // the module sends it
+    // the module sends it (edits from the builder wait for Apply to car, G2: write them now)
+    await post(`/api/devices/${pdm4.guid}/write`)
     await waitFor(async () => (await apiJson('GET', '/api/canlog')).some((m) => (m.id ?? m.Id) === 0x7a6), 15_000, 'frame 0x7A6 on the bus')
   } finally { await restore(snap) }
   expect(errors).toEqual([])
