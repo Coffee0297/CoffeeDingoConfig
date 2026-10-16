@@ -53,14 +53,17 @@
     return t
   })
 
-  // ---- MODULES group: one temperature tile per module ----
-  const moduleTiles = $derived(
+  // ---- MODULES group: one compact row per answering module (temperature, state, current) ----
+  const moduleRows = $derived(
     live.connected
-      ? devs.filter((d) => d.connected && Number.isFinite(d.temp)).map((d) => ({
-          id: 'mod-' + d.guid, name: 'Temperature', mod: d.name, value: String(Math.round(d.temp)), unit: '°C', ...tempBar(d, tempLimits(d)),
-          sub: (/pdm/i.test(d.type) ? 'dingoPDM' : 'CANBoard') + (d.state ? ' · ' + d.state : ''), tone: /overtemp|error/i.test(d.state ?? '') ? 'fault' : /sleep/i.test(d.state ?? '') ? 'off' : 'on',
-          key: keys.temp(d.guid), href: href('hardware', 'module', d.guid), graph: href('live', 'plot', { signal: keys.temp(d.guid) }),
-        }))
+      ? devs.filter((d) => d.connected).map((d) => {
+          const lim = tempLimits(d), t = Number.isFinite(d.temp) ? d.temp : null
+          return {
+            guid: d.guid, name: d.name, temp: t == null ? '-' : String(Math.round(t)), state: d.state || (/pdm/i.test(d.type) ? 'dingoPDM' : 'CANBoard'),
+            current: /pdm/i.test(d.type) ? q(num(d.current)) : '', graph: href('live', 'plot', { signal: keys.temp(d.guid) }),
+            tone: /overtemp|error/i.test(d.state ?? '') ? 'fault' : lim && t != null && t >= lim.warn ? 'warn' : /sleep/i.test(d.state ?? '') ? 'off' : 'on',
+          }
+        })
       : [],
   )
 
@@ -116,13 +119,13 @@
     return { shown, hidden }
   })
 
-  const shownCount = $derived(carTiles.length + moduleTiles.length + outputTiles.shown.length + signalTiles.shown.length)
+  const shownCount = $derived(carTiles.length + outputTiles.shown.length + signalTiles.shown.length)
   const hiddenCount = $derived(outputTiles.hidden.length + signalTiles.hidden.length)
   const feedLost = $derived(hub.state !== 'live' || live.stale)
   const groups = $derived([
     { name: 'CAR', tiles: carTiles },
-    { name: 'MODULES', tiles: moduleTiles },
     { name: 'OUTPUTS ON', tiles: showHidden ? [...outputTiles.shown, ...outputTiles.hidden] : outputTiles.shown },
+    { name: 'MODULES', tiles: [] },
     { name: 'SWITCHES & SIGNALS', tiles: showHidden ? [...signalTiles.shown, ...signalTiles.hidden] : signalTiles.shown },
   ])
 </script>
@@ -131,7 +134,8 @@
   <PageHeader title="Live">
     {#snippet tag()}<LiveTabs current="dashboard" />{/snippet}
     {#snippet actions()}
-      <span class="muted count" role="status" data-testid="live-count">Showing {shownCount} enabled · {hiddenCount} hidden</span>
+      <span class="muted count" role="status" data-testid="live-count" data-shown={shownCount} data-hidden={hiddenCount}
+        title={`${shownCount} values shown. ${hiddenCount} more are hidden: outputs that are off or not enabled, and signals that are not enabled. Turn on Show hidden to see them.`}>{shownCount} live values</span>
       <Checkbox bind:checked={showHidden} label="Show hidden" />
       <div class="sel"><Select items={moduleItems} bind:value={moduleKey} label="Module" hideLabel placeholder="All modules" /></div>
     {/snippet}
@@ -153,14 +157,31 @@
     {#each groups as g (g.name)}
       <section class="grp" aria-label={g.name === 'CAR' ? 'Car' : g.name === 'MODULES' ? 'Modules' : g.name === 'OUTPUTS ON' ? 'Outputs' : 'Switches and signals'}>
         <h2 class="gh">{g.name}</h2>
-        {#if g.tiles.length || g.name === 'CAR' || g.name === 'MODULES'}
+        {#if g.name === 'MODULES'}
+          {#if moduleRows.length}
+            <div class="mtw"><table class="mods">
+              <thead><tr><th>Module</th><th class="r">Temp</th><th>State</th><th class="r">Current</th><th><span class="sr-only">Graph</span></th></tr></thead>
+              <tbody>
+                {#each moduleRows as m (m.guid)}
+                  <tr data-testid="module-row" data-tone={m.tone}>
+                    <td><a href={href('hardware', 'module', m.guid)}>{m.name}</a></td>
+                    <td class="r mono">{m.temp} °C</td>
+                    <td>{m.tone === 'fault' ? '■ ' : m.tone === 'warn' ? '▲ ' : ''}{m.state}</td>
+                    <td class="r mono">{m.current ? m.current + ' A' : ''}</td>
+                    <td class="r"><a class="gr" href={m.graph} aria-label={'Graph ' + m.name + ' temperature'}>Graph it</a></td>
+                  </tr>
+                {/each}
+              </tbody>
+            </table></div>
+          {:else}<p class="muted">No module is answering.</p>{/if}
+        {:else if g.tiles.length || g.name === 'CAR'}
           <div class="grid">
             {#each g.tiles as t (t.id)}
               <Tile name={t.name} mod={t.mod} value={t.value} unit={t.unit} pct={t.pct ?? null} sub={t.sub} tone={t.tone} spark={t.key ? spark(t.key) : []} href={t.href} graph={t.graph ?? ''} />
             {/each}
             {#if g.name === 'CAR' && moduleKey === 'all'}
               {@const ig = ignitionTile(live.devices)}
-              {#if ig}<Tile name="Ignition" mod="" value={ig.value} unit="" sub={ig.sub} tone={ig.value === 'Cranking' ? 'warn' : 'muted'} spark={[]} href={href('power')} graph="" />
+              {#if ig}<Tile name="Ignition" mod="" value={ig.value} unit="" sub={ig.sub} tone={ig.value === 'Cranking' ? 'warn' : 'muted'} spark={[]} href={href('power', 'ignition')} graph="" />
               {:else}<div class="tile-fw"><span>Ignition</span><FwBadge version="5.6" /><small class="muted">start button and ignition state</small></div>{/if}
             {/if}
           </div>
@@ -175,6 +196,16 @@
 <style>
   .count { font-size: var(--text-sm); }
   .sel { width: 190px; }
+  .mtw { max-width: 100%; overflow-x: auto; }
+  .mods { width: 100%; max-width: 760px; border-collapse: collapse; font-size: var(--text-sm); }
+  .mods th { text-align: left; font-size: var(--text-xs); color: var(--color-text-muted); font-weight: 600; padding: 4px 8px; border-bottom: 1px solid var(--color-line); }
+  .mods td { padding: 2px 8px; border-bottom: 1px solid var(--color-line); white-space: nowrap; }
+  .mods .r { text-align: right; }
+  .mods tr[data-tone='fault'] td { color: var(--color-fault); }
+  .mods tr[data-tone='warn'] td:nth-child(2), .mods tr[data-tone='warn'] td:nth-child(3) { color: var(--color-warn); }
+  .gr { display: inline-flex; align-items: center; min-height: 32px; font-size: 13px; font-weight: 600; }
+  .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+  @media (max-width: 900px) { .sel { width: 100%; } .mods td, .mods th { padding: 2px 4px; } .mods td:first-child { white-space: normal; } }
   .grp { display: flex; flex-direction: column; gap: var(--space-3); }
   .gh { font-size: var(--text-xs); font-weight: 700; letter-spacing: 0.08em; color: var(--color-text-muted); }
   .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: var(--space-3); }

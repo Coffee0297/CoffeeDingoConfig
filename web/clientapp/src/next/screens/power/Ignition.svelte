@@ -2,7 +2,7 @@
   // Ignition modes + start button (firmware 5.6, Ignition block, param base 0x1E00, one per module).
   // The main module reads the switch / button and runs the state machine; the others follow its state frame.
   // Backed by GET /devices/{id}/functions (ignition), /inputs?type=bool and POST /function/ignition/1.
-  import { Page, PageHeader, Banner, Button, Card, FwBadge, Select, Checkbox, Field, Chip } from '../../ui/index.js'
+  import { Page, PageHeader, Banner, Button, Card, FwBadge, Select, Checkbox, Stepper, Chip } from '../../ui/index.js'
   import { href } from '../../router.svelte.js'
   import { live, api, toast, project, isCanboard } from '../../lib/live.svelte.js'
   import { olderThan, parseVersion } from '../hardware/parts/util.js'
@@ -147,9 +147,9 @@
       <div class="field"><div><strong>Engine running</strong><div class="muted hint">stops the starter; no cranking while it runs · optional</div></div>
         <Select label="Engine running" hideLabel {items} value={String(f?.runningInput ?? 0)} onchange={(v) => (f.runningInput = +v)} disabled={!ready || busy} data-testid="ign-running" /></div>
       <div class="field"><div><strong>Max crank time</strong><div class="muted hint">then release and press again</div></div>
-        <Field label="Seconds of cranking at most" type="number" min="0.5" max="30" step="0.5" unit="s" bind:value={() => f?.maxCrankS ?? 5, (v) => f && (f.maxCrankS = +v)} disabled={!ready || busy} /></div>
+        <div class="stp"><Stepper label="Seconds of cranking at most" min={0.5} max={30} step={0.5} decimals={1} unit="s" bind:value={() => f?.maxCrankS ?? 5, (v) => f && (f.maxCrankS = +v)} disabled={!ready || busy} data-testid="ign-crank" /></div></div>
       <div class="field"><div><strong>Dash stays on after off</strong><div class="muted hint">the Dash role keeps power this long</div></div>
-        <Field label="Seconds the dash stays on" type="number" min="0" max="60" step="1" unit="s" bind:value={() => f?.dashHoldS ?? 0, (v) => f && (f.dashHoldS = +v)} disabled={!ready || busy} /></div>
+        <div class="stp"><Stepper label="Seconds the dash stays on" min={0} max={60} step={1} unit="s" bind:value={() => f?.dashHoldS ?? 0, (v) => f && (f.dashHoldS = +v)} disabled={!ready || busy} data-testid="ign-dash" /></div></div>
     </div>
   </Card>
 
@@ -188,11 +188,12 @@
   .fields { display: flex; flex-direction: column; }
   .field { display: grid; grid-template-columns: minmax(200px, 1fr) minmax(260px, 1.3fr); gap: var(--space-4); align-items: center; padding: var(--space-2) 0; border-bottom: 1px solid var(--color-line); }
   .hint { font-size: var(--text-xs); }
+  .stp :global(.nx-label) { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; }   /* the row already names it */
   .hold { border: 0; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--space-2); }
   .rules { margin: 0; padding: 0; list-style: none; display: grid; gap: var(--space-2); }
   .rules li { display: grid; grid-template-columns: minmax(180px, 0.6fr) minmax(0, 1.4fr); gap: var(--space-4); padding: var(--space-2) var(--space-3); border-radius: var(--radius-md); background: var(--color-raised); }
   .err { color: var(--color-fault); font-weight: 600; margin: 0; }
   .foot { display: flex; align-items: center; gap: var(--space-3); flex-wrap: wrap; }
   .grow { flex: 1 1 auto; }
-  @media (max-width: 640px) { .field { grid-template-columns: 1fr; } }
+  @media (max-width: 640px) { .field, .rules li { grid-template-columns: 1fr; gap: var(--space-1); } }
 </style>

@@ -1,12 +1,12 @@
 <script>
   /** The selected function: its sentence, what it uses, where it came from, and what you can do with it. */
-  import { Button, Chip, StateDot } from '../../../ui/index.js'
+  import { Button, StateDot } from '../../../ui/index.js'
   import { href } from '../../../router.svelte.js'
   import { templateByKey, ago } from './catalog.js'
 
   let { row, st, busy = false, onremove, onturn } = $props()
   const tpl = $derived(row.inst ? templateByKey(row.inst.key) : null)
-  const turnWhy = $derived(!row.inst ? 'Hand-built blocks have no on/off of their own: change them in the flow builder.' : !st.known ? 'The module is not live.' : '')
+  const turnWhy = $derived(!row.inst ? 'Hand-built blocks cannot be disabled here: change them in the flow builder.' : !st.known ? 'The module is not live.' : '')
 </script>
 
 <aside class="pn" aria-label="Selected function" data-testid="fn-panel">
@@ -20,7 +20,7 @@
   </ul>
   <p class="muted src">
     {#if row.inst}From template “{tpl?.name ?? row.inst.key}”{row.editedAt ? ' · applied ' + ago(row.editedAt) : ''}
-    {:else}<Chip tone="muted" dashed>{row.kindLabel.toUpperCase()}</Chip> No template record: read from the module blocks.{/if}
+    {:else}Built by hand in the flow builder.{/if}
   </p>
   <div class="acts">
     <Button variant="primary" href={href('functions', 'flow', row.logicGuid)}>Open in builder</Button>
@@ -28,14 +28,14 @@
     {#if row.inst}
       <Button href={href('functions', 'setup', row.inst.key, { edit: row.inst.id })} disabled={busy}>Change settings</Button>
       <Button href={href('functions', 'setup', row.inst.key, { from: row.inst.id })} disabled={busy}>Duplicate</Button>
-      <Button disabled={busy || !!turnWhy} onclick={() => onturn(st.enabled)}>{st.enabled ? 'Turn off' : 'Turn on'}</Button>
+      <Button disabled={busy || !!turnWhy} onclick={() => onturn(st.enabled)}>{st.enabled ? 'Disable function' : 'Enable function'}</Button>
       <Button variant="danger" disabled={busy} onclick={onremove}>Remove</Button>
     {:else}
       <Button disabled aria-label="Duplicate (not available: hand-built blocks cannot be copied here)">Duplicate</Button>
-      <Button disabled aria-label="Turn off (not available: hand-built blocks)">Turn off</Button>
+      <Button disabled aria-label="Disable function (not available: hand-built blocks)">Disable function</Button>
     {/if}
   </div>
-  {#if !row.inst}<p class="muted note">Duplicate, turn off and remove work on functions made from a template. Hand-built blocks are changed in the flow builder.</p>{/if}
+  {#if !row.inst}<p class="muted note">Duplicate, disable and remove work on functions made from a template. Hand-built blocks are changed in the flow builder.</p>{/if}
   {#if turnWhy && row.inst}<p class="muted note">{turnWhy}</p>{/if}
 </aside>
 

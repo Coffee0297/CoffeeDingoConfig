@@ -3,6 +3,7 @@
   // the CAN ID map, and the settings of the selected module. Backed by telemetry (live.devices),
   // POST /devices/{id}/rename|remove|modify. A module cannot report its own board revision (the definitions name the
   // documented board only, G21), so there is no Rev column; Identify (firmware 5.6) blinks the module's LEDs.
+  import { DropdownMenu } from 'bits-ui'
   import { Page, PageHeader, Card, Button, Chip, StateDot, Empty } from '../../ui/index.js'
   import Confirm from '../../shell/parts/Confirm.svelte'
   import { live, api, mutate, moduleState, hex, blinkModule } from '../../lib/live.svelte.js'
@@ -27,6 +28,10 @@
   const fmtTime = (t) => new Date(t).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
   const lastSeen = (d) => (d.connected && live.connected ? 'now' : seen[d.guid] ? fmtTime(seen[d.guid]) : 'not seen since this page opened')
 
+  // a click on the row (not on a control in it) picks the module for the side panel; the name opens it
+  function rowClick(e, d) { if (!e.target.closest('a, button, input')) sel = d.guid }
+  function rowKey(e, d) { if ((e.key === 'Enter' || e.key === ' ') && e.target === e.currentTarget) { e.preventDefault(); sel = d.guid } }
+
   // inline rename
   let renaming = $state(null)
   let draft = $state('')
@@ -39,9 +44,13 @@
     if (v === d.name || (await mutate(() => api.rename(d.guid, v), `Renamed to ${v}`))) renaming = null
   }
 
-  // remove
+  // remove: typing the module name arms the button
   let rm = $state(null)
+  let rmTyped = $state('')
+  const rmArmed = $derived(!!rm && rmTyped.trim() === rm.name)
+  function askRemove(d) { rm = d; rmTyped = '' }
   async function doRemove() {
+    if (!rmArmed) return
     const d = rm; rm = null
     if (!d) return
     if (await mutate(() => api.remove(d.guid), `Removed ${d.name} from the project.`) && sel === d.guid) sel = null
@@ -80,34 +89,42 @@
     <div class="cols">
       <div class="main">
         <Card>
-          <div class="tw"><table class="nx-table" aria-label="Module table">
+          <div class="tw"><table class="nx-table table-cards" aria-label="Module table">
             <thead><tr><th>State</th><th>Type</th><th>Name</th><th>Base ID</th><th>Firmware</th><th>Last seen</th><th>Actions</th></tr></thead>
             <tbody>
               {#each mods as d (d.guid)}
                 {@const st = moduleState(d)} {@const oldFw = olderThan(d.version, [5, 6, 0])}
-                <tr class:sel={selected?.guid === d.guid} class:bad={clashes.has(d.guid)} data-testid={'row-' + d.name}>
-                  <td><StateDot tone={st.key} shape={st.shape} label={st.word} /></td>
-                  <td>{d.type}</td>
-                  <td>
+                <tr class:sel={selected?.guid === d.guid} class:bad={clashes.has(d.guid)} data-testid={'row-' + d.name} tabindex="0" aria-current={selected?.guid === d.guid ? 'true' : undefined}
+                  title="Click to show its settings" onclick={(e) => rowClick(e, d)} onkeydown={(e) => rowKey(e, d)}>
+                  <td data-label="State"><StateDot tone={st.key} shape={st.shape} label={st.word} /></td>
+                  <td data-label="Type">{d.type}</td>
+                  <td class="nmc" data-label="Name">
                     {#if renaming === d.guid}
                       <span class="rn">
-                        <input class="nx-input" aria-label="Module name" bind:value={draft} onkeydown={(e) => { if (e.key === 'Enter') saveRename(d); if (e.key === 'Escape') renaming = null }} />
+                        <!-- svelte-ignore a11y_autofocus -->
+                        <input class="nx-input" aria-label="Module name" autofocus bind:value={draft} onkeydown={(e) => { if (e.key === 'Enter') saveRename(d); if (e.key === 'Escape') renaming = null }} />
                         <Button size="sm" variant="primary" onclick={() => saveRename(d)}>Save</Button>
                         <Button size="sm" onclick={() => (renaming = null)}>Cancel</Button>
                       </span>
                       {#if renameErr}<span class="err" role="alert">■ {renameErr}</span>{/if}
                     {:else}
-                      <button type="button" class="pick" aria-pressed={selected?.guid === d.guid} onclick={() => (sel = d.guid)}>{d.name}</button>
+                      <a class="pick" href={href('hardware', 'module', d.guid)} aria-label={`Open ${d.name}`}>{d.name}</a>
                     {/if}
                   </td>
-                  <td><span class="mono">{hexId(d.baseId)}</span>{#if clashes.has(d.guid)} <Chip tone="fault" symbol="■">ID clash</Chip>{/if}</td>
-                  <td class="mono">{fwText(d)}</td>
-                  <td class="muted">{lastSeen(d)}</td>
+                  <td data-label="Base ID"><span class="mono">{hexId(d.baseId)}</span>{#if clashes.has(d.guid)} <Chip tone="fault" symbol="■">ID clash</Chip>{/if}</td>
+                  <td class="mono" data-label="Firmware">{fwText(d)}</td>
+                  <td class="muted" data-label="Last seen">{lastSeen(d)}</td>
                   <td class="acts">
-                    <Button size="sm" href={href('hardware', 'module', d.guid)} aria-label={`Open ${d.name}`}>Open</Button>
-                    <Button size="sm" onclick={() => startRename(d)} aria-label={`Rename ${d.name}`}>Rename</Button>
                     <Button size="sm" disabled={oldFw || !d.connected || !live.connected} title={oldFw ? `Needs firmware 5.6: ${d.name} runs ${fwText(d)}` : !d.connected || !live.connected ? 'The module is not answering' : 'Blink its LEDs for 10 s'} onclick={() => blinkModule(d)} aria-label={`Identify ${d.name}: blink its LED`}>Identify</Button>
-                    <Button size="sm" variant="danger" onclick={() => (rm = d)} aria-label={`Remove ${d.name} from the project`}>Remove</Button>
+                    <DropdownMenu.Root>
+                      <DropdownMenu.Trigger class="more" aria-label={`More actions for ${d.name}`} data-testid={'more-' + d.name}>⋯</DropdownMenu.Trigger>
+                      <DropdownMenu.Portal>
+                        <DropdownMenu.Content class="nx-menu" align="end" sideOffset={4}>
+                          <DropdownMenu.Item class="nx-menu-item" onSelect={() => startRename(d)}>Rename</DropdownMenu.Item>
+                          <DropdownMenu.Item class="nx-menu-item danger" onSelect={() => askRemove(d)}>Remove from project…</DropdownMenu.Item>
+                        </DropdownMenu.Content>
+                      </DropdownMenu.Portal>
+                    </DropdownMenu.Root>
                   </td>
                 </tr>
               {/each}
@@ -117,7 +134,7 @@
             <StateDot tone="on" label="Connected: answering now" />
             <StateDot tone="off" shape="ring" label="Asleep: wakes on its wake sources" />
             <StateDot tone="fault" shape="square" label="Not found: in the project, not on the bus" />
-            <span class="muted">Identify blinks a module's LEDs (firmware 5.6; a CANBoard has none and only answers)</span>
+            <span class="muted">Click a row to see its settings; the name opens the module. Identify blinks a module's LEDs (firmware 5.6; a CANBoard has none and only answers)</span>
           </div>
         </Card>
 
@@ -145,9 +162,11 @@
 
 <Confirm bind:open={() => !!rm, (v) => { if (!v) rm = null }} title={`Remove ${rm?.name ?? ''}?`} width={520}>
   <p>{rm?.name} ({rm ? hexId(rm.baseId) : ''}) leaves this project, including its outputs, inputs and functions. The module itself is not changed and keeps answering on the bus. The project is marked unsaved.</p>
+  <label class="type">Type <strong class="mono">{rm?.name}</strong> to remove it
+    <input class="nx-input" bind:value={rmTyped} autocomplete="off" spellcheck="false" data-testid="rm-type" onkeydown={(e) => e.key === 'Enter' && doRemove()} /></label>
   {#snippet footer()}
     <Button onclick={() => (rm = null)} data-testid="rm-keep">Keep it</Button>
-    <Button variant="danger" onclick={doRemove} data-testid="rm-yes">Remove from project</Button>
+    <Button variant="danger" disabled={!rmArmed} onclick={doRemove} data-testid="rm-yes">Remove from project</Button>
   {/snippet}
 </Confirm>
 
@@ -156,10 +175,20 @@
   .cols { display: grid; grid-template-columns: minmax(0, 1fr) 420px; gap: var(--space-5); align-items: start; }
   .main { display: flex; flex-direction: column; gap: var(--space-4); min-width: 0; }
   .side { display: flex; flex-direction: column; gap: var(--space-3); min-width: 0; }
+  tbody tr { cursor: pointer; }
+  tbody tr:hover td { background: var(--color-raised); }
   tr.sel td { background: var(--color-raised); }
+  tr.sel td:first-child { box-shadow: inset 4px 0 0 var(--color-accent); }
+  tbody tr:focus-visible { outline: 2px solid var(--color-accent); outline-offset: -2px; }
   tr.bad td { border-bottom-color: var(--color-fault); }
-  .pick { min-height: 36px; padding: 0 var(--space-2); background: transparent; border: 0; color: var(--color-accent); font-weight: 700; text-align: left; text-decoration: underline; }
-  .pick[aria-pressed='true'] { color: var(--color-text); }
+  .pick { display: inline-flex; align-items: center; min-height: 36px; padding: 0 var(--space-2); color: var(--color-accent); font-weight: 700; text-decoration: underline; }
+  .acts :global(.more) { min-width: 36px; min-height: 32px; border-radius: var(--radius-md); border: 1px solid var(--color-line-strong); background: var(--color-surface); color: var(--color-text); font-weight: 700; font-size: var(--text-md); line-height: 1; }
+  .acts :global(.more:hover) { background: var(--color-raised); }
+  :global(.nx-menu) { z-index: 60; min-width: 200px; padding: var(--space-1); border: 1px solid var(--color-line-strong); border-radius: var(--radius-md); background: var(--color-surface); box-shadow: 0 8px 24px rgb(0 0 0 / 0.3); }
+  :global(.nx-menu-item) { display: flex; align-items: center; min-height: 40px; padding: 0 var(--space-3); border-radius: 4px; cursor: pointer; font-weight: 600; outline: none; }
+  :global(.nx-menu-item[data-highlighted]) { background: var(--color-raised); }
+  :global(.nx-menu-item.danger) { color: var(--color-fault); }
+  .type { display: flex; flex-direction: column; gap: var(--space-2); }
   .acts { display: flex; gap: var(--space-1); flex-wrap: nowrap; white-space: nowrap; }
   td { white-space: nowrap; }
   .rn { display: flex; gap: var(--space-2); align-items: center; }
@@ -173,4 +202,12 @@
   .obd { position: absolute; top: 0; bottom: 0; background: var(--color-warn-soft); border-left: 2px dashed var(--color-warn); font-size: 11px; color: var(--color-warn); writing-mode: vertical-rl; display: flex; align-items: center; justify-content: center; }
   .ticks { display: flex; justify-content: space-between; font-size: 11px; color: var(--color-text-muted); }
   @media (max-width: 1400px) { .cols { grid-template-columns: 1fr; } }
+  @media (max-width: 900px) {
+    td { white-space: normal; }
+    .acts { justify-content: flex-end; }
+    .rn { flex-wrap: wrap; }
+    tr.sel { box-shadow: inset 4px 0 0 var(--color-accent); background: var(--color-raised); }
+    tr.sel td { background: transparent; }
+    tr.sel td:first-child { box-shadow: none; }
+  }
 </style>

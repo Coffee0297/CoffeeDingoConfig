@@ -10,7 +10,8 @@
   // Roles: standalone (own ignition, nobody else cares), master (own ignition + broadcasts a shutdown
   // frame; applying it enrols every other module as a follower), follower (sleeps N s after the master's
   // frame says shutdown).
-  import { api, applyGraphConnection } from './store.js'
+  import { api } from './store.js'
+  import { compileSequence, N_SLEEP, N_QUIET, N_HOLD, N_FRAME, N_MASTER, tIdx as tIdxOf, ciIdx as ciIdxOf } from './sleepSeq.js'
   import { untrack } from 'svelte'
   import SearchSelect from './SearchSelect.svelte'
   import RemoteSourceAdd from './RemoteSourceAdd.svelte'
@@ -18,7 +19,6 @@
   // on/off signals only (what the Ignition picker offers).
   let { guid, devices = [], live = false, funcs = null, vars = [], pickVars = null, onapplied, onrefresh } = $props()
 
-  const N_SLEEP = 'Sleep · off delay', N_QUIET = 'Sleep · quiet CAN', N_HOLD = 'Sleep · hold outputs', N_FRAME = 'Sleep · shutdown frame', N_MASTER = 'Sleep master'
   const FOLLOWER_SLEEP_S = 10, FOLLOWER_QUIET_S = 8   // defaults for enrolled followers (well inside a 30 s master)
   const hx = (n) => '0x' + Math.max(0, n | 0).toString(16).toUpperCase().padStart(3, '0')
   const ssOpts = (arr, none = false) => (none ? [{ value: 0, label: '—' }] : []).concat((arr ?? []).map((v) => ({ value: v.index, label: v.name })))
@@ -28,8 +28,8 @@
   const timers = $derived(funcs?.timers ?? [])
   const canOuts = $derived(funcs?.canOutputs ?? [])
   const canIns = $derived(funcs?.canInputs ?? [])
-  const tIdx = (n, v = vars) => v.find((x) => x.kind === 'timer' && x.number === n)?.index ?? 0
-  const ciIdx = (n, v = vars) => v.find((x) => x.kind === 'caninput' && x.number === n && x.prop === 'State')?.index ?? 0
+  const tIdx = (n, v = vars) => tIdxOf(n, v)
+  const ciIdx = (n, v = vars) => ciIdxOf(n, v)
   // Ignition candidates: real on/off signals, not the module's own always-true vars and not the sequence's own timers.
   const ignOpts = $derived.by(() => {
     const own = (v) => v.kind === 'timer' && [N_SLEEP, N_QUIET, N_HOLD, N_FRAME].includes(timers.find((t) => t.number === v.number)?.name)
@@ -144,63 +144,6 @@
     return ''
   }
 
-  async function wireOutput(g, n, idx, cb, devs) {
-    if (cb) await api.setFunction(g, 'digitaloutput', n, { enabled: true, input: idx })
-    else await applyGraphConnection(g, 'output:' + n, 'input', idx, devs)
-  }
-
-  // Compile one module's sequence. `cfg` = { funcs, vars, outs, isCb, role, trig?, edge, sleepS, quietOn, quietS, hold... }
-  async function compile(g, f, v, o, cb, p) {
-    const T = f.timers ?? [], CO = f.canOutputs ?? [], CI = f.canInputs ?? []
-    const claimed = new Set()
-    const slot = (arr, name) => arr.find((t) => t.enabled && t.name === name) ?? arr.find((t) => !t.enabled && !claimed.has(t.number))
-    const timer = (name) => { const t = slot(T, name); if (!t) throw new Error(`no free timer slot on ${p.name}`); claimed.add(t.number); return t.number }
-    let trig = p.ign, edge = 1   // ignition: active while the input is OFF (falling edge)
-    if (p.role === 'follower') {
-      const c = slot(CI, N_MASTER); if (!c) throw new Error(`no free CAN input slot on ${p.name}`)
-      await api.setFunction(g, 'caninput', c.number, { enabled: true, name: N_MASTER, id: p.frameId, startBit: 0, bitLength: 8, factor: 1, offset: 0, operator: 0, operand: 1, mode: 0, byteOrder: 0, signed: false, timeoutEnabled: false })   // reset a recycled slot fully
-      trig = ciIdx(c.number, v); edge = 0   // active while the frame says 1
-      if (!trig) throw new Error(`CAN input ${c.number} has no var-map entry on ${p.name}`)
-    } else {
-      const c = CI.find((x) => x.enabled && x.name === N_MASTER); if (c) await api.setFunction(g, 'caninput', c.number, { enabled: false })
-    }
-    // A CANBoard never sleeps (no force-sleep input): as a follower it only goes quiet on CAN when the master says so.
-    const canSleep = !cb
-    let nS = 0
-    if (canSleep) { nS = timer(N_SLEEP); await api.setFunction(g, 'timer', nS, { enabled: true, name: N_SLEEP, input: trig, edge, mode: 0, preset: Math.round(p.sleepS * 1000) }) }
-    else { const t = T.find((x) => x.enabled && x.name === N_SLEEP); if (t) await api.setFunction(g, 'timer', t.number, { enabled: false }) }
-    let mute = 0
-    const tQ = T.find((t) => t.enabled && t.name === N_QUIET)
-    if (p.quietOn) { const nQ = timer(N_QUIET); await api.setFunction(g, 'timer', nQ, { enabled: true, name: N_QUIET, input: trig, edge, mode: 0, preset: Math.round(p.quietS * 1000) }); mute = tIdx(nQ, v) }
-    else if (tQ) await api.setFunction(g, 'timer', tQ.number, { enabled: false })
-    // Hold = off-delay on the ignition itself; the held outputs are re-pointed at the timer (and back when un-held).
-    const tH = T.find((t) => t.enabled && t.name === N_HOLD); const hOld = tH ? tIdx(tH.number, v) : 0
-    if (p.role !== 'follower' && p.holdOn && p.held.length) {
-      const nH = timer(N_HOLD)
-      await api.setFunction(g, 'timer', nH, { enabled: true, name: N_HOLD, input: trig, edge: 0, mode: 1, preset: Math.round(p.holdS * 1000) })
-      const hi = tIdx(nH, v)
-      for (const x of o) {
-        const want = p.held.includes(x.number) ? hi : (hOld && x.inputIdx === hOld ? trig : null)
-        if (want != null && want !== x.inputIdx) await wireOutput(g, x.number, want, cb, devices)
-      }
-    } else if (tH) {
-      for (const x of o) if (hOld && x.inputIdx === hOld) await wireOutput(g, x.number, trig, cb, devices)
-      await api.setFunction(g, 'timer', tH.number, { enabled: false })
-    }
-    // Shutdown frame: master only. Byte 0 = 1 once the ignition has been off for the grace time.
-    const co = CO.find((c) => c.enabled && c.name === N_FRAME), tF = T.find((t) => t.enabled && t.name === N_FRAME)
-    if (p.role === 'master') {
-      const nF = timer(N_FRAME)
-      await api.setFunction(g, 'timer', nF, { enabled: true, name: N_FRAME, input: trig, edge, mode: 0, preset: Math.round(p.frameS * 1000) })
-      const c = co ?? CO.find((x) => !x.enabled); if (!c) throw new Error(`no free CAN output slot on ${p.name}`)
-      await api.setFunction(g, 'canoutput', c.number, { enabled: true, name: N_FRAME, id: p.frameId, input: tIdx(nF, v), startBit: 0, bitLength: 8, factor: 1, offset: 0, byteOrder: 0, signed: false, interval: 100 })
-    } else {
-      if (co) await api.setFunction(g, 'canoutput', co.number, { enabled: false })
-      if (tF) await api.setFunction(g, 'timer', tF.number, { enabled: false })
-    }
-    await api.deviceInputs(g, canSleep ? { forceSleepInput: tIdx(nS, v), muteTxInput: mute } : { muteTxInput: mute })
-    return { forceSleep: canSleep ? tIdx(nS, v) : 0, muteTx: mute }
-  }
 
   async function apply() {
     const bad = validate(); if (bad) { msg = bad; err = true; return }
@@ -209,14 +152,14 @@
         !confirm(`${me?.name ?? 'This module'} becomes the sleep master: it broadcasts frame ${hx(frameId)} (byte 0 = 1) ${frameS} s after ignition off.\n\nThese modules will follow it — their sleep trigger becomes that frame, sleeping ${FOLLOWER_SLEEP_S} s after it (quiet on CAN at ${FOLLOWER_QUIET_S} s; a CANBoard only goes quiet — it never sleeps):\n  • ${followers.map((d) => d.name).join('\n  • ')}\n\nContinue?`)) return
     busy = true; msg = ''; err = false
     try {
-      const r = await compile(guid, funcs, vars, outs, isCb, { name: me?.name, role, ign, frameId, sleepS: S, quietOn, quietS: Number(quietS), holdOn, holdS: Number(holdS), held, frameS: Number(frameS) })
+      const r = await compileSequence(guid, funcs, vars, outs, isCb, { name: me?.name, role, ign, frameId, sleepS: S, quietOn, quietS: Number(quietS), holdOn, holdS: Number(holdS), held, frameS: Number(frameS) }, devices)
       if (live) await api.action(guid, 'burn')
       const done = [me?.name ?? 'module']
       for (const d of followers) {
         const f = others[d.guid]; const v = await api.inputs(d.guid).catch(() => [])   // full map — slot → index maths
         const cb = !!f?.digitalOut
         const o = cb ? (f.digitalOut ?? []).map((x) => ({ number: x.number, name: x.name, inputIdx: x.input | 0 })) : (d.outputs ?? []).map((x) => ({ number: x.number, name: x.name, inputIdx: x.inputVal | 0 }))
-        await compile(d.guid, f, v, o, cb, { name: d.name, role: 'follower', ign: 0, frameId, sleepS: FOLLOWER_SLEEP_S, quietOn: true, quietS: FOLLOWER_QUIET_S, holdOn: false, holdS: 0, held: [], frameS: 0 })
+        await compileSequence(d.guid, f, v, o, cb, { name: d.name, role: 'follower', ign: 0, frameId, sleepS: FOLLOWER_SLEEP_S, quietOn: true, quietS: FOLLOWER_QUIET_S, holdOn: false, holdS: 0, held: [], frameS: 0 }, devices)
         if (d.connected) await api.action(d.guid, 'burn')
         done.push(d.name + ' (follower)')
       }

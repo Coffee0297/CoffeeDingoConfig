@@ -38,7 +38,7 @@ test('the pill and the panel list exactly the connected modules that differ', as
   await openPanel(page)
   for (const d of listed) await expect(panel(page).getByTestId('apply-' + d.name)).toBeVisible()
   const quiet = devs.filter((d) => d.connected && !listed.includes(d))
-  if (quiet.length) await expect(panel(page).getByTestId('apply-quiet')).toContainText(`${quiet.length} more module`)
+  if (quiet.length) await expect(panel(page).getByTestId('apply-quiet')).toContainText(listed.length ? `${quiet.length} more module` : quiet.length === 1 ? 'The module matches' : `All ${quiet.length} modules match`)
   else await expect(panel(page).getByTestId('apply-quiet')).toHaveCount(0)
   const unstoredNow = listed.filter((d) => d.storedOnModule === false)
   if (unstoredNow.length) await expect(panel(page).getByText(new RegExp(`${unstoredNow.length} modules? (is|are) written but not stored`)).first()).toBeVisible()
@@ -49,15 +49,21 @@ test('the pill and the panel list exactly the connected modules that differ', as
   expect(errors).toEqual([])
 })
 
-test('a module that differs shows its Read-found differences or says it has not been compared', async ({ page }) => {
+test('a module that differs shows its Read-found differences or says it has not been compared @exclusive', async ({ page }) => {
   await open(page, 'hardware')
   const pending = (await devices()).filter((d) => d.connected && d.configMismatch)
   test.skip(!pending.length, 'no module is flagged as differing right now')
   await openPanel(page)
   for (const d of pending) {
     const card = panel(page).getByTestId('apply-' + d.name)
+    // written earlier but not stored: this session already sent it, so it has no diff to show
+    if (d.pendingEdits === 0 && /Written, not stored/.test(await card.innerText())) continue
     await expect(card).toContainText(d.pendingEdits > 0 ? `${d.pendingEdits} change` : 'Not sent')
-    if (d.configDiffCount > 0) {
+    if (d.pendingEdits > 0) {
+      // G2: each saved edit is listed with what it was, what it is now, and an undo
+      const rows = await apiJson('GET', `/api/devices/${d.guid}/pending`)
+      await expect(card.getByTestId('apply-edit')).toHaveCount(rows.length)
+    } else if (d.configDiffCount > 0) {
       const diff = await apiJson('GET', `/api/devices/${d.guid}/config-diff`)
       await expect(card.locator('.df')).toHaveCount(Math.min(6, diff.length))
     } else {
@@ -167,8 +173,11 @@ test('Apply to car for every module, then Store on modules, then the read-back c
   await openPanel(page)
   const pending = (await devices()).filter((d) => d.connected && d.configMismatch)
   test.skip(!pending.length, 'nothing differs, so there is no batch to apply')
-  await panel(page).getByTestId('apply-go').click()
-  await panel(page).getByTestId('apply-confirm-yes').click()
+  // a module an earlier test wrote but did not store has nothing left to write: only Store is offered for it
+  if (await panel(page).getByTestId('apply-go').count() && await panel(page).getByTestId('apply-go').isEnabled()) {
+    await panel(page).getByTestId('apply-go').click()
+    await panel(page).getByTestId('apply-confirm-yes').click()
+  }
   await expect(panel(page).getByTestId('apply-store').or(panel(page).getByRole('button', { name: 'Done' }))).toBeVisible({ timeout: 180_000 })
   for (const d of pending) await expect(panel(page).getByTestId('apply-' + d.name)).toContainText(/Written, not stored|Refused|Failed/)
   // Store the ones that were written
@@ -238,6 +247,10 @@ test('a saved edit in the redesign waits for Apply to car: counted, shown, and w
     await openPanel(page)
     const row = await reveal(page, 'PDM-05')
     await expect(panel(page).getByTestId('apply-PDM-05')).toContainText(/change(s)? waiting/)
+    // item 7: the change itself is listed, old → new, and where it came from
+    await expect(panel(page).getByTestId('apply-PDM-05')).toContainText(`Trips above`)
+    await expect(panel(page).getByTestId('apply-PDM-05')).toContainText(`${limit} A`)
+    await expect(panel(page).getByTestId('apply-PDM-05')).toContainText('this browser')
     // Read would replace it: asks first
     await row.getByRole('button', { name: 'Read PDM-05' }).click()
     await expect(panel(page).getByTestId('apply-confirm')).toContainText('replaced by what the modules have')

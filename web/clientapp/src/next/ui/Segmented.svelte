@@ -22,6 +22,6 @@
   :global(.nx-seg-item) { min-height: 36px; padding: 0 var(--space-3); border: 1px solid transparent; border-radius: 8px; background: transparent; color: var(--color-text-muted); font-weight: 600; display: inline-flex; flex-direction: column; align-items: center; justify-content: center; }
   :global(.nx-seg.md .nx-seg-item) { min-height: 40px; }
   :global(.nx-seg-item[data-state='checked']) { background: var(--color-surface); color: var(--color-text); border-color: var(--color-line-strong); }
-  :global(.nx-seg-item small) { font-size: 11px; font-weight: 500; color: var(--color-text-muted); }
+  :global(.nx-seg-item small) { font-size: var(--text-xs); font-weight: 500; color: var(--color-text-muted); }
   :global(.nx-seg-item[data-disabled]) { opacity: 0.5; }
 </style>

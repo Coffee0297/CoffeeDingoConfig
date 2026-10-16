@@ -4,10 +4,11 @@
   // Backed by telemetry (configMismatch, configDiffCount, reading), GET /devices/{id}/config-diff and
   // POST /devices/{id}/read|write|burn.
   // Written / Stored: this panel's own steps, else the backend's storedOnModule (G3: false = written, lost at
-  // power-off). There is no staged "not sent" list (G2): configMismatch means "not yet compared or written".
+  // power-off). Edits saved but not applied (G2) are listed per field from GET /devices/{id}/pending, each with an
+  // undo (POST /devices/{id}/pending/{n}/revert) and where it came from.
   import { untrack } from 'svelte'
   import { Dialog, Button, Banner, StateDot, Chip } from '../ui/index.js'
-  import { live, api, toast, hex, pendingModules } from '../lib/live.svelte.js'
+  import { live, api, toast, hex, pendingModules, project } from '../lib/live.svelte.js'
   import { href } from '../router.svelte.js'
   import { ui } from './ui.svelte.js'
   import { postAction, waitRead } from './parts/act.js'
@@ -22,6 +23,7 @@
   const stOf = (d) => ((d.pendingEdits ?? 0) > 0 ? undefined
     : session[d.guid] ?? (d.storedOnModule === false ? { name: d.name, state: 'written', written: true, rejected: [] } : undefined))
   let diffs = $state({}) // guid → ConfigDiffEntry[]
+  let edits = $state({}) // guid → [{ id, kind, number, field, what, old, new, source, at }] saved, not applied
   let asking = $state(null) // { act: 'write'|'burn'|'read', guids[] }
   let busyAct = $state(null) // 'read'|'write'|'burn'
   let progress = $state({ done: 0, total: 0, name: '' })
@@ -54,20 +56,37 @@
       wasOpen = o
     })
   })
-  // Reload a module's short diff when its count changes.
+  // Reload a module's short diff / edit list when its counts change.
   $effect(() => {
     if (!open) return
-    const key = listed.map((d) => d.guid + ':' + d.configDiffCount).join('|')
+    const key = listed.map((d) => d.guid + ':' + d.configDiffCount + ':' + (d.pendingEdits ?? 0)).join('|')
     untrack(() => { key; refreshDiffs() })
   })
   async function refreshDiffs() {
     for (const d of listed) {
+      if (!d.pendingEdits) edits[d.guid] = []
+      else try { const r = await fetch(`/api/devices/${d.guid}/pending`); edits[d.guid] = r.ok ? await r.json() : [] } catch { edits[d.guid] = [] }
       if (!d.configDiffCount) { diffs[d.guid] = []; continue }
       try { diffs[d.guid] = (await api.configDiff(d.guid)) ?? [] } catch { diffs[d.guid] = [] }
     }
   }
 
   const dev = (g) => live.devices.find((d) => d.guid === g)
+
+  const FROM = { app: 'this browser', agent: 'AI agent', api: 'script or import' }
+  // the page that edits it: outputs and ignition have their own, everything else opens in the flow builder
+  const linkOf = (g, e) => e.kind === 'output' ? href('hardware', 'module', g, 'output', String(e.number))
+    : e.kind === 'ignition' ? href('power', 'ignition')
+    : e.kind === 'device' ? href('hardware', 'module', g)
+    : href('functions', 'flow', g, `${e.kind}:${e.number}`)
+  async function undoEdit(d, e) {
+    try {
+      const r = await fetch(`/api/devices/${d.guid}/pending/${e.id}/revert`, { method: 'POST' })
+      if (!r.ok) { const b = await r.json().catch(() => null); toast(b?.error ?? `Could not undo (HTTP ${r.status})`, 'error', 6000) }
+      else { project.dirty = true; toast(`Undone: ${e.what} is ${e.old} again.`, 'info', 3000) }
+    } catch (x) { toast(`Network error: ${x.message}`, 'error', 6000) }
+    await refreshDiffs()
+  }
 
   async function readOne(d) {
     const r = await postAction(d.guid, 'read')
@@ -157,7 +176,7 @@
 
   const steps = $derived([
     { n: 1, t: 'Apply to car', d: 'write', done: listed.length > 0 && listed.every((d) => ['written', 'stored'].includes(stOf(d)?.state)), on: needWrite.length > 0 && !busyAct },
-    { n: 2, t: 'Store on modules', d: 'burn', done: allStored, on: needStore.length > 0 && needWrite.length === 0 },
+    { n: 2, t: 'Store on modules', d: 'save on module, keeps after power-off', done: allStored, on: needStore.length > 0 && needWrite.length === 0 },
     { n: 3, t: 'Check', d: 'read back', done: allStored && listed.every((d) => session[d.guid]?.checked && !session[d.guid].checked.error), on: false },
   ])
 
@@ -217,6 +236,18 @@
           <span class="grow"></span>
           <StateDot tone={st.tone} shape={st.shape} label={st.word} />
         </div>
+        {#if (edits[d.guid] ?? []).length && !s}
+          <div class="diffs" aria-label="Saved, not applied">
+            {#each edits[d.guid] as e (e.id)}
+              <div class="pe" data-testid="apply-edit">
+                <a href={linkOf(d.guid, e)} onclick={() => (ui.panel = null)}>{e.what}</a>
+                <span class="mono">{e.old}</span><span aria-hidden="true">→</span><span class="mono">{e.new}</span>
+                <span class="muted sm" title={new Date(e.at).toLocaleString()}>{FROM[e.source] ?? e.source}</span>
+                <Button size="sm" onclick={() => undoEdit(d, e)} disabled={!!busyAct} aria-label={`Undo ${e.what}`}>Undo</Button>
+              </div>
+            {/each}
+          </div>
+        {/if}
         {#if dl.length}
           <div class="diffs">
             {#each dl.slice(0, 6) as e, i (i)}
@@ -225,7 +256,7 @@
             {/each}
             {#if dl.length > 6}<p class="muted sm">and {dl.length - 6} more. Full list: <a href={href('expert', 'can')} onclick={() => (ui.panel = null)}>Expert › CAN &amp; parameters</a>.</p>{/if}
           </div>
-        {:else if !s}
+        {:else if !s && !(edits[d.guid] ?? []).length}
           <p class="muted sm">{d.configDiffCount === 0 ? 'Not compared with the module yet. Read it to see exactly what differs, or apply to send what changed.' : ''}</p>
         {/if}
         {#if s?.state === 'refused'}
@@ -254,7 +285,7 @@
     {/each}
     {#if quiet.length}
       <details class="quiet">
-        <summary data-testid="apply-quiet">{quiet.length} more module{quiet.length === 1 ? ' has' : 's have'} no changes</summary>
+        <summary data-testid="apply-quiet">{listed.length ? `${quiet.length} more module${quiet.length === 1 ? ' has' : 's have'} no changes` : quiet.length === 1 ? 'The module matches' : `All ${quiet.length} modules match`}</summary>
         <p class="muted sm">Nothing to send for {quiet.length === 1 ? 'it' : 'them'} as far as the app knows. You can still read or re-send one. Full parameter diff: <a href={href('expert', 'can')} onclick={() => (ui.panel = null)}>Expert › CAN &amp; parameters</a>.</p>
         {#each quiet as d (d.guid)}
           <div class="qrow" data-testid={'apply-quiet-' + d.name}>
@@ -300,6 +331,8 @@
   .mh { display: flex; align-items: center; gap: var(--space-3); }
   .grow { flex: 1 1 auto; }
   .diffs { display: flex; flex-direction: column; gap: 2px; }
+  .pe { display: grid; grid-template-columns: minmax(0, 1fr) auto 20px auto auto auto; gap: var(--space-3); align-items: center; padding: 2px 0; border-bottom: 1px solid var(--color-line); }
+  @media (max-width: 900px) { .pe { grid-template-columns: minmax(0, 1fr) auto 20px auto; } .pe > :nth-child(5) { grid-column: 1 / 4; } }
   .df { display: grid; grid-template-columns: minmax(0, 1fr) auto 20px auto; gap: var(--space-3); padding: 4px 0; border-bottom: 1px solid var(--color-line); }
   .refuse { display: flex; flex-direction: column; gap: 2px; padding: var(--space-3); border-radius: var(--radius-md); border: 1px solid var(--color-fault); background: var(--color-fault-soft); }
   .marks { display: flex; align-items: center; gap: var(--space-4); flex-wrap: wrap; font-size: var(--text-xs); color: var(--color-text-muted); }

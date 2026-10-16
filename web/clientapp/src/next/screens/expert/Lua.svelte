@@ -361,7 +361,7 @@
           <div class="two">
             <Card title="Lua space">
               <Meter label={`Lua space on ${cur.name}`} value={used} max={capOf(cur)} unit="B" />
-              <p class="muted">{fmt(Math.max(0, capOf(cur) - used))} B free. Space is {fmt(capOf(cur))} B on a {boardOf(cur)?.name ?? cur.type} (a fixed firmware limit).</p>
+              <p class="muted">{fmt(Math.max(0, capOf(cur) - used))} B free. Space is {fmt(capOf(cur))} B on {cur.name}{cur.version ? `, firmware ${cur.version}` : ''} (a fixed firmware limit).</p>
               {#if used > capOf(cur)}<Banner tone="fault" title="Too big.">This script is larger than the space on the module. The upload will be refused.</Banner>{/if}
             </Card>
             <Card title="Same script elsewhere">

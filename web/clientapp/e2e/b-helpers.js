@@ -83,8 +83,8 @@ export async function saveAndWait(page) {
   const save = page.getByTestId('save')
   await expect(save).toBeEnabled()
   await save.dispatchEvent('click')
-  // G2: the redesign holds saved edits for Apply to car ("Saved. Apply to car sends it"); offline: saved to the project
-  await expect(page.getByTestId('save-status')).toContainText(/^Saved/, { timeout: 20_000 })
+  // G2: the redesign holds saved edits for Apply to car ("Kept in the project. Not on the car yet"); offline: kept in the project
+  await expect(page.getByTestId('save-status')).toContainText(/^Kept in the project/, { timeout: 20_000 })
 }
 
 /** Show a patched /functions in the page (no write): patch(json) mutates the parsed body. */

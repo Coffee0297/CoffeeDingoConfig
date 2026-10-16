@@ -1,11 +1,12 @@
 <script>
   // Output roles: what each output does when the ignition changes. A role is the output's input set to one of
   // its module's ignition signals (firmware 5.6 var map: Ignition, Accessory, Cranking, Dash, Ready) or to
-  // Always On; anything else is the output's own rule. Accessory is already off while cranking in the
+  // Always On; anything else is Custom (the output's own rule). Accessory is already off while cranking in the
   // firmware, so no extra starter-disable is needed. Backed by GET /devices/{id}/inputs and POST /outputconfig.
   import { Page, PageHeader, Banner, Card, FwBadge, Button, Chip } from '../../ui/index.js'
   import { href } from '../../router.svelte.js'
-  import { live, hex, api, mutate } from '../../lib/live.svelte.js'
+  import { live, hex, api, mutate, toast, project } from '../../lib/live.svelte.js'
+  import Confirm from './parts/Confirm.svelte'
   import { pinFor } from '../../../lib/pinmap.js'
   import { olderThan } from '../hardware/parts/util.js'
 
@@ -55,11 +56,27 @@
     const what = value === 'none' ? `${o.name || 'Output ' + o.number}: no input` : `${o.name || 'Output ' + o.number} is now ${value}`
     await mutate(() => api.outputConfig(d.guid, { Number: o.number, Input: target, ...(value === 'none' ? {} : { Enabled: true }) }), what)
   }
+
+  // Unused = not enabled but still has an input (a role or a custom rule) left over.
+  const unused = $derived(newFw.flatMap((d) => (d.outputs ?? []).filter((o) => !o.enabled && o.inputVal).map((o) => ({ d, o }))))
+  let askNone = $state(false), noneBusy = $state(false)
+  async function clearUnused() {
+    noneBusy = true
+    const failed = []
+    for (const { d, o } of unused) {
+      try { await api.outputConfig(d.guid, { Number: o.number, Input: 0 }) } catch (e) { failed.push(`${d.name} o${o.number}: ${e?.message ?? e}`) }
+    }
+    project.dirty = true
+    noneBusy = false; askNone = false
+    if (failed.length) toast(`Not every output changed: ${failed.join('; ')}`, 'error', 9000)
+    else toast('Unused outputs set to None. Apply to car to store it.', 'info', 4000)
+  }
 </script>
 
 <Page>
   <PageHeader crumbs={[{ label: 'Power & ignition', href: href('power') }, { label: 'Output roles' }]} title="Output roles"
     subtitle="What each output does when the ignition turns on, off or cranks.">
+    {#snippet actions()}<Button disabled={!unused.length || noneBusy} title={unused.length ? '' : 'No output that is not enabled has an input left'} onclick={() => (askNone = true)} data-testid="roles-unused-none">Set all unused to None{unused.length ? ` (${unused.length})` : ''}</Button>{/snippet}
     {#snippet tag()}{#if !newFw.length}<FwBadge version="5.6" />{/if}{/snippet}
   </PageHeader>
 
@@ -86,10 +103,10 @@
               <li class="row" data-output={o.number}>
                 <span class="o mono">o{o.number}</span>
                 <span class="nm"><strong>{o.name || `Output ${o.number}`}</strong><span class="muted sp">{spec(d, o)}{o.enabled ? '' : ' · not enabled'}</span>
-                  <span class="muted fx">{role ? 'follows the ignition' : o.inputVal ? `own rule: ${o.input}` : 'no input'}</span></span>
+                  <span class="muted fx">{role ? 'follows the ignition' : o.inputVal ? `Custom: ${o.input}` : 'no input'}</span></span>
                 <label class="sr-only" for={`role-${d.guid}-${o.number}`}>Role for {o.name || `output ${o.number}`}, {d.name} output {o.number}</label>
                 <select id={`role-${d.guid}-${o.number}`} class="nx-input role" disabled={old || !idx[d.guid]} value={role} onchange={(e) => setRole(d, o, e.currentTarget.value)} data-testid={`role-${d.name}-o${o.number}`}>
-                  {#if old}<option value="">Not available</option>{:else if !role}<option value="">{o.inputVal ? 'Own rule' : 'None'}</option>{/if}
+                  {#if old}<option value="">Not available</option>{:else if !role}<option value="">{o.inputVal ? 'Custom' : 'None'}</option>{/if}
                   {#each ROLES as x (x.r)}<option value={x.r}>{x.r}</option>{/each}
                   {#if role}<option value="none">None (no input)</option>{/if}
                 </select>
@@ -108,14 +125,19 @@
       <Card title="What each role does" aria-label="Roles at a glance">
         <dl class="legend">
           {#each ROLES as x (x.r)}
-            <div><dt><strong>{x.r}</strong> <Chip tone="muted">{counts[x.r] ?? 0} of {total}</Chip></dt><dd class="muted">{x.what}</dd></div>
+            <div><dt><strong>{x.r}</strong> <Chip tone="muted">used by {counts[x.r] ?? 0}</Chip></dt><dd class="muted">{x.what}</dd></div>
           {/each}
         </dl>
-        <p class="muted">A role sets the output's input; changing it on the output's own page later turns it back into its own rule.</p>
+        <p class="muted">A role sets the output's input; changing it on the output's own page later makes it Custom again.</p>
       </Card>
       <Button href={href('power', 'ignition')}>Back to ignition setup</Button>
     </div>
   </div>
+  <Confirm bind:open={askNone} title="Set all unused outputs to None?" confirmLabel={`Set ${unused.length} to None`} busy={noneBusy} onconfirm={clearUnused}
+    description="These outputs are not enabled but still have an input. Each one loses it; nothing switches, they stay off."
+    consequence="Pick the role again, or give the output its input back on its own page.">
+    <p class="muted">{unused.map(({ d, o }) => `${d.name} o${o.number}`).join(', ')}</p>
+  </Confirm>
 </Page>
 
 <style>
@@ -124,12 +146,12 @@
   .side { display: flex; flex-direction: column; gap: var(--space-4); align-items: flex-start; }
   .side :global(.card) { align-self: stretch; }
   .rows { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
-  .row { display: grid; grid-template-columns: 36px minmax(0, 1fr) 150px; gap: var(--space-3); align-items: center; padding: var(--space-2) 0; border-bottom: 1px solid var(--color-line); }
+  .row { display: grid; grid-template-columns: 36px minmax(0, 1fr) 160px; gap: var(--space-3); align-items: center; padding: var(--space-2) 0; border-bottom: 1px solid var(--color-line); }
   .nm { display: flex; flex-direction: column; min-width: 0; }
   .sp, .fx { font-size: var(--text-xs); }
   .role { min-width: 0; }
   .legend { margin: 0; display: flex; flex-direction: column; gap: var(--space-3); }
   .legend dd { margin: 2px 0 0; }
   @media (max-width: 1100px) { .cols { grid-template-columns: minmax(0, 1fr); } }
-  @media (max-width: 640px) { .mods { grid-template-columns: minmax(0, 1fr); } }
+  @media (max-width: 640px) { .mods { grid-template-columns: minmax(0, 1fr); } .row { grid-template-columns: 28px minmax(0, 1fr) 130px; } }
 </style>

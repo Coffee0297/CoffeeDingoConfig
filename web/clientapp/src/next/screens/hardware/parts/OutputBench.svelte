@@ -6,7 +6,6 @@
   const active = $derived(b.phase === 'running' || b.phase === 'lost')
   let modeVal = $state('on')
   $effect(() => { modeVal = b.mode })
-  const label = $derived(b.mode === 'pwm' ? `Run PWM ${b.duty} % for ${bench.holdS()} s` : `Test for ${bench.holdS()} s`)
   const el = $derived(bench.elapsed())
   const series = $derived([{ label: 'Current', values: b.samples.length > 1 ? [...b.samples] : [0, 0], color: 'var(--color-on)', area: true }])
 </script>
@@ -43,9 +42,8 @@
         <Stepper label="Frequency" bind:value={bench.state.freq} min={15} max={400} step={5} unit="Hz" data-testid="bench-freq" />
       {/if}
     </div>
-    <div class="go">
-      <Button variant="test" size="lg" disabled={!!blocker} busy={b.busy} onclick={() => bench.start()} data-testid="bench-start">{blocker ? `${label} · not now` : label}</Button>
-      {#if blocker}<span class="why" role="status">{blocker}</span>{:else}<span class="muted small">Pauses this output's rule while it runs. Current limits stay active.</span>{/if}
+    <div class="go" data-testid="bench-ready">
+      {#if blocker}<span class="why" role="status">{blocker}</span>{:else}<span class="muted small">Start it with <strong>{b.mode === 'pwm' ? `Run PWM ${b.duty} % for ${bench.holdS()} s` : `Test for ${bench.holdS()} s`}</strong> at the top of the page. It pauses this output's rule while it runs. Current limits stay active.</span>{/if}
     </div>
     {#if b.phase === 'refused'}<Banner tone="fault" title="The module refused the test">{b.error}</Banner>{/if}
   {/if}

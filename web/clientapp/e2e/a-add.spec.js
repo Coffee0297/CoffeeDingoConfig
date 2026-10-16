@@ -173,7 +173,7 @@ test('By hand adds a module that shows as Not found, and Add like this copies a 
     expect(made.connected).toBe(false)
     await expect(page.getByTestId('project-chip')).toContainText('unsaved')
     // Add one like this (PDM-02)
-    await page.getByTestId('row-PDM-02').getByRole('button', { name: 'PDM-02', exact: true }).click()
+    await page.getByTestId('row-PDM-02').locator('td').first().click()
     await page.getByRole('complementary', { name: 'Module settings' }).getByTestId('add-like').click()
     const d2 = dlg(page)
     await d2.getByRole('textbox', { name: 'Name' }).fill('zz-e2e-like')

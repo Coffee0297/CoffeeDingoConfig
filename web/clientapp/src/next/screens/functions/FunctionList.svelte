@@ -45,9 +45,8 @@
   const selected = $derived(m.rows.find((r) => r.id === selectedId) ?? matches[0] ?? null)
   const kinds = (k) => count((r) => r.kind === k)
   const moduleCount = $derived(new Set(m.rows.flatMap((r) => r.modules)).size)
-  const subtitle = $derived(m.rows.length
-    ? `${m.rows.length} functions on ${moduleCount} modules · ${count((r) => states[r.id]?.on)} on now · ${kinds('fn')} function blocks, ${kinds('helper')} helpers, ${kinds('blocks')} block groups, ${kinds('lua')} custom code (Lua)`
-    : 'What the car does')
+  const subtitle = $derived(m.rows.length ? `${m.rows.length} functions · ${count((r) => states[r.id]?.on)} on now` : 'What the car does')
+  const breakdown = $derived(`On ${moduleCount} modules. Made of ${kinds('fn')} from templates, ${kinds('helper')} helpers, ${kinds('blocks')} groups of blocks and ${kinds('lua')} custom code (Lua).`)
 
   async function turn(row, enable) { if (enable) { confirmOn = true; return } await M.setEnabled(row, false) }
   async function doRemove() { const r = selected; confirmRemove = false; if (r?.inst) await M.remove(r) }
@@ -56,6 +55,7 @@
 
 <Page wide>
   <PageHeader title="Functions" {subtitle}>
+    {#snippet tag()}{#if m.rows.length}<span class="info" title={breakdown} aria-label={breakdown} role="img" data-testid="fn-breakdown">i</span>{/if}{/snippet}
     {#snippet actions()}
       <label class="srch"><span class="sr-only">Search functions</span>
         <input class="nx-input" type="search" bind:value={q} placeholder="name, signal, pin (J3-7), module" aria-label="Search functions" data-testid="fn-search" />
@@ -113,16 +113,17 @@
   {/snippet}
 </Dialog>
 
-<Dialog bind:open={confirmOn} title={`Turn on “${selected?.name ?? ''}”?`} description="Its outputs will switch again when their signals say so.">
+<Dialog bind:open={confirmOn} title={`Enable “${selected?.name ?? ''}”?`} description="Its outputs will switch again when their signals say so.">
   <p>Loads on {selected?.modules.join(', ')} can start straight away. Make sure nothing is connected that should not run.</p>
   {#snippet footer()}
     <Button onclick={() => (confirmOn = false)}>Cancel</Button>
-    <Button variant="primary" onclick={doOn} data-testid="confirm-on">Turn on</Button>
+    <Button variant="primary" onclick={doOn} data-testid="confirm-on">Enable function</Button>
   {/snippet}
 </Dialog>
 
 <style>
   .srch { width: min(380px, 100%); }
+  .info { display: inline-grid; place-items: center; width: 20px; height: 20px; border-radius: 50%; border: 1px solid var(--color-line-strong); font-size: 12px; font-weight: 700; font-style: italic; color: var(--color-text-muted); cursor: help; }
   .chips { display: flex; gap: var(--space-2); flex-wrap: wrap; }
   .chip { min-height: 36px; padding: 0 var(--space-3); display: inline-flex; align-items: center; gap: var(--space-2); border-radius: 999px; border: 1px solid var(--color-line); background: transparent; font-weight: 600; font-size: var(--text-sm); }
   .chip.on { background: var(--color-raised); border-color: var(--color-line-strong); }

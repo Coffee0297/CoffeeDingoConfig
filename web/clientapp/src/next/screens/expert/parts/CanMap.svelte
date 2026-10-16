@@ -60,18 +60,32 @@
   const filters = [['all', 'All'], ['mod', 'Modules'], ['ecu', 'ECU'], ['unknown', 'Unknown'], ['res', 'Reserved'], ['clash', 'Clashes']]
   const fixLinks = (r) => (r.status === 'clash' ? live.devices.filter((d) => r.owners.some((o) => o.startsWith(d.name + ':'))) : [])
   const glyph = { mod: '●', ecu: '◆', unknown: '△' }
-  const marks = $derived(rows.filter((r) => !r.ide && r.kind !== 'res' && r.lo <= 0x7ff).map((r) => ({ left: (r.lo / 0x7ff) * 100, g: r.status === 'clash' ? '■' : glyph[r.kind] ?? '●', bad: r.status === 'clash' })))
+  // the bar shows the used stretch (padded, on 0x10 steps) unless "Whole range" is on: 162 ids in 0x600..0x7FF
+  // crowd into the right 15 % of 0x000..0x7FF
+  let whole = $state(false)
+  const used = $derived(rows.filter((r) => !r.ide && r.kind !== 'res' && r.lo <= 0x7ff))
+  const view = $derived.by(() => {
+    if (whole || !used.length) return { lo: 0, hi: 0x7ff }
+    const a = Math.min(...used.map((r) => r.lo)), b = Math.max(...used.map((r) => r.hi ?? r.lo))
+    const pad = Math.max(0x10, Math.round((b - a) * 0.05))
+    const lo = Math.max(0, Math.floor((a - pad) / 0x10) * 0x10), hi = Math.min(0x7ff, Math.ceil((b + pad + 1) / 0x10) * 0x10 - 1)
+    return { lo, hi }
+  })
+  const at = (id) => ((id - view.lo) / Math.max(1, view.hi - view.lo)) * 100
+  const marks = $derived(used.map((r) => ({ left: at(r.lo), g: r.status === 'clash' ? '■' : glyph[r.kind] ?? '●', bad: r.status === 'clash' })))
+  const obd = $derived(view.hi >= 0x7df && view.lo <= 0x7ef ? { left: at(Math.max(0x7df, view.lo)), width: at(Math.min(0x7ef, view.hi) + 1) - at(Math.max(0x7df, view.lo)) } : null)
 </script>
 
 {#if loadErr}<Banner tone="fault" title="Could not load the CAN map.">{loadErr}</Banner>{/if}
 
-<Card title="CAN ID map" subtitle={`${idCount} ids in use · 0x000 to 0x7FF`}>
+<Card title="CAN ID map" subtitle={`${idCount} ids in use · showing ${hx(view.lo)} to ${hx(view.hi)}`}>
+  {#snippet actions()}<Button size="sm" aria-pressed={whole} onclick={() => (whole = !whole)} data-testid="can-whole-range">Whole range</Button>{/snippet}
   {#snippet tag()}{#if clashes}<Chip tone="fault" symbol="■" data-testid="can-clash-count">{clashes} {clashes === 1 ? 'clash' : 'clashes'}</Chip>{:else}<Chip tone="ok" symbol="✓" data-testid="can-clash-count">No clashes</Chip>{/if}{/snippet}
-  <div class="strip" role="img" aria-label={`CAN ID map from 0x000 to 0x7FF. ${idCount} ids in use. ${clashes ? clashes + ' clash.' : 'No clashes.'} OBD-II reserved 0x7DF to 0x7EF.`}>
-    <div class="obd" style="left: {(0x7df / 0x7ff) * 100}%; width: {(0x11 / 0x7ff) * 100}%"></div>
+  <div class="strip" role="img" aria-label={`CAN ID map from ${hx(view.lo)} to ${hx(view.hi)}. ${idCount} ids in use. ${clashes ? clashes + ' clash.' : 'No clashes.'} OBD-II reserved 0x7DF to 0x7EF.`}>
+    {#if obd}<div class="obd" style="left: {obd.left}%; width: {obd.width}%"></div>{/if}
     {#each marks as m, i (i)}<span class="mk" class:bad={m.bad} style="left: {m.left}%" aria-hidden="true">{m.g}</span>{/each}
   </div>
-  <div class="scale muted" aria-hidden="true"><span>0x000</span><span>0x3FF</span><span>0x7FF</span></div>
+  <div class="scale muted" aria-hidden="true"><span>{hx(view.lo)}</span><span>{hx(Math.round((view.lo + view.hi) / 2))}</span><span>{hx(view.hi)}</span></div>
   <p class="muted lg">● dingo module · ◆ ECU frame · △ unknown sender · ■ clash · shaded = OBD-II reserved</p>
 </Card>
 

@@ -2,6 +2,7 @@
 export const ui = $state({
   panel: null, // 'connect' | 'apply' | 'project' | null
   palette: false,
+  nav: false, // phone: the rail drawer is open
   addModule: false, // the one Add module dialog (opened from Car and Hardware › Modules)
   theme: (() => { try { return localStorage.getItem('nxTheme') || 'dark' } catch { return 'dark' } })(),
   expertOpen: (() => { try { return localStorage.getItem('nxExpert') === '1' } catch { return false } })(),

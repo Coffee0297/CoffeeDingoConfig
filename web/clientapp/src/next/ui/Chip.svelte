@@ -10,7 +10,7 @@
 <span class="chip" class:dashed class:solid data-tone={tone} {...rest}>{#if symbol}<span aria-hidden="true">{symbol}</span>{/if}{@render children?.()}</span>
 
 <style>
-  .chip { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; font-weight: 700; letter-spacing: 0.04em; padding: 2px 7px; border-radius: 6px; border: 1px solid var(--c); color: var(--c); white-space: nowrap; line-height: 1.4; }
+  .chip { display: inline-flex; align-items: center; gap: 4px; font-size: var(--text-xs); font-weight: 700; letter-spacing: 0.04em; padding: 2px 7px; border-radius: 6px; border: 1px solid var(--c); color: var(--c); white-space: nowrap; line-height: 1.4; }
   .dashed { border-style: dashed; }
   .solid { background: var(--c); color: var(--color-on-accent); }
   [data-tone='ok'] { --c: var(--color-ok); }

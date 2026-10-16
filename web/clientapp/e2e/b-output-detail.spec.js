@@ -61,7 +61,7 @@ test('protection: steppers, summary, revert and rating guard', async ({ page }) 
   await lim.less.click()
   await expect(lim.input).toHaveValue(String(o.currentLimit - 0.5))
   await expect(page.getByTestId('protection-summary')).toContainText(`${o.currentLimit - 0.5} A`)
-  await expect(page.getByTestId('save-status')).toContainText('not saved')
+  await expect(page.getByTestId('save-status')).toContainText('not kept yet')
   await expect(page.getByTestId('save')).toBeEnabled()
   await page.getByRole('button', { name: 'Revert' }).dispatchEvent('click')
   await expect(lim.input).toHaveValue(String(o.currentLimit))
@@ -95,7 +95,7 @@ test('protection save writes limits, retry rule, warn and open-load to the modul
       const o = (await out(1)).o
       return o.currentLimit === 7 && o.inrushLimit === 40 && o.inrushTime === 500 && o.resetMode === 1 && o.resetCountLimit === 5 && o.resetTime === 800 && near(o.warnLimit, 5.5) && near(o.openLoadLimit, 0.3) && o.openLoadTime === 900
     }, 15_000, 'protection values on the module')
-    await expect(page.getByTestId('save-status')).toContainText('Saved. Apply to car sends it')
+    await expect(page.getByTestId('save-status')).toContainText('Not on the car yet')
   })
   expect(errors).toEqual([])
 })
@@ -225,7 +225,8 @@ async function armOut8() {
   await putOutput(d.guid, { ...o, enabled: true, currentLimit: 6 })
   await waitFor(async () => (await out(8)).o.enabled, 15_000, 'out 8 enabled')
 }
-const start = (page) => page.getByTestId('bench-start')
+// the one Test button lives in the page header (the bench card only explains)
+const start = (page) => page.getByTestId('header-test')
 
 test('bench: refused with a reason while the output is off, or has unsaved changes', async ({ page }) => {
   await openOut(page, 1)   // disabled spare

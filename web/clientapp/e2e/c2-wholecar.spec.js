@@ -11,6 +11,9 @@ test('every module on one canvas, links over CAN, a block opens its flow builder
   await expect(wc).toBeVisible({ timeout: 20_000 })
   for (const m of ['CB-1', 'CB-2', 'PDM-01', 'PDM-05']) await expect(wc.locator('.svelte-flow__node').filter({ hasText: m }).first()).toBeVisible()
   await expect(page.getByText(/\d+ signals travel over CAN/)).toBeVisible()
+  // modules start collapsed to the blocks that talk over CAN; Expand all shows every block
+  await page.getByTestId('wc-expand').click()
+  await expect(page.getByTestId('wc-expand')).toHaveText('Collapse all')
   const cb1 = await deviceByName('CB-1')
   const blk = wc.locator(`.svelte-flow__node[data-id="${cb1.guid}#virtualinput:1"]`)
   await expect(blk).toContainText('Start button light')

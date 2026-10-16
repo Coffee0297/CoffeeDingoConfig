@@ -6,9 +6,9 @@ import { inject, devs } from './e-util.js'
 
 const countText = (page) => page.getByTestId('live-count')
 const nums = async (page) => {
-  const t = await countText(page).innerText()
-  const m = /Showing (\d+) enabled · (\d+) hidden/.exec(t)
-  return { shown: Number(m[1]), hidden: Number(m[2]) }
+  const c = countText(page)
+  await expect(c).toContainText(/\d+ live values/)
+  return { shown: Number(await c.getAttribute('data-shown')), hidden: Number(await c.getAttribute('data-hidden')) }
 }
 
 test('dashboard shows car, output and signal tiles from live data', async ({ page }) => {
@@ -23,9 +23,12 @@ test('dashboard shows car, output and signal tiles from live data', async ({ pag
   expect([lim.tempWarnC, lim.tempCritC]).toEqual([55, 80])
   const hot = car.getByTestId('tile').filter({ has: page.getByRole('link', { name: 'Hottest module', exact: true }) })
   await expect(hot).toContainText(`OverTemp at ${lim.tempWarnC} °C · all off at ${lim.tempCritC} °C`)
-  // one temperature tile per module that answers
-  await expect.poll(async () => (await page.getByRole('region', { name: 'Modules', exact: true }).getByTestId('tile').count()) - (await devs()).filter((m) => m.connected).length).toBeLessThanOrEqual(1)
-  await expect(page.getByRole('region', { name: 'Modules', exact: true }).getByTestId('tile').filter({ hasText: 'PDM-01' })).toContainText('°C')
+  // one compact row per module that answers (name, temperature, state, current), below the outputs
+  const modsRegion = page.getByRole('region', { name: 'Modules', exact: true })
+  await expect.poll(async () => Math.abs((await modsRegion.getByTestId('module-row').count()) - (await devs()).filter((m) => m.connected).length)).toBeLessThanOrEqual(1)
+  await expect(modsRegion.getByTestId('module-row').filter({ hasText: 'PDM-01' })).toContainText('°C')
+  // the Ignition tile opens the ignition setup
+  await expect(car.getByRole('link', { name: 'Ignition', exact: true })).toHaveAttribute('href', /power\/ignition$/)
   // the same enabled signals the API reports (non-output kinds) are on the dashboard
   const d = await devs()
   let enabled = 0
@@ -36,7 +39,7 @@ test('dashboard shows car, output and signal tiles from live data', async ({ pag
   const shownOutputs = await page.getByRole('region', { name: 'Outputs' }).getByTestId('tile').count()
   expect(Math.abs(shownOutputs - on)).toBeLessThanOrEqual(2)
   // every tile has a sparkline (a line graph) once its history has two samples
-  await expect.poll(() => page.getByRole('region', { name: 'Outputs' }).locator('[data-testid=tile] svg').count(), { timeout: 10_000 }).toBeGreaterThan(5)
+  await expect.poll(() => page.getByRole('region', { name: 'Outputs' }).locator('[data-testid=tile] svg').count(), { timeout: 10_000 }).toBeGreaterThanOrEqual(Math.max(1, shownOutputs - 2))
   expect(errors).toEqual([])
 })
 

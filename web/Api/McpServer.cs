@@ -266,6 +266,7 @@ public static class McpServer
             var write = call.Method != HttpMethod.Get;
             var before = write ? sp.GetRequiredService<ConfigFileManager>().SerializeDevices(sp.GetRequiredService<DeviceManager>().GetDevices()) : null;
             using var msg = new HttpRequestMessage(call.Method, baseUrl + call.Path) { Content = call.Content };
+            msg.Headers.Add("X-Dingo-Source", "agent");   // item 7: the Apply panel says an edit came from the AI agent
             using var resp = await Http.SendAsync(msg);
             var text = await resp.Content.ReadAsStringAsync();
             if (write) AgentGuard.Record(client, tool.Name, args, resp.IsSuccessStatusCode, resp.IsSuccessStatusCode ? "done" : $"HTTP {(int)resp.StatusCode}", before);

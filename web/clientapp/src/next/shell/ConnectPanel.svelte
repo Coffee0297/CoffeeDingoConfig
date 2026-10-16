@@ -220,8 +220,6 @@
     <div class="sa">
       {#if busy}
         <Button onclick={() => (cancelled = true)}>Stop</Button>
-      {:else if live.connected}
-        <Button onclick={disconnect} data-testid="disconnect">Disconnect</Button>
       {/if}
     </div>
   </div>
@@ -327,8 +325,8 @@
     </span>
     {#if lastConn}<Button onclick={useLast} disabled={busy}>Use last connection</Button>{/if}
     <Button onclick={() => (ui.panel = null)}>Close</Button>
+    {#if live.connected}<Button variant="secondary" onclick={disconnect} disabled={busy} data-testid="disconnect">Disconnect</Button>{/if}
     {#if live.connected && activeId === sel}
-      <Button variant="secondary" onclick={disconnect} disabled={busy}>Disconnect</Button>
       <Button variant="primary" onclick={connect} disabled={busy || !!problem}>Reconnect</Button>
     {:else}
       <Button variant="primary" onclick={connect} busy={busy} disabled={!!problem} data-testid="connect">{sel === 'sim' ? 'Connect to simulator' : 'Connect'}</Button>
@@ -342,7 +340,7 @@
   .st[data-tone='warn'] { background: var(--color-warn-soft); border-color: var(--color-warn); }
   .sx { flex: 1 1 auto; display: flex; flex-direction: column; gap: 2px; min-width: 0; }
   .sx strong { font-size: var(--text-lg); overflow-wrap: anywhere; }
-  .mark { font-size: 12px; font-weight: 700; letter-spacing: 0.06em; }
+  .mark { font-size: var(--text-xs); font-weight: 700; letter-spacing: 0.06em; }
   .st[data-tone='ok'] .mark { color: var(--color-ok); }
   .st[data-tone='fault'] .mark { color: var(--color-fault); }
   .st[data-tone='warn'] .mark { color: var(--color-warn); }

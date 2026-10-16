@@ -178,7 +178,7 @@
   .th { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); }
   .list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
   .list li { display: flex; justify-content: space-between; align-items: center; gap: var(--space-3); padding: var(--space-2) 0; border-bottom: 1px solid var(--color-line); flex-wrap: wrap; }
-  .list li.undone { opacity: 0.6; }
+  .list li.undone { text-decoration: line-through; }
   .fault { color: var(--color-fault); font-weight: 600; }
   .tools code { font-weight: 700; }
 </style>

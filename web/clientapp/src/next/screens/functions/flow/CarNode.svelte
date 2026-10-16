@@ -1,7 +1,8 @@
 <script>
   /**
    * Compact block for the whole-car canvas: name, kind, one live state. data: { n, vals, guid, head? }.
-   * A module header node (head: true) has no ports.
+   * A module header node (head: true) has no ports; an expander node (more: true) opens / closes its column.
+   * data.hl (shared): { on, n: { [nodeId]: true } } lights the blocks at either end of a hovered block's wires.
    */
   import { Handle, Position } from '@xyflow/svelte'
   import { FAM_COLOR } from './model.js'
@@ -18,8 +19,10 @@
     <span class="t" id={'car-t-' + id}>{n.title}</span>
     <span class="s">{n.sub}</span>
   </div>
+{:else if data.more}
+  <div class="more" class:open={data.open} id={'car-t-' + id}>{n.title}</div>
 {:else}
-  <div class="cn" class:sel={selected} class:on={val === true} class:fn={!!n.tag} class:inc={n.incomplete?.length} style="--fam: {FAM_COLOR[n.fam] ?? FAM_COLOR.dev}">
+  <div class="cn" class:sel={selected} class:hi={data.hl?.on && data.hl.n[id]} class:on={val === true} class:fn={!!n.tag} class:inc={n.incomplete?.length} style="--fam: {FAM_COLOR[n.fam] ?? FAM_COLOR.dev}">
     <Handle type="target" position={Position.Left} class="cp" isConnectable={false} />
     <span class="bar" aria-hidden="true"></span>
     <span class="tt">
@@ -40,6 +43,10 @@
   .cn.fn { border-color: var(--color-accent); }
   .cn.inc { border-style: dashed; border-color: var(--color-fault); }
   .cn.sel { border-color: var(--color-focus); }
+  .cn.hi { border-color: var(--color-focus); box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-focus) 35%, transparent); }
+  .more { width: 260px; box-sizing: border-box; min-height: 40px; display: flex; align-items: center; justify-content: center; border-radius: 10px; border: 1px dashed var(--color-line-strong); background: var(--color-surface); color: var(--color-accent); font-weight: 700; font-size: 13px; cursor: pointer; }
+  .more:hover { border-color: var(--color-focus); }
+  :global(.svelte-flow__node:focus-visible) .more { outline: 3px solid var(--color-focus); outline-offset: 3px; }
   :global(.svelte-flow__node:focus-visible) .cn { outline: 3px solid var(--color-focus); outline-offset: 3px; }
   .bar { flex: none; width: 4px; align-self: stretch; border-radius: 2px; background: var(--fam); }
   .tt { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; }

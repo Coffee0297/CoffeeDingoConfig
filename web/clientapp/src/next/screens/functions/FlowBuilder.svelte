@@ -145,6 +145,7 @@
     else { setGroups({ groups: gdata.groups.filter((x) => x.id !== g.id), dismissed: gdata.dismissed }, `Ungroup ${g.name}`); if (selId === 'grp:' + g.id) selId = null; if (lastGroup === g.id) lastGroup = null }
   }
   const activeSug = $derived(suggestions[0] ?? null)
+  const sugText = (s) => (s.members.length > 1 ? s.members.length + ' blocks match the ' : '1 block matches the ') + recipe(s.recipe)?.name + ' ' + kindWord(recipe(s.recipe)?.kind)
   const matchSet = $derived(new Set(activeSug?.members ?? []))
   const lastG = $derived(groups.find((g) => g.id === lastGroup) ?? null)
 
@@ -179,6 +180,10 @@
   let pos = $state.raw({})
   $effect(() => { guid; untrack(() => { pos = loadPos() }) })
   let showLinks = $state(false)
+  let sugOpen = $state(false)
+  // the mini map starts closed on a phone, where it would cover a third of the canvas
+  let mapOpen = $state((() => { try { const v = localStorage.getItem('fb.map'); return v ? v === '1' : !matchMedia('(max-width: 900px)').matches } catch { return true } })())
+  $effect(() => { const v = mapOpen ? '1' : '0'; try { localStorage.setItem('fb.map', v) } catch {} })
   let nodes = $state.raw([])
   let edges = $state.raw([])
   let disp = $state.raw(new Map())
@@ -211,7 +216,7 @@
     const xs = nodes.map((n) => n.position.x), ys = nodes.map((n) => n.position.y)
     const bw = Math.max(...xs) - Math.min(...xs) + 260, bh = Math.max(...ys) - Math.min(...ys) + 300
     if (Math.min(w / bw, h / bh) >= 0.75) flow.fitView({ padding: 0.06, maxZoom: 1 })
-    else flow.setViewport({ x: 16 - Math.min(...xs) * 0.85, y: 16 - Math.min(...ys) * 0.85, zoom: 0.85 })
+    else flow.setViewport({ x: 60 - Math.min(...xs) * 0.85, y: 16 - Math.min(...ys) * 0.85, zoom: 0.85 })
   }
   function savePos() {
     const p = { ...pos }
@@ -431,9 +436,10 @@
     <StateDot tone={mstate.key} shape={mstate.shape} label={mstate.word} />
     <span class="grow"></span>
     <Segmented label="Builder view" items={[{ value: 'canvas', label: 'Canvas' }, { value: 'sentence', label: 'Sentence view' }]} bind:value={view} size="sm" />
-    <Button size="sm" onclick={() => (palOpen = !palOpen)} aria-pressed={palOpen} data-testid="tool-palette">{palOpen ? 'Hide' : 'Show'} block list{!palOpen && suggestions.length ? ` · ${suggestions.length} suggestion${suggestions.length === 1 ? '' : 's'}` : ''}</Button>
+    <Button size="sm" onclick={() => (palOpen = !palOpen)} aria-pressed={palOpen} data-testid="tool-palette">{palOpen ? 'Hide' : 'Show'} block list</Button>
     <Button size="sm" onclick={() => (addOpen = true)} data-testid="tool-add">+ Add</Button>
     <Button size="sm" onclick={tidy} disabled={view !== 'canvas'}>Tidy</Button>
+    <Button size="sm" onclick={() => (showLinks = !showLinks)} aria-pressed={showLinks} disabled={view !== 'canvas'} title="Show the blocks on other modules that read signals from this one" data-testid="toggle-links">{showLinks ? '✓ ' : ''}Links to other modules</Button>
     <Button size="sm" onclick={undoLast} disabled={!undo.length} title={undo.at(-1) ? 'Undo: ' + undo.at(-1).label : 'Nothing to undo'} data-testid="tool-undo">Undo{undo.length ? ' · ' + undo.at(-1).label.slice(0, 22) : ''}</Button>
     <Button size="sm" variant={lv.sim ? 'test' : 'secondary'} onclick={() => (lv.sim ? stopSim() : startSim())} aria-pressed={lv.sim} data-testid="tool-sim">{lv.sim ? '■ Stop simulating' : 'Simulate'}</Button>
     <Button size="sm" variant="primary" onclick={applyToCar} data-testid="tool-apply">Apply to car{#if incomplete.length}<span class="warnc"> ▲ {incomplete.length}</span>{/if}</Button>
@@ -481,10 +487,21 @@
       {#if lv.sim}<div class="simbar" role="status">Simulating: nothing is sent to the car. Change inputs on the right; values and wires update.</div>{/if}
       {#if activeSug && !lv.sim}
         <div class="sug" role="region" aria-label="Suggestion">
-          <span class="stag">SUGGESTION</span>
-          <span class="st"><strong>{activeSug.members.length > 1 ? activeSug.members.length + ' blocks here match the ' : 'This block matches the '}{recipe(activeSug.recipe)?.name} {kindWord(recipe(activeSug.recipe)?.kind)}.</strong> <span class="muted">{activeSug.why} Replacing only groups them; the module runs the same blocks.</span></span>
-          <span class="sb"><Button size="sm" variant="primary" onclick={() => replace(activeSug)} data-testid="sug-replace">Replace with {kindWord(recipe(activeSug.recipe)?.kind)}</Button>
-          <Button size="sm" variant="ghost" onclick={() => dismiss(activeSug)} data-testid="sug-dismiss">Not now</Button></span>
+          <div class="sline">
+            <button type="button" class="stag" aria-expanded={sugOpen} onclick={() => (sugOpen = !sugOpen)} data-testid="sug-toggle"
+              title="Patterns that match a function or helper block. Replacing only groups them on the canvas; the module runs the same blocks.">{suggestions.length} suggestion{suggestions.length === 1 ? '' : 's'} {sugOpen ? '▾' : '▸'}</button>
+            <span class="st" title={activeSug.why}><strong>{sugText(activeSug)}.</strong></span>
+            <span class="sb"><Button size="sm" variant="primary" onclick={() => replace(activeSug)} data-testid="sug-replace">Replace with {kindWord(recipe(activeSug.recipe)?.kind)}</Button>
+            <Button size="sm" variant="ghost" onclick={() => dismiss(activeSug)} data-testid="sug-dismiss">Not now</Button></span>
+          </div>
+          {#if sugOpen}
+            <p class="muted swhy">{activeSug.why} Replacing only groups them; the module runs the same blocks.</p>
+            {#each suggestions.slice(1) as s (s.key)}
+              <div class="sline more"><span class="st" title={s.why}>{sugText(s)}. <span class="muted">{s.why}</span></span>
+                <span class="sb"><Button size="sm" onclick={() => replace(s)}>Replace</Button><Button size="sm" variant="ghost" onclick={() => dismiss(s)}>Not now</Button></span></div>
+            {/each}
+            {#if suggestions.length > 1}<div class="sline more"><span class="st"></span><Button size="sm" onclick={replaceAll}>Replace all ({suggestions.length})</Button></div>{/if}
+          {/if}
         </div>
       {/if}
       {#if lastG && !lv.sim}
@@ -502,18 +519,20 @@
         <SentenceView {model} {lv} selected={selId} onpick={(id) => (selId = id)} onopencanvas={(id) => select(id, true)} />
       {:else}
         <div class="canvas" data-testid="canvas">
-          <SvelteFlow bind:nodes bind:edges {nodeTypes} {edgeTypes} colorMode={ui.theme === 'light' ? 'light' : 'dark'} minZoom={0.2} maxZoom={2}
-            deleteKey={null} {onconnect} {isValidConnection} {onnodeclick} {onedgeclick} onpaneclick={() => (selEdge = null)} onnodedragstop={savePos}
+          <SvelteFlow bind:nodes bind:edges {nodeTypes} {edgeTypes} colorMode={ui.theme === 'light' ? 'light' : 'dark'} minZoom={0.3} maxZoom={2}
+            panOnDrag={[0, 1]} panActivationKey="Space" deleteKey={null} {onconnect} {isValidConnection} {onnodeclick} {onedgeclick} onpaneclick={() => (selEdge = null)} onnodedragstop={savePos}
             proOptions={{ hideAttribution: true }} defaultEdgeOptions={{ type: 'wire' }}>
             <FlowApi {onready} />
             <Background bgColor="var(--color-bg)" patternColor="var(--color-line)" gap={22} />
-            <MiniMap width={160} height={100} pannable zoomable nodeColor={minimapColor} bgColor="var(--color-surface)" maskColor="var(--color-scrim)" ariaLabel="Mini map" />
+            {#if mapOpen}<MiniMap width={160} height={100} pannable zoomable nodeColor={minimapColor} bgColor="var(--color-surface)" maskColor="var(--color-scrim)" ariaLabel="Mini map" />{/if}
+            <Panel position="bottom-right">
+              <button type="button" class="mapt" aria-pressed={mapOpen} onclick={() => (mapOpen = !mapOpen)} data-testid="toggle-map">{mapOpen ? 'Hide map' : 'Map'}</button>
+            </Panel>
             <Panel position="bottom-left">
-              <div class="zoom">
-                <button type="button" aria-label="Zoom in" onclick={() => flow?.zoomIn()}>+</button>
-                <button type="button" aria-label="Zoom out" onclick={() => flow?.zoomOut()}>−</button>
-                <button type="button" onclick={() => flow?.fitView({ padding: 0.06, maxZoom: 1 })}>Fit</button>
-                <button type="button" aria-pressed={showLinks} onclick={() => (showLinks = !showLinks)} data-testid="toggle-links">{showLinks ? 'Hide' : 'Show'} links to other modules</button>
+              <div class="zoom" role="group" aria-label="Zoom">
+                <button type="button" aria-label="Zoom in" title="Zoom in" onclick={() => flow?.zoomIn()}>+</button>
+                <button type="button" aria-label="Zoom out" title="Zoom out" onclick={() => flow?.zoomOut()}>−</button>
+                <button type="button" title="Fit everything (hold space or the middle mouse button and drag to pan)" onclick={() => flow?.fitView({ padding: 0.06, maxZoom: 1, minZoom: 0.3 })}>Fit</button>
               </div>
             </Panel>
           </SvelteFlow>
@@ -578,17 +597,24 @@
   .canvas { position: relative; flex: 1 1 auto; min-height: 0; }
   .canvas :global(.svelte-flow) { --xy-background-color: var(--color-bg); --xy-minimap-background-color: var(--color-surface); --xy-edge-stroke: var(--color-line-strong); --xy-node-border-radius: 12px; background: var(--color-bg); }
   .canvas :global(.svelte-flow__node-block) { padding: 0; border: 0; background: transparent; box-shadow: none; border-radius: 12px; }
-  .canvas :global(.svelte-flow__minimap) { border: 1px solid var(--color-line); border-radius: var(--radius-md); }
+  .canvas :global(.svelte-flow__minimap) { margin-bottom: 52px; border: 1px solid var(--color-line-strong); border-radius: var(--radius-md); background: var(--color-surface); box-shadow: var(--shadow-2); overflow: hidden; }
+  .mapt { height: 32px; padding: 0 10px; border-radius: 8px; border: 1px solid var(--color-line-strong); background: var(--color-surface); color: var(--color-text); font-size: 13px; font-weight: 600; box-shadow: var(--shadow-2); }
   .simbar { margin: 10px 14px 0; padding: 8px 14px; border-radius: var(--radius-md); background: var(--color-warn-soft); color: var(--color-warn); font-weight: 600; }
-  .sug { display: flex; align-items: center; gap: 10px; margin: 10px 14px 0; padding: 10px 14px; border-radius: var(--radius-md); border: 2px solid var(--color-accent); background: var(--color-surface); }
-  .sug.used { border: 1px solid var(--color-line-strong); }
-  .stag { font-size: 11px; font-weight: 700; padding: 2px 7px; border-radius: 6px; background: var(--color-accent); color: var(--color-on-accent); }
+  .sug { display: flex; flex-direction: column; gap: 2px; padding: 2px 10px; border-bottom: 1px solid var(--color-line); background: var(--color-surface); }
+  .sug.used { flex-direction: row; align-items: center; gap: 10px; min-height: 40px; }
+  .sline { display: flex; align-items: center; gap: 10px; min-height: 36px; }
+  .sline.more { padding-left: 4px; }
+  .swhy { font-size: 13px; margin: 0; }
+  .stag { flex: none; font-size: 11px; font-weight: 700; padding: 3px 8px; border-radius: 6px; border: 0; background: var(--color-accent); color: var(--color-on-accent); white-space: nowrap; }
+  button.stag { min-height: 28px; cursor: pointer; }
   .stag.alt { background: var(--color-raised); color: var(--color-accent); }
-  .st { flex: 1 1 260px; min-width: 0; font-size: 13px; }
+  .st { flex: 1 1 auto; min-width: 0; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .sb { display: flex; gap: 6px; flex: none; }
   .pad { padding: var(--space-4); }
-  .zoom { display: flex; gap: 6px; }
-  .zoom button { min-width: 36px; height: 36px; padding: 0 10px; border-radius: 8px; border: 1px solid var(--color-line); background: var(--color-surface); color: var(--color-text); }
+  .zoom { display: flex; flex-direction: column; border: 1px solid var(--color-line-strong); border-radius: 8px; overflow: hidden; background: var(--color-surface); box-shadow: var(--shadow-2); }
+  .zoom button { width: 36px; height: 32px; padding: 0; border: 0; border-top: 1px solid var(--color-line); background: var(--color-surface); color: var(--color-text); font-size: 13px; font-weight: 600; }
+  .zoom button:first-child, .zoom button:nth-child(2) { font-size: 16px; }
+  .zoom button:first-child { border-top: 0; }
   .edgebar { position: absolute; top: 10px; left: 50%; transform: translateX(-50%); z-index: 5; display: flex; align-items: center; gap: 8px; padding: 6px 10px; border-radius: var(--radius-md); border: 1px solid var(--color-line-strong); background: var(--color-surface); box-shadow: var(--shadow-2); }
   .legend { padding: 6px 14px; font-size: 13px; color: var(--color-text-muted); border-top: 1px solid var(--color-line); background: var(--color-surface); }
   .legend summary { cursor: pointer; min-height: 24px; }
@@ -598,4 +624,12 @@
   .fam { font-size: 11px; font-weight: 700; letter-spacing: 0.08em; color: var(--color-text-muted); }
   .lh { font-size: 22px; }
   .lnk { text-align: left; background: transparent; border: 0; padding: 6px 0; min-height: 32px; color: var(--color-accent); font-weight: 600; }
+  @media (max-width: 900px) {
+    .cols, .cols.nopal, .cols.noinsp, .cols.nopal.noinsp { grid-template-columns: minmax(0, 1fr); }
+    .stage { min-height: 65vh; }
+    .fb-pal, .insp { border: 0; border-top: 1px solid var(--color-line); }
+    .fb-pal { order: 2; }
+    .msel { width: 100%; }
+    .sline { flex-wrap: wrap; }
+  }
 </style>

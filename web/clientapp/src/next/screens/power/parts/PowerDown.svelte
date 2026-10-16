@@ -3,7 +3,9 @@
   import { Card, Banner, Button } from '../../../ui/index.js'
   import { live, hex } from '../../../lib/live.svelte.js'
   import { href } from '../../../router.svelte.js'
+  import SequenceEditor from './SequenceEditor.svelte'
   let { seq } = $props()
+  let editOpen = $state(false)
 
   const mods = $derived(live.devices.filter((d) => /pdm|canboard/i.test(d.type ?? '')))
   const frameMod = $derived(mods.find((d) => seq.state.perModule[d.guid]?.frame) ?? null)
@@ -36,7 +38,9 @@
   {:else if !seq.state.loaded}
     <p class="muted" role="status">Reading the modules…</p>
   {:else if !plan}
-    <Banner tone="info" title="No power-down order is set up" data-testid="no-sequence">Each module sleeps by its own timer (see the table). To make the car go quiet in order, set a shutdown sequence in the old UI under System, Settings, for now.</Banner>
+    <Banner tone="info" title="No power-down order is set up" data-testid="no-sequence">Each module sleeps by its own timer (see the table). Set an order to have the module with the ignition key tell the others when to sleep.
+      {#snippet actions()}<Button size="sm" onclick={() => (editOpen = true)} disabled={!live.connected} data-testid="edit-sequence">Set the shut-down order</Button>{/snippet}
+    </Banner>
   {:else}
     <p class="muted" data-testid="sequence-source">Read from {master.name}: {frameMod ? 'it sends the shutdown frame.' : 'it holds the off delay.'}</p>
     <div class="tl" role="img" aria-label={`Power-down timeline: ${plan.marks.map((m) => `${m.at} s ${m.name}`).join(', ')}`} data-testid="power-timeline">
@@ -53,8 +57,9 @@
       <li>All modules sleep {plan.end} s after ignition off. A door, a switch or CAN traffic wakes them.</li>
     </ul>
   {/if}
-  <div><Button size="sm" href={href('power', 'sleep')}>Open sleep settings</Button></div>
+  <div class="acts">{#if plan}<Button size="sm" onclick={() => (editOpen = true)} data-testid="edit-sequence">Change the shut-down order</Button>{/if}<Button size="sm" href={href('power', 'sleep')}>Open sleep settings</Button></div>
 </Card>
+<SequenceEditor bind:open={editOpen} {seq} />
 
 <style>
   .tl { display: flex; gap: 4px; min-height: 64px; }
@@ -63,5 +68,6 @@
   .seg.end { background: var(--color-raised); }
   .n { font-weight: 600; font-size: var(--text-sm); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .l { font-size: var(--text-xs); color: var(--color-text-muted); }
+  .acts { display: flex; gap: var(--space-2); flex-wrap: wrap; }
   .rules { margin: 0; padding-left: 20px; line-height: 1.7; }
 </style>

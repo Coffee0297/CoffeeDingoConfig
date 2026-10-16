@@ -333,6 +333,7 @@ public static class DingoMap
         var reading = ui?.Reading ?? false;
         var readDone = ui?.ReadDone ?? 0;
         var readTotal = ui?.ReadTotal ?? 0;
+        if (d is IDeviceConfigurable dc) ui?.SyncEdits(dc.ConfigMismatch);   // a write or read cleared it: drop the edit list
         if (d is PdmDevice p)
         {
             var outs = p.Outputs.Select(o => new OutputDto(
@@ -765,11 +766,12 @@ public static class LiveApi
             var d = dm.GetDevice<PdmDevice>(g);
             var o = d?.Outputs.FirstOrDefault(x => x.Number == r.Number);
             if (o == null) return Results.NotFound();
+            var track = Track("output", o.Number, $"o{o.Number}", o);
             o.CurrentLimit = r.CurrentLimit;                 // project-record edit (always)
             // Push it to the module over CAN only when it's live, and report which happened so a
             // caller (e.g. the MCP set_output tool, described as "live") never reads the in-memory
             // change as a confirmed device write.
-            if (!await IsLiveEditAsync(http, g, dm, adapters)) return Results.Ok(new { ok = true, o.Number, o.CurrentLimit, written = false, staged = Staged(http) });
+            if (!await IsLiveEditAsync(http, g, dm, adapters, track)) return Results.Ok(new { ok = true, o.Number, o.CurrentLimit, written = false, staged = Staged(http) });
             var res = await dm.WriteAndConfirm(g, dm.FunctionParamKeys(g, 0x1000 + (r.Number - 1)), () => dm.WriteOutputParams(g, r.Number));
             return WriteReport(res, new() { ["Number"] = o.Number, ["CurrentLimit"] = o.CurrentLimit });
         });
@@ -809,6 +811,7 @@ public static class LiveApi
             var d = dm.GetDevice<PdmDevice>(g);
             var o = d?.Outputs.FirstOrDefault(x => x.Number == r.Number);
             if (o == null) return Results.NotFound();
+            var track = Track("output", o.Number, string.IsNullOrWhiteSpace(o.Name) ? $"o{o.Number}" : $"o{o.Number} {o.Name}", o);
             if (r.Name != null) o.Name = r.Name;          // label only — not written over CAN
             if (r.WireColor != null) o.WireColor = r.WireColor;    // documentation labels only
             if (r.WireStripe != null) o.WireStripe = r.WireStripe;
@@ -844,7 +847,7 @@ public static class LiveApi
             // The record edit above always persists (offline config authoring). Only push to the
             // module over CAN when it is actually live; report which happened so the UI can say
             // "written to device" vs "saved to project".
-            if (!await IsLiveEditAsync(http, g, dm, adapters)) return Results.Ok(new { ok = true, written = false, staged = Staged(http) });
+            if (!await IsLiveEditAsync(http, g, dm, adapters, track)) return Results.Ok(new { ok = true, written = false, staged = Staged(http) });
             return WriteReport(await dm.WriteAndConfirm(g, dm.FunctionParamKeys(g, 0x1000 + (r.Number - 1)), () => dm.WriteOutputParams(g, r.Number)));
         });
 
@@ -941,6 +944,10 @@ public static class LiveApi
             if (r.ForceSleepInput is { } fs && dev is not PdmDevice) return Results.BadRequest(new { ok = false, error = "this board never sleeps — it has no force-sleep input" });
             if (Check(r.ForceSleepInput, "force-sleep input") is { } e1) return Results.BadRequest(new { ok = false, error = e1 });
             if (Check(r.MuteTxInput, "mute-TX input") is { } e2) return Results.BadRequest(new { ok = false, error = e2 });
+            Dictionary<string, string> DevSnap() => dev is PdmDevice q
+                ? new() { ["forceSleepInput"] = q.ForceSleepInput.ToString(), ["muteTxInput"] = q.MuteTxInput.ToString() }
+                : new() { ["muteTxInput"] = ((CanboardDevice)dev).MuteTxInput.ToString() };
+            var track = new EditTrack("device", 0, "Module", DevSnap);
             switch (dev)
             {
                 case PdmDevice p:
@@ -951,7 +958,7 @@ public static class LiveApi
                     if (r.MuteTxInput is { } m) c.MuteTxInput = m;
                     break;
             }
-            var live = await IsLiveEditAsync(http, g, dm, adapters);
+            var live = await IsLiveEditAsync(http, g, dm, adapters, track);
             List<DeviceManager.WriteResult>? res = null;
             if (live)
             {
@@ -976,13 +983,14 @@ public static class LiveApi
             var (fn, paramIndex) = FunctionMap.Resolve(dev, kind, number);
             if (fn == null || paramIndex < 0) return Results.NotFound(new { error = $"unknown function {kind} #{number}" });
             using var doc = await JsonDocument.ParseAsync(req.Body);
+            var track = Track(kind.ToLowerInvariant(), number, FnLabel(kind, number, fn), fn);
             var rejected = FunctionMap.ApplyJson(fn, doc.RootElement);
             // A field the model couldn't take (bad enum value, wrong type) must not become a silent
             // "saved": refuse, and don't push a half-applied slot to the device.
             if (rejected.Count > 0)
                 return Results.BadRequest(new { ok = false, error = $"invalid value for {string.Join(", ", rejected)} — nothing was written to the device" });
             // Record edit persists offline; CAN write only when live (see /outputconfig).
-            if (!await IsLiveEditAsync(req.HttpContext, g, dm, adapters)) return Results.Ok(new { ok = true, written = false, staged = Staged(req.HttpContext) });
+            if (!await IsLiveEditAsync(req.HttpContext, g, dm, adapters, track)) return Results.Ok(new { ok = true, written = false, staged = Staged(req.HttpContext) });
             return WriteReport(await dm.WriteAndConfirm(g, dm.FunctionParamKeys(g, paramIndex), () => dm.WriteFunctionParams(g, paramIndex)));
         });
 
@@ -1406,6 +1414,26 @@ public static class LiveApi
             return Results.Ok(d.LastConfigDiff);
         });
 
+        // Item 7: the edits saved to the project and waiting for "Apply to car", one row per field, and a revert of one.
+        api.MapGet("/devices/{guid}/pending", (string guid, DeviceManager dm) =>
+        {
+            if (!Guid.TryParse(guid, out var g) || dm.GetDevice(g) is not IDeviceConfigurable d) return Results.NotFound();
+            var ui = dm.GetDeviceUiState(g);
+            ui.SyncEdits(d.ConfigMismatch);
+            lock (ui.Edits) return Results.Ok(ui.Edits.Select(e => new { e.Id, e.Kind, e.Number, e.Field, e.What, e.Old, e.New, e.Source, at = e.At.ToString("o") }).ToArray());
+        });
+        api.MapPost("/devices/{guid}/pending/{id:int}/revert", (string guid, int id, DeviceManager dm) =>
+        {
+            if (!Guid.TryParse(guid, out var g) || dm.GetDevice(g) is not { } dev) return Results.NotFound();
+            var ui = dm.GetDeviceUiState(g);
+            PendingEdit? e;
+            lock (ui.Edits) e = ui.Edits.FirstOrDefault(x => x.Id == id);
+            if (e == null) return Results.NotFound(new { ok = false, error = "That change is no longer waiting." });
+            if (RevertEdit(dev, e) is { } err) return Results.BadRequest(new { ok = false, error = $"{e.What}: {err}" });
+            lock (ui.Edits) ui.Edits.RemoveAll(x => x.Id == id);
+            return Results.Ok(new { ok = true });
+        });
+
         // Cross-module IO picker (feature B), server-side: point a consumer module's CAN input at a
         // SOURCE module's broadcast signal. Resolves the signal's current absolute CAN id + bit layout
         // from the source's frame map and writes the consumer's CAN input — what the UI picker does
@@ -1423,6 +1451,7 @@ public static class LiveApi
             if (fn is not CanInput ci || paramIndex < 0)
                 return Results.NotFound(new { error = $"CAN input #{r.CanInput} not found on the consumer" });
             var sig = match.Signal;
+            var track = Track("caninput", r.CanInput, FnLabel("caninput", r.CanInput, ci), ci);
             ci.Enabled = true;
             ci.Id = match.MessageId;            // absolute id = source base + offset (setter sets Ide)
             ci.StartBit = sig.StartBit;
@@ -1439,7 +1468,7 @@ public static class LiveApi
                 ["id"] = ci.Id, ["ide"] = ci.Ide, ["startBit"] = ci.StartBit, ["bitLength"] = ci.BitLength,
                 ["factor"] = ci.Factor, ["offset"] = ci.Offset, ["byteOrder"] = (int)ci.ByteOrder, ["signed"] = ci.Signed, ["name"] = ci.Name,
             };
-            if (!await IsLiveEditAsync(http, cg, dm, adapters)) return Results.Ok(new Dictionary<string, object?>(info) { ["ok"] = true, ["written"] = false, ["staged"] = Staged(http) });
+            if (!await IsLiveEditAsync(http, cg, dm, adapters, track)) return Results.Ok(new Dictionary<string, object?>(info) { ["ok"] = true, ["written"] = false, ["staged"] = Staged(http) });
             return WriteReport(await dm.WriteAndConfirm(cg, dm.FunctionParamKeys(cg, paramIndex), () => dm.WriteFunctionParams(cg, paramIndex)), info);
         });
 
@@ -1844,17 +1873,113 @@ public static class LiveApi
     // The old UI, scripts and the AI agent send no header and keep writing live.
     private static bool Staged(HttpContext http) => http.Request.Headers["X-Dingo-Stage"] == "1";
 
-    private static async Task<bool> IsLiveEditAsync(HttpContext http, Guid g, DeviceManager dm, ICommsAdapterManager adapters)
+    private static async Task<bool> IsLiveEditAsync(HttpContext http, Guid g, DeviceManager dm, ICommsAdapterManager adapters, EditTrack? t = null)
     {
-        if (!Staged(http)) return await IsLiveModuleAsync(g, dm, adapters);
+        if (!Staged(http) && await IsLiveModuleAsync(g, dm, adapters)) return true;
+        // Saved to the project only (staged, or the module is offline): remember what changed for the Apply panel.
         if (dm.GetDevice(g) is domain.Interfaces.IDeviceConfigurable c)
         {
             var ui = dm.GetDeviceUiState(g);
-            if (!c.ConfigMismatch) ui.PendingEdits = 0;   // in step since the last count: start again
-            ui.PendingEdits++;
+            ui.SyncEdits(c.ConfigMismatch);   // in step since the last edit: start again
+            if (t != null) RecordEdits(ui, t, Staged(http) ? "app" : http.Request.Headers["X-Dingo-Source"] == "agent" ? "agent" : "api");
             c.ConfigMismatch = true;
         }
         return false;
+    }
+
+    // Item 7: a before-snapshot of the edited thing, diffed after the edit into PendingEdit rows.
+    internal record EditTrack(string Kind, int Number, string Label, Func<Dictionary<string, string>> Snap)
+    {
+        public Dictionary<string, string> Before { get; } = Snap();
+    }
+    internal static EditTrack Track(string kind, int number, string label, object obj) => new(kind, number, label, () => SnapJson(obj));
+    static Dictionary<string, string> SnapJson(object o)
+    {
+        try
+        {
+            var el = JsonSerializer.SerializeToElement(o, o.GetType());
+            return el.ValueKind == JsonValueKind.Object ? el.EnumerateObject().ToDictionary(p => p.Name, p => p.Value.GetRawText()) : new();
+        }
+        catch { return new(); }
+    }
+    static int _editId;
+    static void RecordEdits(DeviceUiState ui, EditTrack t, string source)
+    {
+        var after = t.Snap();
+        lock (ui.Edits)
+            foreach (var (field, now) in after)
+            {
+                var was = t.Before.GetValueOrDefault(field);
+                if (was == null || was == now) continue;
+                var i = ui.Edits.FindIndex(e => e.Kind == t.Kind && e.Number == t.Number && e.Field == field);
+                var first = i >= 0 ? ui.Edits[i].OldJson : was;
+                if (i >= 0) ui.Edits.RemoveAt(i);
+                if (first == now) continue;   // edited back to where it started
+                ui.Edits.Add(new PendingEdit(Interlocked.Increment(ref _editId), t.Kind, t.Number, field, $"{t.Label} {FieldLabel(field)}",
+                    ShowJson(first, field), ShowJson(now, field), first, now, source, DateTime.UtcNow));
+            }
+    }
+    static readonly Dictionary<string, (string label, string unit)> Fields = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["currentLimit"] = ("Trips above", " A"), ["inrushCurrentLimit"] = ("Inrush limit", " A"), ["inrushTime"] = ("Inrush time", " ms"),
+        ["warnLimit"] = ("Warns above", " A"), ["openLoadLimit"] = ("Open load below", " A"), ["openLoadTime"] = ("Open load time", " ms"),
+        ["resetTime"] = ("Retry after", " ms"), ["resetCountLimit"] = ("Retries", ""), ["frequency"] = ("PWM frequency", " Hz"),
+        ["fixedDutyCycle"] = ("Duty", " %"), ["minDutyCycle"] = ("Min duty", " %"), ["softStartRampTime"] = ("Soft start ramp", " ms"),
+    };
+    // "inrushTime" -> "Inrush time" for the fields without a label above
+    static string FieldLabel(string f) => Fields.TryGetValue(f, out var l) ? l.label
+        : f.Length == 0 ? f : char.ToUpperInvariant(f[0]) + System.Text.RegularExpressions.Regex.Replace(f[1..], "([A-Z])", m => " " + m.Value.ToLowerInvariant());
+    static string ShowJson(string json, string field)
+    {
+        if (json is "true" or "false") return json == "true" ? "on" : "off";
+        var str = json.StartsWith('"');
+        var v = str ? JsonSerializer.Deserialize<string>(json) ?? "" : json;
+        if (v.Length > 40) v = v[..37] + "…";
+        return str ? (v.Length == 0 ? "(empty)" : v) : v + (Fields.TryGetValue(field, out var l) ? l.unit : "");
+    }
+    static readonly Dictionary<string, string> KindLabels = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["input"] = "Input", ["pin"] = "Input", ["caninput"] = "CAN input", ["can"] = "CAN input", ["virtualinput"] = "Logic", ["cmb"] = "Logic",
+        ["condition"] = "Condition", ["cmp"] = "Condition", ["counter"] = "Counter", ["cnt"] = "Counter", ["flasher"] = "Flasher", ["fl"] = "Flasher",
+        ["timer"] = "Timer", ["tmr"] = "Timer", ["table"] = "Table", ["tbl"] = "Table", ["math"] = "Math", ["canmsg"] = "CAN message",
+        ["ignition"] = "Ignition", ["comfortblink"] = "Comfort blink", ["canoutput"] = "CAN output", ["cout"] = "CAN output",
+        ["wiper"] = "Wiper", ["wip"] = "Wiper", ["starterdisable"] = "Starter disable", ["std"] = "Starter disable", ["keypad"] = "Keypad",
+        ["keypadbutton"] = "Keypad button", ["keypaddial"] = "Keypad dial", ["digitaloutput"] = "Output", ["dout"] = "Output",
+        ["analoginput"] = "Analog input", ["ain"] = "Analog input",
+    };
+    static readonly HashSet<string> Singles = new(StringComparer.OrdinalIgnoreCase) { "ignition", "comfortblink", "wiper", "wip", "starterdisable", "std" };
+    internal static string FnLabel(string kind, int number, object fn)
+    {
+        var name = fn.GetType().GetProperty("Name")?.GetValue(fn) as string;
+        var k = KindLabels.GetValueOrDefault(kind, kind);
+        var head = Singles.Contains(kind) ? k : $"{k} {number}";
+        return string.IsNullOrWhiteSpace(name) || name == head ? head : $"{head} ({name})";
+    }
+
+    // Put one staged field back to its value before the edit (project only; the module is not touched).
+    internal static string? RevertEdit(IDevice dev, PendingEdit e)
+    {
+        try
+        {
+            if (e.Kind == "device")
+            {
+                var v = JsonSerializer.Deserialize<int>(e.OldJson);
+                switch (dev, e.Field)
+                {
+                    case (PdmDevice p, "forceSleepInput"): p.ForceSleepInput = v; break;
+                    case (PdmDevice p, "muteTxInput"): p.MuteTxInput = v; break;
+                    case (CanboardDevice c, "muteTxInput"): c.MuteTxInput = v; break;
+                    default: return "that setting can't be put back";
+                }
+                return null;
+            }
+            object? obj = e.Kind == "output" ? (dev as PdmDevice)?.Outputs.FirstOrDefault(x => x.Number == e.Number) : FunctionMap.Resolve(dev, e.Kind, e.Number).fn;
+            if (obj == null) return "it no longer exists";
+            using var doc = JsonDocument.Parse($"{{{JsonSerializer.Serialize(e.Field)}:{e.OldJson}}}");
+            var bad = FunctionMap.ApplyJson(obj, doc.RootElement);
+            return bad.Count > 0 ? $"could not put back {string.Join(", ", bad)}" : null;
+        }
+        catch (Exception ex) { return ex.Message; }
     }
 
     private static async Task<bool> IsLiveModuleAsync(Guid g, DeviceManager dm, ICommsAdapterManager adapters)

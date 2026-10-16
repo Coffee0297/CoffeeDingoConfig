@@ -204,7 +204,7 @@
       </div>
       <Switch label="Keep the OBD-II range free" hint="Skips 0x7DF to 0x7EF so a scan tool can still talk to the car." bind:checked={reserve} />
       <div class="row">
-        <Button variant="primary" onclick={askBase} disabled={!canSetBase} busy={reBusy} data-testid="base-set">{d.connected && live.connected ? `Re-address to ${base != null ? hexId(base) : '…'}…` : 'Change in project…'}</Button>
+        <Button onclick={askBase} disabled={!canSetBase} busy={reBusy} title={edited ? '' : 'Type or pick a different base ID first'} data-testid="base-set">{d.connected && live.connected ? (edited && base != null ? `Re-address to ${hexId(base)}…` : 'Re-address…') : 'Change in project…'}</Button>
         {#if d.connected && live.connected}<span class="muted sm">The module is told to move and stores it. The module must answer on its saved ID.</span>{:else}<span class="muted sm">{d.name} is not answering, so only the project changes.</span>{/if}
       </div>
       {#if reMsg}<p role="status" data-testid="readdr-msg">{reMsg}</p>{/if}

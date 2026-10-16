@@ -51,4 +51,8 @@
   main { flex: 1 1 auto; min-width: 0; overflow: auto; padding: var(--space-5) var(--space-6); outline: none; }
   .loading { padding: var(--space-5); }
   .err { color: var(--color-fault); font-weight: 600; }
+  @media (max-width: 900px) {
+    .app { height: 100dvh; }
+    main { padding: var(--space-4); }
+  }
 </style>

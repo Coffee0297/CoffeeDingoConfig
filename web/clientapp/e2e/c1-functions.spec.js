@@ -65,15 +65,16 @@ test.describe('function list', () => {
     await expect(page.getByTestId('fn-row').first()).toBeVisible()
     const n = await page.getByTestId('fn-row').count()
     expect(n).toBeGreaterThan(5)
-    await expect(page.getByText(/\d+ functions on \d+ modules/)).toBeVisible()
+    await expect(page.getByText(/^\d+ functions · \d+ on now$/)).toBeVisible()
+    await expect(page.getByTestId('fn-breakdown')).toHaveAttribute('title', /On \d+ modules/)
     // every row names its kind and a state word
     for (const r of await page.getByTestId('fn-row').all()) {
       await expect(r.locator('.kind')).toHaveText(/FUNCTION BLOCK|HELPER|BLOCKS|CUSTOM CODE/)
-      await expect(r.getByText(/^(on [\d.]+ A|off|tripped|turned off|not reported|no connection)$/)).toBeVisible()
+      await expect(r.getByText(/^(ON [\d.]+ A|off|tripped|disabled|not reported|no connection)$/)).toBeVisible()
     }
     // the live state matches the module: a row says "on" only when an output of it is on
     const low = row(page, 'Low Beam')
-    const on = /^on/.test((await low.locator('.st').innerText()).trim())
+    const on = /^ON/.test((await low.locator('.st').innerText()).trim())
     const pdm = await deviceByName('PDM-02')
     expect(pdm.outputs[0].state === 'On').toBe(on)
     expect(errors).toEqual([])
@@ -95,7 +96,7 @@ test.describe('function list', () => {
     for (const r of await page.getByTestId('fn-row').all()) await expect(r.locator('.kind')).toHaveText('CUSTOM CODE (LUA)')
     // on now chip: every row has an "on" state
     await page.getByRole('button', { name: /^On now/ }).click()
-    for (const r of await page.getByTestId('fn-row').all()) await expect(r.locator('.st')).toHaveText(/^on /)
+    for (const r of await page.getByTestId('fn-row').all()) await expect(r.locator('.st')).toHaveText(/^\s*ON /)
     await page.getByRole('button', { name: /^All/ }).click()
     expect(await page.getByTestId('fn-row').count()).toBe(total)
     // search by name, by pin and by module; unknown text shows the empty state
@@ -120,8 +121,8 @@ test.describe('function list', () => {
     await open(page, 'functions')
     await row(page, 'Low Beam').getByRole('button', { name: /Low Beam/ }).click()
     const panel = page.getByTestId('fn-panel')
-    await expect(panel.getByText(/No template record/)).toBeVisible()
-    for (const b of ['Simulate', 'Duplicate', 'Turn off']) await expect(panel.getByRole('button', { name: new RegExp(b) })).toBeDisabled()
+    await expect(panel.getByText(/Built by hand/)).toBeVisible()
+    for (const b of ['Simulate', 'Duplicate', 'Disable function']) await expect(panel.getByRole('button', { name: new RegExp(b) })).toBeDisabled()
     await expect(panel.getByRole('button', { name: 'Remove' })).toHaveCount(0)
     await expect(panel.getByText(/Hand-built blocks are changed in the flow builder/)).toBeVisible()
     await expect(row(page, 'Low Beam').getByRole('switch')).toBeDisabled()
@@ -249,7 +250,7 @@ test.describe('setup wizard', () => {
     await open(page, 'functions/setup/afterrun')
     await expect(page.getByText('STEP 1 OF 4')).toBeVisible()
     await pick(page, 'pick-output', 'PDM-03 o8', /PDM-03 · J3-3 OUT8/)
-    const relay = page.getByRole('checkbox', { name: /Through a relay/ })
+    const relay = page.getByRole('checkbox', { name: /Via relay/ })
     await expect(relay).not.toBeChecked()   // a PDM output drives a fan directly: no relay by default
     await page.getByTestId('wz-next').click()
     await pick(page, 'pick-trig', 'CB-2 DI7', /CB-2 · J3-7 DI7/)
@@ -265,7 +266,7 @@ test.describe('setup wizard', () => {
     await expect(page.getByText(/OUTPUTS/).first()).toBeVisible()
     await expect(page.getByTestId('drawings').getByText(/through a relay/)).toHaveCount(0)
     await page.getByTestId('wz-back').click(); await page.getByTestId('wz-back').click(); await page.getByTestId('wz-back').click()
-    await page.getByRole('checkbox', { name: /Through a relay/ }).click()
+    await page.getByRole('checkbox', { name: /Via relay/ }).click()
     await page.getByTestId('wz-next').click(); await page.getByTestId('wz-next').click(); await page.getByTestId('wz-next').click()
     await expect(page.getByTestId('drawings').getByText(/through a relay/)).toBeVisible()
     expect(errors).toEqual([])
@@ -303,7 +304,7 @@ test.describe('setup wizard', () => {
       const r = row(page, NAME)
       await expect(r).toBeVisible()
       await expect(r.locator('.kind')).toHaveText('FUNCTION BLOCK')
-      await expect(r.locator('.st')).toHaveText(/^(off|on [\d.]+ A)$/)
+      await expect(r.locator('.st')).toHaveText(/^\s*(off|ON [\d.]+ A)$/)
       await r.getByRole('button', { name: new RegExp(NAME) }).click()
       const panel = page.getByTestId('fn-panel')
       await expect(panel.getByRole('heading', { name: NAME })).toBeVisible()
@@ -315,22 +316,22 @@ test.describe('setup wizard', () => {
       await expect(page.locator('article[data-tpl=simple]').getByText('IN USE')).toBeVisible()
       await page.goBack()
 
-      // ---- turn it off (writes the output config), then on again (asks first)
+      // ---- disable it (writes the output config), then enable again (asks first)
       await row(page, NAME).getByRole('button', { name: new RegExp(NAME) }).click()
-      await panel.getByRole('button', { name: 'Turn off' }).click()
-      await expect(row(page, NAME).locator('.st')).toHaveText('turned off', { timeout: 15_000 })
+      await panel.getByRole('button', { name: 'Disable function' }).click()
+      await expect(row(page, NAME).locator('.st')).toHaveText('disabled', { timeout: 15_000 })
       expect((await outCfg('PDM-02', 8)).enabled).toBe(false)
-      await panel.getByRole('button', { name: 'Turn on' }).click()
-      const on = page.getByRole('dialog', { name: /Turn on/ })
+      await panel.getByRole('button', { name: 'Enable function' }).click()
+      const on = page.getByRole('dialog', { name: /Enable/ })
       await on.getByRole('button', { name: 'Cancel' }).click()
       expect((await outCfg('PDM-02', 8)).enabled).toBe(false)   // Cancel wrote nothing
       await row(page, NAME).getByRole('switch').click()           // the row switch asks as well
       await page.getByTestId('confirm-on').click()
-      await expect(row(page, NAME).locator('.st')).toHaveText(/^(off|on [\d.]+ A)$/, { timeout: 15_000 })
+      await expect(row(page, NAME).locator('.st')).toHaveText(/^\s*(off|ON [\d.]+ A)$/, { timeout: 15_000 })
       expect((await outCfg('PDM-02', 8)).enabled).toBe(true)
       await row(page, NAME).getByRole('switch').click()           // and off again from the row
-      await expect(row(page, NAME).locator('.st')).toHaveText('turned off', { timeout: 15_000 })
-      await panel.getByRole('button', { name: 'Turn on' }).click()
+      await expect(row(page, NAME).locator('.st')).toHaveText('disabled', { timeout: 15_000 })
+      await panel.getByRole('button', { name: 'Enable function' }).click()
       await page.getByTestId('confirm-on').click()
       await expect.poll(async () => (await outCfg('PDM-02', 8)).enabled).toBe(true)
 
@@ -348,7 +349,7 @@ test.describe('setup wizard', () => {
       await waitFor(async () => (await outCfg('PDM-03', 8)).inputVal > 0, 20_000, 'PDM-03 output 8 wired')
       await page.getByTestId('result-done').click()
       await expect(row(page, NAME + ' copy')).toBeVisible()
-      await expect(page.getByText(/\d+ functions on/)).toBeVisible()
+      await expect(page.getByText(/\d+ functions · /)).toBeVisible()
 
       // ---- change settings (edit): the wizard opens filled in; applying again keeps one function
       await row(page, NAME).getByRole('button', { name: new RegExp(NAME) }).first().click()
@@ -396,7 +397,7 @@ test.describe('setup wizard', () => {
       await open(page, 'functions/setup/afterrun')
       await page.getByTestId('fn-name').fill(NAME)
       await pick(page, 'pick-output', 'PDM-03 o8', /PDM-03 · J3-3 OUT8/)
-      await expect(page.getByRole('checkbox', { name: /Through a relay/ })).not.toBeChecked()
+      await expect(page.getByRole('checkbox', { name: /Via relay/ })).not.toBeChecked()
       await page.getByTestId('wz-next').click()
       await pick(page, 'pick-trig', 'CB-2 DI7', /CB-2 · J3-7 DI7/)
       await page.getByTestId('wz-next').click()

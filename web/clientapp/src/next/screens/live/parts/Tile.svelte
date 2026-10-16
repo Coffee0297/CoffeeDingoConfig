@@ -40,7 +40,7 @@
   .bar span.hot { background: var(--color-warn); }
   .sp :global(.lc) { background: transparent; padding: 0; }
   .sp :global(svg) { inset: 0; width: 100%; height: 100%; }
-  .bot { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 18px; }
+  .bot { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 32px; }
   .sub { font-size: 11px; color: var(--color-text-muted); }
-  .gr { position: relative; z-index: 1; font-size: 11px; font-weight: 600; padding: 4px 6px; margin: -4px -6px; }
+  .gr { position: relative; z-index: 1; display: inline-flex; align-items: center; min-height: 32px; font-size: 13px; font-weight: 600; padding: 0 8px; margin: 0 -8px; white-space: nowrap; }
 </style>

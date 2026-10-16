@@ -41,6 +41,6 @@
   .lc { position: relative; border-radius: var(--radius-md); background: var(--color-raised); padding: 8px; box-sizing: border-box; }
   svg { position: absolute; inset: 8px; width: calc(100% - 16px); height: calc(100% - 16px); overflow: visible; }
   .ln { position: absolute; left: 8px; right: 8px; border-top: 2px dashed; }
-  .ll { position: absolute; right: 12px; font-family: var(--font-mono); font-size: 11px; }
-  .xl { display: flex; justify-content: space-between; font-family: var(--font-mono); font-size: 11px; color: var(--color-text-muted); padding: 2px 8px 0; }
+  .ll { position: absolute; right: 12px; font-family: var(--font-mono); font-size: var(--text-xs); }
+  .xl { display: flex; justify-content: space-between; font-family: var(--font-mono); font-size: var(--text-xs); color: var(--color-text-muted); padding: 2px 8px 0; }
 </style>

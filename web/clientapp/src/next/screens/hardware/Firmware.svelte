@@ -5,7 +5,7 @@
   import { live, api, toast, hex } from '../../lib/live.svelte.js'
   import Confirm from '../power/parts/Confirm.svelte'
   import FlashNewBoard from './parts/firmware/FlashNewBoard.svelte'
-  import { boardOf, boardOfFile, fileVersion, cleanVersion, flashPath, pathLabel, extFor, checkFile, lastLine } from './parts/firmware/firmwareLogic.js'
+  import { boardOf, boardOfFile, fileVersion, cleanVersion, flashPath, pathLabel, extFor, checkFile, lastLine, cmpVersion, relationTo, relationLabel } from './parts/firmware/firmwareLogic.js'
   let props = $props()
 
   const mods = $derived(live.devices.filter((d) => /pdm|canboard/i.test(d.type ?? '')))
@@ -55,7 +55,9 @@
       const r = await fetch('/api/firmware/releases' + (refresh ? '?refresh=true' : ''))
       const b = await r.json()
       rel = { list: b.releases ?? [], offline: !!b.offline, error: b.error ?? '', loading: false }
-      if (!relTag || !rel.list.some((x) => x.tag === relTag)) relTag = rel.list.find((x) => !x.prerelease)?.tag ?? rel.list[0]?.tag ?? ''
+      // default: the newest proper release by version number (not list order, not a test build)
+      const newest = rel.list.filter((x) => !x.prerelease).sort((a, b) => cmpVersion(b.version, a.version))[0] ?? rel.list[0]
+      if (!relTag || !rel.list.some((x) => x.tag === relTag)) relTag = newest?.tag ?? ''
     } catch (e) { rel = { list: [], offline: true, error: e?.message ?? String(e), loading: false } }
   }
   loadReleases()
@@ -86,8 +88,14 @@
     }
     checks = out
   }
+  // what the modules run now, and how a release compares (a downgrade asks first)
+  const installed = $derived(mods.filter((d) => d.connected && d.version).map((d) => cleanVersion(d.version)))
+  const relOf = (r) => (r.prerelease ? null : relationTo(r.version, installed))
+  const relation = $derived(release ? relOf(release) : null)
+  const downgrade = $derived(relation === 'older' || relation === 'mixed')
+  let askDowngrade = $state(false)
   const relDate = (iso) => (iso ? new Date(iso).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' }) : '')
-  const relItems = $derived(rel.list.map((r) => ({ value: r.tag, label: `${r.version}${r.prerelease ? ' (test)' : ''} · ${relDate(r.published)}${r.images.every((i) => i.cached) ? ' · on this PC' : ''}` })))
+  const relItems = $derived(rel.list.map((r) => ({ value: r.tag, label: `${r.version}${r.prerelease ? ' (test)' : ''}${relOf(r) ? ' · ' + relationLabel[relOf(r)] : ''} · ${relDate(r.published)}${r.images.every((i) => i.cached) ? ' · on this PC' : ''}` })))
 
   async function readVersions() {
     reading = true
@@ -173,9 +181,44 @@
 
   {#if blocked}<Banner tone="warn" title="Programming is off" data-testid="fw-blocked">{blocked}</Banner>{/if}
 
-  <Card title="Modules" aria-label="Modules">
+  <Card title="1. Release" aria-label="Release files">
+    {#if rel.loading}<p class="muted" role="status">Reading the release list…</p>
+    {:else if rel.list.length}
+      <Select label="Firmware release" items={relItems} bind:value={relTag} data-testid="fw-release" />
+      {#if rel.offline}<p class="muted note" role="status">{rel.error}</p>{/if}
+      {#if release}
+        <details class="notes"><summary>What is new in {release.version}</summary><div class="md" data-testid="fw-notes">{release.notes || 'No notes.'}</div></details>
+        <div class="row">
+          {#if relation}<p class="muted note" data-testid="fw-relation">{release.version} is {relationLabel[relation]}{installed.length ? ` (modules run ${[...new Set(installed)].join(', ')})` : ''}.</p>{/if}
+          {#if downgrade}
+            <Button variant="danger" onclick={() => (askDowngrade = true)} busy={loadingRel} disabled={busy || loadingRel || !needed.length} data-testid="fw-use-release">Downgrade to {release.version} ({needed.length} file{needed.length === 1 ? '' : 's'})</Button>
+          {:else}
+            <Button variant={relation === 'same' ? 'secondary' : 'primary'} onclick={useRelease} busy={loadingRel} disabled={busy || loadingRel || !needed.length} data-testid="fw-use-release">Use this release ({needed.length} file{needed.length === 1 ? '' : 's'})</Button>
+          {/if}
+          <Button size="sm" variant="ghost" onclick={() => loadReleases(true)} disabled={rel.loading}>Check for new releases</Button>
+        </div>
+      {/if}
+    {:else}<p class="muted note" role="status">{rel.error || 'No releases found.'} Pick the files yourself instead.</p>{/if}
+    <input bind:this={fileInput} type="file" multiple accept=".srec,.bin" class="sr-only" onchange={onFiles} data-testid="fw-files" aria-label="Release files" />
+    <div class="row">
+      <Button size="sm" onclick={() => fileInput.click()} disabled={busy}>Or choose files…</Button>
+      {#if anyFile}<Chip tone="ok" symbol="✓">{files.length} file{files.length === 1 ? '' : 's'}</Chip>{/if}
+    </div>
+    {#if anyFile}
+      <ul class="files mono" data-testid="fw-file-list">
+        {#each files as f (f.name)}
+          {@const c = checks[f.name]}
+          <li>{f.name} <span class="muted">· {c?.board ?? boardOfFile(f.name)?.label ?? 'board not in the name'}{fileVersion(f.name) ? ' · ' + fileVersion(f.name) : ''}{c ? ` · fits ${c.modules.length ? c.modules.map((m) => m.name).join(', ') : 'no module in this project'}` : ''}</span>
+            {#each c?.problems ?? [] as p (p)}<br /><span class="warnT" data-testid="fw-check-problem">▲ {p}</span>{/each}</li>
+        {/each}
+      </ul>
+    {/if}
+    <p class="muted note">A .srec per board goes over CAN (CANBoard, dingoPDM, dingoPDM-Max) and a .bin to the link module over USB. Each file is checked for the board it was built for.</p>
+  </Card>
+
+  <Card title="2. Modules" aria-label="Modules">
     <div class="nx-scroll">
-      <table class="nx-table" data-testid="fw-table">
+      <table class="nx-table table-cards" data-testid="fw-table">
         <thead><tr><th>Module</th><th>Board</th><th>Now</th><th>Path</th><th>Progress</th><th><span class="sr-only">Action</span></th></tr></thead>
         <tbody>
           {#each mods as d (d.guid)}
@@ -183,11 +226,11 @@
             {@const p = pathOf(d)}
             {@const f = fileFor(d)}
             <tr data-module={d.name} class:active={c.state === 'writing'}>
-              <td><strong>{d.name}</strong> <span class="muted mono">{hex(d.baseId)}</span></td>
-              <td>{boardOf(d).label}</td>
-              <td class="mono" data-testid={`fw-version-${d.name}`}>{d.connected ? (cleanVersion(d.version) || 'unknown') : d.inBootloader ? 'in bootloader' : 'not seen'}</td>
-              <td>{pathLabel(p)}</td>
-              <td>
+              <td data-label="Module"><strong>{d.name}</strong> <span class="muted mono">{hex(d.baseId)}</span></td>
+              <td data-label="Board">{boardOf(d).label}</td>
+              <td class="mono" data-label="Now" data-testid={`fw-version-${d.name}`}>{d.connected ? (cleanVersion(d.version) || 'unknown') : d.inBootloader ? 'in bootloader' : 'not seen'}</td>
+              <td data-label="Path">{pathLabel(p)}</td>
+              <td class="pc">
                 <div class="prog"><div class="bar" role="progressbar" aria-label={`${d.name} progress`} aria-valuenow={c.pct} aria-valuemin="0" aria-valuemax="100"><span style="width: {c.pct}%" class:bad={c.state === 'failed'} class:ok={c.state === 'done'}></span></div>
                   <span class:fault={c.state === 'failed'} data-testid={`fw-status-${d.name}`}>{c.state === 'failed' ? '■ ' : ''}{c.text}</span></div>
               </td>
@@ -201,35 +244,6 @@
   </Card>
 
   <div class="three">
-    <Card title="Release" aria-label="Release files">
-      {#if rel.loading}<p class="muted" role="status">Reading the release list…</p>
-      {:else if rel.list.length}
-        <Select label="Firmware release" items={relItems} bind:value={relTag} data-testid="fw-release" />
-        {#if rel.offline}<p class="muted note" role="status">{rel.error}</p>{/if}
-        {#if release}
-          <details class="notes"><summary>What is new in {release.version}</summary><div class="md" data-testid="fw-notes">{release.notes || 'No notes.'}</div></details>
-          <div class="row">
-            <Button variant="primary" onclick={useRelease} busy={loadingRel} disabled={busy || loadingRel || !needed.length} data-testid="fw-use-release">Use this release ({needed.length} file{needed.length === 1 ? '' : 's'})</Button>
-            <Button size="sm" variant="ghost" onclick={() => loadReleases(true)} disabled={rel.loading}>Check for new releases</Button>
-          </div>
-        {/if}
-      {:else}<p class="muted note" role="status">{rel.error || 'No releases found.'} Pick the files yourself instead.</p>{/if}
-      <input bind:this={fileInput} type="file" multiple accept=".srec,.bin" class="sr-only" onchange={onFiles} data-testid="fw-files" aria-label="Release files" />
-      <div class="row">
-        <Button size="sm" onclick={() => fileInput.click()} disabled={busy}>Or choose files…</Button>
-        {#if anyFile}<Chip tone="ok" symbol="✓">{files.length} file{files.length === 1 ? '' : 's'}</Chip>{/if}
-      </div>
-      {#if anyFile}
-        <ul class="files mono" data-testid="fw-file-list">
-          {#each files as f (f.name)}
-            {@const c = checks[f.name]}
-            <li>{f.name} <span class="muted">· {c?.board ?? boardOfFile(f.name)?.label ?? 'board not in the name'}{fileVersion(f.name) ? ' · ' + fileVersion(f.name) : ''}{c ? ` · fits ${c.modules.length ? c.modules.map((m) => m.name).join(', ') : 'no module in this project'}` : ''}</span>
-              {#each c?.problems ?? [] as p (p)}<br /><span class="warnT" data-testid="fw-check-problem">▲ {p}</span>{/each}</li>
-          {/each}
-        </ul>
-      {/if}
-      <p class="muted note">A .srec per board goes over CAN (CANBoard, dingoPDM, dingoPDM-Max) and a .bin to the link module over USB. Each file is checked for the board it was built for.</p>
-    </Card>
     <Card title="If something fails" aria-label="If something fails">
       <p>The module stays in its bootloader and is safe. Run it again from here. The ones already done keep their new firmware.</p>
       <div><Button size="sm" onclick={scanBootloaders} busy={scanning} disabled={!!blocked || busy || scanning} data-testid="fw-bl-scan">Look for modules in their bootloader</Button></div>
@@ -261,6 +275,11 @@
   {/if}
 </Confirm>
 
+<Confirm bind:open={askDowngrade} title={`Downgrade to ${release?.version ?? ''}?`} confirmLabel={`Load ${release?.version ?? ''} anyway`} variant="danger" onconfirm={() => { askDowngrade = false; useRelease() }}
+  consequence="Nothing is written yet: this only loads the files. Each module still asks before it is flashed, and you can load a newer release again at any time.">
+  <p data-testid="fw-downgrade-note">{release?.version} is {relationLabel[relation] ?? 'older'}{installed.length ? `: the modules run ${[...new Set(installed)].join(', ')}` : ''}. Flashing it takes them back to older firmware, and settings added since may be lost.</p>
+</Confirm>
+
 <FlashNewBoard bind:open={newBoard} {blocked} busyOther={busy} onflashing={(v) => (busy = v)} />
 
 <style>
@@ -276,6 +295,7 @@
   .files { margin: 0; padding-left: 18px; font-size: var(--text-xs); display: flex; flex-direction: column; gap: 2px; }
   .note { font-size: var(--text-xs); }
   .warnT { color: var(--color-warn); font-weight: 600; }
+  @media (max-width: 900px) { .prog { min-width: 0; flex: 1 1 100%; } }
   .notes summary { cursor: pointer; font-weight: 600; }
   .md { white-space: pre-wrap; max-height: 220px; overflow: auto; font-size: var(--text-xs); margin-top: var(--space-2); }
 </style>

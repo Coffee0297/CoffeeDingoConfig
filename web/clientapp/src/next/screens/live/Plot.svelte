@@ -1,6 +1,6 @@
 <script module>
   // Remembered while the app is open, so leaving the Plot and coming back keeps the chosen signals.
-  const memo = { series: null, win: 60 }
+  const memo = { series: null, win: 60, own: false }
 </script>
 
 <script>
@@ -38,7 +38,9 @@
     })
   })
   let win = $state(String(memo.win))
-  $effect(() => { memo.series = series.map((s) => s.key); memo.win = Number(win) })
+  // default: one y-axis per unit (A, V, °C) from 0, so noise looks like noise; "own scale" stretches each line
+  let ownScale = $state(memo.own)
+  $effect(() => { memo.series = series.map((s) => s.key); memo.win = Number(win); memo.own = ownScale })
 
   // ---- catalog (one-shot read of every module's signals; history only for what is added) ----
   let catSignals = $state({})
@@ -87,40 +89,59 @@
   const hasData = $derived.by(() => { until; return visible.length > 0 && visible.every((s) => samples(s.key).t.length > 0) })
   const from = $derived(until - spanSec * 1000)
 
-  const lines = $derived.by(() => {
-    if (!hasData) return []
-    const units = new Set(visible.map((s) => info(s.key).unit).filter(Boolean))
-    const shared = units.size <= 1
+  // a round step for about four gaps across v
+  const niceStep = (v) => { if (!(v > 0)) return 1; const p = 10 ** Math.floor(Math.log10(v)), m = v / p; return (m <= 1 ? 1 : m <= 2 ? 2 : m <= 2.5 ? 2.5 : m <= 5 ? 5 : 10) * p }
+  const fmtNum = (v, range = 10) => (Math.abs(range) >= 20 ? Math.round(v) : Math.abs(range) >= 2 ? +v.toFixed(1) : +v.toFixed(2))
+  // shared: 0 (or the lowest negative value) up to a round number above the top, ticks on round steps
+  function zeroAxis(a, b, unit) {
+    if (unit === 'on/off') return { lo: -0.1, hi: 1.1, ticks: [{ v: 1, t: 'On' }, { v: 0, t: 'Off' }] }
+    const step = niceStep((Math.max(0, b) - Math.min(0, a)) / 4 || 1)
+    const lo = Math.floor(Math.min(0, a) / step) * step
+    let hi = Math.ceil(Math.max(0, b) / step) * step
+    if (hi <= lo) hi = lo + 4 * step
+    const ticks = []
+    for (let v = hi; v >= lo - step / 2; v -= step) ticks.push({ v, t: String(fmtNum(v, hi - lo)) })
+    return { lo, hi, ticks }
+  }
+  // own scale: the line's own min..max (with a minimum span per unit so a flat signal does not look wild)
+  function ownAxis(a, b, unit) {
+    const min = unit === 'A' ? 2 : unit === 'V' ? 1 : unit === '°C' ? 10 : unit === 'on/off' ? 1.2 : Math.max(1, Math.abs((a + b) / 2) * 0.1)
+    let lo, hi
+    if (b - a >= min) { const p = (b - a) * 0.06; [lo, hi] = [a - p, b + p] }
+    else { const mid = (a + b) / 2; [lo, hi] = [mid - min / 2, mid + min / 2] }
+    return { lo, hi, ticks: [0, 1, 2, 3, 4].map((k) => { const v = hi - ((hi - lo) * k) / 4; return { v, t: String(fmtNum(v, hi - lo)) } }) }
+  }
+
+  // axes: one per unit (shared) or one per line (own scale); each line is drawn 0..100 against its axis
+  const chart = $derived.by(() => {
+    if (!hasData) return { lines: [], axes: [] }
     const raws = visible.map((s) => resampleRange(s.key, from, until, N))
-    // keep a minimum range per unit so a flat signal does not look like a wild one
-    const widen = (a, b, unit) => {
-      const min = unit === 'A' ? 2 : unit === 'V' ? 1 : unit === '°C' ? 10 : unit === 'on/off' ? 1.2 : Math.max(1, Math.abs((a + b) / 2) * 0.1)
-      if (b - a >= min) { const p = (b - a) * 0.06; return [a - p, b + p] }
-      const mid = (a + b) / 2
-      return [mid - min / 2, mid + min / 2]
+    const axes = []
+    if (ownScale) visible.forEach((s, k) => {
+      const i = series.indexOf(s), unit = info(s.key).unit
+      axes.push({ id: s.key, title: unit, color: `var(--color-series-${i + 1})`, members: [k], ...ownAxis(Math.min(...raws[k]), Math.max(...raws[k]), unit) })
+    })
+    else {
+      const byUnit = new Map()
+      visible.forEach((s, k) => { const u = info(s.key).unit ?? ''; if (!byUnit.has(u)) byUnit.set(u, []); byUnit.get(u).push(k) })
+      for (const [u, members] of byUnit) {
+        const all = members.flatMap((k) => raws[k])
+        axes.push({ id: 'u:' + u, title: u || 'value', color: null, members, ...zeroAxis(Math.min(...all), Math.max(...all), u) })
+      }
     }
-    let lo = 0, hi = 1
-    if (shared) {
-      const all = raws.flat()
-      ;[lo, hi] = widen(Math.min(...all), Math.max(...all), [...units][0] ?? '')
-      if (visible.every((s) => info(s.key).unit === 'on/off')) { lo = -0.1; hi = 1.1 }
-    }
-    return visible.map((s, k) => {
-      const raw = raws[k]
-      let a = lo, b = hi
-      if (!shared) [a, b] = widen(Math.min(...raw), Math.max(...raw), info(s.key).unit)
+    const lines = visible.map((s, k) => {
+      const raw = raws[k], ax = axes.find((a) => a.members.includes(k))
       const i = series.indexOf(s)
       const last = samples(s.key).t.at(-1) ?? 0
-      return { key: s.key, i, raw, lo: a, hi: b, norm: raw.map((v) => ((v - a) / (b - a)) * 100), color: `var(--color-series-${i + 1})`, dash: DASH[i], stale: (until - last > 3000 && !paused) || live.devices.some((d) => d.guid === s.key.split(':')[1] && !d.connected), shared }
+      return { key: s.key, i, raw, lo: ax.lo, hi: ax.hi, axis: ax.id, norm: raw.map((v) => ((v - ax.lo) / (ax.hi - ax.lo)) * 100), color: `var(--color-series-${i + 1})`, dash: DASH[i], stale: (until - last > 3000 && !paused) || live.devices.some((d) => d.guid === s.key.split(':')[1] && !d.connected) }
     })
+    for (const a of axes) a.ticks = a.ticks.map((x) => ({ ...x, pos: (x.v - a.lo) / (a.hi - a.lo) }))
+    return { lines, axes }
   })
-  const shared = $derived(lines.length === 0 || lines[0].shared)
-  const yLabels = $derived.by(() => {
-    if (!lines.length || !shared) return []
-    const { lo, hi } = lines[0]
-    return [0, 1, 2, 3, 4].map((k) => fmtNum(hi - ((hi - lo) * k) / 4, hi - lo))
-  })
-  const fmtNum = (v, range = 10) => (Math.abs(range) >= 20 ? Math.round(v) : Math.abs(range) >= 2 ? v.toFixed(1) : v.toFixed(2))
+  const lines = $derived(chart.lines)
+  const axes = $derived(chart.axes)
+  // the export draws the first axis's values at its four grid lines
+  const yLabels = $derived(axes.length ? [0, 1, 2, 3, 4].map((k) => { const a = axes[0], v = a.hi - ((a.hi - a.lo) * k) / 4; return fmtNum(v, a.hi - a.lo) + (a.title !== 'value' && a.title !== 'on/off' ? ' ' + a.title : '') }) : [])
   const xLabels = $derived(Array.from({ length: 6 }, (_, k) => (k === 5 ? 'now' : '−' + fmtDur(spanSec * (1 - k / 5)))))
 
   // cursor
@@ -184,7 +205,7 @@
   }
 
   const opened = $derived(asked.length ? asked.map((k) => info(k).name).join(', ') : '')
-  const unitNote = (r) => (r.ln ? (r.ln.shared ? (shared && rows.filter((x) => x.ln).length > 0 ? 'shared scale' : '') : `own scale ${fmtNum(r.ln.lo, r.ln.hi - r.ln.lo)} to ${fmtNum(r.ln.hi, r.ln.hi - r.ln.lo)}`) : '')
+  const unitNote = (r) => (!r.ln ? '' : ownScale ? `own scale ${fmtNum(r.ln.lo, r.ln.hi - r.ln.lo)} to ${fmtNum(r.ln.hi, r.ln.hi - r.ln.lo)}` : axes.length > 1 ? `${axes.findIndex((a) => a.id === r.ln.axis) === 0 ? 'left' : 'right'} axis` : '')
 </script>
 
 <Page wide>
@@ -209,6 +230,7 @@
         <span class="muted" role="status" data-testid="plot-status">{paused ? `Paused at ${clock(frozenAt)}` : 'Live'}</span>
         <span class="grow"></span>
         {#if exportMsg}<span role="status" class="msg">✓ {exportMsg}</span>{/if}
+        <Button aria-pressed={ownScale} onclick={() => (ownScale = !ownScale)} data-testid="own-scale" title="Stretch each line over the full height. Small changes look big.">Own scale per line</Button>
         <Button aria-pressed={showTable} onclick={() => (showTable = !showTable)}>{showTable ? 'Show as graph' : 'Show as table'}</Button>
         <Button onclick={exportPng}>Export PNG</Button>
       </div>
@@ -233,11 +255,15 @@
           </table>
         </div>
       {:else}
-        <div class="axes muted">{shared ? `Left axis${rows.find((r) => r.ln)?.inf.unit ? ' · ' + rows.find((r) => r.ln).inf.unit : ''}` : 'Each line on its own scale (range shown on the right)'}</div>
+        <div class="axes muted" data-testid="plot-axes">{ownScale ? 'Each line on its own scale (its range is on its axis)' : `One axis per unit from 0: ${axes.map((a) => a.title).join(', ')}`}</div>
         <div class="pw">
-          {#if shared}
-            <div class="ya mono" aria-hidden="true">{#each yLabels as y, k (k)}<span style="top: calc(8px + (100% - 16px) * {k / 4})">{y}</span>{/each}</div>
-          {/if}
+          {#snippet axis(a)}
+            <div class="ya mono" data-testid="y-axis" style={a.color ? `color: ${a.color}` : ''}>
+              <span class="yt">{a.title === 'value' ? '' : a.title}</span>
+              {#each a.ticks as x, k (k)}<span style="top: calc(8px + (100% - 16px) * {1 - x.pos})">{x.t}</span>{/each}
+            </div>
+          {/snippet}
+          {#if axes[0]}{@render axis(axes[0])}{/if}
           <div class="cw">
             <LineChart series={lines.map((l, k) => ({ label: info(l.key).name, values: l.norm, color: l.color, dash: l.stale ? '2 5' : l.dash, area: k === 0 && lines.length === 1 }))} min={0} max={100} height={340} label={chartLabel} />
             <div class="cur" aria-hidden="true" style="left: calc(8px + (100% - 16px) * {cursor / 100})"></div>
@@ -245,8 +271,9 @@
               <span class="dot" aria-hidden="true" style="left: calc(8px + (100% - 16px) * {cursor / 100}); top: calc(8px + (100% - 16px) * {1 - Math.max(0, Math.min(100, l.norm[ci])) / 100}); background: {l.color}"></span>
             {/each}
           </div>
+          {#each axes.slice(1) as a (a.id)}{@render axis(a)}{/each}
         </div>
-        <div class="xl mono" aria-hidden="true">{#each xLabels as x (x)}<span>{x}</span>{/each}</div>
+        <div class="xl mono" aria-hidden="true" style="padding-right: {8 + Math.max(0, axes.length - 1) * 52}px">{#each xLabels as x (x)}<span>{x}</span>{/each}</div>
         <p class="muted small">Showing the last {fmtDur(spanSec)}{spanSec < Number(win) ? ` (history builds up while this app is open, window ${fmtDur(Number(win))})` : ''}. Nothing is stored on the server.</p>
       {/if}
 
@@ -285,7 +312,7 @@
         <div class="res">
           {#each candidates.slice(0, 8) as c (c.key)}
             <button type="button" class="pick" disabled={full} aria-label={`Add ${c.name} from ${c.mod}`} onclick={() => add(c.key)}>
-              <span class="who"><strong>{c.name}</strong><span class="muted small">{c.mod} · {c.kind}{c.unit ? ' · ' + c.unit : ''}</span></span><span class="act">{full ? 'Full' : '+ Add'}</span>
+              <span class="who"><strong>{c.name}</strong><span class="muted small">{c.mod} · {c.kind}{c.unit ? ' · ' + c.unit : ''}</span></span><span class="act">{full ? 'Full' : '+\u00a0Add'}</span>
             </button>
           {:else}
             <p class="muted small">{q ? 'No signal matches that search.' : 'Every signal is already on the graph.'}</p>
@@ -306,8 +333,10 @@
   .msg { color: var(--color-ok); font-weight: 600; }
   .axes { font-size: var(--text-xs); font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; }
   .pw { display: flex; gap: var(--space-2); }
-  .ya { position: relative; width: 52px; flex: none; height: 340px; font-size: 11px; color: var(--color-text-muted); }
-  .ya span { position: absolute; right: 0; transform: translateY(-50%); }
+  .ya { position: relative; width: 44px; flex: none; height: 340px; font-size: var(--text-xs); color: var(--color-text-muted); }
+  .ya span { position: absolute; right: 0; transform: translateY(-50%); white-space: nowrap; }
+  .ya .yt { top: -10px; font-weight: 700; transform: none; }
+  .pw ~ .xl { padding-left: 60px; }
   .cw { position: relative; flex: 1 1 auto; min-width: 0; height: 340px; }
   .cur { position: absolute; top: 8px; bottom: 8px; width: 0; border-left: 2px solid var(--color-text); opacity: 0.7; pointer-events: none; }
   .dot { position: absolute; width: 12px; height: 12px; margin: -6px 0 0 -6px; border-radius: 50%; border: 2px solid var(--color-surface); pointer-events: none; }
@@ -327,5 +356,6 @@
   .pick { display: flex; align-items: center; gap: var(--space-2); min-height: var(--target-min); padding: 4px var(--space-3); border-radius: var(--radius-md); border: 1px solid var(--color-line); background: var(--color-raised); color: var(--color-text); text-align: left; }
   .pick:hover:not(:disabled) { border-color: var(--color-line-strong); }
   .pick:disabled { opacity: 0.55; }
-  .act { font-weight: 700; color: var(--color-accent); font-size: var(--text-xs); }
+  .act { font-weight: 700; color: var(--color-accent); font-size: var(--text-xs); white-space: nowrap; flex: none; }
+  @media (max-width: 900px) { .plot { padding: var(--space-3); } .ya { width: 36px; } .pw ~ .xl { padding-left: 44px; } .side { width: 100%; } }
 </style>

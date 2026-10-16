@@ -1,5 +1,5 @@
 <script>
-  import { Page, PageHeader, Button, Card, FwBadge, Chip } from '../../ui/index.js'
+  import { Page, PageHeader, Button, Banner, Card, FwBadge, Chip } from '../../ui/index.js'
   import { href } from '../../router.svelte.js'
   import { live } from '../../lib/live.svelte.js'
   import PowerDown from './parts/PowerDown.svelte'
@@ -42,7 +42,9 @@
     {#if ignMain}
       <p class="muted" role="status" data-testid="ignition-gap">{ign.live ? `${ignMain.name} runs the ignition. Now: ${nowKey}.` : `${ignMain.name} runs the ignition but its state frame is not heard right now.`}</p>
     {:else if anyNew}
-      <p class="muted" role="status" data-testid="ignition-gap">The ignition is not set up yet. Pick the main module and its switch and button in the ignition setup.</p>
+      <Banner tone="warn" title="The ignition is not set up yet" data-testid="ignition-gap">Pick the main module and its switch and button, so outputs can follow the ignition.
+        {#snippet actions()}<Button variant="primary" size="sm" href={href('power', 'ignition')} data-testid="ignition-setup">Set up ignition</Button>{/snippet}
+      </Banner>
     {:else}
       <p class="muted" role="status" data-testid="ignition-gap">The modules report an ignition state from firmware 5.6. The four states are shown as designed.</p>
     {/if}
@@ -69,4 +71,5 @@
   .line { width: 100%; height: 2px; background: var(--color-line-strong); }
   .two { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.3fr); gap: var(--space-5); align-items: start; }
   @media (max-width: 1200px) { .two { grid-template-columns: minmax(0, 1fr); } .arrow { width: 56px; } }
+  @media (max-width: 900px) { .states, .st { flex-direction: column; align-items: stretch; } .box { min-height: 0; } .arrow { width: auto; flex-direction: row; justify-content: center; padding: 4px 0; } .line { width: 2px; height: 16px; } }
 </style>

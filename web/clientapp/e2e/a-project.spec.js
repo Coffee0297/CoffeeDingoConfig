@@ -109,7 +109,7 @@ test('Download a copy saves the whole project as a file on this PC', async ({ pa
   expect(errors).toEqual([])
 })
 
-test('Export config and Export template download JSON; the two missing exports are off and say so', async ({ page }) => {
+test('Export config and Export template download JSON; Export combined DBC opens the DBC devices tab', async ({ page }) => {
   const errors = watchErrors(page)
   await open(page, 'hardware')
   await openMenu(page)
@@ -121,8 +121,10 @@ test('Export config and Export template download JSON; the two missing exports a
   const [t] = await Promise.all([page.waitForEvent('download'), menu(page).getByRole('button', { name: 'Export template…' }).click()])
   expect(t.suggestedFilename()).toBe('dingopdm-template.json')
   expect(JSON.parse(fs.readFileSync(await t.path(), 'utf8'))).toBeTruthy()
-  await expect(menu(page).getByRole('button', { name: 'Export profile…' })).toBeDisabled()
-  await expect(menu(page).getByRole('button', { name: 'Export combined DBC…' })).toBeDisabled()
+  await expect(menu(page).getByRole('button', { name: 'Export profile…' })).toHaveCount(0)
+  await menu(page).getByTestId('proj-dbc').click()
+  await expect(page).toHaveURL(/#\/next\/expert\/can\?tab=dbc/)
+  await expect(page.getByTestId('dbc-export')).toBeVisible()
   expect(errors).toEqual([])
 })
 
@@ -196,7 +198,7 @@ test('Save as, Save (Ctrl+S) and the unsaved chip follow each other @exclusive',
     expect(['PdmDevices', 'CanboardDevices', 'DbcDevices', 'BlinkMarineKeypads', 'GrayhillKeypads'].reduce((n, k) => n + (copy[k]?.length ?? 0), 0)).toBe((await devices()).length)
     // change something through the UI: the chip says unsaved, Ctrl+S saves and clears it
     await page.keyboard.press('Escape')
-    await page.getByRole('button', { name: 'Rename PDM-05' }).first().click()
+    await page.getByTestId('more-PDM-05').click(); await page.getByRole('menuitem', { name: 'Rename' }).click()
     await page.getByTestId('row-PDM-05').getByLabel('Module name').fill('zz-e2e-chip')
     await page.getByTestId('row-PDM-05').getByRole('button', { name: 'Save' }).click()
     await expect(page.getByTestId('project-chip')).toContainText('unsaved')
@@ -234,7 +236,7 @@ test('New project, Upload and Open replace the project and warn about unsaved ch
     await page.keyboard.press('Escape')
 
     // make it dirty, then New: the warning offers Cancel / Discard / Save
-    await page.getByRole('button', { name: 'Rename PDM-05' }).first().click()
+    await page.getByTestId('more-PDM-05').click(); await page.getByRole('menuitem', { name: 'Rename' }).click()
     await page.getByTestId('row-PDM-05').getByLabel('Module name').fill('zz-e2e-dirty')
     await page.getByTestId('row-PDM-05').getByRole('button', { name: 'Save' }).click()
     await expect(page.getByTestId('project-chip')).toContainText('unsaved')
@@ -283,7 +285,7 @@ test('Save, then continue saves first and then opens @exclusive', async ({ page 
     await menu(page).getByTestId('saveas-go').click()
     await waitFor(async () => (await apiJson('GET', '/api/project')).current === file + '.json', 10_000, 'saved')
     await page.keyboard.press('Escape')
-    await page.getByRole('button', { name: 'Rename PDM-05' }).first().click()
+    await page.getByTestId('more-PDM-05').click(); await page.getByRole('menuitem', { name: 'Rename' }).click()
     await page.getByTestId('row-PDM-05').getByLabel('Module name').fill('zz-e2e-keep')
     await page.getByTestId('row-PDM-05').getByRole('button', { name: 'Save' }).click()
     await openMenu(page)

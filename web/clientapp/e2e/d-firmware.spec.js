@@ -136,12 +136,24 @@ test('firmware: the release list loads a release\'s files through the backend an
   const errors = watchErrors(page)
   const r = await fetch('http://127.0.0.1:5000/api/firmware/releases').then((x) => x.json()).catch(() => null)
   test.skip(!r?.releases?.length, 'no release list: GitHub not reachable and none saved')
-  const rel = r.releases.find((x) => !x.prerelease) ?? r.releases[0]
+  // the page picks the newest proper release by version number
+  const num = (v) => v.split('.').map(Number)
+  const newer = (a, b) => { const x = num(a), y = num(b); for (let i = 0; i < 3; i++) if (x[i] !== y[i]) return x[i] > y[i]; return false }
+  const rel = r.releases.filter((x) => !x.prerelease).reduce((best, x) => (!best || newer(x.version, best.version) ? x : best), null) ?? r.releases[0]
   await open(page, 'hardware/firmware')
   await expect(page.getByTestId('fw-release')).toBeVisible()
   await page.getByText(`What is new in ${rel.version}`).click()
   await expect(page.getByTestId('fw-notes')).toContainText(rel.notes.trim().split('\n')[0].trim().slice(0, 30))
-  await page.getByTestId('fw-use-release').click()
+  await expect(page.getByTestId('fw-release')).toContainText(rel.version)
+  const use = page.getByTestId('fw-use-release')
+  // older than what the modules run: the button says Downgrade and asks first (it only loads the files)
+  const down = /^Downgrade/.test((await use.innerText()).trim())
+  await use.click()
+  if (down) {
+    const dlg = page.getByRole('dialog', { name: /^Downgrade to/ })
+    await expect(dlg).toContainText('older')
+    await dlg.getByTestId('confirm-go').click()
+  }
   const list = page.getByTestId('fw-file-list')
   await expect(list).toBeVisible({ timeout: 120_000 })
   // a .srec per board kind in the project, and the .bin for the PDMs

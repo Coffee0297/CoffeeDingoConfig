@@ -19,6 +19,7 @@
   const src = untrack(() => (editId || fromId ? get(templateInstances).find((i) => i.id === (editId || fromId)) : null))
   // No relay by default: a PDM output drives lamps, motors and pumps directly (it handles their kick-back). Only an
   // output the template itself names a relay (a relay-switched wiper, a starter relay) starts with one.
+  const RELAY_WHY = "Not needed on a PDM output: it drives lamps, motors and pumps directly. Use one on a CANBoard output, or for a load above the output's rating. The drawing shows how to wire it."
   const relayDefaults = () => Object.fromEntries(tpl.fields.filter((f) => f.t === 'out').map((f) => [f.k, /relay/i.test(f.label ?? '')]))
   const init = () => {
     const s = { ...defaults(tpl), ...(src?.sel ?? {}) }
@@ -208,11 +209,12 @@
         <h2>Where should “{name || tpl.name}” go?</h2>
         <p class="muted">{tpl.desc}</p>
         <Field label="Name of this function" bind:value={name} data-testid="fn-name" />
+        {#if fOut.length}<p class="muted relay-note" data-testid="relay-note"><b>Via relay?</b> {RELAY_WHY}</p>{/if}
         {#each fOut as f (f.k)}
           <div class="fld" data-field={f.k}>
             <SearchPick label={f.label + (f.opt ? ' (optional)' : '')} options={[...(f.opt ? [{ value: '', label: '— none —' }] : []), ...outOpts]} bind:value={sel[f.k]}
               placeholder="Search: module, J3-7, OUT1, name…" data-testid={'pick-' + f.k} />
-            <Checkbox bind:checked={relays[f.k]} label="Through a relay" hint="Not needed on a PDM output: it drives lamps, motors and pumps directly. Use one on a CANBoard output, or for a load above the output's rating. The drawing shows how to wire it." data-testid={'relay-' + f.k} />
+            <span class="rl"><Checkbox bind:checked={relays[f.k]} label="Via relay" data-testid={'relay-' + f.k} /><span class="i" title={RELAY_WHY} aria-label={RELAY_WHY} role="img">i</span></span>
           </div>
         {/each}
         {#if takenNames.length}<Banner tone="warn" title="Already driven by something else">{takenNames.join(', ')}. Applying takes {takenNames.length > 1 ? 'them' : 'it'} over. Removing the function gives {takenNames.length > 1 ? 'them' : 'it'} back.</Banner>{/if}
@@ -297,6 +299,9 @@
   h2 { font-size: var(--text-xl); }
   .fld { display: flex; flex-direction: column; gap: var(--space-2); padding: var(--space-4); border: 1px solid var(--color-line); border-radius: var(--radius-md); background: var(--color-surface); }
   .now { font-size: var(--text-sm); color: var(--color-on); }
+  .relay-note { font-size: var(--text-sm); }
+  .rl { display: inline-flex; align-items: center; gap: var(--space-2); }
+  .i { display: inline-grid; place-items: center; width: 18px; height: 18px; border-radius: 50%; border: 1px solid var(--color-line-strong); font-size: 11px; font-weight: 700; font-style: italic; color: var(--color-text-muted); cursor: help; }
   .issue { color: var(--color-warn); font-size: var(--text-sm); font-weight: 600; }
   .issue::before { content: '△ '; }
   .nav { display: flex; gap: var(--space-2); align-items: center; flex-wrap: wrap; padding-top: var(--space-2); }

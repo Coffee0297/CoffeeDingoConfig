@@ -87,7 +87,7 @@ test('recording starts, counts frames, stops, and the CSV downloads', async ({ p
   try {
     await expect(page.getByTestId('rec-status')).not.toContainText('REC')
     await expect(page.getByTestId('rec-toggle')).toContainText('Start recording')
-    await expect(page.getByRole('button', { name: 'Download raw (.bin)' })).toBeDisabled()
+    await expect(page.getByRole('button', { name: 'Download raw (.bin)' })).toHaveCount(0)   // not offered: the backend records CSV only
     await page.getByTestId('rec-toggle').click()
     await expect(page.getByTestId('rec-status')).toContainText('REC')
     expect((await apiJson('GET', '/api/canlog/record/status')).recording).toBe(true)

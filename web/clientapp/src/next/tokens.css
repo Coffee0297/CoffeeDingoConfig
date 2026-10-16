@@ -13,8 +13,8 @@
   --color-line-strong: #686d73;   /* 3:1 on every ground: control borders, ports, idle wires */
   /* Text */
   --color-text: #eceef0;
-  --color-text-muted: #a3acb6;    /* 4.5:1+ on surface */
-  --color-text-faint: #7d8792;    /* only >= 18px or decorative */
+  --color-text-muted: #a7adb6;    /* 7:1+ on every dark ground */
+  --color-text-faint: #8f99a4;    /* 5.5:1+ on every dark ground */
   /* Brand / interaction */
   --color-accent: #3ecf72;        /* green: primary actions, focus */
   --color-accent-strong: #74e39b;
@@ -58,7 +58,7 @@
   --color-line-strong: #898780;
   --color-text: #15181b;
   --color-text-muted: #545c65;
-  --color-text-faint: #6f7781;
+  --color-text-faint: #636b74;
   --color-accent: #157a3a;
   --color-accent-strong: #0f6330;
   --color-on-accent: #ffffff;
@@ -92,7 +92,7 @@
   /* Type: IBM Plex Sans for UI, IBM Plex Mono for values, IDs and pins */
   --font-ui: "IBM Plex Sans", system-ui, sans-serif;
   --font-mono: "IBM Plex Mono", ui-monospace, monospace;
-  --text-xs: 12px;
+  --text-xs: 13px;  /* smallest text in the app */
   --text-sm: 14px;
   --text-md: 16px;   /* body */
   --text-lg: 20px;

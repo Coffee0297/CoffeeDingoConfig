@@ -32,7 +32,7 @@ export function inputModel(getGuid, getKind, getN) {
       try {
         const r = await api.setFunction(getGuid(), getKind(), getN(), body)
         project.dirty = true
-        m.note = r?.staged ? 'Saved. Apply to car sends it to the module.' : r?.written ? 'Saved to the module.' : 'Saved to the project. The module did not get it (offline). Apply to car when it is back.'
+        m.note = r?.staged ? 'Kept in the project. Not on the car yet.' : r?.written ? 'Kept in the project and sent to the module.' : 'Kept in the project. Not on the car yet: the module is offline, apply to car when it is back.'
         await reload()
         return true
       } catch (e) { m.saveErr = e?.message ?? String(e); return false } finally { m.saving = false }

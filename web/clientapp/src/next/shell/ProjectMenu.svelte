@@ -8,6 +8,7 @@
   import { live, project, api, toast, refreshProject } from '../lib/live.svelte.js'
   import { gatherClientState, restoreClientState } from '../../lib/store.js'
   import { ui } from './ui.svelte.js'
+  import { go } from '../router.svelte.js'
   import { pm } from './parts/project.svelte.js'
   import { ago } from '../screens/functions/parts/catalog.js'
 
@@ -278,8 +279,7 @@
       <Button onclick={() => exportConfig(false)} disabled={busy}>Export config…</Button>
       <Button onclick={() => exportConfig(true)} disabled={busy} title="Reads each module's Lua program over CAN first: slow">Export config with Lua…</Button>
       <Button onclick={exportTemplate} disabled={busy}>Export template…</Button>
-      <Button disabled title="Not available yet: the backend has no profile export">Export profile…</Button>
-      <Button disabled title="Not available yet: the backend has no combined DBC export">Export combined DBC…</Button>
+      <Button onclick={() => { ui.panel = null; go('expert', 'can', { tab: 'dbc' }) }} title="Opens Expert › CAN & parameters › DBC devices, where you pick what goes in the file" data-testid="proj-dbc">Export combined DBC…</Button>
     </div>
   {/if}
 

@@ -8,6 +8,7 @@
   import { go, href } from '../../router.svelte.js'
   import { ui } from '../../shell/ui.svelte.js'
   import CarMap from '../car/parts/CarMap.svelte'
+  import { layout } from '../car/parts/layout.svelte.js'
   import { fwText } from '../hardware/parts/ids.js'
   import { olderThan } from '../hardware/parts/util.js'
 
@@ -18,11 +19,8 @@
   let connErr = $state('')
   let names = $state({}) // guid → draft
   let nameErr = $state({})
-  let placed = $state(readPlaced())
-
-  function readPlaced() { try { return JSON.parse(localStorage.getItem('pinpos') || '{}') } catch { return {} } }
-  // The car map saves positions in this browser; re-read them so "placed" follows a drag.
-  $effect(() => { const t = setInterval(() => { placed = readPlaced() }, 800); return () => clearInterval(t) })
+  // the same layout the Car screen's map uses: a module with no position sits in the map's tray
+  const placed = $derived(layout.pos)
 
   const mods = $derived([...live.devices].sort((a, b) => a.baseId - b.baseId))
   const step = $derived(!live.connected || back ? 1 : 2)
@@ -111,7 +109,7 @@
               </div>
             {/each}
           </div>
-          {#if unplaced.length}<p class="muted" role="status">Unplaced: {unplaced.map((d) => d.name).join(', ')}. Drag {unplaced.length === 1 ? 'it' : 'them'} onto the car.</p>{/if}
+          {#if unplaced.length}<p class="muted" role="status">Not placed yet: {unplaced.map((d) => d.name).join(', ')}. Drag {unplaced.length === 1 ? 'it' : 'them'} from the tray onto the car.</p>{/if}
           <p class="muted">Blink LED needs firmware 5.6. A CANBoard has no LED: it only answers.</p>
         {/if}
 

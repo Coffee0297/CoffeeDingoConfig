@@ -48,3 +48,24 @@ export function checkFile(d, file, path) {
 
 /** Last meaningful line of a flash log. */
 export const lastLine = (log) => String(log ?? '').trimEnd().split('\n').filter(Boolean).at(-1) ?? ''
+
+/** Compare dotted versions numerically: <0 when a is older than b. Non-numeric (testing-latest) sorts last. */
+export function cmpVersion(a, b) {
+  const p = (v) => cleanVersion(v).split('.').map(Number)
+  const x = p(a), y = p(b)
+  if (x.some(isNaN) || y.some(isNaN)) return x.some(isNaN) === y.some(isNaN) ? 0 : x.some(isNaN) ? -1 : 1
+  for (let i = 0; i < Math.max(x.length, y.length); i++) if ((x[i] ?? 0) !== (y[i] ?? 0)) return (x[i] ?? 0) - (y[i] ?? 0)
+  return 0
+}
+
+/** A release against the versions the modules run: 'older' | 'same' | 'newer' | 'mixed' | null (nothing known). */
+export function relationTo(version, installed) {
+  const known = installed.filter((v) => /^\d+(\.\d+)*$/.test(cleanVersion(v)))
+  if (!known.length || !/^\d+(\.\d+)*$/.test(cleanVersion(version))) return null
+  const c = known.map((v) => Math.sign(cmpVersion(version, v)))
+  if (c.every((x) => x < 0)) return 'older'
+  if (c.every((x) => x === 0)) return 'same'
+  if (c.every((x) => x > 0)) return 'newer'
+  return c.some((x) => x < 0) ? 'mixed' : 'newer'
+}
+export const relationLabel = { older: 'older than installed', same: 'same as installed', newer: 'newer', mixed: 'older than some modules' }

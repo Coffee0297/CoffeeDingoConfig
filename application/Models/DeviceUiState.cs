@@ -19,9 +19,12 @@ public class DeviceUiState
     // G9: the last bootloader scan found this module in OpenBLT (it answered XCP CONNECT on base+12/13).
     // Only meaningful while the module sends no status frames; it is reported as false once it does.
     public bool InBootloader { get; set; }
-    // G2: edits saved to the project and held for "Apply to car" since the module was last in step. Only counts
-    // while the module differs (a confirmed write or read clears ConfigMismatch, and with it these).
-    public int PendingEdits { get; set; }
+    // G2: edits saved to the project and held for "Apply to car" since the module was last in step: one row per
+    // changed field (repeat edits merge, keeping the first "before"). Only meaningful while the module differs
+    // (a confirmed write or read clears ConfigMismatch, and SyncEdits drops these with it). Lock on Edits.
+    public List<PendingEdit> Edits { get; } = new();
+    public int PendingEdits { get { lock (Edits) return Edits.Count; } }
+    public void SyncEdits(bool mismatch) { if (!mismatch) lock (Edits) Edits.Clear(); }
     // Firmware 5.6
     public bool? HasLed { get; set; }               // Identify reply (G12)
     public bool Asleep { get; set; }                // announced "going to sleep" and quiet since (G14)
@@ -33,3 +36,8 @@ public class DeviceUiState
     public bool SleepInfoAsked { get; set; }        // asked once per connect
     public DateTime VersionAskedAt { get; set; }    // last automatic version request (unknown version)
 }
+
+/// <summary>One staged (not yet applied) field change. Kind/Number/Field address it for a revert: kind "output",
+/// "device" or a FunctionMap kind; OldJson is the field's JSON before the first edit. Source: app (this UI,
+/// X-Dingo-Stage), agent (MCP) or api (REST without the header, saved while the module was offline).</summary>
+public record PendingEdit(int Id, string Kind, int Number, string Field, string What, string Old, string New, string OldJson, string NewJson, string Source, DateTime At);

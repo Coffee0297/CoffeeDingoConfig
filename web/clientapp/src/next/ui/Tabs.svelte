@@ -25,5 +25,5 @@
   :global(.nx-tab) { min-height: 36px; padding: 0 var(--space-4); border: 0; border-radius: 8px; background: transparent; color: var(--color-text-muted); font-weight: 600; display: inline-flex; align-items: center; gap: 6px; }
   :global(.nx-tab[data-state='active']) { background: var(--color-surface); color: var(--color-text); box-shadow: var(--shadow-1); }
   :global(.nx-tabpanel) { min-height: 0; }
-  .n { font-family: var(--font-mono); font-size: 11px; color: var(--color-text-muted); }
+  .n { font-family: var(--font-mono); font-size: var(--text-xs); color: var(--color-text-muted); }
 </style>

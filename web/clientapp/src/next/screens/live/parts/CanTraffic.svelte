@@ -131,10 +131,9 @@
         </div>
         <div class="rr">
           <Button href={hasFile ? '/api/canlog/record/download' : undefined} download disabled={!hasFile} data-testid="dl-csv">Download CSV</Button>
-          <Button disabled title="Not available yet: the backend records CSV only">Download raw (.bin)</Button>
           <Button href="/api/canlog/export" download data-testid="dl-summary">Download ID summary</Button>
         </div>
-        {#if !hasFile}<span class="muted small">Download is available after a recording. Raw .bin needs a backend change (not available yet).</span>{/if}
+        {#if !hasFile}<span class="muted small">Download is available after a recording.</span>{/if}
       </section>
     </div>
 

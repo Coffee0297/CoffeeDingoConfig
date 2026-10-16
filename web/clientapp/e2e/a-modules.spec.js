@@ -33,10 +33,10 @@ test('rows are sorted by base ID', async ({ page }) => {
 test('selecting a module shows its settings', async ({ page }) => {
   await open(page, 'hardware')
   const pdm3 = await deviceByName('PDM-03')
-  await page.getByTestId('row-PDM-03').getByRole('button', { name: 'PDM-03', exact: true }).click()
+  await page.getByTestId('row-PDM-03').locator('td').first().click()
   await expect(side(page).getByRole('heading', { name: 'PDM-03' })).toBeVisible()
   await expect(side(page).getByTestId('saved-base')).toHaveText(hex3(pdm3.baseId))
-  await expect(page.getByTestId('row-PDM-03').getByRole('button', { name: 'PDM-03', exact: true })).toHaveAttribute('aria-pressed', 'true')
+  await expect(page.getByTestId('row-PDM-03')).toHaveAttribute('aria-current', 'true')
   await side(page).getByTestId('open-module').click()
   await expect(page).toHaveURL(new RegExp('#/next/hardware/module/' + pdm3.guid))
 })
@@ -66,7 +66,7 @@ test('hardware sub navigation links work', async ({ page }) => {
 test('Open goes to the module page', async ({ page }) => {
   await open(page, 'hardware')
   const g = await guidOf('CB-2')
-  await page.getByRole('button', { name: 'Open CB-2' }).or(page.getByRole('link', { name: 'Open CB-2' })).click()
+  await page.getByRole('link', { name: 'Open CB-2' }).click()
   await expect(page).toHaveURL(new RegExp('#/next/hardware/module/' + g))
   await expect(page.getByRole('heading', { level: 1, name: 'CB-2' })).toBeVisible()
 })
@@ -98,7 +98,7 @@ test('Base ID: a clash blocks, a bad ID is explained, suggestions and Undo work 
   await open(page, 'hardware')
   const pdm1 = await deviceByName('PDM-01')
   const pdm2 = await deviceByName('PDM-02')
-  await page.getByTestId('row-PDM-02').getByRole('button', { name: 'PDM-02', exact: true }).click()
+  await page.getByTestId('row-PDM-02').locator('td').first().click()
   const input = side(page).getByTestId('base-input')
   const set = side(page).getByTestId('base-set')
   await expect(input).toHaveValue(hex3(pdm2.baseId))
@@ -150,7 +150,7 @@ test('Base ID: a clash blocks, a bad ID is explained, suggestions and Undo work 
 
 test('Re-address how-it-works and Deploy to USB sections open', async ({ page }) => {
   await open(page, 'hardware')
-  await page.getByTestId('row-PDM-02').getByRole('button', { name: 'PDM-02', exact: true }).click()
+  await page.getByTestId('row-PDM-02').locator('td').first().click()
   await side(page).getByText('How re-addressing works').click()
   await expect(side(page).getByText('dingoConfig sends the new ID and stores it on the module.')).toBeVisible()
   await side(page).getByRole('button', { name: /Deploy to the module on USB/ }).click()
@@ -164,7 +164,7 @@ test('Re-address how-it-works and Deploy to USB sections open', async ({ page })
 
 test('Rename: the inline editor validates and Cancel leaves the name alone', async ({ page }) => {
   await open(page, 'hardware')
-  await page.getByRole('button', { name: 'Rename PDM-05' }).first().click()
+  await page.getByTestId('more-PDM-05').click(); await page.getByRole('menuitem', { name: 'Rename' }).click()
   const row = page.getByTestId('row-PDM-05')
   const input = row.getByLabel('Module name')
   await input.fill('')
@@ -174,7 +174,7 @@ test('Rename: the inline editor validates and Cancel leaves the name alone', asy
   await row.getByRole('button', { name: 'Save' }).click()
   await expect(row.getByText('Another module is called PDM-01.')).toBeVisible()
   await row.getByRole('button', { name: 'Cancel' }).click()
-  await expect(row.getByRole('button', { name: 'PDM-05', exact: true })).toBeVisible()
+  await expect(row.getByRole('link', { name: 'Open PDM-05' })).toBeVisible()
   expect((await devices()).some((d) => d.name === 'PDM-05')).toBe(true)
 })
 
@@ -182,7 +182,7 @@ test('Remove asks first, and Keep it leaves the module in the project', async ({
   const errors = watchErrors(page)
   await open(page, 'hardware')
   const before = (await devices()).length
-  await page.getByRole('button', { name: 'Remove PDM-05 from the project' }).click()
+  await page.getByTestId('more-PDM-05').click(); await page.getByRole('menuitem', { name: /^Remove/ }).click()
   const dlg = page.getByRole('alertdialog')
   await expect(dlg).toContainText('Remove PDM-05?')
   await expect(dlg).toContainText('The module itself is not changed')
@@ -194,7 +194,7 @@ test('Remove asks first, and Keep it leaves the module in the project', async ({
 
 test('Add one like this opens Add module with the same board kind', async ({ page }) => {
   await open(page, 'hardware')
-  await page.getByTestId('row-PDM-02').getByRole('button', { name: 'PDM-02', exact: true }).click()
+  await page.getByTestId('row-PDM-02').locator('td').first().click()
   await side(page).getByTestId('add-like').click()
   const dlg = page.getByRole('dialog', { name: 'Add module' })
   await expect(dlg.getByRole('tab', { name: 'By hand', selected: true })).toBeVisible()
@@ -212,7 +212,7 @@ test('Rename a module and rename it back @exclusive', async ({ page }) => {
   await open(page, 'hardware')
   const g = await guidOf('PDM-05')
   try {
-    await page.getByRole('button', { name: 'Rename PDM-05' }).first().click()
+    await page.getByTestId('more-PDM-05').click(); await page.getByRole('menuitem', { name: 'Rename' }).click()
     const row = page.getByTestId('row-PDM-05')
     await row.getByLabel('Module name').fill('zz-e2e-renamed')
     await row.getByRole('button', { name: 'Save' }).click()
@@ -229,7 +229,7 @@ test('Rename from the settings panel @exclusive', async ({ page }) => {
   await open(page, 'hardware')
   const g = await guidOf('PDM-05')
   try {
-    await page.getByTestId('row-PDM-05').getByRole('button', { name: 'PDM-05', exact: true }).click()
+    await page.getByTestId('row-PDM-05').locator('td').first().click()
     await side(page).getByTestId('rename-start').click()
     await side(page).getByLabel('Module name').fill('zz-e2e-side')
     await side(page).getByTestId('rename-save').click()
@@ -261,7 +261,7 @@ test('Add a module by hand, change its base ID, then remove it @exclusive', asyn
     g = await guidOf('zz-e2e-temp')
     expect((await devices()).find((d) => d.guid === g).baseId).toBe(parseInt(base, 16))
     // an offline module: only the project changes
-    await page.getByTestId('row-zz-e2e-temp').getByRole('button', { name: 'zz-e2e-temp', exact: true }).click()
+    await page.getByTestId('row-zz-e2e-temp').locator('td').first().click()
     const input = side(page).getByTestId('base-input')
     await side(page).getByRole('button', { name: /^0x[0-9A-F]{3}$/ }).first().click()
     const next = await input.inputValue()
@@ -273,7 +273,9 @@ test('Add a module by hand, change its base ID, then remove it @exclusive', asyn
     await waitFor(async () => (await devices()).find((d) => d.guid === g).baseId === parseInt(next, 16), 10_000, 'base changed')
     await expect(side(page).getByTestId('readdr-msg')).toContainText('was not answering')
     // remove it from the table
-    await page.getByRole('button', { name: 'Remove zz-e2e-temp from the project' }).click()
+    await page.getByTestId('more-zz-e2e-temp').click(); await page.getByRole('menuitem', { name: /^Remove/ }).click()
+    await expect(page.getByTestId('rm-yes')).toBeDisabled()
+    await page.getByTestId('rm-type').fill('zz-e2e-temp')
     await page.getByTestId('rm-yes').click()
     await expect(page.getByTestId('row-zz-e2e-temp')).toHaveCount(0)
     g = null
@@ -289,7 +291,7 @@ test('Re-address a live module to a free ID and back @exclusive', async ({ page 
   await open(page, 'hardware')
   const orig = await deviceByName('PDM-05')
   try {
-    await page.getByTestId('row-PDM-05').getByRole('button', { name: 'PDM-05', exact: true }).click()
+    await page.getByTestId('row-PDM-05').locator('td').first().click()
     const sugg = side(page).getByRole('button', { name: /^0x[0-9A-F]{3}$/ }).first()
     const target = await sugg.innerText()
     await sugg.click()
@@ -315,7 +317,9 @@ test('Remove a module asks, removes it, and the project is marked unsaved @exclu
   await apiJson('POST', '/api/devices', { Type: 'pdm', Name: 'zz-e2e-gone', BaseId: '0x740' })
   try {
     await expect(page.getByTestId('row-zz-e2e-gone')).toBeVisible()
-    await page.getByRole('button', { name: 'Remove zz-e2e-gone from the project' }).click()
+    await page.getByTestId('more-zz-e2e-gone').click(); await page.getByRole('menuitem', { name: /^Remove/ }).click()
+    await expect(page.getByTestId('rm-yes')).toBeDisabled()
+    await page.getByTestId('rm-type').fill('zz-e2e-gone')
     await page.getByTestId('rm-yes').click()
     await expect(page.getByTestId('row-zz-e2e-gone')).toHaveCount(0)
     expect((await devices()).some((d) => d.name === 'zz-e2e-gone')).toBe(false)

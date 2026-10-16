@@ -1,7 +1,7 @@
 <script>
   /**
    * Button. variant: primary | secondary | ghost | danger | test (load-switching: orange outline).
-   * size: sm (32) | md (44, default) | lg (52). Pass `href` to render a link styled as a button.
+   * size: sm (36, 44 on touch) | md (44, default) | lg (52). Pass `href` to render a link styled as a button.
    * Extra attributes (aria-label, data-testid, title …) pass through.
    */
   let { variant = 'secondary', size = 'md', disabled = false, busy = false, type = 'button', href = null, onclick, children, ...rest } = $props()
@@ -19,7 +19,8 @@
 <style>
   .b { display: inline-flex; align-items: center; justify-content: center; gap: var(--space-2); border-radius: var(--radius-md); border: 1px solid var(--color-line-strong); background: var(--color-surface); color: var(--color-text); font-weight: 600; text-decoration: none; white-space: nowrap; padding: 0 var(--space-4); transition: background var(--dur-fast) var(--ease); }
   .md { min-height: var(--target-min); }
-  .sm { min-height: 32px; padding: 0 var(--space-3); font-size: var(--text-xs); }
+  .sm { min-height: 36px; padding: 0 var(--space-3); font-size: var(--text-xs); }
+  @media (pointer: coarse) { .sm { min-height: var(--target-min); } }
   .lg { min-height: 52px; padding: 0 var(--space-5); font-size: var(--text-md); }
   .b:hover:not(:disabled) { background: var(--color-raised); }
   .primary { background: var(--color-accent); border-color: var(--color-accent); color: var(--color-on-accent); }

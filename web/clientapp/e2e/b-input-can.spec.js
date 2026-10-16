@@ -11,7 +11,7 @@ test.beforeAll(async () => { p5 = await deviceByName('PDM-05'); p2 = await devic
 const row = (n) => funcRow(p5.guid, 'canInputs', n)
 const openCan = async (page, n) => { await open(page, `hardware/module/${p5.guid}/input/caninput/${n}`); await expect(page.getByTestId('save')).toBeVisible() }
 const withCan = (n, fn) => withFunc(p5.guid, 'caninput', 'canInputs', n, fn)
-const save = async (page) => { await page.getByTestId('save').dispatchEvent('click'); await expect(page.getByTestId('save-status')).toContainText(/^Saved/, { timeout: 30_000 }) }
+const save = async (page) => { await page.getByTestId('save').dispatchEvent('click'); await expect(page.getByTestId('save-status')).toContainText(/^Kept in the project/, { timeout: 30_000 }) }
 
 test('reads a configured CAN input: live value, last frame, byte map and source choices', async ({ page }) => {
   const errors = watchErrors(page)

@@ -118,8 +118,8 @@ export function createModel() {
     if (!live.connected) return { on: false, known: false, enabled, text: 'no connection', tone: 'stale' }
     if (!known) return { on: false, known: false, enabled: true, text: 'not reported', tone: 'stale' }
     if (fault) return { on, known, enabled, text: 'tripped', tone: 'fault' }
-    if (!enabled) return { on: false, known, enabled, text: 'turned off', tone: 'off' }
-    return on ? { on, known, enabled, text: `on ${amps.toFixed(1)} A`, tone: 'on' } : { on, known, enabled, text: 'off', tone: 'off' }
+    if (!enabled) return { on: false, known, enabled, text: 'disabled', tone: 'off' }
+    return on ? { on, known, enabled, text: `ON ${amps.toFixed(1)} A`, tone: 'on' } : { on, known, enabled, text: 'off', tone: 'off' }
   }
 
   /** Turn every output of an applied function off (or back on). Writes each output's own config. */

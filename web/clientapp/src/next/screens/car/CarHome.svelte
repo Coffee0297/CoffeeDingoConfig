@@ -22,8 +22,12 @@
   const counts = $derived(outputCounts(devices))
   const hottest = $derived.by(() => {
     const t = answering.filter((d) => Number.isFinite(d.temp))
-    return t.length ? t.reduce((a, b) => (b.temp > a.temp ? b : a)) : null
+    if (!t.length) return null
+    const top = t.reduce((a, b) => (b.temp > a.temp ? b : a))
+    const tied = t.filter((d) => Math.round(d.temp) === Math.round(top.temp)).length
+    return { temp: top.temp, who: tied === 1 ? top.name : tied === t.length ? `all ${tied} modules` : `${tied} modules` }
   })
+  const ign = $derived(ignitionTile(live.devices))
   const differing = $derived(pendingModules())
   const older = $derived(olderFirmware(devices))
 
@@ -69,6 +73,9 @@
     }
     if (differing.length) {
       list.push({ id: 'diff', tone: 'warn', title: `${differing.length} ${differing.length === 1 ? 'module differs' : 'modules differ'} from the project`, detail: differing.map((d) => d.name).join(', '), label: 'Review', onclick: () => (ui.panel = 'apply') })
+    }
+    if (ign?.value === 'Not set up') {
+      list.push({ id: 'ign', tone: 'warn', title: 'Ignition is not set up', detail: 'Pick the switch and start button so outputs can follow the ignition.', label: 'Set up', href: href('power', 'ignition') })
     }
     if (older.length) {
       list.push({ id: 'fw', tone: 'warn', title: `${older.length} ${older.length === 1 ? 'module has' : 'modules have'} older firmware`, detail: older.map((o) => `${o.dev.name} ${o.dev.version}`).join(', ') + ` · newest in the car is ${older[0].newest}`, label: 'Firmware', href: href('hardware', 'firmware') })
@@ -139,15 +146,15 @@
 
     <div class="stats" aria-label="Car summary">
       <div class="stat"><span class="l">Battery</span><span class="n mono" data-testid="stat-battery">{battery != null && live.connected ? battery.toFixed(1) : dash}<small> V</small></span><span class="s" class:ok={battery >= 13.2}>{battery == null ? 'no PDM answering' : battery >= 13.2 ? 'charging' : 'not charging'}</span></div>
-      <div class="stat"><span class="l">Total current</span><span class="n mono" data-testid="stat-current">{live.connected ? totalA.toFixed(1) : dash}<small> A</small></span><span class="s">of {Math.round(worstA)} A if every output hit its limit</span></div>
+      <div class="stat"><span class="l">Total current</span><span class="n mono" data-testid="stat-current">{live.connected ? totalA.toFixed(1) : dash}<small> A</small></span><span class="s" title="of {Math.round(worstA)} A if every output hit its limit">of {Math.round(worstA)} A if every output hit its limit</span></div>
       {#if ecu.rpm != null}
         <div class="stat"><span class="l">Engine</span><span class="n mono">{Math.round(ecu.rpm)}<small> rpm</small></span><span class="s">from {ecu.source}{ecu.gear != null ? ' · gear ' + ecu.gear : ''}</span></div>
       {/if}
-      <div class="stat"><span class="l">Hottest module</span><span class="n mono" data-testid="stat-temp">{hottest ? Math.round(hottest.temp) : dash}<small> °C</small></span><span class="s">{hottest ? hottest.name : 'no module answering'}</span></div>
+      <div class="stat"><span class="l">Hottest module</span><span class="n mono" data-testid="stat-temp">{hottest ? Math.round(hottest.temp) : dash}<small> °C</small></span><span class="s">{hottest ? hottest.who : 'no module answering'}</span></div>
       <div class="stat"><span class="l">Outputs on</span><span class="n mono" data-testid="stat-outputs">{counts.on}<small> of {counts.total}</small></span><span class="s">enabled outputs that are switched on</span></div>
       <div class="stat"><span class="l">Matches the project</span><span class="n mono">{differing.length ? differing.length + ' differ' : 'All'}</span><span class="s" class:warn={differing.length}>{differing.length ? 'Apply to car sends them' : 'modules hold the project settings'}</span></div>
-      {#if ignitionTile(live.devices)}{@const ig = ignitionTile(live.devices)}
-        <div class="stat"><span class="l">Ignition</span><span class="n" data-testid="stat-ignition">{ig.value}</span><span class="s">{ig.sub}</span></div>
+      {#if ign}
+        <a class="stat link" href={href('power', 'ignition')}><span class="l">Ignition</span><span class="n" data-testid="stat-ignition">{ign.value}</span>{#if ign.value === 'Not set up'}<span class="s cta">Set up ignition →</span>{:else}<span class="s">{ign.sub}</span>{/if}</a>
       {:else}<div class="stat dis"><span class="l">Ignition</span><span class="n"><FwBadge version="5.6" /></span><span class="s">start button and ignition state</span></div>{/if}
     </div>
 
@@ -193,13 +200,15 @@
 </Page>
 
 <style>
-  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: var(--space-3); }
-  .stat { border-radius: var(--radius-lg); border: 1px solid var(--color-line); background: var(--color-surface); padding: var(--space-3) var(--space-4); display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: var(--space-3); }
+  .stat { border-radius: var(--radius-lg); border: 1px solid var(--color-line); background: var(--color-surface); padding: var(--space-2) var(--space-4); display: flex; flex-direction: column; gap: 2px; min-width: 0; color: var(--color-text); text-decoration: none; }
+  a.stat:hover { background: var(--color-raised); }
   .stat.dis { border-style: dashed; }
   .l { font-size: var(--text-xs); color: var(--color-text-muted); }
-  .n { font-size: 28px; font-weight: 500; }
+  .n { font-size: 24px; font-weight: 500; line-height: 1.2; }
   .n small { font-size: var(--text-sm); color: var(--color-text-muted); }
-  .s { font-size: var(--text-xs); color: var(--color-text-muted); }
+  .s { font-size: var(--text-xs); color: var(--color-text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .s.cta { color: var(--color-accent); font-weight: 600; }
   .s.ok { color: var(--color-ok); }
   .s.warn { color: var(--color-warn); }
   .cols { display: grid; grid-template-columns: minmax(0, 1fr) minmax(340px, 480px); gap: var(--space-4); align-items: start; }

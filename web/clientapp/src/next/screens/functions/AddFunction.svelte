@@ -7,17 +7,23 @@
   import { href } from '../../router.svelte.js'
   import { TEMPLATES } from '../../../lib/templates.js'
   import { templateInstances, syncTemplates } from '../../../lib/store.js'
-  import { SYSTEMS, systemName, templateSystem, needText, shortDesc } from './parts/catalog.js'
+  import { SYSTEMS, systemName, templateSystem, needText } from './parts/catalog.js'
   import { untrack } from 'svelte'
 
   // Templates added in the latest batch (git: "9 more templates", 2026-10-12). The templates carry no date.
   const NEW_KEYS = ['washwipe', 'pwmfan', 'relaywipe', 'interior', 'reverse', 'brake', 'radfan', 'starter', 'drl', 'toggle', 'reminder']
 
-  let q = $state(''), chip = $state('all')
+  let q = $state(''), chip = $state('all'), opened = $state({}), clipped = $state({})
+  // marks a description the 3-line clamp cuts, so only those get a More toggle
+  function clamp(el, key) {
+    const check = () => { const c = el.scrollHeight > el.clientHeight + 1; if (!el.classList.contains('open') && clipped[key] !== c) clipped = { ...clipped, [key]: c } }
+    const ro = new ResizeObserver(check); ro.observe(el); check()
+    return { destroy: () => ro.disconnect() }
+  }
   $effect(() => { untrack(() => syncTemplates()) })
 
   const used = $derived.by(() => { const m = {}; for (const i of $templateInstances) m[i.key] = (m[i.key] ?? 0) + 1; return m })
-  const cards = $derived(TEMPLATES.map((t) => ({ key: t.key, name: t.name, system: templateSystem(t.key), what: shortDesc(t), full: t.desc, need: needText(t), isNew: NEW_KEYS.includes(t.key), used: used[t.key] ?? 0, icon: t.icon })))
+  const cards = $derived(TEMPLATES.map((t) => ({ key: t.key, name: t.name, system: templateSystem(t.key), full: t.desc ?? '', need: needText(t), isNew: NEW_KEYS.includes(t.key), used: used[t.key] ?? 0, icon: t.icon })))
   const shown = $derived(cards.filter((c) => {
     if (chip !== 'all' && c.system !== chip) return false
     const w = q.trim().toLowerCase().split(/\s+/).filter(Boolean)
@@ -50,7 +56,9 @@
           {#if c.used}<Chip tone="ok" symbol="✓">IN USE{c.used > 1 ? ' ×' + c.used : ''}</Chip>{/if}
         </div>
         <h2><a href={href('functions', 'setup', c.key)}>{c.name}</a></h2>
-        <p class="what">{c.what}</p>
+        <p class="what" class:open={opened[c.key]} title={c.full} id={'tpl-d-' + c.key} use:clamp={c.key}>{c.full}</p>
+        {#if clipped[c.key] || opened[c.key]}<button type="button" class="more" aria-expanded={!!opened[c.key]} aria-controls={'tpl-d-' + c.key}
+          onclick={() => (opened = { ...opened, [c.key]: !opened[c.key] })}>{opened[c.key] ? 'Less' : 'More'}<span class="sr-only"> about {c.name}</span></button>{/if}
         <p class="need muted">You need: {c.need}</p>
       </article>
     {/each}
@@ -84,6 +92,9 @@
   h2 a::after { content: ''; position: absolute; inset: 0; border-radius: var(--radius-lg); }
   h2 a:focus-visible { outline: none; }
   .card:has(h2 a:focus-visible) { outline: 3px solid var(--color-focus); outline-offset: 2px; }
-  .what { font-size: var(--text-sm); line-height: 1.5; }
-  .need { font-size: var(--text-sm); margin-top: auto; }
+  .what { font-size: var(--text-sm); line-height: 1.5; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; line-clamp: 3; overflow: hidden; }
+  .what.open { display: block; }
+  .more { position: relative; z-index: 1; align-self: flex-start; background: transparent; border: 0; padding: 2px 0; min-height: 28px; font-size: var(--text-sm); font-weight: 600; color: var(--color-accent); }
+  .need { font-size: var(--text-sm); margin-top: auto; padding-top: var(--space-2); border-top: 1px solid var(--color-line); }
+  @media (max-width: 900px) { .grid { grid-template-columns: minmax(0, 1fr); } .card { min-height: 0; } .srch { width: 100%; } }
 </style>

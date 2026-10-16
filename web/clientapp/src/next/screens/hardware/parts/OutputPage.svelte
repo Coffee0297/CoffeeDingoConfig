@@ -12,6 +12,7 @@
   import OutputWiring from './OutputWiring.svelte'
   import OutputBench from './OutputBench.svelte'
   import BenchBanner from './BenchBanner.svelte'
+  import SaveBar from './SaveBar.svelte'
   import { createBench } from './bench.svelte.js'
   import { signalFeed, ring } from './feeds.svelte.js'
   import { resample, olderThan } from './util.js'
@@ -110,7 +111,7 @@
       }
       project.dirty = true
       snap = JSON.stringify(f)
-      savedNote = r?.staged ? 'Saved. Apply to car sends it to the module.' : r?.written ? 'Saved to the module.' : 'Saved to the project. The module did not get it (offline). Apply to car when it is back.'
+      savedNote = r?.staged ? 'Kept in the project. Not on the car yet.' : r?.written ? 'Kept in the project and sent to the module.' : 'Kept in the project. Not on the car yet: the module is offline, apply to car when it is back.'
     } catch (e) { saveErr = e?.message ?? String(e) } finally { saving = false }
   }
 
@@ -184,7 +185,7 @@
         {#if state}<span class="pill" data-tone={tone} role="status" data-testid="out-state"><StateDot tone={tone} shape={tone === 'on' ? 'dot' : tone === 'off' ? 'ring' : tone === 'warn' ? 'triangle' : 'square'} label={state + (amps != null ? ' · ' + amps.toFixed(1) + ' A' : '')} /></span>{/if}
       {/snippet}
       {#snippet actions()}
-        <Button variant="test" disabled={!!blocker || bench.state.phase === 'running' || bench.state.phase === 'lost'} busy={bench.state.busy} title={blocker || 'Switch this output on for a timed test'} onclick={() => bench.start()} data-testid="header-test">Test for {bench.holdS()} s</Button>
+        <Button variant="test" disabled={!!blocker || bench.state.phase === 'running' || bench.state.phase === 'lost'} busy={bench.state.busy} title={blocker || 'Switch this output on for a timed test'} onclick={() => bench.start()} data-testid="header-test">{bench.state.mode === 'pwm' ? `Run PWM ${bench.state.duty} % for ${bench.holdS()} s` : `Test for ${bench.holdS()} s`}</Button>
         <Button href={href('live', 'plot', { signal: `out:${guid}:${n}` })}>Graph it</Button>
       {/snippet}
     </PageHeader>
@@ -238,22 +239,13 @@
       </div>
     </div>
 
-    <div class="savebar" class:dirty role="region" aria-label="Save">
-      <div class="msg" role="status" aria-live="polite" data-testid="save-status">
-        {#if problem}<span class="bad">■ {problem}</span>
-        {:else if saveErr}<span class="bad">■ {saveErr}</span>
-        {:else if dirty}<strong>You have changes that are not saved.</strong>
-        {:else if savedNote}{savedNote}
-        {:else}No changes.{/if}
-      </div>
-      <Button onclick={revert} disabled={!dirty || saving}>Revert</Button>
-      <Button variant="primary" busy={saving} disabled={!dirty || !!problem} onclick={save} data-testid="save">Save</Button>
-    </div>
+    <SaveBar {dirty} {saving} {problem} err={saveErr} note={savedNote} {connected} onsave={save} onrevert={revert} />
   {/if}
 </Page>
 
 <style>
-  .cols { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-4); align-items: start; }
+  /* room under the last cards for the sticky save bar, so it never hides Retries or Wiring */
+  .cols { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-4); align-items: start; padding-bottom: 96px; }
   .col { display: flex; flex-direction: column; gap: var(--space-4); min-width: 0; }
   @media (max-width: 1100px) { .cols { grid-template-columns: minmax(0, 1fr); } }
   .pin { font-size: var(--text-md); padding: 4px 10px; border-radius: var(--radius-sm); background: var(--color-raised); }
@@ -262,8 +254,4 @@
   .pill[data-tone='fault'] { background: var(--color-fault-soft); }
   .pill[data-tone='warn'] { background: var(--color-warn-soft); }
   .small { font-size: var(--text-xs); }
-  .savebar { position: sticky; bottom: 0; display: flex; align-items: center; gap: var(--space-3); padding: var(--space-3) var(--space-4); border: 1px solid var(--color-line); border-radius: var(--radius-md); background: var(--color-surface); box-shadow: var(--shadow-2); }
-  .savebar.dirty { border-color: var(--color-accent); }
-  .msg { flex: 1 1 auto; }
-  .bad { color: var(--color-fault); font-weight: 600; }
 </style>
