@@ -48,12 +48,14 @@ const mcp = (method, params, id = 1) => fetch(API + '/mcp', {
   method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'application/json', 'Mcp-Session-Id': 'e2e-agent' },
   body: JSON.stringify({ jsonrpc: '2.0', id, method, params }) }).then(async (r) => ({ status: r.status, body: await r.json() }))
 const tool = async (name, args = {}) => (await mcp('tools/call', { name, arguments: args })).body
+// the operator's own requests (the app page sends Sec-Fetch-Site: same-origin; a plain call is refused)
+const op = (path, body) => fetch(API + path, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Sec-Fetch-Site': 'same-origin' }, body: JSON.stringify(body) }).then((r) => r.json())
 
 test('AI agent: a tool that asks first waits for Allow or Refuse in the app, on any page (G22)', async ({ page }) => {
   const errors = watchErrors(page)
   await proxyMcp(page)
   await mcp('initialize', { protocolVersion: '2024-11-05', capabilities: {}, clientInfo: { name: 'e2e assistant', version: '1.0' } }, 0)
-  await apiJson('POST', '/api/agent/ask', { tool: 'list_devices', ask: true })
+  await op('/api/agent/ask', { tool: 'list_devices', ask: true })
   try {
     await open(page, 'expert/tools')
     await expect(page.getByTestId('ai-clients')).toContainText('e2e assistant')
@@ -72,8 +74,19 @@ test('AI agent: a tool that asks first waits for Allow or Refuse in the app, on 
     expect(r.result.isError).toBe(true)
     expect(r.result.content[0].text).toMatch(/^Refused/)
     await expect(prompt).toHaveCount(0)
-  } finally { await apiJson('POST', '/api/agent/ask', { tool: 'list_devices', ask: false }) }
+  } finally { await op('/api/agent/ask', { tool: 'list_devices', ask: false }) }
   expect(errors).toEqual([])
+})
+
+test('AI agent: an assistant cannot answer its own request or change the ask list with a plain HTTP call (G22)', async () => {
+  for (const [path, body] of [['/api/agent/ask', { tool: 'set_output', ask: false }], ['/api/agent/enabled', { enabled: false }], ['/api/agent/approvals/x', { approve: true }]]) {
+    const r = await fetch(API + path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+    expect(r.status, path).toBe(403)
+  }
+  const a = await apiJson('GET', '/api/agent')
+  expect(a.enabled).toBe(true)
+  // every tool that changes a module asks by default
+  for (const t of ['set_output', 'set_output_config', 'set_function', 'write_param', 'flash_firmware', 'device_action']) expect(a.ask).toContain(t)
 })
 
 test('AI agent: Stop server turns assistants away until Start (G22)', async ({ page }) => {
@@ -89,7 +102,7 @@ test('AI agent: Stop server turns assistants away until Start (G22)', async ({ p
     await page.getByTestId('ai-start').click()
     await expect(page.getByTestId('ai-status')).toContainText('Running')
     expect((await mcp('tools/list', {})).status).toBe(200)
-  } finally { await apiJson('POST', '/api/agent/enabled', { enabled: true }) }
+  } finally { await op('/api/agent/enabled', { enabled: true }) }
   expect(errors).toEqual([])
 })
 

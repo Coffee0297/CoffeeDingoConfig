@@ -6,7 +6,7 @@ import { toast } from '../../lib/toast.js'
 export { api, toast }
 
 /** Live telemetry, ~10 Hz: { connected, adapter, canTotal, canRate, ids, devices[] } */
-export const live = $state({ connected: false, agentPending: 0, adapter: null, canTotal: 0, canRate: 0, ids: [], devices: [], stale: false })
+export const live = $state({ connected: false, agentPending: 0, agentPendingId: null, adapter: null, canTotal: 0, canRate: 0, ids: [], devices: [], stale: false })
 /** SignalR feed state: 'live' | 'reconnecting' | 'down' */
 export const hub = $state({ state: 'live' })
 
@@ -19,6 +19,7 @@ telemetry.subscribe((t) => {
   live.devices = t.devices ?? []
   live.stale = !!t.stale
   live.agentPending = t.agentPending ?? 0   // G22: AI agent requests waiting for an answer
+  live.agentPendingId = t.agentPendingId ?? null
 })
 hubState.subscribe((s) => (hub.state = s))
 

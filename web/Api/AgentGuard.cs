@@ -15,7 +15,13 @@ public static class AgentGuard
 {
     public static bool Enabled { get; set; } = true;
     static readonly TimeSpan AskTimeout = TimeSpan.FromMinutes(2);
-    static readonly HashSet<string> _ask = ["flash_firmware", "flash_firmware_can", "flash_blank", "set_output"];
+    // By default every tool that reaches the modules asks first: flashing, and anything that can switch a load or
+    // change what a module does (an output's config or function can switch it on as well as set_output can).
+    // Project-only edits (rename, add, remove, open) run and are journaled with undo.
+    static readonly HashSet<string> _ask = [
+        "flash_firmware", "flash_firmware_can", "flash_blank", "set_output", "set_output_config", "set_function",
+        "write_param", "apply_config", "apply_profile", "device_action", "modify_device", "clear_overloads",
+        "link_remote_signal", "deploy_cross_module", "apply_template", "remove_template", "set_lua", "sdo_write", "sdo_store"];
     static readonly object _lock = new();
 
     public sealed record Client(string Id, string Name, DateTime FirstSeen, DateTime LastCall, int Calls);
@@ -29,6 +35,8 @@ public static class AgentGuard
     static int _nextId;
 
     public static int PendingCount => _pending.Count;
+    /// <summary>The oldest waiting request (null: none). Changes with every new request, unlike the count.</summary>
+    public static string? OldestPendingId => _pending.Values.OrderBy(p => p.At).FirstOrDefault()?.Id;
     public static bool NeedsApproval(string tool) { lock (_lock) return _ask.Contains(tool); }
 
     public static void SetAsk(string tool, bool ask) { lock (_lock) { if (ask) _ask.Add(tool); else _ask.Remove(tool); } }
@@ -99,11 +107,19 @@ public static class AgentGuard
     public static void MapAgentGuard(this WebApplication app)
     {
         var api = app.MapGroup("/api/agent");
+        // Answers, the ask list and on/off are for the operator in the app, not for an assistant: only a request a
+        // browser marks as coming from the page itself (Sec-Fetch-Site: same-origin) changes them. ponytail: a speed
+        // bump against an assistant answering its own request with a plain HTTP call, not a lock: anything running
+        // on this PC can set that header (or edit the project file). Real auth needs a session the agent never sees.
+        var operatorOnly = api.MapGroup("").AddEndpointFilter(async (ctx, next) =>
+            ctx.HttpContext.Request.Headers["Sec-Fetch-Site"] == "same-origin"
+                ? await next(ctx)
+                : Results.Json(new { error = "Only the dingoConfig app can do this." }, statusCode: 403));
         api.MapGet("", (HttpRequest req) => Results.Ok(Status($"{req.Scheme}://{req.Host}")));
-        api.MapPost("/approvals/{id}", (string id, AnswerReq r) =>
+        operatorOnly.MapPost("/approvals/{id}", (string id, AnswerReq r) =>
             Answer(id, r.Approve) ? Results.Ok(new { ok = true }) : Results.NotFound(new { error = "That request is no longer waiting." }));
-        api.MapPost("/ask", (AskReq r) => { SetAsk(r.Tool, r.Ask); return Results.Ok(new { ask = AskList() }); });
-        api.MapPost("/enabled", (EnabledReq r) =>
+        operatorOnly.MapPost("/ask", (AskReq r) => { SetAsk(r.Tool, r.Ask); return Results.Ok(new { ask = AskList() }); });
+        operatorOnly.MapPost("/enabled", (EnabledReq r) =>
         {
             Enabled = r.Enabled;
             if (!Enabled) foreach (var p in _pending.Values) p.Answer.TrySetResult(false);
@@ -111,7 +127,7 @@ public static class AgentGuard
         });
         // Put the project back as it was before an agent's write (and drop that write and every later one).
         // Like opening a file: the modules keep what they have until Apply to car sends the project.
-        api.MapPost("/undo/{id:int}", (int id, ConfigFileManager cfg, DeviceManager dm, CrossModuleStore xmod) =>
+        operatorOnly.MapPost("/undo/{id:int}", (int id, ConfigFileManager cfg, DeviceManager dm, CrossModuleStore xmod) =>
         {
             var snap = TakeUndo(id);
             if (snap is null) return Results.NotFound(new { error = "That change can no longer be undone." });

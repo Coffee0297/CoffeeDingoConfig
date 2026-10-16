@@ -11,7 +11,7 @@
   let agent = $state(null)
   async function loadAgent() { try { agent = await (await fetch('/api/agent')).json() } catch { agent = null } }
   onMount(() => { loadAgent(); const t = setInterval(loadAgent, 2000); return () => clearInterval(t) })
-  $effect(() => { live.agentPending; loadAgent() })
+  $effect(() => { live.agentPendingId; loadAgent() })
   const post = async (url, body) => {
     const r = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body ?? {}) })
     const j = await r.json().catch(() => null)
@@ -128,7 +128,7 @@
       {#if agent?.clients?.length}
         <ul class="list" data-testid="ai-clients">
           {#each agent.clients as c (c.id)}
-            <li><span><strong>{c.name}</strong> <span class="muted mono">{c.id}</span></span><span class="muted"><time datetime={c.lastCall}>{ago(c.lastCall)}</time> · {c.calls} call{c.calls === 1 ? '' : 's'}</span></li>
+            <li><span><strong>{c.name}</strong> <span class="muted mono">{c.id}</span> <span class="muted">(as the assistant reports itself)</span></span><span class="muted"><time datetime={c.lastCall}>{ago(c.lastCall)}</time> · {c.calls} call{c.calls === 1 ? '' : 's'}</span></li>
           {/each}
         </ul>
       {:else}<Empty title="No assistant yet" text="An assistant shows here after its first call to the address above." />{/if}
@@ -138,7 +138,7 @@
   <div class="stack">
     <Card title="What an assistant can do" subtitle={info ? `${info.tools?.length ?? 0} tools, read from the server` : ''}>
       <Field label="Search the tools" bind:value={q} placeholder="for example lua" data-testid="ai-search" />
-      <p class="muted gap">Tick a tool to be asked before it runs. Flashing and output changes ask by default.</p>
+      <p class="muted gap">Tick a tool to be asked before it runs. Every tool that changes a module asks by default.</p>
       <ul class="tools" data-testid="ai-tools" tabindex="0" aria-label="Tools the AI agent can use">
         {#each tools as t (t.name)}
           <li><span class="th"><code class="mono">{t.name}</code><Checkbox label="Ask me first" checked={asks(t.name)} onchange={(v) => setAsk(t.name, v)} data-testid={'ask-' + t.name} /></span><span class="muted">{t.description}</span></li>

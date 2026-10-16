@@ -8,7 +8,8 @@
   async function refresh() {
     try { req = (await (await fetch('/api/agent')).json()).pending?.[0] ?? null } catch { req = null }
   }
-  $effect(() => { live.agentPending; refresh() })
+  // keyed on the oldest request's id: a new request after an answer changes it even when the count stays 1
+  $effect(() => { live.agentPendingId; refresh() })
   async function answer(approve) {
     if (!req) return
     busy = true

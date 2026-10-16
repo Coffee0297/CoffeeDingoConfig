@@ -35,7 +35,7 @@ public record DeviceDto(string Guid, string Name, string Type, int BaseId, bool 
     bool CanSleep = true);
 public record AdaptersDto(string[] Adapters, string[] Ports, bool Connected, string? ActiveAdapter, string? ActivePort, int? GatewayBaseId);
 public record TelemetryDto(bool Connected, string? Adapter, long CanTotal, long CanRate, int[] Ids, DeviceDto[] Devices,
-    int AgentPending = 0);   // G22: AI agent requests waiting for the operator
+    int AgentPending = 0, string? AgentPendingId = null);   // G22: AI agent requests waiting for the operator, and the oldest
 public record ConnectReq(string Adapter, string Port, string Bitrate);
 public record AddDeviceReq(string Type, string Name, string BaseId);
 public record ModifyReq(string Name, string BaseId);
@@ -383,7 +383,7 @@ public class TelemetryBroadcaster(
                         bool isGateway = isPdm && gwBase is int gb && d.BaseId == gb;
                         return isGateway ? dto with { IsGateway = true } : dto;
                     }).ToArray();
-                var dto = new TelemetryDto(status.isConnected, status.activeAdapter, _total, _rate, ids, devices, AgentGuard.PendingCount);
+                var dto = new TelemetryDto(status.isConnected, status.activeAdapter, _total, _rate, ids, devices, AgentGuard.PendingCount, AgentGuard.OldestPendingId);
 
                 await hub.Clients.All.SendAsync("telemetry", dto, ct);
               }
