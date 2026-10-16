@@ -1,24 +1,25 @@
 <script>
   // Learn a switch (H20): record the bus while the operator flips a switch, then rank the bits that followed it.
-  // The backend has no timestamped frame history (gap G17), so this polls /api/canlog about 10 times a second
-  // and diffs the snapshots in the browser. Very short pulses can be missed; the dialog says so.
+  // Reads the backend's timestamped change history (GET /api/canlog/changes, G17) about 10 times a second, so
+  // every data change is seen with its time, even a pulse shorter than the poll.
   import { Dialog, Button, LineChart, Banner } from '../../../ui/index.js'
-  import { api } from '../../../lib/live.svelte.js'
   import { createLearner } from './learn.js'
 
   let { open = $bindable(false), onuse } = $props()
   const SECONDS = 8
   let phase = $state('idle'), left = $state(SECONDS), sel = $state(0), result = $state(null), stats = $state({ polls: 0, ids: 0, bits: 0 }), err = $state(''), activity = $state([])
-  let learner = null, timer = null, startedAt = 0, busy = false, prevBits = 0
+  let learner = null, timer = null, startedAt = 0, busy = false, prevBits = 0, since = 0
+  const changes = async (s) => { const r = await fetch('/api/canlog/changes?since=' + s); if (!r.ok) throw new Error('Could not read the CAN history (' + r.status + ')'); return r.json() }
 
   function clear() { if (timer) { clearInterval(timer); timer = null } }
   async function tick() {
     if (busy) return
     busy = true
     try {
-      const snap = await api.canlog()
+      const r = await changes(since)
       const t = Date.now()
-      learner.feed(snap, t)
+      learner.feedChanges(r.changes, r.now)
+      since = r.now
       stats = learner.stats()
       // bits changed per second, for the activity graph
       const sec = Math.floor((t - startedAt) / 1000)
@@ -28,10 +29,13 @@
       if (left <= 0) finish()
     } catch (e) { err = e?.message ?? String(e); clear(); phase = 'error' } finally { busy = false }
   }
-  function start() {
+  async function start() {
     err = ''; result = null; sel = 0; activity = []; prevBits = 0
     learner = createLearner(); startedAt = Date.now(); left = SECONDS; phase = 'learning'
-    clear(); timer = setInterval(tick, 100); tick()
+    clear()
+    // start from the backend's "now", so only changes made while recording count
+    try { since = (await changes(Number.MAX_SAFE_INTEGER)).now; learner.tick(since) } catch (e) { err = e?.message ?? String(e); phase = 'error'; return }
+    timer = setInterval(tick, 100); tick()
   }
   function finish() {
     clear()
@@ -71,7 +75,7 @@
     <div class="timer" role="timer" aria-label={`${left} seconds left`} data-testid="learn-timer"><span class="n mono">{left}</span> seconds</div>
     <p><strong>Work the switch now</strong><br /><span class="muted">Turn it on and off three or four times, a second apart. Leave it off at the end.</span></p>
     <div class="stats">
-      <div><span class="nx-label">Snapshots</span><strong class="mono">{stats.polls}</strong></div>
+      <div><span class="nx-label">Changes</span><strong class="mono">{stats.polls}</strong></div>
       <div><span class="nx-label">IDs seen</span><strong class="mono">{stats.ids}</strong></div>
       <div><span class="nx-label">Bits that changed</span><strong class="mono" data-testid="learn-bits">{stats.bits}</strong></div>
     </div>
@@ -90,7 +94,7 @@
       {/each}
     </div>
     <p class="muted" role="status" data-testid="learn-note">{note}</p>
-    <p class="muted small">Found by checking the bus about 10 times a second, so very short pulses can be missed.</p>
+    <p class="muted small">Found from every change on the bus while recording, each with its time.</p>
   {:else if phase === 'none'}
     <Banner tone="fault" title="Nothing followed the switch">{result?.changedBits ?? 0} bits changed, but none changed 3 to 8 times. Counters and noisy bits are left out on purpose.</Banner>
     <ul class="tips">

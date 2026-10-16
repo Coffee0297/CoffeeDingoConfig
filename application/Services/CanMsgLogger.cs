@@ -61,6 +61,19 @@ public class CanMsgLogger(int maxHistorySize = 100000, string logDirectory = "./
     /// </summary>
     public List<CanLogEntry> GetMessageSum() => _messageSum.Values.ToList();
 
+    // G17: every time an id's data differs from its previous frame (or the id is first seen), with the time.
+    // "Learn a switch" picks the bit that followed the switch from these. Capped; oldest dropped.
+    public record CanChange(long T, int Id, bool IsExtended, DataDirection Dir, byte[] Data, byte[]? Prev);
+    private const int MaxChanges = 20000;
+    private readonly Queue<CanChange> _changes = new();
+    private readonly Lock _changeLock = new();
+
+    /// <summary>Changes after <paramref name="sinceMs"/> (Unix ms), oldest first, at most <paramref name="max"/> (the newest).</summary>
+    public List<CanChange> GetChanges(long sinceMs, int max = 5000)
+    {
+        lock (_changeLock) return _changes.Where(c => c.T > sinceMs).TakeLast(max).ToList();
+    }
+
     /// <summary>
     /// Get full message history (for detailed log view)
     /// </summary>
@@ -100,6 +113,15 @@ public class CanMsgLogger(int maxHistorySize = 100000, string logDirectory = "./
         // on the bus and must not collapse into one row. Extended ids are ≤ 0x1FFFFFFF, so the high
         // bit is free to use as the std/ext discriminator in the dictionary key.
         var sumKey = msg.IsExtended ? (int)(msg.Id | unchecked((int)0x80000000)) : msg.Id;
+        var bytes = (msg.Payload ?? []).Take(msg.Len).ToArray();
+        _messageSum.TryGetValue(sumKey, out var before);
+        var prev = before?.Payload is { } bp ? bp.Take(before.Len).ToArray() : null;
+        if (prev is null || !prev.AsSpan().SequenceEqual(bytes))
+            lock (_changeLock)
+            {
+                _changes.Enqueue(new CanChange(new DateTimeOffset(entry.Timestamp).ToUnixTimeMilliseconds(), msg.Id, msg.IsExtended, dir, bytes, prev));
+                while (_changes.Count > MaxChanges) _changes.Dequeue();
+            }
         _messageSum.AddOrUpdate(
             sumKey,
             entry, // Add new
@@ -190,6 +212,7 @@ public class CanMsgLogger(int maxHistorySize = 100000, string logDirectory = "./
         {
             _fullHistory.Clear();
         }
+        lock (_changeLock) _changes.Clear();
     }
 
     public void Dispose()

@@ -1,9 +1,9 @@
 // "Learn a switch": find the CAN bit that followed a switch the operator flipped a few times.
-// Fed with snapshots of /api/canlog ([{ dir, id, ide, data: '22 00 ..', count }]) taken while recording.
-// The backend keeps only the last data and a count per id (gap G17: no timestamped history), so this works
-// from polling and can miss very fast pulses. Pure functions: no DOM, no network.
+// Fed with the backend's change history (GET /api/canlog/changes, G17: every data change per id with its time),
+// or with snapshots of /api/canlog ([{ dir, id, ide, data: '22 00 ..', count }]). Pure functions: no DOM, no network.
 
 const bytesOf = (data) => String(data ?? '').trim().split(/\s+/).filter(Boolean).map((h) => parseInt(h, 16)).filter((v) => Number.isFinite(v))
+const spaced = (hex) => String(hex ?? '').replace(/(..)(?!$)/g, '$1 ')   // 'AA0B' -> 'AA 0B'
 const keyOf = (e) => (e.ide ? 'x' : '') + e.id
 
 export function createLearner() {
@@ -40,6 +40,18 @@ export function createLearner() {
         s.last = b
       }
     },
+    /** Add change events { t, id, ext, dir, data: 'AA0B..', prev } (oldest first), then move the clock to `now`. */
+    feedChanges(changes, now) {
+      for (const c of changes ?? []) {
+        const e = { dir: c.dir, id: c.id, ide: !!c.ext }
+        // the frame before the first change seeds the comparison, so that first change counts too
+        if (c.prev != null && !ids.has(keyOf(e))) this.feed([{ ...e, data: spaced(c.prev) }], c.t)
+        this.feed([{ ...e, data: spaced(c.data) }], c.t)
+      }
+      this.tick(now)
+    },
+    /** Move the clock without data (the bus was quiet), so "held steady since" is measured to now. */
+    tick(now) { if (startT === null) startT = now; if (now > lastT) lastT = now },
     stats() {
       let bits = 0
       for (const s of ids.values()) bits += s.bits.size
@@ -77,4 +89,22 @@ export function createLearner() {
       return { cands, ignored: ignored.slice(0, 2), changedBits: ids.size ? [...ids.values()].reduce((n, s) => n + s.bits.size, 0) : 0 }
     },
   }
+}
+
+/**
+ * Which CAN input already reads a learned bit: [{ guid, mod, canInputs }] -> { guid, mod, number, name, exact }
+ * or null. A 1-bit input on that exact bit wins; else an Intel-order field that covers the bit.
+ */
+export function findReader(modules, c) {
+  let best = null
+  for (const m of modules ?? []) {
+    for (const x of m.canInputs ?? []) {
+      if (!x.enabled || x.id !== c.id || !!x.ide !== !!c.ide) continue
+      const exact = x.bitLength === 1 && x.startBit === c.startBit
+      const covers = (x.byteOrder ?? 0) === 0 && x.startBit <= c.startBit && c.startBit < x.startBit + x.bitLength
+      if (exact) return { guid: m.guid, mod: m.mod, number: x.number, name: x.name, exact: true }
+      if (covers && !best) best = { guid: m.guid, mod: m.mod, number: x.number, name: x.name, exact: false }
+    }
+  }
+  return best
 }

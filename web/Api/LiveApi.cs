@@ -1603,6 +1603,13 @@ public static class LiveApi
             }
         });
 
+        // G17: data changes per id with their time (Unix ms), oldest first. Poll with since = the last "now".
+        api.MapGet("/canlog/changes", (long? since, int? max, CanMsgLogger log) => Results.Ok(new {
+            now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+            changes = log.GetChanges(since ?? 0, Math.Clamp(max ?? 5000, 1, 20000)).Select(c => new {
+                t = c.T, id = c.Id, ext = c.IsExtended, dir = c.Dir.ToString(),
+                data = Convert.ToHexString(c.Data), prev = c.Prev is null ? null : Convert.ToHexString(c.Prev) }) }));
+
         api.MapGet("/canlog", (CanMsgLogger log) => Results.Ok(
             log.GetMessageSum().OrderBy(m => m.Id).Select(m => new CanLogDto(
                 m.Direction.ToString(), m.Id, m.IsExtended, m.Len,
