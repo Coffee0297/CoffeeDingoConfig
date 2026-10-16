@@ -116,6 +116,25 @@ export function createSim(model, snapshot) {
         else if (Number(r.mode) === 1) { if (fall) { s.timing = true; s.t0 = t } if (active) s.timing = false; if (s.timing && t - s.t0 >= pre) s.timing = false; vals[out] = active || !!s.timing }
         else { if (rise) { s.timing = true; s.t0 = t } if (s.timing && t - s.t0 >= pre) s.timing = false; vals[out] = !!s.timing }
         s.left = s.timing ? Math.max(0, pre - (t - s.t0)) : 0
+      } else if (n.kind === 'comfortblink') {
+        const outL = port(n, 'Left'), outR = port(n, 'Right'); if (!outL || !outR) continue
+        const clk = truthy(val(r.clockInput)), rise = clk && !s.lc, fall = !clk && s.lc
+        s.lc = clk
+        s.L ??= {}; s.R ??= {}
+        const on = (x) => (x.last && !x.cancel) || x.comfort
+        const stepSide = (x, o, inp) => {
+          if (inp && !x.last) { x.since = t; x.held = false; x.cancel = !!o.comfort; o.comfort = false; x.comfort = false; x.blinks = clk ? 1 : 0; x.just = true }
+          if (inp && !x.held && t - x.since >= (+r.tapMs || 1000)) { x.held = true; x.cancel = false }
+          if (!inp && x.last) { x.comfort = !x.held && !x.cancel && ((x.blinks ?? 0) < (+r.blinks || 3) || clk); x.held = false; x.cancel = false }
+          x.last = inp
+        }
+        stepSide(s.L, s.R, truthy(val(r.leftInput))); stepSide(s.R, s.L, truthy(val(r.rightInput)))
+        for (const x of [s.L, s.R]) {
+          if (rise && on(x) && !x.just) x.blinks = (x.blinks ?? 0) + 1
+          if (fall && x.comfort && x.blinks >= (+r.blinks || 3)) x.comfort = false
+          x.just = false
+        }
+        vals[outL] = on(s.L); vals[outR] = on(s.R)
       } else if (n.kind === 'flasher') {
         const out = port(n, 'State'); if (!out) continue
         if (!truthy(val(r.input))) { vals[out] = false; s.on = false; continue }

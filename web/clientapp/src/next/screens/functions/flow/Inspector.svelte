@@ -30,6 +30,7 @@
     caninput: ['name', 'id', 'ide', 'startBit', 'bitLength', 'factor', 'offset', 'operator', 'operand', 'mode', 'timeoutEnabled', 'timeout', 'timeoutValue'],
     math: ['name', 'inputA', 'inputB', 'op', 'constB', 'factor', 'offset'],
     canmsg: ['name', 'input', 'id', 'ide', 'dlc', 'data', 'mode', 'intervalMs'],
+    comfortblink: ['name', 'leftInput', 'rightInput', 'clockInput', 'tapMs', 'blinks'],
     input: ['name', 'invert', 'mode', 'debounceTime'],
     digitaloutput: ['name', 'input'],
     output: ['name', 'input', 'dutyCycleInput'],
@@ -101,6 +102,8 @@
     }
     if (k === 'counter' && draft.maxCount <= draft.minCount) return 'Max must be above min.'
     if (k === 'canmsg' && (draft.dlc < 0 || draft.dlc > 8)) return 'Length must be 0 to 8 bytes.'
+    if (k === 'comfortblink' && (draft.tapMs < 100 || draft.tapMs > 5000)) return 'The tap time must be 0.1 to 5 s.'
+    if (k === 'comfortblink' && (!Number.isInteger(draft.blinks) || draft.blinks < 1 || draft.blinks > 10)) return 'Blinks must be 1 to 10.'
     if (k === 'canmsg' && draft.mode === 0 && (draft.intervalMs < 10 || draft.intervalMs > 60000)) return 'Repeat every 10 to 60000 ms.'
     if (k === 'canmsg' && draft.data.some((x) => !Number.isInteger(x) || x < 0 || x > 255)) return 'Each byte must be 00 to FF.'
     return ''
@@ -110,7 +113,7 @@
     err = validate()
     if (err) return
     const body = { ...dirtyBody }
-    for (const k of Object.keys(body)) if (typeof base[k] === 'number' || ['input', 'var0', 'var1', 'var2', 'xInput', 'yInput', 'incInput', 'decInput', 'resetInput', 'inputA', 'inputB'].includes(k)) body[k] = Number(body[k])
+    for (const k of Object.keys(body)) if (typeof base[k] === 'number' || ['input', 'var0', 'var1', 'var2', 'xInput', 'yInput', 'incInput', 'decInput', 'resetInput', 'inputA', 'inputB', 'leftInput', 'rightInput', 'clockInput'].includes(k)) body[k] = Number(body[k])
     await onsave?.(node.id, body, `${node.title}: ${Object.keys(body).join(', ')}`)
   }
 
@@ -260,6 +263,13 @@
       {@render seg('Send', [{ value: '0', label: 'Repeat while on' }, { value: '1', label: 'Once each time' }], String(draft.mode ?? 0), (v) => (draft.mode = Number(v)), false)}
       {#if (draft.mode ?? 0) === 0}<Field label="Every" type="number" min="10" max="60000" unit="ms" bind:value={() => draft.intervalMs ?? 100, (v) => (draft.intervalMs = toNum(v))} />{/if}
       <p class="hint">Bytes in hex. The frame goes out on the module's bus exactly as typed, for example a command another ECU listens for.</p>
+    {:else if node.kind === 'comfortblink'}
+      <span class="sec">Settings</span>
+      <div class="two">
+        <Field label="A tap is shorter than" type="number" min="0.1" max="5" step="0.1" unit="s" bind:value={() => (draft.tapMs ?? 1000) / 1000, (v) => (draft.tapMs = Math.round(toNum(v) * 1000))} />
+        <Field label="Blinks for a tap" type="number" min="1" max="10" step="1" bind:value={() => draft.blinks ?? 3, (v) => (draft.blinks = Math.round(toNum(v)))} />
+      </div>
+      <p class="hint">A tap of the lever blinks that many times, then stops. Held longer than the tap time it blinks until released. A tap the other way during a comfort blink cancels it. Use Left / Right as "indicator on" in place of the lever; blinks are counted on the indicator clock, so every module stops on the same blink.</p>
     {:else if node.kind === 'ignition'}
       <p class="hint">The ignition and start button are set up on their own page: mode, inputs, crank limits and which module is the main one.</p>
       <Button size="sm" href={href('power', 'ignition')}>Open ignition setup</Button>

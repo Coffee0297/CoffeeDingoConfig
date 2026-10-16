@@ -15,7 +15,7 @@ public class VarMapLayoutTests
     public void Canboard_MatchesFirmware_WithPwmInputsLast()
     {
         var d = new CanboardDevice("CB", 0x660);
-        Assert.Equal(113, d.VarMap.Count);   // 5.6: + 4 math, 2 CAN messages, 7 ignition
+        Assert.Equal(115, d.VarMap.Count);   // 5.6: + 4 math, 2 CAN messages, 7 ignition; 5.6.1: + 2 comfort blink
         Assert.Equal("PWM Duty", d.VarMap[84].PropertyName);       // appended after the timers: old indices kept
         Assert.Equal("PWM Frequency", d.VarMap[99].PropertyName);
         Assert.Equal(99, d.VarMap[99].VariableIndex);
@@ -25,7 +25,7 @@ public class VarMapLayoutTests
     public void Pdm_MatchesFirmware_WithPwmInputsLast()
     {
         var d = new PdmDevice("PDM", 0x680);
-        Assert.Equal(282, d.VarMap.Count);   // 5.6: + 8 math, 4 CAN messages, 7 ignition
+        Assert.Equal(284, d.VarMap.Count);   // 5.6: + 8 math, 4 CAN messages, 7 ignition; 5.6.1: + 2 comfort blink
         Assert.Equal("PWM Duty", d.VarMap[259].PropertyName);
         Assert.Equal(262, d.VarMap[262].VariableIndex);
         // 5.6 blocks after everything older, ignition roles last; none of them exists on older firmware
@@ -33,7 +33,11 @@ public class VarMapLayoutTests
         Assert.Equal(("canmsg", 1), (d.VarMap[271].OwnerKind, d.VarMap[271].OwnerNumber));
         Assert.Equal("Ignition", d.VarMap[275].PropertyName);
         Assert.Equal("Link OK", d.VarMap[281].PropertyName);
-        Assert.All(d.VarMap.Skip(263), v => Assert.Equal(new Version(5, 6, 0), v.MinFirmware));
+        Assert.All(d.VarMap.Skip(263).Take(19), v => Assert.Equal(new Version(5, 6, 0), v.MinFirmware));
+        // 5.6.1: the comfort blink sides last
+        Assert.Equal(("comfortblink", "Left"), (d.VarMap[282].OwnerKind, d.VarMap[282].PropertyName));
+        Assert.Equal("Right", d.VarMap[283].PropertyName);
+        Assert.All(d.VarMap.Skip(282), v => Assert.Equal(new Version(5, 6, 1), v.MinFirmware));
         Assert.All(d.VarMap.Take(263), v => Assert.Null(v.MinFirmware));
     }
 

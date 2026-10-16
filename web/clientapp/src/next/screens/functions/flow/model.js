@@ -38,6 +38,7 @@ export const KINDS = {
   // firmware 5.6
   math: { label: 'Math', fam: 'logic', arr: 'maths', def: 'numMath', addable: true, fw: [5, 6, 0], ins: [['inputA', 'A', 'num'], ['inputB', 'B', 'num']] },
   canmsg: { label: 'CAN message', fam: 'out', arr: 'canMessages', def: 'numCanMessages', addable: true, fw: [5, 6, 0], ins: [['input', 'While', 'bool']] },
+  comfortblink: { label: 'Comfort blink', fam: 'time', arr: 'comfortBlinks', addable: true, fw: [5, 6, 1], ins: [['leftInput', 'Lever left', 'bool'], ['rightInput', 'Lever right', 'bool'], ['clockInput', 'Indicator clock', 'bool']] },
   ignition: { label: 'Ignition', fam: 'fn', ins: [['ignitionInput', 'Ignition switch', 'bool'], ['startInput', 'Start button', 'bool'], ['crankAllowInput', 'Crank allowed', 'bool'], ['runningInput', 'Engine running', 'bool']] },
 }
 export const arrOf = (kind, dev) => (kind === 'input' ? (isCb(dev) ? 'digitalIn' : 'inputs') : KINDS[kind]?.arr)
@@ -116,6 +117,7 @@ function subline(kind, n, row, dev) {
     case 'canoutput': return `CAN ${hexId(row?.id)}${row?.ide ? ' ext' : ''} · every ${row?.interval ?? 0} ms`
     case 'math': return `Math · ${MATH_OPS[row?.op ?? 0]?.fn('A', row?.inputB ? 'B' : (row?.constB ?? 0))}` + ((row?.factor ?? 1) !== 1 || (row?.offset ?? 0) !== 0 ? ` · ×${row?.factor ?? 1} ${(row?.offset ?? 0) < 0 ? '−' : '+'} ${Math.abs(row?.offset ?? 0)}` : '')
     case 'canmsg': return `CAN ${hexId(row?.id)}${row?.ide ? ' ext' : ''} · ` + (row?.mode === 1 ? 'once' : `every ${row?.intervalMs ?? 0} ms`)
+    case 'comfortblink': return `Comfort blink · tap < ${secs(row?.tapMs ?? 1000)}: ${row?.blinks ?? 3} blinks`
     case 'ignition': return `Ignition · ${row?.role === 1 ? 'follows the main module' : ['switch + button', 'button only', 'key'][row?.mode ?? 0]}`
     case 'output': return `Output ${n} · ${row?.currentLimit ?? '?'} A` + (row?.enabled === false ? ' · switched off' : row?.pwmEnabled ? ' · PWM' : '')
     case 'digitaloutput': return `Digital out ${n}` + (row?.pwmEnabled ? ' · PWM' : '')
@@ -168,6 +170,7 @@ export function incompleteReasons(kind, row, enabled) {
     case 'canoutput': if (!row.input) r.push('needs a value to send'); if (!row.id) r.push('needs a CAN ID'); break
     case 'caninput': if (!row.id) r.push('needs a CAN ID'); if (!row.bitLength) r.push('needs a bit length'); break
     case 'math': if (!row.inputA) r.push('needs an A input'); break
+    case 'comfortblink': if (!row.leftInput || !row.rightInput) r.push('needs both lever inputs'); if (!row.clockInput) r.push('needs the indicator clock'); break
     case 'canmsg': if (!row.input) r.push('needs a signal to send on'); if (!row.id) r.push('needs a CAN ID'); break
     case 'output': if (!row.inputVal) r.push('has no input, so it never switches'); break
     case 'digitaloutput': if (!row.input) r.push('has no input, so it never switches'); break
@@ -194,7 +197,7 @@ export function buildModel(dev, funcs, vmap) {
   const physIn = isCb(dev) ? funcs?.digitalIn : funcs?.inputs
   for (const r of physIn ?? []) add('input', r.number, r, !!r.enabled)
   for (const r of funcs?.analogIn ?? []) add('analoginput', r.number, r, !!r.enabled)
-  for (const k of ['caninput', 'virtualinput', 'condition', 'counter', 'flasher', 'timer', 'table', 'canoutput', 'digitaloutput', 'math', 'canmsg']) {
+  for (const k of ['caninput', 'virtualinput', 'condition', 'counter', 'flasher', 'timer', 'table', 'canoutput', 'digitaloutput', 'math', 'canmsg', 'comfortblink']) {
     for (const r of funcs?.[KINDS[k].arr] ?? []) add(k, r.number, r, !!r.enabled)
   }
   if (funcs?.ignition) add('ignition', 1, funcs.ignition, !!funcs.ignition.enabled)

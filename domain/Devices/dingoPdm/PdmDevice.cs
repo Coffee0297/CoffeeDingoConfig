@@ -188,6 +188,7 @@ public class PdmDevice : IDeviceConfigurable
     [JsonPropertyName("maths")] public List<MathFunction> Maths { get; init; } = [];
     [JsonPropertyName("canMessages")] public List<CanMessage> CanMessages { get; init; } = [];
     [JsonPropertyName("ignition")] public Ignition Ignition { get; set; } = null!;
+    [JsonPropertyName("comfortBlink")] public ComfortBlink ComfortBlink { get; set; } = null!;   // 5.6.1
     [JsonPropertyName("tables")] public List<LookupTable> Tables { get; init; } = [];
     [JsonPropertyName("keypads")] public List<KeypadMaster> Keypads { get; init; } = [];
     
@@ -326,6 +327,7 @@ public class PdmDevice : IDeviceConfigurable
         for (var i = 0; i < NumCanMessages; i++)
             CanMessages.Add(new CanMessage(i + 1, "canMessage" + (i + 1)));
         Ignition = new Ignition("ignition");
+        ComfortBlink = new ComfortBlink("Comfort blink");
 
         for (var i = 0; i < NumTables; i++)
             Tables.Add(new LookupTable(i + 1, "table" + (i + 1)));
@@ -950,6 +952,10 @@ public class PdmDevice : IDeviceConfigurable
         foreach (var role in new[] { "Ignition", "Accessory", "Cranking", "Running", "Ready", "Dash", "Link OK" })
             VarMap.Add(new DeviceVariable { GetName = () => "Ignition", OwnerKind = "ignition", OwnerNumber = 1,
                 PropertyName = role, DataType = "bool", VariableIndex = index++, SingleVariable = false, MinFirmware = since56 });
+        // firmware 5.6.1: comfort blink, "indicator on" per side
+        foreach (var side in new[] { "Left", "Right" })
+            VarMap.Add(new DeviceVariable { GetName = () => ComfortBlink.Name, OwnerKind = "comfortblink", OwnerNumber = 1,
+                PropertyName = side, DataType = "bool", VariableIndex = index++, SingleVariable = false, MinFirmware = Functions.ComfortBlink.Since });
     }
 
     private void InitParams()
@@ -1047,6 +1053,7 @@ public class PdmDevice : IDeviceConfigurable
         foreach (var m in Maths) allParams.AddRange(m.Params);
         foreach (var m in CanMessages) allParams.AddRange(m.Params);
         allParams.AddRange(Ignition.Params);
+        allParams.AddRange(ComfortBlink.Params);
         allParams.AddRange(StarterDisable.Params);
         allParams.AddRange(Wipers.Params);
         foreach (var canOutput in CanOutputs) allParams.AddRange(canOutput.Params);

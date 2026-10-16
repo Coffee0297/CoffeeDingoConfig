@@ -1,13 +1,14 @@
 <script>
   /**
    * "+ Add" a block. Each item claims the first free slot of its kind on this module (the firmware has a
-   * fixed number of each) and opens it in the inspector. Math and CAN message need firmware 5.6: on an
-   * older module they are shown disabled with the firmware they need (`fwOld`).
+   * fixed number of each) and opens it in the inspector. Items newer firmware added (Math and CAN message: 5.6,
+   * Comfort blink: 5.6.1) are shown disabled on an older module with the firmware they need (`version`).
    */
   import { Dialog, FwBadge, Button } from '../../../ui/index.js'
   import { FAM_COLOR } from './model.js'
+  import { olderThan } from '../../hardware/parts/util.js'
 
-  let { open = $bindable(false), funcs, cb = false, slots = [], fwOld = false, onadd, onremote, hardwareHref } = $props()
+  let { open = $bindable(false), funcs, cb = false, slots = [], version = '', onadd, onremote, hardwareHref } = $props()
   const free = (arr) => (funcs?.[arr] ?? []).filter((x) => !x.enabled).length
   const has = (arr) => Array.isArray(funcs?.[arr])
   const GROUPS = $derived([
@@ -27,6 +28,7 @@
       { label: 'Keep on after', sub: 'stays on for a time', kind: 'timer', arr: 'timers', body: { mode: 1, preset: 60000 } },
       { label: 'Pulse / limit', sub: 'one pulse of a set length', kind: 'timer', arr: 'timers', body: { mode: 2, preset: 1000 } },
       { label: 'Flasher', sub: 'blink on / off', kind: 'flasher', arr: 'flashers', body: { onTime: 500, offTime: 500 } },
+      { label: 'Comfort blink', sub: 'a lever tap blinks 3 times; held, a normal blink', kind: 'comfortblink', arr: 'comfortBlinks', fw: '5.6.1', body: { tapMs: 1000, blinks: 3 } },
       { label: 'Counter', sub: 'count presses up / down', kind: 'counter', arr: 'counters' },
       { label: 'Table', sub: 'a value from a curve or map', kind: 'table', arr: 'tables', pdmOnly: true },
     ] },
@@ -45,7 +47,7 @@
       <span class="gn" style="color: {FAM_COLOR[g.fam]}">{g.name}</span>
       <div class="items">
         {#each g.items as it (it.label)}
-          {@const old = !!it.fw && fwOld}
+          {@const old = !!it.fw && olderThan(version, it.fw.split('.').map(Number))}
           {@const avail = old ? false : it.hw ? true : has(it.arr) && free(it.arr) > 0}
           {@const absent = it.arr && !has(it.arr)}
           {#if it.hw}

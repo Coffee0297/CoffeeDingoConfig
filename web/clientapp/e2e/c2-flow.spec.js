@@ -7,8 +7,8 @@ import { near } from './api.js'
 import { open, watchErrors } from './helpers.js'
 import { API, apiJson, deviceByName, waitFor } from './api.js'
 
-const TARGETS = { virtualInputs: [14, 15, 16], conditions: [30, 31, 32], timers: [8], flashers: [4], counters: [4], tables: [2], canOutputs: [30, 31, 32], maths: [8], canMessages: [4] }
-const KIND = { virtualInputs: 'virtualinput', conditions: 'condition', timers: 'timer', flashers: 'flasher', counters: 'counter', tables: 'table', canOutputs: 'canoutput', maths: 'math', canMessages: 'canmsg' }
+const TARGETS = { virtualInputs: [14, 15, 16], conditions: [30, 31, 32], timers: [8], flashers: [4], counters: [4], tables: [2], canOutputs: [30, 31, 32], maths: [8], canMessages: [4], comfortBlinks: [1] }
+const KIND = { virtualInputs: 'virtualinput', conditions: 'condition', timers: 'timer', flashers: 'flasher', counters: 'counter', tables: 'table', canOutputs: 'canoutput', maths: 'math', canMessages: 'canmsg', comfortBlinks: 'comfortblink' }
 
 let pdm4
 const fns = (g) => apiJson('GET', `/api/devices/${g}/functions`)
@@ -255,6 +255,27 @@ test('firmware 5.6: Math and CAN message blocks write the module, and the CAN me
     // the module sends it (edits from the builder wait for Apply to car, G2: write them now)
     await post(`/api/devices/${pdm4.guid}/write`)
     await waitFor(async () => (await apiJson('GET', '/api/canlog')).some((m) => (m.id ?? m.Id) === 0x7a6), 15_000, 'frame 0x7A6 on the bus')
+  } finally { await restore(snap) }
+  expect(errors).toEqual([])
+})
+
+test('firmware 5.6.1: a Comfort blink block takes the levers, the clock, the tap time and the blink count', async ({ page }) => {
+  const errors = watchErrors(page)
+  const snap = await snapshot()
+  try {
+    if ((await row('comfortBlinks', 1)).enabled) await put(`/api/devices/${pdm4.guid}/function/comfortblink/1`, { enabled: false })
+    await openFlow(page)
+    await addBlock(page, 'Comfort blink')
+    await waitFor(async () => { const r = await row('comfortBlinks', 1); return r.enabled && r.tapMs === 1000 && r.blinks === 3 }, 15_000, 'comfort blink added')
+    await pickSource(page, 'leftInput', 'Hazard · State')
+    await pickSource(page, 'rightInput', 'Brake · State')
+    await pickSource(page, 'clockInput', 'Always On')
+    await insp(page).getByLabel('A tap is shorter than').fill('0.8')
+    await insp(page).getByLabel('Blinks for a tap').fill('4')
+    await save(page)
+    await waitFor(async () => { const r = await row('comfortBlinks', 1); return r.tapMs === 800 && r.blinks === 4 && r.leftInput > 0 && r.rightInput > 0 && r.clockInput === 1 }, 15_000, 'comfort blink saved')
+    await expect(node(page, 'comfortblink:1')).toContainText('tap < 0.8 s: 4 blinks')
+    await expect(insp(page).getByText(/blinks 4 times on/)).toBeVisible()
   } finally { await restore(snap) }
   expect(errors).toEqual([])
 })

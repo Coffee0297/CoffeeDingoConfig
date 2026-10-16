@@ -118,6 +118,7 @@ public static class FunctionMap
                 "math"                => (p.Maths.FirstOrDefault(x => x.Number == number), MathFunction.BaseIndex + n),
                 "canmsg"              => (p.CanMessages.FirstOrDefault(x => x.Number == number), CanMessage.BaseIndex + n),
                 "ignition"            => (p.Ignition, Ignition.BaseIndex),
+                "comfortblink"        => (p.ComfortBlink, ComfortBlink.BaseIndex),
                 "canoutput" or "cout" => (p.CanOutputs.FirstOrDefault(x => x.Number == number), CanOutput.BaseIndex + n),
                 "wiper" or "wip"      => (p.Wipers, Wiper.BaseIndex),
                 "starterdisable" or "std" => (p.StarterDisable, StarterDisable.BaseIndex),
@@ -142,6 +143,7 @@ public static class FunctionMap
                 "math"                => (c.Maths.FirstOrDefault(x => x.Number == number), MathFunction.BaseIndex + n),
                 "canmsg"              => (c.CanMessages.FirstOrDefault(x => x.Number == number), CanMessage.BaseIndex + n),
                 "ignition"            => (c.Ignition, Ignition.BaseIndex),
+                "comfortblink"        => (c.ComfortBlink, ComfortBlink.BaseIndex),
                 _ => (null, -1)
             };
         return (null, -1);
@@ -901,6 +903,7 @@ public static class LiveApi
                     conditions = p.Conditions, counters = p.Counters, flashers = p.Flashers,
                     timers = p.Timers, tables = p.Tables,
                     maths = p.Maths, canMessages = p.CanMessages, ignition = p.Ignition,   // firmware 5.6
+                    comfortBlinks = new[] { p.ComfortBlink },   // 5.6.1 (one; an array for the flow builder)
                     canOutputs = p.CanOutputs, wiper = p.Wipers, starterDisable = p.StarterDisable,
                     keypads = p.Keypads,
                     device = new { forceSleepInput = p.ForceSleepInput, muteTxInput = p.MuteTxInput, canSleep = p.CanSleep },
@@ -912,6 +915,7 @@ public static class LiveApi
                     canInputs = c.CanInputs, virtualInputs = c.VirtualInputs, conditions = c.Conditions,
                     counters = c.Counters, flashers = c.Flashers, timers = c.Timers, canOutputs = c.CanOutputs,
                     maths = c.Maths, canMessages = c.CanMessages, ignition = c.Ignition,   // firmware 5.6
+                    comfortBlinks = new[] { c.ComfortBlink },   // 5.6.1
                     device = new { forceSleepInput = 0, muteTxInput = c.MuteTxInput, canSleep = c.CanSleep },
                 });
             return Results.Ok(new { });
