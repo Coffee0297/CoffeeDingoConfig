@@ -426,6 +426,13 @@ public static class LiveApi
             return Results.Ok(new AdaptersDto(adapters, ports, s.isConnected, s.activeAdapter, s.activePort, m.GatewayBaseId));
         });
 
+        // G11: SLCAN-over-TCP bridges that announce _slcan._tcp on the local network (DNS-SD / mDNS).
+        api.MapGet("/adapters/discover", async (int? ms) =>
+        {
+            var list = await MdnsBrowser.BrowseAsync(TimeSpan.FromMilliseconds(Math.Clamp(ms ?? 1500, 200, 5000)));
+            return Results.Ok(new { bridges = list.Select(b => new { name = b.Name, host = b.Host, address = b.Address, port = b.Port, url = b.Url }) });
+        });
+
         api.MapPost("/connect", async (ConnectReq r, ICommsAdapterManager m) =>
         {
             try
