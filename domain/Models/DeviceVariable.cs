@@ -12,4 +12,7 @@ public class DeviceVariable
     // var-map index to its owner directly instead of reconstructing names (which collide).
     public string OwnerKind { get; set; } = string.Empty;
     public int OwnerNumber { get; set; }
+    // The firmware that first has this variable (null = every supported firmware). Older modules do not offer
+    // it as a source: its index does not exist there.
+    public System.Version? MinFirmware { get; set; }
 }

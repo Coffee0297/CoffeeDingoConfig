@@ -27,6 +27,9 @@ public class CanInput : IDeviceFunction
     [JsonPropertyName("operator")] public Operator Operator { get; set; } = Operator.Equal;
     [JsonPropertyName("operand")] public double Operand {get; set;}
     [JsonPropertyName("mode")] public InputMode Mode { get; set; } = InputMode.Momentary;
+    // Firmware 5.6 (G19): the value the input takes when the timeout expires — it acts as if this arrived, so the
+    // rule above decides on/off. Before 5.6 the input read 0 and was off.
+    [JsonPropertyName("timeoutValue")] public double TimeoutValue { get; set; }
 
     [JsonPropertyName("id")]
     public int Id
@@ -161,6 +164,14 @@ public class CanInput : IDeviceFunction
                 GetValue = () => Mode, SetValue = val => Mode = (InputMode)val,
                 ValueType = Mode.GetType(),
                 DefaultValue = InputMode.Momentary
+            },
+            new DeviceParameter
+            {
+                ParentName = Name, Name = $"canInput[{Number}].timeoutValue", Index = BaseIndex + (Number - 1), SubIndex = subIndex++,
+                GetValue = () => TimeoutValue, SetValue = val => TimeoutValue = (double)val,
+                ValueType = typeof(double),
+                DefaultValue = 0.0,
+                MinFirmware = MathFunction.Since
             }
         ];
     }

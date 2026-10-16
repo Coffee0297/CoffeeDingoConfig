@@ -15,7 +15,10 @@ internal class ParamProtocol(IDeviceConfigurable device, List<DeviceParameter> @
     // Only the params the device actually stores. LocalOnly entries (output name / wire labels —
     // strings and doubles at fake sub-indices) have no CAN counterpart: encoding them threw in
     // WriteAll/CalcCrc, and a ReadAll reset them to defaults and reported them as "appOnly".
-    private readonly List<DeviceParameter> _params = @params.Where(p => !p.LocalOnly).ToList();
+    // Also only the ones this module's firmware has (DeviceParameter.MinFirmware): until it reports its
+    // version it is treated as the oldest, so new params are never sent to a module that refuses them.
+    private List<DeviceParameter> _params => @params.Where(p => !p.LocalOnly && FirmwareHas(p)).ToList();
+    private bool FirmwareHas(DeviceParameter p) => domain.Common.Firmware.Has(device.Version, p.MinFirmware);
 
     private readonly Dictionary<(int Index, int SubIndex), object> _tempParamValues = new();
     private int _readAllCount;

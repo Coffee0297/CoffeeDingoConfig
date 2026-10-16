@@ -32,7 +32,16 @@ public record DeviceDto(string Guid, string Name, string Type, int BaseId, bool 
     bool CanBootloader, bool ConfigMismatch = false, int ConfigDiffCount = 0, bool IsGateway = false,
     bool CanFiltersEnabled = false, bool ConnectUsbToCan = true,
     // false on a CANBoard (firmware CAN_SLEEP off): the sleep / force-sleep / wake controls do nothing there.
-    bool CanSleep = true);
+    bool CanSleep = true,
+    // Firmware 5.6 (null on older firmware or before the module answered)
+    bool? HasLed = null,                 // G12: Identify reply; a CANBoard has no LED
+    bool Asleep = false,                 // G14: said "going to sleep" and has been quiet since
+    WakeDto? LastWake = null,            // G14: why it last woke
+    int? SleepCountdownS = null,         // G14: seconds until auto-sleep (null = not counting)
+    int? SleepBlockers = null,           // G14: bit0 sleep off, bit1 outputs on, bit2 USB, bit3 CAN traffic
+    IgnitionDto? Ignition = null);       // G13: this module's ignition role and, for a main module, its live state
+public record WakeDto(string Reason, int Source, int Count);
+public record IgnitionDto(bool Enabled, string Role, string State, bool Dash, int MainStateId, int StateId, bool Live);
 public record AdaptersDto(string[] Adapters, string[] Ports, bool Connected, string? ActiveAdapter, string? ActivePort, int? GatewayBaseId);
 public record TelemetryDto(bool Connected, string? Adapter, long CanTotal, long CanRate, int[] Ids, DeviceDto[] Devices);
 public record ConnectReq(string Adapter, string Port, string Bitrate);
@@ -95,6 +104,9 @@ public static class FunctionMap
                 "flasher" or "fl"     => (p.Flashers.FirstOrDefault(x => x.Number == number), Flasher.BaseIndex + n),
                 "timer" or "tmr"      => (p.Timers.FirstOrDefault(x => x.Number == number), TimerFunction.BaseIndex + n),
                 "table" or "tbl"      => (p.Tables.FirstOrDefault(x => x.Number == number), LookupTable.BaseIndex + n),
+                "math"                => (p.Maths.FirstOrDefault(x => x.Number == number), MathFunction.BaseIndex + n),
+                "canmsg"              => (p.CanMessages.FirstOrDefault(x => x.Number == number), CanMessage.BaseIndex + n),
+                "ignition"            => (p.Ignition, Ignition.BaseIndex),
                 "canoutput" or "cout" => (p.CanOutputs.FirstOrDefault(x => x.Number == number), CanOutput.BaseIndex + n),
                 "wiper" or "wip"      => (p.Wipers, Wiper.BaseIndex),
                 "starterdisable" or "std" => (p.StarterDisable, StarterDisable.BaseIndex),
@@ -116,6 +128,9 @@ public static class FunctionMap
                 "flasher" or "fl"     => (c.Flashers.FirstOrDefault(x => x.Number == number), Flasher.BaseIndex + n),
                 "timer" or "tmr"      => (c.Timers.FirstOrDefault(x => x.Number == number), TimerFunction.BaseIndex + n),
                 "canoutput" or "cout" => (c.CanOutputs.FirstOrDefault(x => x.Number == number), CanOutput.BaseIndex + n),
+                "math"                => (c.Maths.FirstOrDefault(x => x.Number == number), MathFunction.BaseIndex + n),
+                "canmsg"              => (c.CanMessages.FirstOrDefault(x => x.Number == number), CanMessage.BaseIndex + n),
+                "ignition"            => (c.Ignition, Ignition.BaseIndex),
                 _ => (null, -1)
             };
         return (null, -1);
@@ -292,6 +307,13 @@ public static class DingoMap
         s.Name, s.Id, ide = s.IsExtended, s.MessageName, s.StartBit, s.Length,
         byteOrder = (int)s.ByteOrder, s.IsSigned, s.Factor, s.Offset, s.Unit, s.Min, s.Max, s.Value };
 
+    static WakeDto? Wake(DeviceUiState? ui) => ui?.WakeReason is int r
+        ? new WakeDto(r switch { 1 => "can", 2 => "input", 3 => "usb", _ => "power-on" }, ui.WakeSource, ui.WakeCount) : null;
+    static IgnitionDto? Ign(domain.Devices.Functions.Ignition? g, int baseId, string? type) => g is null ? null
+        : new IgnitionDto(g.Enabled, g.Role == domain.Devices.Functions.IgnitionRole.Main ? "main" : "follower",
+            g.State.ToString().ToLowerInvariant(), g.Dash, g.MainStateId, baseId + domain.Devices.Functions.Ignition.StateOffsetFor(type),
+            (DateTime.UtcNow - g.LastStateFrame).TotalMilliseconds < 1000);
+
     public static DeviceDto ToDto(IDevice d, DeviceUiState? ui = null)
     {
         var reading = ui?.Reading ?? false;
@@ -311,7 +333,9 @@ public static class DingoMap
                 p.Version, BitrateLabel(p.BitRate), outs, reading, readDone, readTotal,
                 p.SleepEnabled, p.SleepTimeoutMs, p.SleepIgnoreAlwaysOn, p.ForceSleepInput, p.MuteTxInput, p.WakeDigInputMask, p.WakeOnCan,
                 p.CanBootloader, p.Connected && p.ConfigMismatch, p.LastConfigDiff.Count, false,
-                p.CanFiltersEnabled, p.ConnectUsbToCan);
+                p.CanFiltersEnabled, p.ConnectUsbToCan,
+                HasLed: ui?.HasLed, Asleep: ui?.Asleep == true && !p.Connected, LastWake: Wake(ui), SleepCountdownS: p.SleepCountdownS,
+                SleepBlockers: ui?.SleepBlockers, Ignition: Ign(p.Ignition, p.BaseId, p.Type));
         }
         if (d is domain.Devices.Canboard.CanboardDevice cb)
             // CANBoard has no battery/total-current sensing (those are PDM smart-output features) — leave
@@ -321,7 +345,9 @@ public static class DingoMap
             return new DeviceDto(cb.Guid.ToString(), cb.Name, cb.Type, cb.BaseId, cb.Connected,
                 0, 0, cb.BoardTempC, "", cb.Version, BitrateLabel(cb.BitRate), Array.Empty<OutputDto>(), reading, readDone, readTotal,
                 cb.SleepEnabled, cb.SleepTimeoutMs, cb.SleepIgnoreAlwaysOn, cb.ForceSleepInput, cb.MuteTxInput, cb.WakeDigInputMask, cb.WakeOnCan,
-                cb.CanBootloader, cb.Connected && cb.ConfigMismatch, cb.LastConfigDiff.Count, CanSleep: cb.CanSleep);
+                cb.CanBootloader, cb.Connected && cb.ConfigMismatch, cb.LastConfigDiff.Count, CanSleep: cb.CanSleep,
+                HasLed: ui?.HasLed, Asleep: ui?.Asleep == true && !cb.Connected, LastWake: Wake(ui), SleepCountdownS: cb.SleepCountdownS,
+                SleepBlockers: cb.SleepCountdownS != null ? cb.SleepBlockersRaw : ui?.SleepBlockers, Ignition: Ign(cb.Ignition, cb.BaseId, cb.Type));
         return new DeviceDto(d.Guid.ToString(), d.Name, d.Type, d.BaseId, d.Connected,
             0, 0, 0, "", "", "", Array.Empty<OutputDto>(), reading, readDone, readTotal, false, 30000, true, 0, 0, 0, true,
             (d as IDeviceConfigurable)?.CanBootloader ?? false);
@@ -796,6 +822,8 @@ public static class LiveApi
             // points at (setLuaOut writes 0/1), so the bool picker must offer them too.
             var vars = type is null ? cfg.VarMap : cfg.VarMap.Where(v => v.DataType == type || (type == "bool" && v.OwnerKind == "lua"));
             if (inUse == true) vars = vars.Where(v => VarInUse(dev, v));
+            // a signal newer firmware added does not exist on this module: never offer it as a source
+            vars = vars.Where(v => domain.Common.Firmware.Has(cfg.Version, v.MinFirmware));
             // kind/number/prop = the owning function slot, so clients can resolve an index to its function
             // without reconstructing names (a CAN input and a table both called "Fan" collide by name).
             return Results.Ok(vars.Select(v => new { index = v.VariableIndex, name = DingoMap.VarLabel(v), kind = v.OwnerKind, number = v.OwnerNumber, prop = v.PropertyName, type = v.DataType }).ToArray());
@@ -811,6 +839,7 @@ public static class LiveApi
                     inputs = p.Inputs, canInputs = p.CanInputs, virtualInputs = p.VirtualInputs,
                     conditions = p.Conditions, counters = p.Counters, flashers = p.Flashers,
                     timers = p.Timers, tables = p.Tables,
+                    maths = p.Maths, canMessages = p.CanMessages, ignition = p.Ignition,   // firmware 5.6
                     canOutputs = p.CanOutputs, wiper = p.Wipers, starterDisable = p.StarterDisable,
                     keypads = p.Keypads,
                     device = new { forceSleepInput = p.ForceSleepInput, muteTxInput = p.MuteTxInput, canSleep = p.CanSleep },
@@ -821,6 +850,7 @@ public static class LiveApi
                     analogIn = c.AnalogInputs, digitalIn = c.DigitalInputs, digitalOut = c.DigitalOutputs,
                     canInputs = c.CanInputs, virtualInputs = c.VirtualInputs, conditions = c.Conditions,
                     counters = c.Counters, flashers = c.Flashers, timers = c.Timers, canOutputs = c.CanOutputs,
+                    maths = c.Maths, canMessages = c.CanMessages, ignition = c.Ignition,   // firmware 5.6
                     device = new { forceSleepInput = 0, muteTxInput = c.MuteTxInput, canSleep = c.CanSleep },
                 });
             return Results.Ok(new { });
@@ -991,6 +1021,25 @@ public static class LiveApi
 
         // In-app firmware update over CAN (OpenBLT XCP). Upload a .srec (raw body); commands the
         // module into its CAN bootloader and programs it over the live SLCAN link — no USB/DFU.
+        // G12 (firmware 5.6): blink the module's LEDs so the operator can find it. { ok, hasLed }: a CANBoard has none.
+        api.MapPost("/devices/{guid}/identify", async (string guid, int? seconds, DeviceManager dm, ICommsAdapterManager adapters) =>
+        {
+            if (!Guid.TryParse(guid, out var g)) return Results.BadRequest();
+            if (await RequireLiveModuleAsync(g, dm, adapters, "identify") is { } bad) return bad;
+            if (dm.GetDevice(g) is not IDeviceConfigurable c) return Results.BadRequest();
+            // version not read yet (no Read since the project opened): ask once, up to ~1 s
+            for (int i = 0; i < 10 && domain.Common.Firmware.Of(c.Version).Major == 0; i++)
+            {
+                if (i == 0) dm.RequestVersion(g);
+                await Task.Delay(100);
+            }
+            if (!domain.Common.Firmware.Has(c.Version, domain.Devices.Functions.MathFunction.Since))
+                return Results.Json(new { ok = false, error = "Needs firmware 5.6: older firmware has no identify command." }, statusCode: 409);
+            var ok = await dm.IdentifyConfirmed(g, seconds ?? 10);
+            return ok ? Results.Ok(new { ok, hasLed = dm.GetDeviceUiState(g).HasLed })
+                      : Results.Json(new { ok, error = "The module did not answer." }, statusCode: 409);
+        });
+
         api.MapPost("/devices/{guid}/flash-can", async (string guid, HttpRequest req, CanFlashService flasher) =>
         {
             if (!Guid.TryParse(guid, out var g)) return Results.BadRequest();

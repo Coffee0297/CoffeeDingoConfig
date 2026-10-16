@@ -21,5 +21,8 @@ public record PdmDeviceDefinition(
     int[]? OutputCurrentRatings = null,
     // Timer / lookup-table function slots (firmware >= 5.5.107). Defaults match dingoFW's PDM boards.
     int NumTimers = 8,
-    int NumTables = 2
+    int NumTables = 2,
+    // Math and CAN Message blocks (firmware 5.6)
+    int NumMath = 8,
+    int NumCanMessages = 4
     );

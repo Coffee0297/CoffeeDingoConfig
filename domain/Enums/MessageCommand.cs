@@ -41,4 +41,10 @@ public enum MessageCommand
     // Output bench test (firmware ≥ 5.5.107): [cmd, out (0-based), mode 0 off / 1 on / 2 pwm, duty %, freqLo, freqHi, holdSec, 0]
     // -> reply echoes bytes 0-6, [7] = accepted. The module releases on its own after holdSec.
     OutputTest = 48,
+
+    // Firmware 5.6
+    Identify = 49,          // [cmd, seconds] -> [cmd, seconds, hasLed]: blink the LEDs to find the module
+    SleepInfo = 50,         // [cmd] -> [cmd, wakeReason, wakeSource, wakesLo, wakesHi, countdown s (0xFF none), blockers, 0]
+    OvlTime = 51,           // [cmd, idx] -> [cmd, idx, t0..t3] trip time, ms since power-on
+    OvlNotice = 52,         // [cmd, idx] -> [cmd, idx, out (0-based), kind 1 warning / 2 open load, t0..t3]
 }
