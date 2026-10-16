@@ -109,7 +109,7 @@
         if (s.kind === 'Output') continue
         const enabled = s.enabled !== false
         const tile = {
-          id: `${d.guid}:${s.name}`, name: s.name, mod: d.name, value: word(s), unit: s.kind === 'Analog input' ? 'mV' : '',
+          id: `${d.guid}:${s.kind}:${s.n}:${s.name}`, name: s.name, mod: d.name, value: word(s), unit: s.kind === 'Analog input' ? 'mV' : '',
           sub: s.kind + (d.connected ? '' : ' · module not answering'), tone: !d.connected ? 'stale' : s.on ? 'on' : 'off', key: keys.sig(d.guid, s.name),
           href: signalHref(d.guid, s), graph: href('live', 'plot', { signal: keys.sig(d.guid, s.name) }),
         }

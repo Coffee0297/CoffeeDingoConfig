@@ -6,6 +6,8 @@
   import { href } from '../../router.svelte.js'
   import { live, api, toast, project, isCanboard } from '../../lib/live.svelte.js'
   import { olderThan, parseVersion } from '../hardware/parts/util.js'
+  import { broadcastOf } from '../functions/flow/car.js'
+  import { linkRemote } from '../functions/flow/net.js'
 
   const MODES = [
     { value: 0, name: 'Ignition switch + start button', what: 'A switch (or key with only ON) powers the ignition. The button only cranks, and only while the ignition is on.' },
@@ -65,7 +67,43 @@
       maxCrankS: (g.maxCrankMs ?? 5000) / 1000, crankWhileHeld: g.crankWhileHeld ?? true, dashHoldS: (g.dashHoldMs ?? 0) / 1000 }
   }
   const main = $derived(mods.find((d) => d.guid === mainGuid) ?? null)
-  const items = $derived([{ value: '0', label: '— not set' }, ...(boolsOf[mainGuid] ?? [])])
+  // on/off signals other modules broadcast: picking one links it to a free CAN input on the main module at Save
+  let remote = $state([])
+  $effect(() => {
+    const list = mods.map((d) => ({ guid: d.guid, name: d.name }))
+    const key = list.map((d) => d.guid).join()
+    if (!key) return
+    let alive = true
+    Promise.all(list.map((d) => broadcastOf(d.guid).then((s) => s.filter((x) => x.kind === 'bool' && x.inUse && !/^CanInput/.test(x.name)).map((x) => ({ guid: d.guid, mod: d.name, sig: x.name, label: x.label ?? x.name })))))
+      .then((r) => { if (alive) remote = r.flat() })
+    return () => { alive = false }
+  })
+  const items = $derived([{ value: '0', label: '— not set' }, ...(boolsOf[mainGuid] ?? []),
+    ...remote.filter((r) => r.guid !== mainGuid).map((r) => ({ value: `r:${r.guid}:${r.sig}`, label: `${r.label} · ${r.mod} (over CAN)` }))])
+  const num = (v) => (String(v).startsWith('r:') ? v : +v)
+  /** Turn picked remote signals into CAN inputs on the main module; returns false when it could not. */
+  async function linkRemotes() {
+    const keys = ['ignitionInput', 'startInput', 'crankAllowInput', 'runningInput'].filter((k) => String(f[k]).startsWith('r:'))
+    if (!keys.length) return true
+    const fn = await api.functions(mainGuid)
+    const free = (fn?.canInputs ?? []).filter((x) => !x.enabled).map((x) => x.number).reverse()
+    const done = {}
+    for (const k of keys) {
+      const v = String(f[k])
+      if (!done[v]) {
+        const n = free.shift()
+        if (!n) { err = `No free CAN input on ${main.name} for ${items.find((i) => i.value === v)?.label}. Free one in the flow builder.`; return false }
+        const [, g, sig] = v.split(':')
+        await linkRemote(mainGuid, n, g, sig)
+        const vars = await api.inputs(mainGuid, 'bool', true)
+        done[v] = vars.find((x) => x.kind === 'caninput' && x.number === n && x.prop === 'State')?.index ?? 0
+        if (!done[v]) { err = `CAN input ${n} on ${main.name} did not get a signal number.`; return false }
+      }
+      f[k] = done[v]
+    }
+    await load(main)
+    return true
+  }
   const followers = $derived(capable.filter((d) => d.guid !== mainGuid))
   const isOn = $derived(!!funcsOf[mainGuid]?.enabled && funcsOf[mainGuid]?.role === 0)
 
@@ -81,6 +119,7 @@
     err = problem()
     if (err) return
     busy = true
+    try { if (!(await linkRemotes())) { busy = false; return } } catch (e) { err = e?.message ?? String(e); busy = false; return }
     const failed = []
     const put = async (d, body) => { try { const r = await api.setFunction(d.guid, 'ignition', 1, body); funcsOf[d.guid] = { ...(funcsOf[d.guid] ?? {}), ...body }; return r } catch (e) { failed.push(`${d.name}: ${e?.message ?? e}`) } }
     await put(main, { enabled: true, role: 0, mode: f.mode, ignitionInput: Number(f.ignitionInput), startInput: Number(f.startInput), crankAllowInput: Number(f.crankAllowInput),
@@ -138,14 +177,14 @@
     <div class="fields">
       {#if (f?.mode ?? 0) !== 1}
         <div class="field"><div><strong>{f?.mode === 2 ? 'Key at ON' : 'Ignition switch'}</strong><div class="muted hint">held on while the ignition should be on</div></div>
-          <Select label="Ignition switch" hideLabel {items} value={String(f?.ignitionInput ?? 0)} onchange={(v) => (f.ignitionInput = +v)} disabled={!ready || busy} data-testid="ign-switch" /></div>
+          <Select label="Ignition switch" hideLabel {items} value={String(f?.ignitionInput ?? 0)} onchange={(v) => (f.ignitionInput = num(v))} disabled={!ready || busy} data-testid="ign-switch" /></div>
       {/if}
       <div class="field"><div><strong>{f?.mode === 2 ? 'Key at START' : 'Start button'}</strong><div class="muted hint">a pin, a keypad button, or a bit in a CAN frame</div></div>
-        <Select label="Start button" hideLabel {items} value={String(f?.startInput ?? 0)} onchange={(v) => (f.startInput = +v)} disabled={!ready || busy} data-testid="ign-start" /></div>
+        <Select label="Start button" hideLabel {items} value={String(f?.startInput ?? 0)} onchange={(v) => (f.startInput = num(v))} disabled={!ready || busy} data-testid="ign-start" /></div>
       <div class="field"><div><strong>Also required to crank</strong><div class="muted hint">clutch or brake pressed, neutral · optional</div></div>
-        <Select label="Also required to crank" hideLabel {items} value={String(f?.crankAllowInput ?? 0)} onchange={(v) => (f.crankAllowInput = +v)} disabled={!ready || busy} data-testid="ign-allow" /></div>
+        <Select label="Also required to crank" hideLabel {items} value={String(f?.crankAllowInput ?? 0)} onchange={(v) => (f.crankAllowInput = num(v))} disabled={!ready || busy} data-testid="ign-allow" /></div>
       <div class="field"><div><strong>Engine running</strong><div class="muted hint">stops the starter; no cranking while it runs · optional</div></div>
-        <Select label="Engine running" hideLabel {items} value={String(f?.runningInput ?? 0)} onchange={(v) => (f.runningInput = +v)} disabled={!ready || busy} data-testid="ign-running" /></div>
+        <Select label="Engine running" hideLabel {items} value={String(f?.runningInput ?? 0)} onchange={(v) => (f.runningInput = num(v))} disabled={!ready || busy} data-testid="ign-running" /></div>
       <div class="field"><div><strong>Max crank time</strong><div class="muted hint">then release and press again</div></div>
         <div class="stp"><Stepper label="Seconds of cranking at most" min={0.5} max={30} step={0.5} decimals={1} unit="s" bind:value={() => f?.maxCrankS ?? 5, (v) => f && (f.maxCrankS = +v)} disabled={!ready || busy} data-testid="ign-crank" /></div></div>
       <div class="field"><div><strong>Dash stays on after off</strong><div class="muted hint">the Dash role keeps power this long</div></div>
