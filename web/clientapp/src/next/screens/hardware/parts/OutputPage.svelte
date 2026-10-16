@@ -145,7 +145,7 @@
   $effect(() => () => bench.dispose())
   const blocker = $derived.by(() => {
     if (!live.connected) return 'Connect to the car first. Tests run only while connected.'
-    if (live.adapter === 'Sim') return 'Sim adapter: programming is turned off.'
+    if (!live.programmingAllowed) return 'Sim adapter: programming is turned off.'
     if (!dev?.connected) return `${dev?.name ?? 'The module'} is not answering on the bus.`
     if (olderThan(dev?.version, [5, 5, 107])) return 'Needs firmware 5.5.107 or newer.'
     if (!src?.enabled) return 'Turn the output on and save first. The test only runs on an enabled output.'

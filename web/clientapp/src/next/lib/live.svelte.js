@@ -5,14 +5,16 @@ import { toast } from '../../lib/toast.js'
 
 export { api, toast }
 
-/** Live telemetry, ~10 Hz: { connected, adapter, canTotal, canRate, ids, devices[] } */
-export const live = $state({ connected: false, adapter: null, canTotal: 0, canRate: 0, ids: [], devices: [], stale: false })
+/** Live telemetry, ~10 Hz: { connected, adapter, programmingAllowed, canTotal, canRate, ids, devices[] } */
+export const live = $state({ connected: false, adapter: null, programmingAllowed: true, canTotal: 0, canRate: 0, ids: [], devices: [], stale: false })
 /** SignalR feed state: 'live' | 'reconnecting' | 'down' */
 export const hub = $state({ state: 'live' })
 
 telemetry.subscribe((t) => {
   live.connected = !!t.connected
   live.adapter = t.adapter ?? null
+  // the backend refuses write / store / flash / test under the Sim adapter (G5); older backends: tell by name
+  live.programmingAllowed = t.programmingAllowed ?? !/^sim$/i.test(t.adapter ?? '')
   live.canTotal = t.canTotal ?? 0
   live.canRate = t.canRate ?? 0
   live.ids = t.ids ?? []

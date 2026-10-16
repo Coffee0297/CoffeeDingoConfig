@@ -19,7 +19,7 @@
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
   const isPdm = $derived(/pdm/i.test(d?.type ?? ''))
   const st = $derived(d ? moduleState(d) : null)
-  const simAdapter = $derived(/^sim$/i.test(live.adapter ?? ''))
+  const simAdapter = $derived(!live.programmingAllowed)
   const progBlock = $derived(!d ? '' : !live.connected ? 'Not connected.' : simAdapter ? 'The simulator replay cannot program modules.' : !d.connected ? `${d.name} is not answering on the bus.` : '')
   const askBlock = $derived(!d ? '' : !live.connected ? 'Not connected.' : !d.connected ? `${d.name} is not answering on the bus.` : '')
 

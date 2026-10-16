@@ -21,7 +21,7 @@
 
   const mods = $derived(live.devices.filter((d) => isPdm(d) || isCanboard(d)).sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true })))
   const cur = $derived(mods.find((m) => m.guid === sel) ?? mods[0])
-  const sim = $derived(live.adapter === 'Sim')
+  const sim = $derived(!live.programmingAllowed)
   const modLive = $derived(live.connected && !!cur?.connected)
 
   async function loadDiff(guid) {

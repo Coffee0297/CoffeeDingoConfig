@@ -174,6 +174,14 @@ test('Sim replay with the real Sim adapter: load a log, play, pause, reset, loop
   try {
     await apiJson('POST', '/api/disconnect')
     await apiJson('POST', '/api/connect', { Adapter: 'Sim', Port: '', Bitrate: '500K' })
+    // the backend itself refuses programming on the Sim adapter, whoever asks (G5)
+    expect((await apiJson('GET', '/api/adapters')).programmingAllowed).toBe(false)
+    const g = (await apiJson('GET', '/api/devices'))[0].guid
+    for (const p of [`/api/devices/${g}/write`, `/api/devices/${g}/burn`, `/api/devices/${g}/output/1/test`, '/api/flash/blank']) {
+      const r = await fetch(API + p, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })
+      expect(r.status, p).toBe(400)
+      expect(await r.text(), p).toContain('programming disabled')
+    }
     await open(page, 'expert/tools')
     await goTab(page, 'Sim replay')
     await expect(page.getByTestId('sim-banner')).toHaveCount(0)

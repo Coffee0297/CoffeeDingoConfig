@@ -9,7 +9,7 @@
   let props = $props()
 
   const mods = $derived(live.devices.filter((d) => /pdm|canboard/i.test(d.type ?? '')))
-  const blocked = $derived(!live.connected ? 'Connect to the car first.' : (!live.adapter || /^sim$/i.test(live.adapter)) ? 'Switch to a real CAN or USB adapter: the Sim cannot program hardware.' : '')
+  const blocked = $derived(!live.connected ? 'Connect to the car first.' : (!live.adapter || !live.programmingAllowed) ? 'Switch to a real CAN or USB adapter: the Sim cannot program hardware.' : '')
 
   let files = $state([]), st = $state({}), busy = $state(false), pausing = $state(false)
   let run = $state(null)          // { label, done, total } while an update-all is going

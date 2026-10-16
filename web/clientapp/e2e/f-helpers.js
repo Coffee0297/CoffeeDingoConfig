@@ -51,7 +51,8 @@ export async function restoreLua(guid, src) {
 export async function fakeTelemetry(page, patch) {
   await page.evaluate(async (p) => {
     await window.__conn.stop()
-    window.__telemetry.update((t) => ({ ...t, ...p }))
+    // like the backend: the Sim adapter turns programming off
+    window.__telemetry.update((t) => ({ ...t, ...('adapter' in p ? { programmingAllowed: !/^sim$/i.test(p.adapter ?? '') } : {}), ...p }))
   }, patch)
 }
 
