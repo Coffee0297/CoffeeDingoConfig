@@ -220,6 +220,8 @@ test('the backend reconnects by itself when the link drops, and a Disconnect sta
     await apiJson('POST', '/api/connection/options', { autoReconnect: opts.autoReconnect })
     await restoreConnection()
   }
+})
+
 test('WiFi bridge: Search the network finds the Sim bridge and connects through it (G11) @exclusive', async ({ page }) => {
   const errors = watchErrors(page)
   const found = (await apiJson('GET', '/api/adapters/discover')).bridges
