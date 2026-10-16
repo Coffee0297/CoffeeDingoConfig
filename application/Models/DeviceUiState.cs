@@ -16,4 +16,7 @@ public class DeviceUiState
     // true = a confirmed burn stored it. ponytail: the firmware reports no stored-image CRC, so a power cycle
     // (values lost) is not seen; add one to the burn reply / CheckCrc to make this exact.
     public bool? StoredOnModule { get; set; }
+    // G9: the last bootloader scan found this module in OpenBLT (it answered XCP CONNECT on base+12/13).
+    // Only meaningful while the module sends no status frames; it is reported as false once it does.
+    public bool InBootloader { get; set; }
 }
