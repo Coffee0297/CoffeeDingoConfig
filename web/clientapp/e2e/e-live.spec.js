@@ -70,6 +70,19 @@ test('module filter narrows every tile to one module', async ({ page }) => {
   expect(errors).toEqual([])
 })
 
+test('a switch or signal tile opens that input or block, not the module page', async ({ page }) => {
+  const errors = watchErrors(page)
+  await open(page, 'live')
+  const sig = page.getByRole('region', { name: 'Switches and signals' })
+  const can = sig.getByTestId('tile').filter({ hasText: 'CAN input' }).first()
+  await expect(can.locator('a.nm')).toHaveAttribute('href', /\/input\/caninput\/\d+$/)
+  const block = sig.getByTestId('tile').filter({ hasText: /Virtual input|Timer|Condition|Flasher|Counter/ }).first()
+  if (await block.count()) await expect(block.locator('a.nm')).toHaveAttribute('href', /#\/next\/functions\/flow\/[0-9a-f-]+\/(virtualinput|timer|condition|flasher|counter)%3A\d+$/)
+  await can.locator('a.nm').click()
+  await expect(page).toHaveURL(/\/input\/caninput\/\d+$/)
+  expect(errors).toEqual([])
+})
+
 test('an output tile opens its output and Graph it opens the Plot with that signal', async ({ page }) => {
   const errors = watchErrors(page)
   await open(page, 'live')
