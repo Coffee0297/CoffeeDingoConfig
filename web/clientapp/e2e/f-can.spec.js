@@ -342,7 +342,7 @@ test('Parameters: search narrows the list, labels are read only', async ({ page 
   const errors = watchErrors(page)
   await open(page, 'expert/can')
   await goTab(page, 'Parameters')
-  await expect(page.getByText(/of 14,\d{3} parameters/)).toBeVisible()
+  await expect(page.getByText(/of 1\d,\d{3} parameters/)).toBeVisible()   // grows with each firmware's params
   await expect(page.getByText('Showing the first 100.')).toBeVisible()
   await findParam(page, 'output[8].name')
   const w = rowOf(page, 'output[8].name').getByTestId('par-write')

@@ -117,10 +117,10 @@ test('drive: modes, duty, frequency, soft start and duty-from-signal are written
   expect(errors).toEqual([])
 })
 
-test('drive: cranking choice is disabled behind a firmware badge', async ({ page }) => {
+test('drive: off while cranking points to the Accessory role (firmware 5.6)', async ({ page }) => {
   await openOut(page, 8)
-  await expect(page.getByRole('radio', { name: 'Switch off while cranking' })).toBeDisabled()
-  await expect(page.getByText(/Needs firmware 5\.6/).first()).toBeVisible()
+  await expect(page.getByText(/give it the Accessory role/)).toBeVisible()
+  await expect(page.getByRole('link', { name: 'Output roles' })).toHaveAttribute('href', /power\/roles/)
 })
 
 test('wiring: gauge, length, colour and voltage drop are saved', async ({ page }) => {
@@ -165,8 +165,8 @@ test('chain panel: raw view, flow-builder links and firmware-gated items', async
   await expect(page.getByLabel('Raw output settings')).toContainText('"number": 2')
   await page.getByTestId('show-raw').click()
   await expect(page.getByLabel('Raw output settings')).toHaveCount(0)
-  await expect(page.getByRole('button', { name: 'Use a role instead…' })).toBeDisabled()
-  await expect(page.getByRole('button', { name: '+ Math' })).toBeDisabled()
+  await expect(page.getByRole('link', { name: 'Use a role instead…' })).toHaveAttribute('href', /power\/roles/)   // firmware 5.6
+  await expect(page.getByRole('link', { name: '+ Math' })).toHaveAttribute('href', /functions\/flow/)
   for (const c of ['On-delay', 'Keep on after', 'Flasher', 'Table', 'Signal', 'Lua']) await expect(page.getByRole('link', { name: '+ ' + c })).toHaveAttribute('href', `#/next/functions/flow/${d.guid}`)
   await page.getByRole('link', { name: 'Open in flow builder' }).click()
   await expect(page).toHaveURL(new RegExp(`#/next/functions/flow/${d.guid}`))
