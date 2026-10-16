@@ -9,6 +9,7 @@
   import { gatherClientState, restoreClientState } from '../../lib/store.js'
   import { ui } from './ui.svelte.js'
   import { pm } from './parts/project.svelte.js'
+  import { ago } from '../screens/functions/parts/catalog.js'
 
   const open = $derived(ui.panel === 'project')
   const stem = (f) => (f ?? '').replace(/\.json$/i, '')
@@ -16,6 +17,8 @@
   // A project that was never saved but has modules counts as unsaved: leaving it would lose it.
   const unsaved = $derived(project.dirty || (!project.current && live.devices.length > 0))
   const files = $derived([...project.files].sort((a, b) => a.localeCompare(b)))
+  // newest first with time and module count (G20); an older backend gives names only
+  const listed = $derived(project.recent.length ? project.recent : files.map((name) => ({ name })))
 
   let view = $state('menu') // 'menu' | 'saveas'
   let showFiles = $state(false)
@@ -247,16 +250,16 @@
     {#if showFiles}
       <span class="nx-label" id="files-l">Project files ({files.length}) · {project.dir}</span>
       <div class="files" role="group" aria-labelledby="files-l">
-        {#each files as f (f)}
-          <button type="button" class="file" onclick={() => pickFile(f)} disabled={busy}>
-            <span class="mono">{f}</span>
-            {#if f === project.current}<Chip tone="ok">open now</Chip>{/if}
+        {#each listed as r (r.name)}
+          <button type="button" class="file" onclick={() => pickFile(r.name)} disabled={busy}>
+            <span class="mono">{r.name}</span>
+            {#if r.modifiedAt}<span class="muted meta">{r.moduleCount != null ? `${r.moduleCount} module${r.moduleCount === 1 ? '' : 's'} · ` : ''}<time datetime={r.modifiedAt} title={new Date(r.modifiedAt).toLocaleString()}>{ago(r.modifiedAt)}</time></span>{/if}
+            {#if r.name === project.current}<Chip tone="ok">open now</Chip>{/if}
           </button>
         {:else}
           <p class="muted pad">No project files in the folder yet.</p>
         {/each}
       </div>
-      <p class="muted sm">The folder lists names only. The backend does not report when a file changed or how many modules it holds (gap G20).</p>
     {/if}
 
     <span class="nx-label">Copy to or from this PC</span>
@@ -314,6 +317,7 @@
   .at .muted { font-size: var(--text-xs); }
   kbd { font-family: var(--font-mono); font-size: var(--text-xs); color: var(--color-text-muted); }
   .files { display: flex; flex-direction: column; max-height: 220px; overflow: auto; border: 1px solid var(--color-line); border-radius: var(--radius-md); }
+  .meta { margin-left: auto; font-size: var(--text-xs); white-space: nowrap; }
   .file { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); min-height: 44px; padding: 0 var(--space-3); border: 0; border-bottom: 1px solid var(--color-line); background: transparent; color: var(--color-text); text-align: left; }
   .file:hover:not(:disabled) { background: var(--color-raised); }
   .pad { padding: var(--space-3); }

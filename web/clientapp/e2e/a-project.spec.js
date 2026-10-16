@@ -36,7 +36,17 @@ test('Open lists the project files from the backend', async ({ page }) => {
   const list = menu(page).getByRole('group', { name: /Project files/ })
   await expect(list.getByRole('button')).toHaveCount(proj.files.length)
   for (const f of proj.files.slice(0, 5)) await expect(list.getByRole('button', { name: f, exact: false }).first()).toBeVisible()
-  await expect(menu(page).getByText('gap G20')).toBeVisible()
+  // newest first, each with its module count and when it changed (G20)
+  expect(proj.recent.map((r) => r.name).sort()).toEqual([...proj.files].sort())
+  const ts = proj.recent.map((r) => Date.parse(r.modifiedAt))
+  expect(ts.every(Number.isFinite), 'modifiedAt is ISO 8601').toBe(true)
+  expect(ts).toEqual([...ts].sort((a, b) => b - a))
+  if (proj.recent.length) {
+    const top = proj.recent[0]
+    await expect(list.getByRole('button').first()).toContainText(top.name)
+    if (top.moduleCount != null) await expect(list.getByRole('button').first()).toContainText(`${top.moduleCount} module`)
+    await expect(list.getByRole('button').first().locator('time')).toHaveAttribute('datetime', top.modifiedAt)
+  }
   await menu(page).getByTestId('proj-open').click()
   await expect(list).toHaveCount(0)
 })

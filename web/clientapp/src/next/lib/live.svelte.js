@@ -22,7 +22,7 @@ telemetry.subscribe((t) => {
 hubState.subscribe((s) => (hub.state = s))
 
 /** Project file state. `dirty` is tracked in the app (API gap G1: the backend has no flag). */
-export const project = $state({ current: null, dir: '', files: [], dirty: false, loaded: false })
+export const project = $state({ current: null, dir: '', files: [], recent: [], dirty: false, loaded: false })
 
 export async function refreshProject() {
   try {
@@ -30,6 +30,7 @@ export async function refreshProject() {
     project.current = p?.current ?? null
     project.dir = p?.dir ?? ''
     project.files = p?.files ?? []
+    project.recent = p?.recent ?? []   // G20: [{ name, modifiedAt, moduleCount }], newest first
     project.loaded = true
   } catch { /* backend down: keep last */ }
 }
