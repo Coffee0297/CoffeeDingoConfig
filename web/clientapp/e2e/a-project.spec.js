@@ -284,3 +284,41 @@ test('Save, then continue saves first and then opens @exclusive', async ({ page 
   }
   expect(errors).toEqual([])
 })
+
+test('Save keeps the app\'s own state in the file, New clears it and Open brings it back (G4) @exclusive', async ({ page }) => {
+  const errors = watchErrors(page)
+  await open(page, 'hardware')
+  const file = stamp()
+  const g = (await devices())[0].guid
+  const posKey = 'dingoNextFlowPos:' + g, pos = JSON.stringify({ 'output:1': { x: 123, y: 45 } })
+  const read = () => page.evaluate((k) => localStorage.getItem(k), posKey)
+  try {
+    await page.evaluate(([k, v]) => localStorage.setItem(k, v), [posKey, pos])
+    await openMenu(page)
+    await menu(page).getByTestId('proj-saveas').click()
+    await menu(page).getByRole('textbox', { name: 'File name' }).fill(file)
+    await menu(page).getByTestId('saveas-go').click()
+    await waitFor(async () => (await apiJson('GET', '/api/project')).current === file + '.json', 10_000, 'file saved')
+    // the file holds it (and a save without it, like the AI agent's, keeps it)
+    expect((await apiJson('GET', '/api/project/download')).dingoConfigClient.graph[posKey]).toBe(pos)
+    await apiJson('POST', '/api/project/save', { FileName: file + '.json' })
+    expect((await apiJson('GET', '/api/project/download')).dingoConfigClient.graph[posKey]).toBe(pos)
+    await page.keyboard.press('Escape')
+    // forget it in the browser and start a new project: nothing comes back from the old one
+    await page.evaluate((k) => localStorage.removeItem(k), posKey)
+    await openMenu(page)
+    await menu(page).getByTestId('proj-new').click()
+    await waitFor(async () => (await devices()).length === 0, 10_000, 'new project is empty')
+    expect((await apiJson('GET', '/api/project/download')).dingoConfigClient).toBeUndefined()
+    // Open the file again: the browser gets it back
+    await openMenu(page)
+    await menu(page).getByTestId('proj-open').click()
+    await menu(page).getByRole('group', { name: /Project files/ }).getByRole('button', { name: new RegExp(file) }).click()
+    await expect(page.getByText(new RegExp(`Opened ${file}\.json`)).first()).toBeVisible({ timeout: 20_000 })
+    await expect.poll(read).toBe(pos)
+  } finally {
+    await page.evaluate((k) => localStorage.removeItem(k), posKey).catch(() => {})
+    await forceRestoreProject()
+  }
+  expect(errors).toEqual([])
+})

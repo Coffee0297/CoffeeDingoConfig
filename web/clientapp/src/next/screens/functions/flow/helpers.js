@@ -3,8 +3,8 @@
 // 2. suggest(): a matcher over the real block graph of one module that finds plain-block patterns a
 //    function or helper block covers (e.g. brake + turn combines = US rear lamp).
 // 3. Group records: "Replace" only regroups existing blocks (metadata). The blocks on the module are
-//    not changed. Records live in this browser (localStorage, per project + module) because the
-//    backend has no place for them yet (G16 / G4): they are NOT saved in the project file.
+//    not changed. Records live in this browser (localStorage, per module guid) and travel in the
+//    project file's client section (G4); the function record itself is G16.
 
 // port notation: plain = on/off, '#' = number, '*' = bundle
 export const CATALOG = [
@@ -124,13 +124,14 @@ export function suggest(model, groups = [], dismissed = []) {
   return out
 }
 
-// ---- group records (localStorage) -------------------------------------------------------------
-const storeKey = (projectName, guid) => `dingoNextGroups:${projectName || 'unsaved'}:${guid}`
-export function loadGroups(projectName, guid) {
-  try { const v = JSON.parse(localStorage.getItem(storeKey(projectName, guid)) || '{}'); return { groups: v.groups ?? [], dismissed: v.dismissed ?? [] } } catch { return { groups: [], dismissed: [] } }
+// ---- group records (localStorage per module guid; saved with the project file, G4) ----------------
+export const GROUPS_KEY = 'dingoNextGroups:'
+const storeKey = (guid) => GROUPS_KEY + guid
+export function loadGroups(guid) {
+  try { const v = JSON.parse(localStorage.getItem(storeKey(guid)) || '{}'); return { groups: v.groups ?? [], dismissed: v.dismissed ?? [] } } catch { return { groups: [], dismissed: [] } }
 }
-export function saveGroups(projectName, guid, data) {
-  try { localStorage.setItem(storeKey(projectName, guid), JSON.stringify({ groups: data.groups, dismissed: data.dismissed })) } catch { /* private mode: lives for this page only */ }
+export function saveGroups(guid, data) {
+  try { localStorage.setItem(storeKey(guid), JSON.stringify({ groups: data.groups, dismissed: data.dismissed })) } catch { /* private mode: lives for this page only */ }
 }
 export function makeGroup(s) {
   const r = recipe(s.recipe)

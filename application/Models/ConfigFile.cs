@@ -1,3 +1,5 @@
+using System.Text.Json;
+using System.Text.Json.Serialization;
 using domain.Devices.Canboard;
 using domain.Devices.dingoPdm;
 using domain.Devices.Generic;
@@ -16,4 +18,10 @@ public class ConfigFile
     public List<DbcDevice> DbcDevices { get; set; } = new();
     public List<BlinkMarineKeypadDevice> BlinkMarineKeypads { get; set; } = new();
     public List<GrayhillKeypadDevice> GrayhillKeypads { get; set; } = new();
+
+    // G4: what the app keeps outside the modules (car-map and canvas positions, function records, groups,
+    // dismissed suggestions, cross-module functions, Lua snippets). Opaque to the server; same key the
+    // browser-download copy has always used.
+    [JsonPropertyName("dingoConfigClient"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public JsonElement? Client { get; set; }
 }

@@ -1,7 +1,7 @@
 <script>
   // Car-layout map: one pin per module, dragged where it sits in the car. Positions are percentages of
-  // the map, stored in this browser under the same key the old UI uses ("pinpos"). API gap G4: they are
-  // not saved with the project file yet, so another PC starts with the default layout.
+  // the map, stored in this browser under the same key the old UI uses ("pinpos") and saved with the
+  // project file (its client section, G4), so another PC that opens the file gets the same layout.
   import { Button, StateDot } from '../../../ui/index.js'
   import { moduleState, live } from '../../../lib/live.svelte.js'
   import { href } from '../../../router.svelte.js'

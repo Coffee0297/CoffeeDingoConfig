@@ -175,7 +175,7 @@ export const api = {
   canlog: () => j('GET', '/api/canlog'),
   syslog: () => j('GET', '/api/syslog'),
   project: () => j('GET', '/api/project'),
-  projSave: (FileName) => j('POST', '/api/project/save', { FileName }),
+  projSave: (FileName, Client) => j('POST', '/api/project/save', { FileName, Client }),
   projOpen: (FileName) => j('POST', '/api/project/open', { FileName }),
   projNew: () => j('POST', '/api/project/new'),
   projDownload: () => j('GET', '/api/project/download'),   // full project JSON for a browser save
@@ -553,7 +553,8 @@ export function gatherClientState() {
   try {
     for (let i = 0; i < localStorage.length; i++) {
       const k = localStorage.key(i)
-      if (k && (k.startsWith('dingoGraphPos:') || k.startsWith('dingoGraphRemotes:'))) graph[k] = localStorage.getItem(k)
+      // old UI graph layout, and the redesign's flow canvas positions and function groups (per module guid)
+      if (k && /^(dingoGraphPos|dingoGraphRemotes|dingoNextFlowPos|dingoNextGroups):/.test(k)) graph[k] = localStorage.getItem(k)
     }
   } catch {}
   return {

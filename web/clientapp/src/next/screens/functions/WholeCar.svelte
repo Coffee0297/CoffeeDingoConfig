@@ -59,7 +59,7 @@
     const shownId = {}
     mods.forEach((m, ci) => {
       const g = m.dev.guid
-      const groups = pruneGroups(loadGroups(project.current ?? '', g).groups, m.model).filter((x) => !x.expanded)
+      const groups = pruneGroups(loadGroups(g).groups, m.model).filter((x) => !x.expanded)
       const memberOf = new Map()
       for (const gr of groups) for (const id of gr.members) memberOf.set(id, gr)
       const keep = [...m.model.nodes.values()].filter((n) => {

@@ -50,7 +50,7 @@
   async function saveTo(file) {
     busy = true
     try {
-      const r = await api.projSave(file)
+      const r = await api.projSave(file, gatherClientState())   // G4: the app's own state goes in the file
       project.dirty = false
       await refreshProject()
       say(`Saved ${r?.current ?? file}.`)
@@ -101,6 +101,7 @@
     busy = true
     try {
       const r = await api.projOpen(file)
+      restoreClientState(r?.client)   // G4: positions, groups, function records (a file without them clears them)
       project.dirty = false
       await refreshProject()
       ui.panel = null
@@ -114,6 +115,7 @@
     busy = true
     try {
       await api.projNew()
+      restoreClientState(null)   // a new project has none of the old one's layout or records
       live.devices = []   // the telemetry lags: an untitled project with old modules would count as unsaved
       project.dirty = false
       await refreshProject()

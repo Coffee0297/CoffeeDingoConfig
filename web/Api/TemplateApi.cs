@@ -12,13 +12,19 @@ namespace web.Api;
 //
 //  Applied templates (what each one created, so it can be edited or removed) are a JSON list kept here
 //  and mirrored by the SPA, which bundles it into the saved project file.
-//  ponytail: in memory only — the project file (via the SPA) is what keeps it across restarts.
+//  In memory; the project file keeps it (G4: saved into and loaded from the file's client section).
 // ============================================================================
 public static class TemplateApi
 {
     static readonly HttpClient Http = new() { Timeout = TimeSpan.FromMinutes(2) };
     static readonly SemaphoreSlim Gate = new(1, 1);   // one run at a time: the instance list is read-modify-write
     static string? _instances;   // null until the SPA (or an apply) seeds it
+    /// <summary>The function records as JSON (G4: written into the project file on save).</summary>
+    internal static string? Instances => _instances;
+    /// <summary>Take the records from an opened project; null = the project has none.</summary>
+    internal static void LoadInstances(System.Text.Json.JsonElement? client) =>
+        _instances = client is { ValueKind: System.Text.Json.JsonValueKind.Object } c && c.TryGetProperty("templates", out var t)
+            && t.ValueKind == System.Text.Json.JsonValueKind.Array ? t.GetRawText() : "[]";
 
     public static void MapTemplateApi(this WebApplication app, IFileProvider spaFiles)
     {

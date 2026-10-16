@@ -69,6 +69,9 @@ public class ConfigFileManager(ILogger<ConfigFileManager> logger, DeviceDefiniti
         return File.Exists(fullPath);
     }
 
+    /// <summary>G4: the open project's client section (see ConfigFile.Client); written with every save.</summary>
+    public JsonElement? ClientState { get; set; }
+
     public void NewFile()
     {
         CurrentFileName = null;
@@ -88,7 +91,8 @@ public class ConfigFileManager(ILogger<ConfigFileManager> logger, DeviceDefiniti
             CanboardDevices = list.Where(d => d.GetType() == typeof(CanboardDevice)).Cast<CanboardDevice>().OrderBy(d => d.BaseId).ThenBy(d => d.Name).ToList(),
             DbcDevices = list.Where(d => d.GetType() == typeof(DbcDevice)).Cast<DbcDevice>().OrderBy(d => d.BaseId).ThenBy(d => d.Name).ToList(),
             BlinkMarineKeypads = list.OfType<BlinkMarineKeypadDevice>().OrderBy(d => d.BaseId).ThenBy(d => d.Name).ToList(),
-            GrayhillKeypads = list.OfType<GrayhillKeypadDevice>().OrderBy(d => d.BaseId).ThenBy(d => d.Name).ToList()
+            GrayhillKeypads = list.OfType<GrayhillKeypadDevice>().OrderBy(d => d.BaseId).ThenBy(d => d.Name).ToList(),
+            Client = ClientState
         };
         return JsonSerializer.Serialize(config, _options);
     }
@@ -99,6 +103,7 @@ public class ConfigFileManager(ILogger<ConfigFileManager> logger, DeviceDefiniti
     {
         var config = JsonSerializer.Deserialize<ConfigFile>(jsonString, _options);
         if (config == null) return null;
+        ClientState = config.Client?.Clone();
 
         foreach (var device in config.PdmDevices)
             device.ApplyDefinition(deviceDefinitionManager.GetByPdmType(device.PdmType) ?? DeviceDefinitionManager.DefaultPdm);
