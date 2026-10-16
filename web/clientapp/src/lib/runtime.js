@@ -19,7 +19,7 @@ const mkApi = (host) => {
 }
 
 export function list() {
-  return JSON.stringify({ ops: OPS, templates: TEMPLATES.map(({ key, name, desc, fields }) => ({ key, name, desc,
+  return JSON.stringify({ ops: OPS, templates: TEMPLATES.map(({ key, group, name, desc, fields }) => ({ key, group, name, desc,
     fields: fields.map(({ k, t, label, load, opt, def, min, max }) => ({ field: k, type: t, label, load, optional: !!opt, def, min, max })) })) })
 }
 

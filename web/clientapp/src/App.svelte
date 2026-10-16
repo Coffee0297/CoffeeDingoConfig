@@ -76,7 +76,7 @@
     projOpen = false
     try {
       const doc = await api.projDownload()
-      doc.dingoConfigClient = gatherClientState()   // cross-module functions, Lua, bridges, layout
+      doc.dingoConfigClient = { ...gatherClientState(), groups: doc.dingoConfigClient?.groups ?? {} }   // cross-module functions, Lua, bridges, layout; groups from the server (G16)
       const name = (projFileName || 'project').replace(/\.json$/i, '') + '.json'
       const url = URL.createObjectURL(new Blob([JSON.stringify(doc, null, 2)], { type: 'application/json' }))
       const a = document.createElement('a'); a.href = url; a.download = name; a.click()

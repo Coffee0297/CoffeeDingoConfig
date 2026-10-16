@@ -16,7 +16,7 @@
   import FlowEdge from './flow/FlowEdge.svelte'
   import FlowApi from './flow/FlowApi.svelte'
   import { loadCar, carLinks, carModels } from './flow/car.js'
-  import { loadGroups, pruneGroups, kindWord } from './flow/helpers.js'
+  import { loadAllGroups, pruneGroups, kindWord } from './flow/helpers.js'
   import { writeLive } from './flow/livevals.js'
   import { FAM_COLOR, isCb } from './flow/model.js'
   import { portForSignal } from './flow/flowgraph.js'
@@ -52,6 +52,8 @@
 
   // which blocks to show per module: logic, outputs, inputs that something reads, groups collapsed
   const COL_W = 300
+  let groupsBy = $state({})   // G16: every module's group record, from the server
+  $effect(() => { project.current; untrack(() => { loadAllGroups().then((r) => (groupsBy = r)) }) })
   const graph = $derived.by(() => {
     const nodes = [], edges = []
     const linkedFrom = new Set(links.map((l) => l.from.guid + '|' + l.from.node))
@@ -59,7 +61,7 @@
     const shownId = {}
     mods.forEach((m, ci) => {
       const g = m.dev.guid
-      const groups = pruneGroups(loadGroups(project.current ?? '', g).groups, m.model).filter((x) => !x.expanded)
+      const groups = pruneGroups(groupsBy[g]?.groups ?? [], m.model).filter((x) => !x.expanded)
       const memberOf = new Map()
       for (const gr of groups) for (const id of gr.members) memberOf.set(id, gr)
       const keep = [...m.model.nodes.values()].filter((n) => {

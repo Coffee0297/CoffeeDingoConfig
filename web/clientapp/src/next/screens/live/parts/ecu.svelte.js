@@ -1,6 +1,7 @@
 // Engine values (RPM, gear, coolant) from a CAN input or an imported ECU (DBC) device, when the project
-// has one. Which signal means "RPM" is guessed from its name (API gap G4: the choice cannot be stored
-// with the project yet). One read of every module's signals finds the sources; only those are polled.
+// has one. Which signal means "RPM" is guessed from its name (there is no picker to store a choice; the
+// project file could carry one in its client section, G4). One read of every module's signals finds the
+// sources; only those are polled.
 import { live, api } from '../../../lib/live.svelte.js'
 import { feed, watchSignals } from './feed.svelte.js'
 

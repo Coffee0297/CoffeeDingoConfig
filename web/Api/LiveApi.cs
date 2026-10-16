@@ -69,7 +69,8 @@ public record WriteParamReq(int Index, int Sub, uint Value);
 public record SdoReadReq(int Node, int Index, int Sub);
 public record SdoWriteReq(int Node, int Index, int Sub, uint Value, int Size);
 public record SdoNodeReq(int Node);
-public record ProjReq(string FileName);
+// Client (G4): the app's own project state to store in the file; null keeps the one already held.
+public record ProjReq(string FileName, System.Text.Json.JsonElement? Client = null);
 public record LuaReq(string Source);
 public record LinkRemoteReq(int CanInput, string SourceGuid, string Signal);
 public record CrossTrigReq(string Guid, int? VarIndex);
@@ -1454,9 +1455,22 @@ public static class LiveApi
                 files = cfg.ListFilesWithExtension("*.json").Select(f => f.Name).ToArray() });
         });
 
+        // The function records and groups the server holds are the newest (the AI agent may have changed
+        // them): write them into the client section before the file is made.
+        static void WithServerState(ConfigFileManager cfg)
+        {
+            if (cfg.ClientState is null && TemplateApi.Instances is null or "[]" && GroupApi.IsEmpty) return;   // nothing to keep (a new project)
+            var node = (cfg.ClientState is { } cs ? System.Text.Json.Nodes.JsonNode.Parse(cs.GetRawText()) as System.Text.Json.Nodes.JsonObject : null)
+                ?? new System.Text.Json.Nodes.JsonObject { ["version"] = 1 };
+            if (TemplateApi.Instances is { } inst) node["templates"] = System.Text.Json.Nodes.JsonNode.Parse(inst);
+            cfg.ClientState = System.Text.Json.JsonSerializer.SerializeToElement(GroupApi.MergeInto(node));
+        }
+
         api.MapPost("/project/save", async (ProjReq r, ConfigFileManager cfg, DeviceManager dm) =>
         {
             Directory.CreateDirectory(cfg.WorkingDirectory);
+            if (r.Client is { ValueKind: System.Text.Json.JsonValueKind.Object } c) cfg.ClientState = c.Clone();
+            WithServerState(cfg);
             await cfg.SaveDevices(dm.GetDevices(), r.FileName);
             MarkClean(cfg, dm);
             return Results.Ok(new { ok = true, current = cfg.CurrentFileName });
@@ -1474,8 +1488,9 @@ public static class LiveApi
                 dm.ClearDevices();
                 xmod.Clear();   // cross-module defs are per-project; the UI re-imports for the new project
                 dm.AddDevices(devs);
+                TemplateApi.LoadInstances(cfg.ClientState); GroupApi.Load(cfg.ClientState);
                 MarkClean(cfg, dm);
-                return Results.Ok(new { ok = true, count = devs.Count });
+                return Results.Ok(new { ok = true, count = devs.Count, client = cfg.ClientState });
             }
             catch (Exception e)
             {
@@ -1485,13 +1500,16 @@ public static class LiveApi
 
         api.MapPost("/project/new", (ConfigFileManager cfg, DeviceManager dm, CrossModuleStore xmod) =>
         {
-            dm.ClearDevices(); xmod.Clear(); cfg.NewFile(); MarkClean(cfg, dm); return Results.Ok(new { ok = true });
+            dm.ClearDevices(); xmod.Clear(); cfg.NewFile(); cfg.ClientState = null; TemplateApi.LoadInstances(null); GroupApi.Load(null); MarkClean(cfg, dm); return Results.Ok(new { ok = true });
         });
 
         // Local-PC project SAVE: stream the whole project (ConfigFile JSON) back so the browser
         // saves it wherever the user chooses. No server-side folder — works on Windows/Mac/Linux.
         api.MapGet("/project/download", (ConfigFileManager cfg, DeviceManager dm) =>
-            Results.Text(cfg.SerializeDevices(dm.GetDevices()), "application/json"));
+        {
+            WithServerState(cfg);
+            return Results.Text(cfg.SerializeDevices(dm.GetDevices()), "application/json");
+        });
 
         // Local-PC project OPEN: load a project file the user picked on their PC (raw ConfigFile
         // JSON in the body). The current project is replaced only on a successful parse.
@@ -1507,6 +1525,7 @@ public static class LiveApi
                 xmod.Clear();   // cross-module defs are per-project; the UI re-imports for the new project
                 dm.AddDevices(devs);
                 cfg.NewFile();   // opened from an external file, not one of our working-dir files
+                TemplateApi.LoadInstances(cfg.ClientState); GroupApi.Load(cfg.ClientState);
                 MarkClean(cfg, dm);
                 return Results.Ok(new { ok = true, count = devs.Count });
             }

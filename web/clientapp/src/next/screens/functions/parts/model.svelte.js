@@ -2,7 +2,8 @@
 //  - applied templates (templateInstances): function blocks, with their picks, blocks and outputs
 //  - every other enabled output, grouped by name across modules ("Left Low Beam" + "Right Low Beam" = "Low Beam"),
 //    classed by what drives it: custom code (Lua), blocks (logic between), or a helper (a direct link).
-// There is no function record on the backend (API gap G16), so hand-built rows are a best-effort reading.
+// Hand-built rows are a best-effort reading of the outputs; the flow builder's groups (/api/groups) label
+// blocks on one module, not whole functions.
 import { get } from 'svelte/store'
 import { live, api, mutate } from '../../../lib/live.svelte.js'
 import { templateInstances, syncTemplates } from '../../../../lib/store.js'

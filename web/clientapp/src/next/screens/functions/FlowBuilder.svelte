@@ -115,14 +115,15 @@
   // ---- groups (function / helper blocks) ----
   const projName = $derived(project.current ?? '')
   let gdata = $state({ groups: [], dismissed: [] })
-  $effect(() => { const g = guid, p = projName; untrack(() => { gdata = loadGroups(p, g) }) })
+  // reload when the module or the open project changes (opening a project restores its groups, G4)
+  $effect(() => { const g = guid; projName; untrack(() => { loadGroups(g).then((d) => { if (guid === g) gdata = d }) }) })
   const groups = $derived(model ? pruneGroups(gdata.groups, model) : [])
   const suggestions = $derived(model ? suggest(model, groups, gdata.dismissed) : [])
   let lastGroup = $state(null)
   function setGroups(next, label) {
     const prev = JSON.parse(JSON.stringify(gdata))
     gdata = next
-    saveGroups(projName, guid, next)
+    saveGroups(guid, next)
     pushUndo({ label, groupsPrev: prev })
   }
   function replace(s) {
@@ -258,7 +259,7 @@
     const e = undo.at(-1)
     if (!e) return
     undo = undo.slice(0, -1)
-    if (e.groupsPrev) { gdata = e.groupsPrev; saveGroups(projName, guid, e.groupsPrev); toast(`Undid: ${e.label}`, 'info', 2500); return }
+    if (e.groupsPrev) { gdata = e.groupsPrev; saveGroups(guid, e.groupsPrev); toast(`Undid: ${e.label}`, 'info', 2500); return }
     if (e.posPrev) { pos = e.posPrev; try { localStorage.setItem(posKey(), JSON.stringify(e.posPrev)) } catch {} toast('Undid: Tidy', 'info', 2500); return }
     busy = true
     try {

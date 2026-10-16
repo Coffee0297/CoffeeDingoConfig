@@ -14,17 +14,8 @@ export const SYSTEMS = [
 ]
 export const systemName = (k) => SYSTEMS.find((s) => s.key === k)?.name ?? 'Other'
 
-// The templates carry no group (API gap G16), so the screen keeps this map.
-const TEMPLATE_SYSTEM = {
-  headlights: 'lights', interior: 'lights', reverse: 'lights', brake: 'lights', drl: 'lights', reminder: 'lights',
-  blinker: 'signals',
-  washwipe: 'wipers', wipers: 'wipers', relaywipe: 'wipers',
-  radfan: 'cooling', pwmfan: 'cooling',
-  fuelpump: 'fuel',
-  starter: 'power',
-  simple: 'accessories', analog: 'accessories', afterrun: 'accessories', toggle: 'accessories',
-}
-export const templateSystem = (key) => TEMPLATE_SYSTEM[key] ?? 'other'
+// Each template names its system (`group` in templates.js, also in the agent's template list).
+export const templateSystem = (key) => TEMPLATES.find((t) => t.key === key)?.group ?? 'other'
 export const templateByKey = (key) => TEMPLATES.find((t) => t.key === key)
 
 // Output name -> system (hand-built functions only). First match wins.
