@@ -596,8 +596,10 @@ public static class LiveApi
                         1 => ("pdm", "dingoPDM-Max"),
                         _ => ("pdm", "dingoPDM"),
                     };
+                    // G8: the same reply carries the firmware version (bytes 4..7, as the device classes read it)
+                    var version = pl.Length >= 8 ? $"v{pl[4]}.{pl[5]}.{(pl[6] << 8) + pl[7]}" : null;
                     found.Add(new {
-                        type, baseId, hex = "0x" + baseId.ToString("X3"), label, confidence = "high",
+                        type, baseId, hex = "0x" + baseId.ToString("X3"), label, confidence = "high", version,
                         detail = $"identified via BOARD_ID {boardId} at 0x{baseId:X3} ({runLen} status frames)"
                     });
                 }

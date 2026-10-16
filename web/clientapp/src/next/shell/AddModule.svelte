@@ -239,7 +239,7 @@
                       </td>
                       <td>{f.label}</td>
                       <td class="mono">{f.hex}</td>
-                      <td class="muted" title="The scan does not report firmware yet (gap G8)">not reported</td>
+                      <td class:muted={!f.version} class:mono={!!f.version}>{fwText({ version: f.version, connected: true })}</td>
                       <td>{#if f.isNew}<strong>New: not in the project</strong>{:else}<span class="muted">In project as {f.already?.name}</span>{/if}</td>
                     </tr>
                   {/each}
