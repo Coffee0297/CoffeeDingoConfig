@@ -8,6 +8,7 @@
   import CommandPalette from './shell/CommandPalette.svelte'
   import ConnectPanel from './shell/ConnectPanel.svelte'
   import ApplyPanel from './shell/ApplyPanel.svelte'
+  import AgentPrompt from './shell/AgentPrompt.svelte'
   import ProjectMenu from './shell/ProjectMenu.svelte'
   import AddModule from './shell/AddModule.svelte'
 
@@ -38,6 +39,7 @@
 
 <ConnectPanel />
 <ApplyPanel />
+<AgentPrompt />
 <ProjectMenu />
 <AddModule />
 <CommandPalette />

@@ -1,4 +1,5 @@
 using System.Text;
+using application.Services;
 using System.Text.Json;
 
 namespace web.Api;
@@ -146,6 +147,21 @@ public static class McpServer
         };
     }
 
+    /// <summary>The first object key that appears twice (ignoring case) in the same object, anywhere in <paramref name="e"/>, or null.</summary>
+    static string? DuplicateKey(JsonElement e)
+    {
+        if (e.ValueKind == JsonValueKind.Array)
+            foreach (var x in e.EnumerateArray()) if (DuplicateKey(x) is { } d) return d;
+        if (e.ValueKind != JsonValueKind.Object) return null;
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);   // the API binds names case-insensitively
+        foreach (var p in e.EnumerateObject())
+        {
+            if (!seen.Add(p.Name)) return p.Name;
+            if (DuplicateKey(p.Value) is { } d) return d;
+        }
+        return null;
+    }
+
     // ------------------------------------------------------------- JSON-RPC pump
     static async Task<IResult> HandlePost(HttpRequest req)
     {
@@ -162,11 +178,27 @@ public static class McpServer
 
         if (root.ValueKind != JsonValueKind.Object || !root.TryGetProperty("method", out var mEl))
             return Results.Json(Error(null, -32600, "invalid request"));
+        // A repeated key is read first-wins by TryGetProperty but last-wins by a deserializer: the approval
+        // prompt could show one value while the tool acts on another. Refuse the whole request.
+        if (DuplicateKey(root) is { } dup)
+            return Results.Json(Error(null, -32600, $"invalid request: key \"{dup}\" appears twice"));
 
         var method = mEl.GetString();
         var hasId = root.TryGetProperty("id", out var idEl);
         object? id = hasId ? JsonId(idEl) : null;
         var baseUrl = $"{req.Scheme}://{req.Host}";
+
+        // G22: switched off in the app = every client is turned away
+        if (!AgentGuard.Enabled)
+            return Results.Json(Error(id, -32000, "The dingoConfig AI agent server is switched off (Expert > AI agent)."), statusCode: 503);
+        // a client is its MCP session, else its address and user agent
+        var client = req.Headers["Mcp-Session-Id"].FirstOrDefault() is { Length: > 0 } sid ? sid
+            : $"{req.HttpContext.Connection.RemoteIpAddress} {req.Headers.UserAgent}".Trim();
+        string? clientName = null;
+        if (method == "initialize" && root.TryGetProperty("params", out var ip) && ip.TryGetProperty("clientInfo", out var ci)
+            && ci.TryGetProperty("name", out var cn))
+            clientName = ci.TryGetProperty("version", out var cv) ? $"{cn.GetString()} {cv.GetString()}" : cn.GetString();
+        AgentGuard.Seen(client, clientName);
 
         switch (method)
         {
@@ -193,7 +225,7 @@ public static class McpServer
                 });
 
             case "tools/call":
-                return await CallTool(id, root, baseUrl);
+                return await CallTool(id, root, baseUrl, client, req.HttpContext.RequestServices);
 
             case "prompts/list":
                 return Ok(id, new
@@ -211,7 +243,7 @@ public static class McpServer
         }
     }
 
-    static async Task<IResult> CallTool(object? id, JsonElement root, string baseUrl)
+    static async Task<IResult> CallTool(object? id, JsonElement root, string baseUrl, string client, IServiceProvider sp)
     {
         if (!root.TryGetProperty("params", out var p) || !p.TryGetProperty("name", out var nEl))
             return Results.Json(Error(id, -32602, "missing params.name"));
@@ -224,9 +256,19 @@ public static class McpServer
         try
         {
             var call = tool.Build(args);
+            // G22: ask the operator first for the tools on the ask-first list
+            if (AgentGuard.NeedsApproval(tool.Name) && !await AgentGuard.AskAsync(client, tool.Name, args))
+            {
+                AgentGuard.Record(client, tool.Name, args, false, "refused by the operator", null);
+                return Ok(id, ToolText($"Refused: the operator did not allow {tool.Name} in dingoConfig (or did not answer within 2 minutes). Nothing was done.", isError: true));
+            }
+            // a write: keep the project as it was, so the operator can undo it
+            var write = call.Method != HttpMethod.Get;
+            var before = write ? sp.GetRequiredService<ConfigFileManager>().SerializeDevices(sp.GetRequiredService<DeviceManager>().GetDevices()) : null;
             using var msg = new HttpRequestMessage(call.Method, baseUrl + call.Path) { Content = call.Content };
             using var resp = await Http.SendAsync(msg);
             var text = await resp.Content.ReadAsStringAsync();
+            if (write) AgentGuard.Record(client, tool.Name, args, resp.IsSuccessStatusCode, resp.IsSuccessStatusCode ? "done" : $"HTTP {(int)resp.StatusCode}", before);
 
             if (!resp.IsSuccessStatusCode)
                 return Ok(id, ToolText($"Error: HTTP {(int)resp.StatusCode} from {call.Path}\n{text}", isError: true));

@@ -43,17 +43,97 @@ test('AI agent: status, address, setup and the real tool list', async ({ page, c
   expect(errors).toEqual([])
 })
 
-test('AI agent: what the backend cannot report yet is marked not available, and Stop server is disabled', async ({ page }) => {
+// ---- G22: ask first, journal + undo, connected assistants, on/off. MCP calls go straight to the backend.
+const mcp = (method, params, id = 1) => fetch(API + '/mcp', {
+  method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'application/json', 'Mcp-Session-Id': 'e2e-agent' },
+  body: JSON.stringify({ jsonrpc: '2.0', id, method, params }) }).then(async (r) => ({ status: r.status, body: await r.json() }))
+const tool = async (name, args = {}) => (await mcp('tools/call', { name, arguments: args })).body
+// the operator's own requests (the app page sends Sec-Fetch-Site: same-origin; a plain call is refused)
+const op = (path, body) => fetch(API + path, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Sec-Fetch-Site': 'same-origin' }, body: JSON.stringify(body) }).then((r) => r.json())
+
+test('AI agent: a tool that asks first waits for Allow or Refuse in the app, on any page (G22)', async ({ page }) => {
+  const errors = watchErrors(page)
+  await proxyMcp(page)
+  await mcp('initialize', { protocolVersion: '2024-11-05', capabilities: {}, clientInfo: { name: 'e2e assistant', version: '1.0' } }, 0)
+  await op('/api/agent/ask', { tool: 'list_devices', ask: true })
+  try {
+    await open(page, 'expert/tools')
+    await expect(page.getByTestId('ai-clients')).toContainText('e2e assistant')
+    // asked on another page too: the prompt is app-wide
+    await open(page, 'hardware')
+    let call = tool('list_devices')
+    const prompt = page.getByRole('dialog', { name: 'An AI assistant asks first' })
+    await expect(prompt).toContainText('list_devices')
+    await prompt.getByTestId('agent-allow').click()
+    let r = await call
+    expect(r.result.isError).toBe(false)
+    call = tool('list_devices')
+    await expect(prompt).toBeVisible()
+    await prompt.getByTestId('agent-refuse').click()
+    r = await call
+    expect(r.result.isError).toBe(true)
+    expect(r.result.content[0].text).toMatch(/^Refused/)
+    await expect(prompt).toHaveCount(0)
+  } finally { await op('/api/agent/ask', { tool: 'list_devices', ask: false }) }
+  expect(errors).toEqual([])
+})
+
+test('AI agent: an assistant cannot answer its own request or change the ask list with a plain HTTP call (G22)', async () => {
+  for (const [path, body] of [['/api/agent/ask', { tool: 'set_output', ask: false }], ['/api/agent/enabled', { enabled: false }], ['/api/agent/approvals/x', { approve: true }]]) {
+    const r = await fetch(API + path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+    expect(r.status, path).toBe(403)
+  }
+  const a = await apiJson('GET', '/api/agent')
+  expect(a.enabled).toBe(true)
+  // every tool that changes a module asks by default
+  for (const t of ['set_output', 'set_output_config', 'set_function', 'write_param', 'flash_firmware', 'device_action']) expect(a.ask).toContain(t)
+})
+
+test('AI agent: a tool call with a repeated key is refused, so the prompt cannot show other values than the tool uses (G22)', async () => {
+  const call = (args) => fetch(API + '/mcp', { method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'application/json, text/event-stream' },
+    body: `{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"device_action","arguments":${args}}}` }).then((r) => r.json())
+  for (const args of ['{"guid":"x","action":"read","action":"burn"}', '{"guid":"x","Guid":"y","action":"read"}']) {
+    const r = await call(args)
+    expect(r.error?.code, args).toBe(-32600)
+    expect(r.error?.message).toMatch(/appears twice/)
+  }
+  expect((await apiJson('GET', '/api/agent')).pending ?? []).toHaveLength(0)   // nothing reached the ask queue
+})
+
+test('AI agent: Stop server turns assistants away until Start (G22)', async ({ page }) => {
   const errors = watchErrors(page)
   await proxyMcp(page)
   await open(page, 'expert/tools')
-  await expect(page.getByRole('button', { name: 'Stop server' })).toBeDisabled()
-  await expect(page.getByRole('button', { name: 'Stop server' })).toHaveAttribute('title', /Not available yet/)
-  await expect(page.getByRole('heading', { name: 'Connected assistants' })).toBeVisible()
-  await expect(page.getByText('does not keep a list of connected assistants')).toBeVisible()
-  await expect(page.getByText('does not record what an assistant changed')).toBeVisible()
-  await expect(page.getByText('Not available yet').first()).toBeVisible()
-  await expect(page.getByText(/gap G22/).first()).toBeVisible()
+  try {
+    await page.getByTestId('ai-stop').click()
+    await expect(page.getByTestId('ai-status')).toContainText('Stopped')
+    const r = await mcp('tools/list', {})
+    expect(r.status).toBe(503)
+    expect(r.body.error.message).toMatch(/switched off/)
+    await page.getByTestId('ai-start').click()
+    await expect(page.getByTestId('ai-status')).toContainText('Running')
+    expect((await mcp('tools/list', {})).status).toBe(200)
+  } finally { await op('/api/agent/enabled', { enabled: true }) }
+  expect(errors).toEqual([])
+})
+
+test('AI agent: what an assistant changed is in the journal and Undo puts the project back (G22) @exclusive', async ({ page }) => {
+  const errors = watchErrors(page)
+  await proxyMcp(page)
+  const d = (await apiJson('GET', '/api/devices')).find((x) => x.name === 'PDM-05')
+  try {
+    expect((await tool('rename_device', { guid: d.guid, name: 'zz-e2e-agent' })).result.isError).toBe(false)
+    await open(page, 'expert/tools')
+    const row = page.getByTestId('ai-journal').locator('li').filter({ hasText: 'rename_device' }).first()
+    await expect(row).toContainText('done')
+    await row.getByRole('button', { name: 'Undo' }).click()
+    await page.getByTestId('confirm-go').click()
+    await waitFor(async () => (await apiJson('GET', '/api/devices')).some((x) => x.name === 'PDM-05'), 10_000, 'name back')
+    await expect(row).toContainText('undone')
+  } finally {
+    const x = (await apiJson('GET', '/api/devices')).find((y) => y.name === 'zz-e2e-agent')
+    if (x) await apiJson('POST', `/api/devices/${x.guid}/rename`, { Name: 'PDM-05' })
+  }
   expect(errors).toEqual([])
 })
 

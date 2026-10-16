@@ -41,7 +41,8 @@ public record AdaptersDto(string[] Adapters, string[] Ports, bool Connected, str
     // G10: link state and the remembered connection
     bool Reconnecting = false, bool AutoConnect = false, bool AutoReconnect = true, object? Last = null);
 public record ConnectionOptionsReq(bool? AutoConnect, bool? AutoReconnect);
-public record TelemetryDto(bool Connected, string? Adapter, long CanTotal, long CanRate, int[] Ids, DeviceDto[] Devices, bool ProgrammingAllowed, bool Reconnecting = false);
+public record TelemetryDto(bool Connected, string? Adapter, long CanTotal, long CanRate, int[] Ids, DeviceDto[] Devices, bool ProgrammingAllowed, bool Reconnecting = false,
+    int AgentPending = 0, string? AgentPendingId = null);   // G22: AI agent requests waiting for the operator, and the oldest
 public record ConnectReq(string Adapter, string Port, string Bitrate);
 public record AddDeviceReq(string Type, string Name, string BaseId);
 public record ModifyReq(string Name, string BaseId);
@@ -391,7 +392,8 @@ public class TelemetryBroadcaster(
                         bool isGateway = isPdm && gwBase is int gb && d.BaseId == gb;
                         return isGateway ? dto with { IsGateway = true } : dto;
                     }).ToArray();
-                var dto = new TelemetryDto(status.isConnected, status.activeAdapter, _total, _rate, ids, devices, !LiveApi.IsSim(adapterManager), keeper.Reconnecting);
+                var dto = new TelemetryDto(status.isConnected, status.activeAdapter, _total, _rate, ids, devices, !LiveApi.IsSim(adapterManager), keeper.Reconnecting,
+                    AgentGuard.PendingCount, AgentGuard.OldestPendingId);
 
                 await hub.Clients.All.SendAsync("telemetry", dto, ct);
               }
