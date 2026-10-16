@@ -273,6 +273,8 @@ test('Save, then continue saves first and then opens @exclusive', async ({ page 
     await menu(page).getByRole('group', { name: /Project files/ }).getByRole('button', { name: new RegExp(file) }).click()
     await confirm(page).getByTestId('dlg-save').click()
     await expect(confirm(page)).toHaveCount(0, { timeout: 20_000 })
+    // the dialog closes before the open runs: wait for it, or the restore below races the open
+    await expect(page.getByText(new RegExp(`Opened ${file}\\.json`)).first()).toBeVisible({ timeout: 20_000 })
     // the change was saved to the file before it was opened again: the name is still there
     await waitFor(async () => (await devices()).some((d) => d.name === 'zz-e2e-keep'), 15_000, 'saved change survived the open')
   } finally {
