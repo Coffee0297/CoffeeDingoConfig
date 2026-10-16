@@ -130,3 +130,46 @@ test('firmware: update all over CAN with real release files @exclusive', async (
   }
   for (const d of await apiJson('GET', '/api/devices')) expect(d.connected).toBe(true)
 })
+
+// Sim module reset through the Sim's MCP endpoint (cleanup only)
+async function simReset(module) {
+  await fetch('http://127.0.0.1:8787/mcp', { method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'application/json, text/event-stream' },
+    body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'sim_renode', arguments: { cmd: 'reset', module } } }) }).catch(() => {})
+}
+
+test('firmware: a module waiting in its bootloader is found, shown and restarted (G9) @exclusive', async ({ page }) => {
+  test.setTimeout(120_000)
+  const errors = watchErrors(page)
+  const cb = await deviceByName('CB-1')
+  try {
+    await apiJson('POST', `/api/devices/${cb.guid}/bootloader?can=true`)   // the CAN-update entry: OpenBLT waits for a tool
+    // the Sim's Renode reset reloads the app without OpenBLT (its README: bootloader not verified), so a module
+    // there never stays in its bootloader; on a bench with real modules it does
+    const stays = await waitFor(async () => !(await deviceByName('CB-1')).connected, 8_000, 'CB-1 left its firmware').then(() => true, () => false)
+    test.skip(!stays, 'the Sim does not keep a module in its OpenBLT bootloader')
+    await open(page, 'hardware/firmware')
+    await page.getByTestId('fw-bl-scan').click()
+    await expect(page.getByTestId('fw-bl-result')).toContainText('In the bootloader: CB-1', { timeout: 30_000 })
+    await expect(page.getByTestId('fw-version-CB-1')).toHaveText('in bootloader')
+    expect((await deviceByName('CB-1')).inBootloader).toBe(true)
+    await page.getByTestId('fw-restart-CB-1').click()
+    await waitFor(async () => (await deviceByName('CB-1')).connected, 30_000, 'CB-1 runs its firmware again')
+    await expect(page.getByTestId('fw-version-CB-1')).not.toHaveText('in bootloader')
+    expect((await deviceByName('CB-1')).inBootloader).toBe(false)
+  } finally {
+    if (!(await deviceByName('CB-1')).connected) { await simReset('CB-1'); await waitFor(async () => (await deviceByName('CB-1')).connected, 60_000, 'CB-1 back after a Sim reset') }
+  }
+  expect(errors).toEqual([])
+})
+
+test('firmware: the bootloader scan asks only silent modules and says what it found (G9)', async ({ page }) => {
+  const errors = watchErrors(page)
+  await open(page, 'hardware/firmware')
+  await page.getByTestId('fw-bl-scan').click()
+  const devs = await apiJson('GET', '/api/devices')
+  const silent = devs.filter((d) => !d.connected && d.canBootloader)
+  await expect(page.getByTestId('fw-bl-result')).toHaveText(silent.length ? /none in the bootloader|In the bootloader/ : 'Every module is answering. None is in its bootloader.', { timeout: 30_000 })
+  // nothing that answers is called a bootloader
+  expect(devs.filter((d) => d.connected && d.inBootloader)).toEqual([])
+  expect(errors).toEqual([])
+})

@@ -19,8 +19,29 @@
   const pathOf = (d) => flashPath(d, live.connected)
   const fileFor = (d) => { const p = pathOf(d); return p ? files.find((f) => boardOfFile(f.name)?.key === boardOf(d).key && f.name.toLowerCase().endsWith(extFor(p))) ?? null : null }
   const upToDate = (d, f) => !!f && !!fileVersion(f.name) && cleanVersion(d.version) === fileVersion(f.name)
-  const plan = $derived(mods.filter((d) => pathOf(d) === 'can' && d.connected).map((d) => ({ d, file: fileFor(d) })).filter((p) => p.file && !upToDate(p.d, p.file)))
+  // reachable: answering, or found waiting in its bootloader (G9: a CAN update can run from there)
+  const reach = (d) => d.connected || (d.inBootloader && pathOf(d) === 'can')
+  const plan = $derived(mods.filter((d) => pathOf(d) === 'can' && reach(d)).map((d) => ({ d, file: fileFor(d) })).filter((p) => p.file && !upToDate(p.d, p.file)))
   const anyFile = $derived(files.length > 0)
+
+  // G9: find modules that are silent because they wait in their bootloader; Restart leaves it (app starts if valid)
+  let scanning = $state(false), blResult = $state('Asks every silent module once. A module found there can be updated again, or restarted.')
+  async function scanBootloaders() {
+    scanning = true
+    try {
+      const r = await (await fetch('/api/devices/bootloader-scan', { method: 'POST' })).json()
+      if (!Array.isArray(r)) throw new Error(r?.error ?? 'scan failed')
+      const inBl = r.filter((x) => x.inBootloader).map((x) => x.name)
+      blResult = !r.length ? 'Every module is answering. None is in its bootloader.' : inBl.length ? `In the bootloader: ${inBl.join(', ')}.` : `${r.length} silent module${r.length === 1 ? '' : 's'}, none in the bootloader (off, asleep or not wired).`
+    } catch (e) { blResult = 'Could not scan: ' + (e?.message ?? e) } finally { scanning = false }
+  }
+  async function leaveBootloader(d) {
+    try {
+      const r = await fetch(`/api/devices/${d.guid}/leave-bootloader`, { method: 'POST' })
+      if (!r.ok) throw new Error((await r.json().catch(() => null))?.error ?? 'HTTP ' + r.status)
+      toast(`${d.name} restarted. It runs its firmware again if that is complete.`, 'info', 5000)
+    } catch (e) { toast(`${d.name}: ${e?.message ?? e}`, 'error', 8000) }
+  }
 
   function onFiles(e) { files = [...(e.target.files ?? [])]; e.target.value = '' }
 
@@ -84,7 +105,7 @@
     if (s) return s
     const p = pathOf(d), f = fileFor(d)
     if (!p) return { state: 'idle', pct: 0, text: 'Cannot be flashed here' }
-    if (!d.connected) return { state: 'idle', pct: 0, text: 'Not on the bus' }
+    if (!reach(d)) return { state: 'idle', pct: 0, text: 'Not on the bus' }
     if (!anyFile) return { state: 'idle', pct: 0, text: 'Choose release files first' }
     if (!f) return { state: 'idle', pct: 0, text: `No ${extFor(p)} file for a ${boardOf(d).label}` }
     if (upToDate(d, f)) return { state: 'skip', pct: 100, text: 'Already up to date · skipped' }
@@ -120,13 +141,14 @@
             <tr data-module={d.name} class:active={c.state === 'writing'}>
               <td><strong>{d.name}</strong> <span class="muted mono">{hex(d.baseId)}</span></td>
               <td>{boardOf(d).label}</td>
-              <td class="mono" data-testid={`fw-version-${d.name}`}>{d.connected ? (cleanVersion(d.version) || 'unknown') : 'not seen'}</td>
+              <td class="mono" data-testid={`fw-version-${d.name}`}>{d.connected ? (cleanVersion(d.version) || 'unknown') : d.inBootloader ? 'in bootloader' : 'not seen'}</td>
               <td>{pathLabel(p)}</td>
               <td>
                 <div class="prog"><div class="bar" role="progressbar" aria-label={`${d.name} progress`} aria-valuenow={c.pct} aria-valuemin="0" aria-valuemax="100"><span style="width: {c.pct}%" class:bad={c.state === 'failed'} class:ok={c.state === 'done'}></span></div>
                   <span class:fault={c.state === 'failed'} data-testid={`fw-status-${d.name}`}>{c.state === 'failed' ? '■ ' : ''}{c.text}</span></div>
               </td>
-              <td><Button size="sm" disabled={!!blocked || busy || !d.connected || !p || !f || upToDate(d, f)} onclick={() => ask(d)} data-testid={`fw-update-${d.name}`}>{p === 'usb' ? 'Update over USB' : 'Update'}</Button></td>
+              <td><Button size="sm" disabled={!!blocked || busy || !reach(d) || !p || !f || (d.connected && upToDate(d, f))} onclick={() => ask(d)} data-testid={`fw-update-${d.name}`}>{p === 'usb' ? 'Update over USB' : 'Update'}</Button>
+                {#if d.inBootloader}<Button size="sm" variant="ghost" disabled={!!blocked || busy} onclick={() => leaveBootloader(d)} data-testid={`fw-restart-${d.name}`}>Restart it</Button>{/if}</td>
             </tr>
           {/each}
         </tbody>
@@ -150,7 +172,8 @@
     </Card>
     <Card title="If something fails" aria-label="If something fails">
       <p>The module stays in its bootloader and is safe. Run it again from here. The ones already done keep their new firmware.</p>
-      <p class="muted note">Not available yet: the app cannot list a module that sits in its bootloader (gap G9). It shows as not seen until the update works.</p>
+      <div><Button size="sm" onclick={scanBootloaders} busy={scanning} disabled={!!blocked || busy || scanning} data-testid="fw-bl-scan">Look for modules in their bootloader</Button></div>
+      <p class="muted note" role="status" data-testid="fw-bl-result">{blResult}</p>
     </Card>
     <Card title="New or blank board" aria-label="New or blank board">
       <p>Over USB (DFU) on a PDM. A CANBoard needs a probe once.</p>

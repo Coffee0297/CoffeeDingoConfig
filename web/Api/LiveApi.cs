@@ -32,7 +32,9 @@ public record DeviceDto(string Guid, string Name, string Type, int BaseId, bool 
     bool CanBootloader, bool ConfigMismatch = false, int ConfigDiffCount = 0, bool IsGateway = false,
     bool CanFiltersEnabled = false, bool ConnectUsbToCan = true,
     // false on a CANBoard (firmware CAN_SLEEP off): the sleep / force-sleep / wake controls do nothing there.
-    bool CanSleep = true);
+    bool CanSleep = true,
+    // G9: silent on the bus but answering the OpenBLT bootloader (found by POST /devices/bootloader-scan)
+    bool InBootloader = false);
 public record AdaptersDto(string[] Adapters, string[] Ports, bool Connected, string? ActiveAdapter, string? ActivePort, int? GatewayBaseId);
 public record TelemetryDto(bool Connected, string? Adapter, long CanTotal, long CanRate, int[] Ids, DeviceDto[] Devices);
 public record ConnectReq(string Adapter, string Port, string Bitrate);
@@ -311,7 +313,7 @@ public static class DingoMap
                 p.Version, BitrateLabel(p.BitRate), outs, reading, readDone, readTotal,
                 p.SleepEnabled, p.SleepTimeoutMs, p.SleepIgnoreAlwaysOn, p.ForceSleepInput, p.MuteTxInput, p.WakeDigInputMask, p.WakeOnCan,
                 p.CanBootloader, p.Connected && p.ConfigMismatch, p.LastConfigDiff.Count, false,
-                p.CanFiltersEnabled, p.ConnectUsbToCan);
+                p.CanFiltersEnabled, p.ConnectUsbToCan, InBootloader: !p.Connected && ui?.InBootloader == true);
         }
         if (d is domain.Devices.Canboard.CanboardDevice cb)
             // CANBoard has no battery/total-current sensing (those are PDM smart-output features) — leave
@@ -321,7 +323,7 @@ public static class DingoMap
             return new DeviceDto(cb.Guid.ToString(), cb.Name, cb.Type, cb.BaseId, cb.Connected,
                 0, 0, cb.BoardTempC, "", cb.Version, BitrateLabel(cb.BitRate), Array.Empty<OutputDto>(), reading, readDone, readTotal,
                 cb.SleepEnabled, cb.SleepTimeoutMs, cb.SleepIgnoreAlwaysOn, cb.ForceSleepInput, cb.MuteTxInput, cb.WakeDigInputMask, cb.WakeOnCan,
-                cb.CanBootloader, cb.Connected && cb.ConfigMismatch, cb.LastConfigDiff.Count, CanSleep: cb.CanSleep);
+                cb.CanBootloader, cb.Connected && cb.ConfigMismatch, cb.LastConfigDiff.Count, CanSleep: cb.CanSleep, InBootloader: !cb.Connected && ui?.InBootloader == true);
         return new DeviceDto(d.Guid.ToString(), d.Name, d.Type, d.BaseId, d.Connected,
             0, 0, 0, "", "", "", Array.Empty<OutputDto>(), reading, readDone, readTotal, false, 30000, true, 0, 0, 0, true,
             (d as IDeviceConfigurable)?.CanBootloader ?? false);
@@ -991,6 +993,39 @@ public static class LiveApi
 
         // In-app firmware update over CAN (OpenBLT XCP). Upload a .srec (raw body); commands the
         // module into its CAN bootloader and programs it over the live SLCAN link — no USB/DFU.
+        // G9: which silent modules sit in their OpenBLT bootloader (after a failed or stopped update). Sends one
+        // XCP CONNECT (then DISCONNECT, which keeps the bootloader waiting) per module. Only on request: probing
+        // all the time would wake a sleeping car.
+        api.MapPost("/devices/bootloader-scan", async (DeviceManager dm, ICommsAdapterManager adapters, CanFlashService can) =>
+        {
+            if (!adapters.GetStatus().isConnected) return Results.BadRequest(new { error = "Not connected to a CAN adapter — connect first." });
+            if (can.Status().Busy) return Results.Json(new { error = "A CAN update is running." }, statusCode: 409);
+            var found = new List<object>();
+            foreach (var d in dm.GetAllDevices().OfType<IDeviceConfigurable>().Where(d => d.CanBootloader))
+            {
+                d.UpdateIsConnected();
+                var ui = dm.GetDeviceUiState(d.Guid);
+                if (d.Connected) { ui.InBootloader = false; continue; }
+                using var xcp = new application.Services.XcpCanMaster(adapters, d.BaseId);
+                ui.InBootloader = await xcp.ConnectAsync(2, CancellationToken.None);
+                if (ui.InBootloader) await xcp.DisconnectAsync(CancellationToken.None);
+                found.Add(new { guid = d.Guid, name = d.Name, inBootloader = ui.InBootloader });
+            }
+            return Results.Ok(found);
+        });
+
+        // G9: leave the bootloader: XCP CONNECT + PROGRAM_RESET, so OpenBLT starts the app if it is valid.
+        api.MapPost("/devices/{guid}/leave-bootloader", async (string guid, DeviceManager dm, ICommsAdapterManager adapters) =>
+        {
+            if (!Guid.TryParse(guid, out var g) || dm.GetDevice(g) is not { } d) return Results.NotFound();
+            using var xcp = new application.Services.XcpCanMaster(adapters, d.BaseId);
+            if (!await xcp.ConnectAsync(2, CancellationToken.None))
+                return Results.Json(new { ok = false, error = $"{d.Name} did not answer as a bootloader." }, statusCode: 409);
+            await xcp.ProgramResetAsync(CancellationToken.None);
+            dm.GetDeviceUiState(g).InBootloader = false;
+            return Results.Ok(new { ok = true });
+        });
+
         api.MapPost("/devices/{guid}/flash-can", async (string guid, HttpRequest req, CanFlashService flasher) =>
         {
             if (!Guid.TryParse(guid, out var g)) return Results.BadRequest();
@@ -1575,7 +1610,7 @@ public static class LiveApi
             return ok ? Results.Ok(new { ok = true, baseId = dm.GetDevice(t)?.BaseId }) : Results.Text(err, "text/plain", null, 400);
         });
 
-        api.MapPost("/devices/{guid}/{action}", async (string guid, string action, DeviceManager dm, ICommsAdapterManager adapters) =>
+        api.MapPost("/devices/{guid}/{action}", async (string guid, string action, bool? can, DeviceManager dm, ICommsAdapterManager adapters) =>
         {
             if (!Guid.TryParse(guid, out var g)) return Results.BadRequest();
 
@@ -1602,7 +1637,8 @@ public static class LiveApi
                     break;
                 case "sleep": dm.RequestSleep(g); break;
                 case "wakeup": dm.RequestWakeup(g); break;
-                case "bootloader": dm.RequestBootloader(g); break;
+                // ?can=true: the OpenBLT CAN-update entry (it waits there for a tool, G9); default: the USB-DFU entry
+                case "bootloader": dm.RequestBootloader(g, canUpdate: can == true); break;
                 case "version": dm.RequestVersion(g); break;
                 // Push the Lua program stored on the record (e.g. an offline cross-module deploy) to the
                 // now-live module. Pair with "writeall" to also push the output bindings (params).
