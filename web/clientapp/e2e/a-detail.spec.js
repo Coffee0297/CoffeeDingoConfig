@@ -22,6 +22,9 @@ test('PDM header shows type, base ID, firmware, state and live stats', async ({ 
   await expect(page.getByText(new RegExp(`dingoPDM · base ${hex3(d.baseId)} · firmware`))).toBeVisible()
   await expect(page.getByText('Connected').first()).toBeVisible()
   for (const l of ['Battery', 'Current', 'Temperature', 'Reported state']) await expect(page.locator('.stats').getByText(l, { exact: true })).toBeVisible()
+  // the PDM's worst case: every enabled output at its limit
+  const worst = d.outputs.filter((o) => o.enabled !== false).reduce((n, o) => n + o.currentLimit, 0)
+  await expect(page.getByTestId('max-current')).toContainText(`${worst.toFixed(1)} A`)
   const crumbs = page.getByRole('navigation', { name: 'Breadcrumb' })
   await crumbs.getByRole('link', { name: 'Modules' }).click()
   await expect(page).toHaveURL(/#\/next\/hardware$/)

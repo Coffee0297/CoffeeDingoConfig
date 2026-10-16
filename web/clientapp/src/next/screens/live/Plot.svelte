@@ -4,6 +4,7 @@
 </script>
 
 <script>
+  import { untrack } from 'svelte'
   import { Page, PageHeader, Button, Banner, Segmented, Card, Empty, StateDot } from '../../ui/index.js'
   import { live, api } from '../../lib/live.svelte.js'
   import { feed, watchSignals, resampleRange, firstAt, samples, keys } from './parts/feed.svelte.js'
@@ -22,15 +23,20 @@
   const WINDOWS = [{ value: '10', label: '10 s' }, { value: '60', label: '1 min' }, { value: '300', label: '5 min' }]
 
   // ---- chosen series ----
-  const tokens = String(query?.signal ?? '').split(',').filter(Boolean)
-  let asked = $state(tokens.map((t) => resolveSignalToken(t, live.devices)).filter(Boolean))
-  // names of modules can only be resolved once the module list has arrived
+  // Graph it: ?signal=<token>[,<token>]. Read on every change of the query (a Graph it while this page is open
+  // re-uses it), and again once the module list arrives (module names resolve only then).
+  const tokens = $derived(String(query?.signal ?? '').split(',').filter(Boolean))
+  let asked = $state([])
+  let series = $state((memo.series ?? [keys.total, keys.battMax]).slice(0, MAX).map((k) => ({ key: k, hidden: false })))
   $effect(() => {
-    if (!live.devices.length || asked.length >= tokens.length) return
-    const more = tokens.map((t) => resolveSignalToken(t, live.devices)).filter((k) => k && !series.some((s) => s.key === k))
-    if (more.length) { series = [...series, ...more.map((k) => ({ key: k, hidden: false }))].slice(0, MAX); asked = [...asked, ...more] }
+    const want = tokens.map((t) => resolveSignalToken(t, live.devices)).filter(Boolean)
+    untrack(() => {
+      const more = want.filter((k) => !series.some((s) => s.key === k))
+      // the asked ones go first so they are not cut by the limit of MAX lines
+      if (more.length) series = [...more.map((k) => ({ key: k, hidden: false })), ...series].slice(0, MAX)
+      if (want.length && want.join() !== asked.join()) asked = want
+    })
   })
-  let series = $state([...(memo.series ?? [keys.total, keys.battMax]), ...asked].filter((k, i, a) => a.indexOf(k) === i).slice(0, MAX).map((k) => ({ key: k, hidden: false })))
   let win = $state(String(memo.win))
   $effect(() => { memo.series = series.map((s) => s.key); memo.win = Number(win) })
 

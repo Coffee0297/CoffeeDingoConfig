@@ -125,7 +125,9 @@
     const a = Number(pdmOut.current ?? 0)
     untrack(() => { hist.push(a); if (a > peak) peak = a; tick++ })
   })
-  const series = $derived.by(() => { tick; return resample(hist.samples(), 60_000, 150) })
+  // a steady scale: up to the limit (or the peak, if higher), so the limit line shows and the chart does not rescale every update
+  const yMax = $derived(Math.max(Number(f?.currentLimit) || 0, peak, 1) * 1.1)
+  const series = $derived.by(() => { tick; return resample(hist.samples(), 60_000, 150, Date.now(), 'max') })   // peak per bin: spikes stay visible
   const tone = $derived(state === 'On' ? 'on' : state === 'Fault' || state === 'Overcurrent' ? 'fault' : state === 'Warning' || state === 'OpenLoad' ? 'warn' : 'off')
 
   // ---- bench test ----
@@ -183,7 +185,7 @@
       {/snippet}
       {#snippet actions()}
         <Button variant="test" disabled={!!blocker || bench.state.phase === 'running' || bench.state.phase === 'lost'} busy={bench.state.busy} title={blocker || 'Switch this output on for a timed test'} onclick={() => bench.start()} data-testid="header-test">Test for {bench.holdS()} s</Button>
-        <Button href={href('live', 'plot', { module: dev.name, output: n })}>Graph it</Button>
+        <Button href={href('live', 'plot', { signal: `out:${guid}:${n}` })}>Graph it</Button>
       {/snippet}
     </PageHeader>
 
@@ -213,7 +215,7 @@
             {#if !live.connected}
               <p class="muted" role="status">No live data while disconnected.</p>
             {:else}
-              <LineChart series={[{ label: 'Current', values: series.length ? series : [0, 0], color: 'var(--color-on)', area: true }]} min={0} height={190}
+              <LineChart series={[{ label: 'Current', values: series.length ? series : [0, 0], color: 'var(--color-on)', area: true }]} min={0} max={yMax} height={190}
                 over={Number(f.currentLimit) > 0 ? { value: Number(f.currentLimit), tone: 'warn' } : null}
                 lines={[...(Number(f.currentLimit) > 0 ? [{ value: Number(f.currentLimit), label: `limit ${f.currentLimit} A`, tone: 'fault' }] : []), ...(Number(f.warnLimit) > 0 ? [{ value: Number(f.warnLimit), label: `warn ${f.warnLimit} A`, tone: 'warn' }] : [])]}
                 label={`Current over the last 60 seconds. Now ${amps?.toFixed(1)} A, peak ${peak.toFixed(1)} A. Limit ${f.currentLimit} A.`} xLabels={['−60 s', '−45 s', '−30 s', '−15 s', 'now']} />

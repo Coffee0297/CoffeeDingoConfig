@@ -30,9 +30,14 @@ export function push(key, v, now = Date.now()) {
 export function samples(key) { return bufs.get(key) ?? { t: [], v: [] } }
 
 /** Last `seconds` of a key resampled to `n` evenly spaced values (hold-last), plus the span covered. */
+// The sample times sit on a fixed grid (multiples of the step), so a redraw a moment later picks the same samples
+// for the past: the line scrolls instead of reshaping with the noise of whichever readings it happened to hit.
+const onGrid = (t, step) => Math.floor(t / step) * step
+
 export function resample(key, seconds, n = 120, until = Date.now()) {
   const b = bufs.get(key)
   if (!b || !b.t.length) return { values: [], span: 0, last: null, lastAt: 0 }
+  until = onGrid(until, (seconds * 1000) / (n - 1))
   const from = Math.max(until - seconds * 1000, b.t[0])
   const span = Math.max(0.2, (until - from) / 1000)
   const values = []
@@ -118,6 +123,8 @@ export function firstAt(key) { const b = bufs.get(key); return b?.t.length ? b.t
 export function resampleRange(key, from, until, n = 120) {
   const b = bufs.get(key)
   if (!b || !b.t.length) return []
+  const step = (until - from) / (n - 1)
+  from = onGrid(from, step); until = from + step * (n - 1)
   const values = []
   let j = 0
   for (let k = 0; k < n; k++) {

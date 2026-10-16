@@ -8,7 +8,7 @@
   import { href, go } from '../../router.svelte.js'
   import ModuleSettings from './parts/ModuleSettings.svelte'
   import { hexId, fwText } from './parts/ids.js'
-  import { isTripped, isOn, fmt1, num } from '../car/parts/summary.js'
+  import { isTripped, isOn, fmt1, num, worstCaseA } from '../car/parts/summary.js'
 
   let { guid, tab } = $props()
 
@@ -67,6 +67,8 @@
       {#if isPdm}
         <div class="stat"><span class="nx-label">Battery</span><span class="v mono">{d.connected ? fmt1(num(d.battery)) + ' V' : '–'}</span></div>
         <div class="stat"><span class="nx-label">Current</span><span class="v mono">{d.connected ? fmt1(num(d.current)) + ' A' : '–'}</span></div>
+        <div class="stat" title="The sum of the current limits of its enabled outputs: what it draws if every output hit its limit at once" data-testid="max-current">
+          <span class="nx-label">Max current</span><span class="v mono">{fmt1(worstCaseA([d]))} A</span><span class="sub muted">if every limit tripped at once</span></div>
       {/if}
       <div class="stat"><span class="nx-label">Temperature</span><span class="v mono">{d.connected && Number.isFinite(d.temp) ? Math.round(d.temp) + ' °C' : '–'}</span></div>
       <div class="stat"><span class="nx-label">Reported state</span><span class="v">{d.state || (d.connected ? 'Running' : '–')}</span></div>
@@ -144,6 +146,7 @@
 
 <style>
   .stats { display: flex; gap: var(--space-4); flex-wrap: wrap; }
+  .sub { font-size: var(--text-xs); }
   .stat { display: flex; flex-direction: column; gap: 2px; min-width: 140px; padding: var(--space-3) var(--space-4); border: 1px solid var(--color-line); border-radius: var(--radius-md); background: var(--color-surface); }
   .v { font-size: var(--text-lg); font-weight: 600; }
   tr.unused td { color: var(--color-text-muted); }

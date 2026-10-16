@@ -93,19 +93,25 @@ export function consumersOf(idxs, funcs, outputs, moduleName, dev) {
   return hits
 }
 
-/** Resample time-stamped samples [{t,v}] onto n evenly spaced bins covering the last windowMs (step-hold). */
-export function resample(samples, windowMs, n, now = Date.now()) {
+/**
+ * Time-stamped samples [{t,v}] onto n bins of the last windowMs. The bins sit on a fixed time grid (multiples of
+ * the bin width), so a bin that has passed never changes: the history scrolls, it does not reshape each redraw.
+ * agg 'last' keeps a bin's last sample, 'max' its peak (short spikes stay visible). Empty bins hold the previous
+ * value; bins before the first sample take its value.
+ */
+export function resample(samples, windowMs, n, now = Date.now(), agg = 'last') {
   if (!samples.length) return []
-  const out = []
-  let j = 0, last = samples[0].v
-  for (let i = 0; i < n; i++) {
-    const t = now - windowMs + (windowMs * i) / (n - 1)
-    while (j < samples.length && samples[j].t <= t) last = samples[j++].v
-    out.push(t < samples[0].t ? NaN : last)
+  const step = windowMs / (n - 1)
+  const lastBin = Math.floor(now / step), firstBin = lastBin - n + 1
+  const out = new Array(n).fill(NaN)
+  for (const s of samples) {
+    const k = Math.floor(s.t / step) - firstBin
+    if (k < 0 || k >= n) continue
+    out[k] = agg === 'max' && !Number.isNaN(out[k]) ? Math.max(out[k], s.v) : s.v
   }
-  // leading gap: fill with the first value so the line starts at the left edge
-  const first = out.find((x) => !Number.isNaN(x))
-  return out.map((x) => (Number.isNaN(x) ? first : x))
+  // hold across empty bins; before the window's first sample, the last value seen before it (or the first sample)
+  let prev = samples.filter((s) => Math.floor(s.t / step) < firstBin).at(-1)?.v ?? samples[0].v
+  return out.map((x) => (Number.isNaN(x) ? prev : (prev = x)))
 }
 
 export const f1 = (x, d = 1) => (Number.isFinite(+x) ? (+x).toFixed(d) : '—')
