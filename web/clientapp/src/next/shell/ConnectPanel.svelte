@@ -55,10 +55,17 @@
   const moduleRate = $derived(live.devices.find((d) => d.bitrate)?.bitrate ?? null)
   const simActive = $derived(live.connected && /^sim$/i.test(live.adapter ?? ''))
 
+  // G10: the backend remembers the last connection that worked and keeps these two choices
+  let autoConnect = $state(false), autoReconnect = $state(true)
+  async function setOption(o) {
+    try { const r = await api.connectionOptions(o); autoConnect = r.autoConnect; autoReconnect = r.autoReconnect }
+    catch (e) { error = { title: 'Could not save the setting', body: e.message } }
+  }
   async function loadInfo() {
     try {
       const a = await api.adapters()
       info = { adapters: a.adapters ?? [], ports: a.ports ?? [], connected: !!a.connected, activeAdapter: a.activeAdapter ?? null, activePort: a.activePort ?? null, gatewayBaseId: a.gatewayBaseId ?? null }
+      autoConnect = !!a.autoConnect; autoReconnect = a.autoReconnect !== false
       if (!serial || (!info.ports.includes(serial))) serial = info.ports[0] ?? ''
       if (a.connected && isTcp(a.activePort)) {
         const m = /^tcp:\/\/(.+):(\d+)\s*$/i.exec(a.activePort)
@@ -272,8 +279,8 @@
       </div>
 
       <div class="box">
-        <Switch label="Connect automatically when dingoConfig starts" hint="Not available yet: the backend does not remember the last connection (gap G10)." checked={false} disabled />
-        <Switch label="Reconnect if the link drops" hint="Not available yet: the backend does not reconnect the adapter (gap G10). The live feed reconnects by itself." checked={false} disabled />
+        <Switch label="Connect automatically when dingoConfig starts" hint="Uses the last connection that worked." checked={autoConnect} onchange={(v) => setOption({ autoConnect: v })} data-testid="auto-connect" />
+        <Switch label="Reconnect if the link drops" hint="Tries again every 2 seconds until the adapter is back. Disconnect stops it." checked={autoReconnect} onchange={(v) => setOption({ autoReconnect: v })} data-testid="auto-reconnect" />
       </div>
 
       {#if live.connected}

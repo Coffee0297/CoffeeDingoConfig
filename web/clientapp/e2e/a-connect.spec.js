@@ -79,10 +79,15 @@ test('CAN speed choice, auto-detect note, and the not-available-yet switches', a
   }
   await expect(panel(page).getByText('Auto-detect tries 500 k')).toBeVisible()
   await group.getByRole('radio', { name: '500 k' }).click()
-  // auto-connect and auto-reconnect: gap G10
-  await expect(panel(page).getByRole('switch', { name: /Connect automatically/ })).toBeDisabled()
-  await expect(panel(page).getByRole('switch', { name: /Reconnect if the link drops/ })).toBeDisabled()
-  await expect(panel(page).getByText(/gap G10/).first()).toBeVisible()
+  // auto-connect and auto-reconnect are kept by the backend (G10): the switches show and change them
+  const before = await apiJson('GET', '/api/adapters')
+  const autoC = panel(page).getByRole('switch', { name: /Connect automatically/ })
+  await expect(autoC).toHaveAttribute('aria-checked', String(before.autoConnect))
+  await expect(panel(page).getByRole('switch', { name: /Reconnect if the link drops/ })).toHaveAttribute('aria-checked', String(before.autoReconnect))
+  try {
+    await autoC.click()
+    await waitFor(async () => (await apiJson('GET', '/api/adapters')).autoConnect === !before.autoConnect, 5000, 'auto-connect saved')
+  } finally { await apiJson('POST', '/api/connection/options', { autoConnect: before.autoConnect }) }
   expect(errors).toEqual([])
 })
 
@@ -170,4 +175,49 @@ test('Auto-detect keeps the speed where frames arrive @exclusive', async ({ page
     await expect(panel(page).getByRole('radiogroup', { name: 'CAN speed' }).getByRole('radio', { name: '500 k' })).toBeChecked()
   } finally { await restoreConnection() }
   expect(errors).toEqual([])
+})
+
+test('the backend reconnects by itself when the link drops, and a Disconnect stays (G10) @exclusive', async ({ page }) => {
+  test.setTimeout(90_000)
+  const net = await import('node:net')
+  // a relay in front of the Sim bridge, so the test can cut the link and refuse it for a moment
+  const sim = new URL(SIM_PORT.replace(/^tcp:/, 'http:'))
+  const socks = new Set()
+  let refuse = false
+  const relay = net.createServer((c) => {
+    if (refuse) { c.destroy(); return }
+    const up = net.connect(Number(sim.port), sim.hostname)
+    socks.add(c); socks.add(up)
+    const end = () => { c.destroy(); up.destroy(); socks.delete(c); socks.delete(up) }
+    for (const s of [c, up]) { s.on('error', end); s.on('close', end) }
+    c.pipe(up).pipe(c)
+  })
+  await new Promise((r) => relay.listen(0, '127.0.0.1', r))
+  const port = `tcp://127.0.0.1:${relay.address().port}`
+  const opts = await apiJson('GET', '/api/adapters')
+  try {
+    await apiJson('POST', '/api/connection/options', { autoReconnect: true })
+    await apiJson('POST', '/api/disconnect')
+    expect((await apiJson('POST', '/api/connect', { Adapter: 'SLCAN', Port: port, Bitrate: '500K' })).ok).toBe(true)
+    expect((await apiJson('GET', '/api/adapters')).last).toMatchObject({ adapter: 'SLCAN', port })
+    await open(page, 'hardware')
+    // the link drops and stays down for 4 s: the top bar says the app is reconnecting
+    refuse = true
+    for (const s of [...socks]) s.destroy()
+    await waitFor(async () => (await apiJson('GET', '/api/adapters')).reconnecting, 10_000, 'reconnecting')
+    await expect(page.getByText('Adapter lost · reconnecting…')).toBeVisible()
+    await new Promise((r) => setTimeout(r, 4000))
+    refuse = false
+    await waitFor(async () => { const a = await apiJson('GET', '/api/adapters'); return a.connected && a.activePort === port }, 20_000, 'reconnected')
+    expect((await apiJson('GET', '/api/adapters')).reconnecting).toBe(false)
+    // the user's Disconnect is not undone
+    await apiJson('POST', '/api/disconnect')
+    await new Promise((r) => setTimeout(r, 5000))
+    const a = await apiJson('GET', '/api/adapters')
+    expect(a.connected).toBe(false); expect(a.reconnecting).toBe(false)
+  } finally {
+    relay.close(); for (const s of [...socks]) s.destroy()
+    await apiJson('POST', '/api/connection/options', { autoReconnect: opts.autoReconnect })
+    await restoreConnection()
+  }
 })

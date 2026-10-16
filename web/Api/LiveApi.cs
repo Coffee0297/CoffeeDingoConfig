@@ -37,8 +37,11 @@ public record DeviceDto(string Guid, string Name, string Type, int BaseId, bool 
     bool? StoredOnModule = null,
     // G9: silent on the bus but answering the OpenBLT bootloader (found by POST /devices/bootloader-scan)
     bool InBootloader = false);
-public record AdaptersDto(string[] Adapters, string[] Ports, bool Connected, string? ActiveAdapter, string? ActivePort, int? GatewayBaseId, bool ProgrammingAllowed);
-public record TelemetryDto(bool Connected, string? Adapter, long CanTotal, long CanRate, int[] Ids, DeviceDto[] Devices, bool ProgrammingAllowed);
+public record AdaptersDto(string[] Adapters, string[] Ports, bool Connected, string? ActiveAdapter, string? ActivePort, int? GatewayBaseId, bool ProgrammingAllowed,
+    // G10: link state and the remembered connection
+    bool Reconnecting = false, bool AutoConnect = false, bool AutoReconnect = true, object? Last = null);
+public record ConnectionOptionsReq(bool? AutoConnect, bool? AutoReconnect);
+public record TelemetryDto(bool Connected, string? Adapter, long CanTotal, long CanRate, int[] Ids, DeviceDto[] Devices, bool ProgrammingAllowed, bool Reconnecting = false);
 public record ConnectReq(string Adapter, string Port, string Bitrate);
 public record AddDeviceReq(string Type, string Name, string BaseId);
 public record ModifyReq(string Name, string BaseId);
@@ -338,6 +341,7 @@ public class TelemetryBroadcaster(
     IHubContext<LiveHub> hub,
     DeviceManager deviceManager,
     ICommsAdapterManager adapterManager,
+    ConnectionKeeper keeper,
     SystemLogger systemLogger,
     ILogger<TelemetryBroadcaster> logger) : BackgroundService
 {
@@ -387,7 +391,7 @@ public class TelemetryBroadcaster(
                         bool isGateway = isPdm && gwBase is int gb && d.BaseId == gb;
                         return isGateway ? dto with { IsGateway = true } : dto;
                     }).ToArray();
-                var dto = new TelemetryDto(status.isConnected, status.activeAdapter, _total, _rate, ids, devices, !LiveApi.IsSim(adapterManager));
+                var dto = new TelemetryDto(status.isConnected, status.activeAdapter, _total, _rate, ids, devices, !LiveApi.IsSim(adapterManager), keeper.Reconnecting);
 
                 await hub.Clients.All.SendAsync("telemetry", dto, ct);
               }
@@ -450,40 +454,37 @@ public static class LiveApi
             return Results.Ok(new { version = v is null ? "0.0.0" : $"{v.Major}.{v.Minor}.{v.Build}" });
         });
 
-        api.MapGet("/adapters", (ICommsAdapterManager m) =>
+        api.MapGet("/adapters", (ICommsAdapterManager m, ConnectionKeeper keeper) =>
         {
             var (adapters, ports) = m.GetAvailable();
             var s = m.GetStatus();
-            return Results.Ok(new AdaptersDto(adapters, ports, s.isConnected, s.activeAdapter, s.activePort, m.GatewayBaseId, !IsSim(m)));
+            return Results.Ok(new AdaptersDto(adapters, ports, s.isConnected, s.activeAdapter, s.activePort, m.GatewayBaseId, !IsSim(m),
+                keeper.Reconnecting, keeper.AutoConnect, keeper.AutoReconnect, keeper.Last));
         });
 
-        api.MapPost("/connect", async (ConnectReq r, ICommsAdapterManager m) =>
+        api.MapPost("/connect", async (ConnectReq r, ConnectionKeeper keeper) =>
         {
             try
             {
-                if (r.Adapter == "USB")   // find the module's COM port; try each one found (several modules plugged in)
-                {
-                    var found = UsbPortFinder.Find();
-                    if (found.Length == 0)
-                        return Results.Ok(new { ok = false, error = $"No dingo module found on USB ({UsbPortFinder.Vid}:{UsbPortFinder.Pid}) — check the cable carries data and the module has 12 V." });
-                    foreach (var p in found)
-                        if (await m.ConnectAsync(m.ToAdapter("USB"), p, DingoMap.ParseBitrate(r.Bitrate), CancellationToken.None))
-                            return Results.Ok(new { ok = true, port = p });
-                    return Results.Ok(new { ok = false, error = $"Found {string.Join(", ", found)} but couldn't open it — is another program using the port?" });
-                }
-                var adapter = m.ToAdapter(r.Adapter);
-                var ok = await m.ConnectAsync(adapter, r.Port, DingoMap.ParseBitrate(r.Bitrate), CancellationToken.None);
-                return Results.Ok(new { ok });
+                var (ok, port, error) = await keeper.ConnectAsync(r.Adapter, r.Port, DingoMap.ParseBitrate(r.Bitrate));
+                return r.Adapter == "USB" ? Results.Ok(new { ok, port, error }) : Results.Ok(new { ok, error });
             }
             catch (Exception ex) { return Results.BadRequest(new { ok = false, error = ex.Message }); }
+        });
+
+        // G10: connect at startup / reconnect when the link drops (remembered in the user preferences)
+        api.MapPost("/connection/options", (ConnectionOptionsReq r, ConnectionKeeper keeper) =>
+        {
+            keeper.SetOptions(r.AutoConnect, r.AutoReconnect);
+            return Results.Ok(new { autoConnect = keeper.AutoConnect, autoReconnect = keeper.AutoReconnect });
         });
 
         // Re-ask the module on USB for its base id (it moves when re-addressed); returns { gatewayBaseId }.
         api.MapPost("/usb/identify", async (ICommsAdapterManager m) =>
             Results.Ok(new { gatewayBaseId = await m.ReidentifyAsync() }));
 
-        api.MapPost("/disconnect", async (ICommsAdapterManager m) =>
-            Results.Ok(new { ok = await m.DisconnectAsync() }));
+        api.MapPost("/disconnect", async (ConnectionKeeper keeper) =>
+            Results.Ok(new { ok = await keeper.DisconnectAsync() }));
 
         // Is the connected adapter able to filter the bus at the wire — i.e. can it flash a module over
         // CAN on a busy bus without losing responses? Probes the live adapter (see ProbeFilterAsync) and

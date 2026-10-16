@@ -35,6 +35,9 @@ builder.Services.AddSingleton<SystemConfigService>();
 builder.Services.AddSingleton<CanMsgLogger>();
 builder.Services.AddSingleton<SystemLogger>();
 builder.Services.AddSingleton<SimPlayback>();
+builder.Services.AddSingleton<UserPreferencesManager>();
+builder.Services.AddSingleton<ConnectionKeeper>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<ConnectionKeeper>());
 
 builder.Services.AddHostedService<CommsDataPipeline>();
 
