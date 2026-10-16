@@ -20,7 +20,7 @@
   // a module written elsewhere (output page, AI agent) and not stored counts as written here
   const stOf = (d) => session[d.guid] ?? (d.storedOnModule === false ? { name: d.name, state: 'written', written: true, rejected: [] } : undefined)
   let diffs = $state({}) // guid → ConfigDiffEntry[]
-  let asking = $state(null) // { act: 'write'|'burn', guids[] }
+  let asking = $state(null) // { act: 'write'|'burn'|'read', guids[] }
   let busyAct = $state(null) // 'read'|'write'|'burn'
   let progress = $state({ done: 0, total: 0, name: '' })
   let stop = false
@@ -95,10 +95,17 @@
     if (cantProgram || busyAct || !guids.length) return
     asking = { act, guids }
   }
+  // G2: saved edits wait in the project until Apply; a Read replaces them with what the modules have, so ask first
+  function askRead(guids) {
+    if (busyAct || !guids.length) return
+    if (guids.some((g) => live.devices.find((d) => d.guid === g)?.pendingEdits > 0)) asking = { act: 'read', guids }
+    else doRead(guids)
+  }
   async function confirmAsk() {
     const a = asking; asking = null
     if (!a) return
-    await run(a.act, a.guids)
+    if (a.act === 'read') await doRead(a.guids)
+    else await run(a.act, a.guids)
   }
 
   async function run(act, guids) {
@@ -136,7 +143,7 @@
   const statusOf = (d) => {
     const s = stOf(d)
     if (!d.connected) return { tone: 'fault', shape: 'square', word: 'Not found: cannot apply' }
-    if (!s) return { tone: 'warn', shape: 'diamond', word: 'Not sent' }
+    if (!s) return { tone: 'warn', shape: 'diamond', word: d.pendingEdits > 0 ? `${d.pendingEdits} change${d.pendingEdits === 1 ? '' : 's'} waiting` : 'Not sent' }
     return {
       working: { tone: 'accent', shape: 'ring', word: s.step === 'write' ? 'Writing…' : 'Storing…' },
       written: { tone: 'warn', shape: 'diamond', word: 'Written, not stored' },
@@ -162,7 +169,9 @@
     return { tone: 'ok', title: 'Nothing to apply.', body: 'Every connected module matches the project as far as the app knows.' }
   })
 
-  const confirmText = $derived(asking ? (asking.act === 'write'
+  const confirmText = $derived(asking ? (asking.act === 'read'
+    ? `Read ${asking.guids.length} module${asking.guids.length === 1 ? '' : 's'} into the project? Changes you saved but did not apply yet are replaced by what the modules have.`
+    : asking.act === 'write'
     ? `Write the project's settings to ${asking.guids.length} module${asking.guids.length === 1 ? '' : 's'} now? Outputs follow the new limits and rules at once. The values are lost at power-off until you store them.`
     : `Store the current settings permanently in the flash of ${asking.guids.length} module${asking.guids.length === 1 ? '' : 's'}? This replaces what they start up with.`) : '')
 
@@ -190,7 +199,7 @@
       <p>{confirmText}</p>
       <div class="row">
         <Button onclick={() => (asking = null)}>Cancel</Button>
-        <Button variant={asking.act === 'burn' ? 'danger' : 'primary'} onclick={confirmAsk} data-testid="apply-confirm-yes">{asking.act === 'write' ? 'Yes, write now' : 'Yes, store permanently'}</Button>
+        <Button variant={asking.act === 'burn' ? 'danger' : 'primary'} onclick={confirmAsk} data-testid="apply-confirm-yes">{asking.act === 'write' ? 'Yes, write now' : asking.act === 'read' ? 'Yes, read and replace' : 'Yes, store permanently'}</Button>
       </div>
     </div>
   {/if}
@@ -233,7 +242,7 @@
             {#if !s?.checked}○ Not checked yet{:else if s.checked.error}■ Check failed: {s.checked.error}{:else if s.checked.diff === 0}✓ Read back: matches the project{:else}▲ Read back: {s.checked.diff} difference{s.checked.diff === 1 ? '' : 's'}{/if}
           </span>
           <span class="grow"></span>
-          <Button size="sm" onclick={() => doRead([d.guid])} disabled={!!busyAct || !d.connected} aria-label={`Read ${d.name}`}>Read</Button>
+          <Button size="sm" onclick={() => askRead([d.guid])} disabled={!!busyAct || !d.connected} aria-label={`Read ${d.name}`}>Read</Button>
           <Button size="sm" onclick={() => ask('write', [d.guid])} disabled={!!busyAct || !d.connected || !!cantProgram} aria-label={`Apply ${d.name}`}>Apply</Button>
           <Button size="sm" onclick={() => ask('burn', [d.guid])} disabled={!!busyAct || !d.connected || !!cantProgram} aria-label={`Store ${d.name}`}>Store</Button>
         </div>
@@ -248,7 +257,7 @@
         {#each quiet as d (d.guid)}
           <div class="qrow" data-testid={'apply-quiet-' + d.name}>
             <strong>{d.name}</strong><span class="muted mono">{hex(d.baseId)}</span><span class="grow"></span>
-            <Button size="sm" onclick={() => doRead([d.guid])} disabled={!!busyAct} aria-label={`Read ${d.name}`}>Read</Button>
+            <Button size="sm" onclick={() => askRead([d.guid])} disabled={!!busyAct} aria-label={`Read ${d.name}`}>Read</Button>
             <Button size="sm" onclick={() => ask('write', [d.guid])} disabled={!!busyAct || !!cantProgram} aria-label={`Apply ${d.name}`}>Apply</Button>
             <Button size="sm" onclick={() => ask('burn', [d.guid])} disabled={!!busyAct || !!cantProgram} aria-label={`Store ${d.name}`}>Store</Button>
           </div>
@@ -263,7 +272,7 @@
       <Button variant="primary" busy disabled>{busyAct === 'read' ? 'Reading…' : busyAct === 'write' ? 'Applying…' : 'Storing…'}</Button>
     {:else}
       <span class="muted hint">{needWrite.length ? 'Writes live now. Lost at power-off until you store.' : needStore.length ? 'Store keeps the written values after power-off.' : ''}</span>
-      <Button onclick={() => doRead(readTargets)} disabled={!readTargets.length} data-testid="apply-read">Read from modules</Button>
+      <Button onclick={() => askRead(readTargets)} disabled={!readTargets.length} data-testid="apply-read">Read from modules</Button>
       {#if needStore.length}
         <!-- modules already written can be stored while others still wait to be applied -->
         <Button variant={needWrite.length ? 'secondary' : 'primary'} onclick={() => ask('burn', needStore.map((d) => d.guid))} disabled={!!cantProgram} title={cantProgram} data-testid="apply-store">Store on modules ({needStore.length})</Button>

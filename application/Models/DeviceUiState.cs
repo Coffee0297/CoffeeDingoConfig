@@ -19,4 +19,7 @@ public class DeviceUiState
     // G9: the last bootloader scan found this module in OpenBLT (it answered XCP CONNECT on base+12/13).
     // Only meaningful while the module sends no status frames; it is reported as false once it does.
     public bool InBootloader { get; set; }
+    // G2: edits saved to the project and held for "Apply to car" since the module was last in step. Only counts
+    // while the module differs (a confirmed write or read clears ConfigMismatch, and with it these).
+    public int PendingEdits { get; set; }
 }

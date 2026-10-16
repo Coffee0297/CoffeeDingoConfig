@@ -42,7 +42,8 @@ export async function writeDeviceInput(d, body) {
   try {
     const r = await api.deviceInputs(d.guid, body)
     project.dirty = true
-    if (r && r.written === false) toast(`${d.name} is offline: saved in the project only.`, 'info', 5000)
+    if (r?.staged) toast(`Saved. Apply to car sends it to ${d.name}.`, 'info', 4000)
+    else if (r && r.written === false) toast(`${d.name} is offline: saved in the project only.`, 'info', 5000)
     return true
   } catch (e) {
     if (isUnconfirmed(e)) { project.dirty = true; toast(`Saved in the project, but ${d.name} did not confirm it. ${e.message}`, 'error', 9000); return true }

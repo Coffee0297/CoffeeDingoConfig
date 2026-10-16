@@ -30,12 +30,19 @@ function putOutputOnce(guid, o) {
 }
 
 /** Run fn with the output restored afterwards. */
+/** G2: UI saves wait for Apply. After a test put a module back, write it whole so nothing is left waiting. */
+export async function settle(guid) {
+  const d = (await apiJson('GET', '/api/devices')).find((x) => x.guid === guid)
+  if (d?.connected && d.pendingEdits > 0) await apiJson('POST', `/api/devices/${guid}/writeall`, undefined, 60_000).catch(() => {})
+}
+
 export async function withOutput(name, n, fn) {
   const { d, o } = await outputOf(name, n)
   const before = JSON.parse(JSON.stringify(o))
   try { return await fn(d, before) } finally {
     try { await apiJson('POST', `/api/devices/${d.guid}/output/${n}/test`, { mode: 'off', duty: 0, freq: 100, hold: 1 }).catch(() => {}) } catch {}
     await putOutput(d.guid, before)
+    await settle(d.guid)
   }
 }
 
@@ -54,7 +61,7 @@ export async function putFunc(guid, kind, number, row, tries = 5) {
 }
 export async function withFunc(guid, kind, arr, number, fn) {
   const before = JSON.parse(JSON.stringify(await funcRow(guid, arr, number)))
-  try { return await fn(before) } finally { await putFunc(guid, kind, number, before) }
+  try { return await fn(before) } finally { await putFunc(guid, kind, number, before); await settle(guid) }
 }
 
 /** Live telemetry of one output (state / duty / current). */
@@ -76,7 +83,8 @@ export async function saveAndWait(page) {
   const save = page.getByTestId('save')
   await expect(save).toBeEnabled()
   await save.dispatchEvent('click')
-  await expect(page.getByTestId('save-status')).toContainText(/Saved to/, { timeout: 20_000 })
+  // G2: the redesign holds saved edits for Apply to car ("Saved. Apply to car sends it"); offline: saved to the project
+  await expect(page.getByTestId('save-status')).toContainText(/^Saved/, { timeout: 20_000 })
 }
 
 /** Show a patched /functions in the page (no write): patch(json) mutates the parsed body. */

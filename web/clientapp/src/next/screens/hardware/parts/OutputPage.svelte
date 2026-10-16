@@ -110,7 +110,7 @@
       }
       project.dirty = true
       snap = JSON.stringify(f)
-      savedNote = r?.written ? 'Saved to the module.' : 'Saved to the project. The module did not get it (offline). Apply to car when it is back.'
+      savedNote = r?.staged ? 'Saved. Apply to car sends it to the module.' : r?.written ? 'Saved to the module.' : 'Saved to the project. The module did not get it (offline). Apply to car when it is back.'
     } catch (e) { saveErr = e?.message ?? String(e) } finally { saving = false }
   }
 
@@ -149,7 +149,9 @@
     if (!dev?.connected) return `${dev?.name ?? 'The module'} is not answering on the bus.`
     if (olderThan(dev?.version, [5, 5, 107])) return 'Needs firmware 5.5.107 or newer.'
     if (!src?.enabled) return 'Turn the output on and save first. The test only runs on an enabled output.'
-    if (dirty) return 'Save your changes first. The test uses what is saved on the module.'
+    if (dirty) return 'Save your changes first. The test uses what is on the module.'
+    // G2: saved changes wait for Apply; the module still runs what it had
+    if (dev?.pendingEdits > 0) return 'Apply to car first. The test uses what is on the module, and this module has changes waiting.'
     return ''
   })
 
@@ -243,7 +245,7 @@
         {:else}No changes.{/if}
       </div>
       <Button onclick={revert} disabled={!dirty || saving}>Revert</Button>
-      <Button variant="primary" busy={saving} disabled={!dirty || !!problem} onclick={save} data-testid="save">{connected ? 'Save to the module' : 'Save to the project'}</Button>
+      <Button variant="primary" busy={saving} disabled={!dirty || !!problem} onclick={save} data-testid="save">Save</Button>
     </div>
   {/if}
 </Page>

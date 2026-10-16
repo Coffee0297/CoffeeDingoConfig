@@ -29,7 +29,10 @@ test('the pill and the panel list exactly the connected modules that differ', as
   const unstored = devs.filter((d) => d.connected && d.storedOnModule === false)
   const listed = devs.filter((d) => pending.includes(d) || unstored.includes(d))
   const pill = page.getByTestId('apply-pill')
-  if (pending.length) await expect(pill).toContainText(`${pending.length} module${pending.length === 1 ? '' : 's'} differ`)
+  // G2: saved edits held for Apply are counted first
+  const waiting = devs.reduce((n, d) => n + (d.connected ? d.pendingEdits ?? 0 : 0), 0)
+  if (waiting) await expect(pill).toContainText(`${waiting} change${waiting === 1 ? '' : 's'} waiting`)
+  else if (pending.length) await expect(pill).toContainText(`${pending.length} module${pending.length === 1 ? '' : 's'} differ`)
   else if (unstored.length) await expect(pill).toContainText(`${unstored.length} not stored`)
   else await expect(pill).toContainText('Nothing to apply')
   await openPanel(page)
@@ -53,7 +56,7 @@ test('a module that differs shows its Read-found differences or says it has not 
   await openPanel(page)
   for (const d of pending) {
     const card = panel(page).getByTestId('apply-' + d.name)
-    await expect(card).toContainText('Not sent')
+    await expect(card).toContainText(d.pendingEdits > 0 ? `${d.pendingEdits} change` : 'Not sent')
     if (d.configDiffCount > 0) {
       const diff = await apiJson('GET', `/api/devices/${d.guid}/config-diff`)
       await expect(card.locator('.df')).toHaveCount(Math.min(6, diff.length))
@@ -215,4 +218,36 @@ test('With no connection the panel says programming is off and disables Apply @e
     await expect(panel(page).getByText('Not connected. Connect first.')).toBeVisible()
     await expect(panel(page).getByRole('button', { name: /^Apply to car/ })).toBeDisabled()
   } finally { await restoreConnection() }
+})
+
+test('a saved edit in the redesign waits for Apply to car: counted, shown, and written by Apply (G2) @exclusive', async ({ page }) => {
+  await ready('PDM-05')
+  const errors = watchErrors(page)
+  const d = await deviceByName('PDM-05')
+  const out = d.outputs.find((o) => o.number === 1)
+  const staged = (body) => fetch(`http://127.0.0.1:5000/api/devices/${d.guid}/outputconfig`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Dingo-Stage': '1' }, body: JSON.stringify(body) }).then((r) => r.json())
+  const limit = out.currentLimit === 7 ? 6 : 7
+  try {
+    const r = await staged({ Number: 1, CurrentLimit: limit })
+    expect(r).toMatchObject({ ok: true, written: false, staged: true })
+    // in the project, not on the module: counted as waiting
+    await waitFor(async () => (await deviceByName('PDM-05')).pendingEdits >= 1, 5000, 'PDM-05 has a change waiting')
+    expect((await deviceByName('PDM-05')).outputs.find((o) => o.number === 1).currentLimit).toBe(limit)
+    await open(page, 'hardware')
+    await expect(page.getByTestId('apply-pill')).toContainText(/change(s)? waiting/)
+    await openPanel(page)
+    const row = await reveal(page, 'PDM-05')
+    await expect(panel(page).getByTestId('apply-PDM-05')).toContainText(/change(s)? waiting/)
+    // Read would replace it: asks first
+    await row.getByRole('button', { name: 'Read PDM-05' }).click()
+    await expect(panel(page).getByTestId('apply-confirm')).toContainText('replaced by what the modules have')
+    await panel(page).getByTestId('apply-confirm').getByRole('button', { name: 'Cancel' }).click()
+    // Apply writes it: nothing waits any more
+    await row.getByRole('button', { name: 'Apply PDM-05' }).click()
+    await panel(page).getByTestId('apply-confirm-yes').click()
+    await waitFor(async () => (await deviceByName('PDM-05')).pendingEdits === 0, 60_000, 'PDM-05 written')
+  } finally {
+    await apiJson('POST', `/api/devices/${d.guid}/outputconfig`, { Number: 1, CurrentLimit: out.currentLimit })
+  }
+  expect(errors).toEqual([])
 })

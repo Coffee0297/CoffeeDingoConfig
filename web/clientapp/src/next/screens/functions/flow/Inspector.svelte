@@ -1,7 +1,7 @@
 <script>
   /**
    * Inspector for the selected block: what feeds it, its settings, where its outputs go, the plain
-   * sentence. Edits are a draft until "Save to module" (one partial POST). Physical channels (outputs,
+   * sentence. Edits are a draft until "Save" (one partial POST; it reaches the car with Apply, G2). Physical channels (outputs,
    * analog inputs) link to their Hardware screen for protection / calibration settings.
    */
   import { Button, Chip, Field, Select, Segmented, Checkbox, Banner } from '../../../ui/index.js'
@@ -310,7 +310,7 @@
     {#if err}<p class="hint bad" role="alert">■ {err}</p>{/if}
     {#if fields.length}
       <div class="act">
-        <Button variant="primary" disabled={!dirty || busy} {busy} onclick={save} data-testid="insp-save">Save to module</Button>
+        <Button variant="primary" disabled={!dirty || busy} {busy} onclick={save} data-testid="insp-save">Save</Button>
         <Button variant="ghost" disabled={!dirty} onclick={seed}>Revert</Button>
       </div>
     {/if}
