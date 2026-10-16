@@ -147,6 +147,21 @@ public static class McpServer
         };
     }
 
+    /// <summary>The first object key that appears twice (ignoring case) in the same object, anywhere in <paramref name="e"/>, or null.</summary>
+    static string? DuplicateKey(JsonElement e)
+    {
+        if (e.ValueKind == JsonValueKind.Array)
+            foreach (var x in e.EnumerateArray()) if (DuplicateKey(x) is { } d) return d;
+        if (e.ValueKind != JsonValueKind.Object) return null;
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);   // the API binds names case-insensitively
+        foreach (var p in e.EnumerateObject())
+        {
+            if (!seen.Add(p.Name)) return p.Name;
+            if (DuplicateKey(p.Value) is { } d) return d;
+        }
+        return null;
+    }
+
     // ------------------------------------------------------------- JSON-RPC pump
     static async Task<IResult> HandlePost(HttpRequest req)
     {
@@ -163,6 +178,10 @@ public static class McpServer
 
         if (root.ValueKind != JsonValueKind.Object || !root.TryGetProperty("method", out var mEl))
             return Results.Json(Error(null, -32600, "invalid request"));
+        // A repeated key is read first-wins by TryGetProperty but last-wins by a deserializer: the approval
+        // prompt could show one value while the tool acts on another. Refuse the whole request.
+        if (DuplicateKey(root) is { } dup)
+            return Results.Json(Error(null, -32600, $"invalid request: key \"{dup}\" appears twice"));
 
         var method = mEl.GetString();
         var hasId = root.TryGetProperty("id", out var idEl);

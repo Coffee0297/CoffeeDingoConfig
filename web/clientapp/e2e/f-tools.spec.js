@@ -89,6 +89,17 @@ test('AI agent: an assistant cannot answer its own request or change the ask lis
   for (const t of ['set_output', 'set_output_config', 'set_function', 'write_param', 'flash_firmware', 'device_action']) expect(a.ask).toContain(t)
 })
 
+test('AI agent: a tool call with a repeated key is refused, so the prompt cannot show other values than the tool uses (G22)', async () => {
+  const call = (args) => fetch(API + '/mcp', { method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'application/json, text/event-stream' },
+    body: `{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"device_action","arguments":${args}}}` }).then((r) => r.json())
+  for (const args of ['{"guid":"x","action":"read","action":"burn"}', '{"guid":"x","Guid":"y","action":"read"}']) {
+    const r = await call(args)
+    expect(r.error?.code, args).toBe(-32600)
+    expect(r.error?.message).toMatch(/appears twice/)
+  }
+  expect((await apiJson('GET', '/api/agent')).pending ?? []).toHaveLength(0)   // nothing reached the ask queue
+})
+
 test('AI agent: Stop server turns assistants away until Start (G22)', async ({ page }) => {
   const errors = watchErrors(page)
   await proxyMcp(page)
