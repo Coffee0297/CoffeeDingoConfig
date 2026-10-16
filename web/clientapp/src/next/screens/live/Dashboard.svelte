@@ -1,12 +1,15 @@
 <script>
   import { Page, PageHeader, Banner, Checkbox, Select, Empty, FwBadge, Button } from '../../ui/index.js'
-  import { live, hub } from '../../lib/live.svelte.js'
+  import { live, hub, tempLimits } from '../../lib/live.svelte.js'
   import { href } from '../../router.svelte.js'
   import { feed, watchSignals, resample, keys } from './parts/feed.svelte.js'
   import { useEcu } from './parts/ecu.svelte.js'
   import { isTripped, isOn, num, worstCaseA } from '../car/parts/summary.js'
   import LiveTabs from './parts/LiveTabs.svelte'
   import Tile from './parts/Tile.svelte'
+
+  // temperature as a share of the all-off limit (G18), so the bar fills toward the shutdown
+  const tempBar = (d, lim) => (lim ? { pct: (d.temp / lim.crit) * 100 } : {})
 
   let showHidden = $state(false)
   let moduleKey = $state('all')
@@ -40,7 +43,8 @@
     const temps = answering.filter((d) => Number.isFinite(d.temp))
     if (!one && temps.length) {
       const h = temps.reduce((a, b) => (b.temp > a.temp ? b : a))
-      t.push({ id: 'temp', name: one ? 'Temperature' : 'Hottest module', mod: h.name, value: String(Math.round(h.temp)), unit: '°C', sub: 'limit not reported by the module', tone: /overtemp/i.test(h.state ?? '') ? 'fault' : 'on', key: one ? keys.temp(h.guid) : keys.hottest, href: href('hardware', 'module', h.guid), graph: href('live', 'plot', { signal: one ? keys.temp(h.guid) : keys.hottest }) })
+      const lim = tempLimits(h)
+      t.push({ id: 'temp', name: one ? 'Temperature' : 'Hottest module', mod: h.name, value: String(Math.round(h.temp)), unit: '°C', ...tempBar(h, lim), sub: lim ? `OverTemp at ${lim.warn} °C · all off at ${lim.crit} °C` : 'limit not known yet', tone: /overtemp/i.test(h.state ?? '') ? 'fault' : lim && h.temp >= lim.warn ? 'warn' : 'on', key: one ? keys.temp(h.guid) : keys.hottest, href: href('hardware', 'module', h.guid), graph: href('live', 'plot', { signal: one ? keys.temp(h.guid) : keys.hottest }) })
     }
     if (!one && ecu.rpm != null) t.push({ id: 'rpm', name: 'Engine', mod: ecu.source, value: String(Math.round(ecu.rpm)), unit: 'rpm', sub: ecu.gear != null ? 'gear ' + ecu.gear : '', tone: 'on', key: null, href: href('hardware', 'module', ecu.guid) })
     if (!one && ecu.coolant != null) t.push({ id: 'cool', name: 'Coolant', mod: ecu.source, value: String(Math.round(ecu.coolant)), unit: '°C', sub: '', tone: 'on', key: null, href: href('hardware', 'module', ecu.guid) })
@@ -52,7 +56,7 @@
   const moduleTiles = $derived(
     live.connected
       ? devs.filter((d) => d.connected && Number.isFinite(d.temp)).map((d) => ({
-          id: 'mod-' + d.guid, name: 'Temperature', mod: d.name, value: String(Math.round(d.temp)), unit: '°C',
+          id: 'mod-' + d.guid, name: 'Temperature', mod: d.name, value: String(Math.round(d.temp)), unit: '°C', ...tempBar(d, tempLimits(d)),
           sub: (/pdm/i.test(d.type) ? 'dingoPDM' : 'CANBoard') + (d.state ? ' · ' + d.state : ''), tone: /overtemp|error/i.test(d.state ?? '') ? 'fault' : /sleep/i.test(d.state ?? '') ? 'off' : 'on',
           key: keys.temp(d.guid), href: href('hardware', 'module', d.guid), graph: href('live', 'plot', { signal: keys.temp(d.guid) }),
         }))

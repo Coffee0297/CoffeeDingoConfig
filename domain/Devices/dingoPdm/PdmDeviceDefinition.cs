@@ -21,5 +21,9 @@ public record PdmDeviceDefinition(
     int[]? OutputCurrentRatings = null,
     // Timer / lookup-table function slots (firmware >= 5.5.107). Defaults match dingoFW's PDM boards.
     int NumTimers = 8,
-    int NumTables = 2
+    int NumTables = 2,
+    // Board temperature (°C): at TempWarnC the module reports OverTemp; at TempCritC it switches every output
+    // off with a fatal error (BOARD_TEMP_WARN / BOARD_TEMP_CRIT in dingoFW core/device_config.h).
+    int TempWarnC = 55,
+    int TempCritC = 80
     );
