@@ -24,7 +24,8 @@ export async function write(guid, kind, number, body) {
   try {
     const r = await api.setFunction(guid, kind, number, body)
     project.dirty = true
-    if (r && r.written === false) toast('The module is offline: saved in the project, sent when it is back.', 'info', 5000)
+    if (r?.staged) toast('Saved. Apply to car sends it to the module.', 'info', 4000)
+    else if (r && r.written === false) toast('The module is offline: saved in the project, sent when it is back.', 'info', 5000)
     return r ?? {}
   } catch (e) {
     const m = e?.message ?? String(e)

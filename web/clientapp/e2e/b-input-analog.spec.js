@@ -10,7 +10,7 @@ test.beforeAll(async () => { cb = await deviceByName('CB-2'); cb1 = await device
 const row = (n) => funcRow(cb.guid, 'analogIn', n)
 const openAi = async (page, n, d = cb) => { await open(page, `hardware/module/${d.guid}/input/analoginput/${n}`); await expect(page.getByTestId('save')).toBeVisible() }
 const withAi = (n, fn) => withFunc(cb.guid, 'analoginput', 'analogIn', n, fn)
-const save = async (page) => { await page.getByTestId('save').dispatchEvent('click'); await expect(page.getByTestId('save-status')).toContainText(/Saved to/, { timeout: 30_000 }) }
+const save = async (page) => { await page.getByTestId('save').dispatchEvent('click'); await expect(page.getByTestId('save-status')).toContainText(/^Saved/, { timeout: 30_000 }) }
 
 /** Report a fixed millivolt value for one analog input (and its switch state) in GET .../signals. */
 async function mockMv(page, realName, name, mv) {

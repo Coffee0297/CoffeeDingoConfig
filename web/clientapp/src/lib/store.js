@@ -57,6 +57,10 @@ async function apiError(r) {
   try { return new Error(JSON.parse(t)?.error ?? t) } catch { return new Error(t) }
 }
 
+// G2: the redesigned UI (#/next) holds its edits until "Apply to car"; the backend saves them to the project
+// only when a request carries this header. The old UI sends none and keeps writing live.
+const STAGE = typeof location !== 'undefined' && location.hash.startsWith('#/next') ? { 'X-Dingo-Stage': '1' } : {}
+
 async function j(method, url, body, timeoutMs = 15000) {
   // Abort a hung request (wedged CAN adapter / stalled device) so callers' busy flags
   // clear instead of spinning forever. Flash uses its own raw fetch (legitimately long).
@@ -66,7 +70,7 @@ async function j(method, url, body, timeoutMs = 15000) {
   try {
     r = await fetch(url, {
       method,
-      headers: body ? { 'Content-Type': 'application/json' } : {},
+      headers: body ? { 'Content-Type': 'application/json', ...STAGE } : { ...STAGE },
       body: body ? JSON.stringify(body) : undefined,
       signal: ac.signal,
     })

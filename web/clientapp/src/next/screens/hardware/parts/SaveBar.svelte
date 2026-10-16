@@ -13,7 +13,7 @@
     {:else}No changes.{/if}
   </div>
   <Button onclick={onrevert} disabled={!dirty || saving}>Revert</Button>
-  <Button variant="primary" busy={saving} disabled={!dirty || !!problem || disabled} onclick={onsave} data-testid="save">{connected ? 'Save to the module' : 'Save to the project'}</Button>
+  <Button variant="primary" busy={saving} disabled={!dirty || !!problem || disabled} onclick={onsave} data-testid="save">Save</Button>
 </div>
 
 <style>

@@ -11,4 +11,8 @@ public class DeviceUiState
     public bool Reading { get; set; }
     public int ReadDone { get; set; }
     public int ReadTotal { get; set; }
+
+    // G2: edits saved to the project and held for "Apply to car" since the module was last in step. Only counts
+    // while the module differs (a confirmed write or read clears ConfigMismatch, and with it these).
+    public int PendingEdits { get; set; }
 }

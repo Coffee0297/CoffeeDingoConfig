@@ -32,7 +32,9 @@ public record DeviceDto(string Guid, string Name, string Type, int BaseId, bool 
     bool CanBootloader, bool ConfigMismatch = false, int ConfigDiffCount = 0, bool IsGateway = false,
     bool CanFiltersEnabled = false, bool ConnectUsbToCan = true,
     // false on a CANBoard (firmware CAN_SLEEP off): the sleep / force-sleep / wake controls do nothing there.
-    bool CanSleep = true);
+    bool CanSleep = true,
+    // G2: edits held for "Apply to car" (0 once a write or read brings the module in step)
+    int PendingEdits = 0);
 public record AdaptersDto(string[] Adapters, string[] Ports, bool Connected, string? ActiveAdapter, string? ActivePort, int? GatewayBaseId);
 public record TelemetryDto(bool Connected, string? Adapter, long CanTotal, long CanRate, int[] Ids, DeviceDto[] Devices);
 public record ConnectReq(string Adapter, string Port, string Bitrate);
@@ -311,7 +313,7 @@ public static class DingoMap
                 p.Version, BitrateLabel(p.BitRate), outs, reading, readDone, readTotal,
                 p.SleepEnabled, p.SleepTimeoutMs, p.SleepIgnoreAlwaysOn, p.ForceSleepInput, p.MuteTxInput, p.WakeDigInputMask, p.WakeOnCan,
                 p.CanBootloader, p.Connected && p.ConfigMismatch, p.LastConfigDiff.Count, false,
-                p.CanFiltersEnabled, p.ConnectUsbToCan);
+                p.CanFiltersEnabled, p.ConnectUsbToCan, PendingEdits: p.ConfigMismatch ? ui?.PendingEdits ?? 0 : 0);
         }
         if (d is domain.Devices.Canboard.CanboardDevice cb)
             // CANBoard has no battery/total-current sensing (those are PDM smart-output features) — leave
@@ -321,7 +323,7 @@ public static class DingoMap
             return new DeviceDto(cb.Guid.ToString(), cb.Name, cb.Type, cb.BaseId, cb.Connected,
                 0, 0, cb.BoardTempC, "", cb.Version, BitrateLabel(cb.BitRate), Array.Empty<OutputDto>(), reading, readDone, readTotal,
                 cb.SleepEnabled, cb.SleepTimeoutMs, cb.SleepIgnoreAlwaysOn, cb.ForceSleepInput, cb.MuteTxInput, cb.WakeDigInputMask, cb.WakeOnCan,
-                cb.CanBootloader, cb.Connected && cb.ConfigMismatch, cb.LastConfigDiff.Count, CanSleep: cb.CanSleep);
+                cb.CanBootloader, cb.Connected && cb.ConfigMismatch, cb.LastConfigDiff.Count, CanSleep: cb.CanSleep, PendingEdits: cb.ConfigMismatch ? ui?.PendingEdits ?? 0 : 0);
         return new DeviceDto(d.Guid.ToString(), d.Name, d.Type, d.BaseId, d.Connected,
             0, 0, 0, "", "", "", Array.Empty<OutputDto>(), reading, readDone, readTotal, false, 30000, true, 0, 0, 0, true,
             (d as IDeviceConfigurable)?.CanBootloader ?? false);
@@ -669,7 +671,7 @@ public static class LiveApi
         });
 
         // Set an output's current limit (used by the output editor; also the write-path test hook)
-        api.MapPost("/devices/{guid}/output", async (string guid, SetOutputReq r, DeviceManager dm, ICommsAdapterManager adapters) =>
+        api.MapPost("/devices/{guid}/output", async (string guid, SetOutputReq r, DeviceManager dm, ICommsAdapterManager adapters, HttpContext http) =>
         {
             if (!Guid.TryParse(guid, out var g)) return Results.BadRequest();
             var d = dm.GetDevice<PdmDevice>(g);
@@ -679,7 +681,7 @@ public static class LiveApi
             // Push it to the module over CAN only when it's live, and report which happened so a
             // caller (e.g. the MCP set_output tool, described as "live") never reads the in-memory
             // change as a confirmed device write.
-            if (!await IsLiveModuleAsync(g, dm, adapters)) return Results.Ok(new { ok = true, o.Number, o.CurrentLimit, written = false });
+            if (!await IsLiveEditAsync(http, g, dm, adapters)) return Results.Ok(new { ok = true, o.Number, o.CurrentLimit, written = false, staged = Staged(http) });
             var res = await dm.WriteAndConfirm(g, dm.FunctionParamKeys(g, 0x1000 + (r.Number - 1)), () => dm.WriteOutputParams(g, r.Number));
             return WriteReport(res, new() { ["Number"] = o.Number, ["CurrentLimit"] = o.CurrentLimit });
         });
@@ -713,7 +715,7 @@ public static class LiveApi
 
         // Apply an output's config from the editor, then write that output's params to the
         // device (paced). Burn separately to persist to flash.
-        api.MapPost("/devices/{guid}/outputconfig", async (string guid, OutputConfigReq r, DeviceManager dm, ICommsAdapterManager adapters) =>
+        api.MapPost("/devices/{guid}/outputconfig", async (string guid, OutputConfigReq r, DeviceManager dm, ICommsAdapterManager adapters, HttpContext http) =>
         {
             if (!Guid.TryParse(guid, out var g)) return Results.BadRequest();
             var d = dm.GetDevice<PdmDevice>(g);
@@ -754,7 +756,7 @@ public static class LiveApi
             // The record edit above always persists (offline config authoring). Only push to the
             // module over CAN when it is actually live; report which happened so the UI can say
             // "written to device" vs "saved to project".
-            if (!await IsLiveModuleAsync(g, dm, adapters)) return Results.Ok(new { ok = true, written = false });
+            if (!await IsLiveEditAsync(http, g, dm, adapters)) return Results.Ok(new { ok = true, written = false, staged = Staged(http) });
             return WriteReport(await dm.WriteAndConfirm(g, dm.FunctionParamKeys(g, 0x1000 + (r.Number - 1)), () => dm.WriteOutputParams(g, r.Number)));
         });
 
@@ -829,7 +831,7 @@ public static class LiveApi
         // The module's own var-map inputs — the force-sleep and mute-TX signals (device params 0x0000:10 / :11).
         // The Wiring canvas wires them like any function input. Record edit persists offline; CAN write when
         // live. Same field-safety as System ▸ Settings: a module-level always-true signal is refused.
-        api.MapPost("/devices/{guid}/device-inputs", async (string guid, DeviceInputsReq r, DeviceManager dm, ICommsAdapterManager adapters) =>
+        api.MapPost("/devices/{guid}/device-inputs", async (string guid, DeviceInputsReq r, DeviceManager dm, ICommsAdapterManager adapters, HttpContext http) =>
         {
             if (!Guid.TryParse(guid, out var g)) return Results.BadRequest();
             var dev = dm.GetDevice(g);
@@ -855,7 +857,7 @@ public static class LiveApi
                     if (r.MuteTxInput is { } m) c.MuteTxInput = m;
                     break;
             }
-            var live = await IsLiveModuleAsync(g, dm, adapters);
+            var live = await IsLiveEditAsync(http, g, dm, adapters);
             List<DeviceManager.WriteResult>? res = null;
             if (live)
             {
@@ -869,7 +871,7 @@ public static class LiveApi
                 });
             }
             var (fsNow, mtNow) = dev is PdmDevice pp ? (pp.ForceSleepInput, pp.MuteTxInput) : (0, ((CanboardDevice)dev).MuteTxInput);
-            if (res is null) return Results.Ok(new { ok = true, written = false, forceSleepInput = fsNow, muteTxInput = mtNow });
+            if (res is null) return Results.Ok(new { ok = true, written = false, staged = Staged(http), forceSleepInput = fsNow, muteTxInput = mtNow });
             return WriteReport(res, new() { ["forceSleepInput"] = fsNow, ["muteTxInput"] = mtNow });
         });
 
@@ -886,7 +888,7 @@ public static class LiveApi
             if (rejected.Count > 0)
                 return Results.BadRequest(new { ok = false, error = $"invalid value for {string.Join(", ", rejected)} — nothing was written to the device" });
             // Record edit persists offline; CAN write only when live (see /outputconfig).
-            if (!await IsLiveModuleAsync(g, dm, adapters)) return Results.Ok(new { ok = true, written = false });
+            if (!await IsLiveEditAsync(req.HttpContext, g, dm, adapters)) return Results.Ok(new { ok = true, written = false, staged = Staged(req.HttpContext) });
             return WriteReport(await dm.WriteAndConfirm(g, dm.FunctionParamKeys(g, paramIndex), () => dm.WriteFunctionParams(g, paramIndex)));
         });
 
@@ -1262,7 +1264,7 @@ public static class LiveApi
         // SOURCE module's broadcast signal. Resolves the signal's current absolute CAN id + bit layout
         // from the source's frame map and writes the consumer's CAN input — what the UI picker does
         // client-side, in one call. Re-run after a source base-ID change to re-resolve the id.
-        api.MapPost("/devices/{guid}/link-remote", async (string guid, LinkRemoteReq r, DeviceManager dm, ICommsAdapterManager adapters) =>
+        api.MapPost("/devices/{guid}/link-remote", async (string guid, LinkRemoteReq r, DeviceManager dm, ICommsAdapterManager adapters, HttpContext http) =>
         {
             if (!Guid.TryParse(guid, out var cg) || dm.GetDevice(cg) is not IDeviceConfigurable consumer)
                 return Results.BadRequest(new { error = "bad or non-configurable consumer guid" });
@@ -1291,7 +1293,7 @@ public static class LiveApi
                 ["id"] = ci.Id, ["ide"] = ci.Ide, ["startBit"] = ci.StartBit, ["bitLength"] = ci.BitLength,
                 ["factor"] = ci.Factor, ["offset"] = ci.Offset, ["byteOrder"] = (int)ci.ByteOrder, ["signed"] = ci.Signed, ["name"] = ci.Name,
             };
-            if (!await IsLiveModuleAsync(cg, dm, adapters)) return Results.Ok(new Dictionary<string, object?>(info) { ["ok"] = true, ["written"] = false });
+            if (!await IsLiveEditAsync(http, cg, dm, adapters)) return Results.Ok(new Dictionary<string, object?>(info) { ["ok"] = true, ["written"] = false, ["staged"] = Staged(http) });
             return WriteReport(await dm.WriteAndConfirm(cg, dm.FunctionParamKeys(cg, paramIndex), () => dm.WriteFunctionParams(cg, paramIndex)), info);
         });
 
@@ -1651,6 +1653,24 @@ public static class LiveApi
             body["error"] = string.Join("; ", rejected.Select(x => $"{x.param} {x.reason}: the module kept {x.kept}")
                 .Concat(noReply.Count > 0 ? [$"no reply for {string.Join(", ", noReply)}: not confirmed on the device"] : []));
         return ok ? Results.Ok(body) : Results.Json(body, statusCode: 409);
+    }
+
+    // G2: the redesigned UI holds its edits until "Apply to car": it sends X-Dingo-Stage: 1, and the edit endpoints
+    // then save to the project only and mark the module as differing (the Apply panel lists it; Apply writes it).
+    // The old UI, scripts and the AI agent send no header and keep writing live.
+    private static bool Staged(HttpContext http) => http.Request.Headers["X-Dingo-Stage"] == "1";
+
+    private static async Task<bool> IsLiveEditAsync(HttpContext http, Guid g, DeviceManager dm, ICommsAdapterManager adapters)
+    {
+        if (!Staged(http)) return await IsLiveModuleAsync(g, dm, adapters);
+        if (dm.GetDevice(g) is domain.Interfaces.IDeviceConfigurable c)
+        {
+            var ui = dm.GetDeviceUiState(g);
+            if (!c.ConfigMismatch) ui.PendingEdits = 0;   // in step since the last count: start again
+            ui.PendingEdits++;
+            c.ConfigMismatch = true;
+        }
+        return false;
     }
 
     private static async Task<bool> IsLiveModuleAsync(Guid g, DeviceManager dm, ICommsAdapterManager adapters)

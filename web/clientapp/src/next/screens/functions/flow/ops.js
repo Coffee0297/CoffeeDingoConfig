@@ -40,4 +40,5 @@ export function clearsFor(model, id) {
 }
 
 /** Plain result word for a toast. */
-export const landed = (r, dev) => (r?.written === false ? `saved to the project only (${dev?.name ?? 'module'} is not live). Apply later to send it.` : `sent to ${dev?.name ?? 'the module'} (not stored until you Apply).`)
+export const landed = (r, dev) => (r?.staged ? `saved. Apply to car sends it to ${dev?.name ?? 'the module'}.`
+  : r?.written === false ? `saved to the project only (${dev?.name ?? 'module'} is not live). Apply later to send it.` : `sent to ${dev?.name ?? 'the module'} (not stored until you Apply).`)

@@ -86,7 +86,7 @@ test('protection save writes limits, retry rule, warn and open-load to the modul
       const o = (await out(1)).o
       return o.currentLimit === 7 && o.inrushLimit === 40 && o.inrushTime === 500 && o.resetMode === 1 && o.resetCountLimit === 5 && o.resetTime === 800 && near(o.warnLimit, 5.5) && near(o.openLoadLimit, 0.3) && o.openLoadTime === 900
     }, 15_000, 'protection values on the module')
-    await expect(page.getByTestId('save-status')).toContainText('Saved to the module')
+    await expect(page.getByTestId('save-status')).toContainText('Saved. Apply to car sends it')
   })
   expect(errors).toEqual([])
 })

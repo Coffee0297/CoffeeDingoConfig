@@ -5,6 +5,8 @@
   const total = $derived(live.devices.length)
   const answering = $derived(live.devices.filter((d) => d.connected).length)
   const pending = $derived(pendingModules().length)
+  // G2: edits saved and held for Apply, across the connected modules
+  const waiting = $derived(live.devices.reduce((n, d) => n + (d.connected ? d.pendingEdits ?? 0 : 0), 0))
   const projName = $derived(project.current ? project.current.replace(/\.json$/i, '') : 'Untitled car')
 
   const conn = $derived.by(() => {
@@ -24,7 +26,7 @@
     <span class="dot" aria-hidden="true"></span>{conn.text}
   </button>
   <button type="button" class="chip apply" class:has={pending > 0} aria-haspopup="dialog" aria-expanded={ui.panel === 'apply'} onclick={() => (ui.panel = 'apply')} data-testid="apply-pill">
-    {#if pending > 0}◆ {pending} {pending === 1 ? 'module differs' : 'modules differ'} · Apply to car{:else}Nothing to apply{/if}
+    {#if waiting > 0}◆ {waiting} change{waiting === 1 ? '' : 's'} waiting · Apply to car{:else if pending > 0}◆ {pending} {pending === 1 ? 'module differs' : 'modules differ'} · Apply to car{:else}Nothing to apply{/if}
   </button>
   <button type="button" class="chip search" onclick={() => (ui.palette = true)} aria-keyshortcuts="Control+K">Search · <span class="mono">Ctrl K</span></button>
   <button type="button" class="chip icon" aria-label={ui.theme === 'dark' ? 'Use light theme' : 'Use dark theme'} onclick={() => setTheme(ui.theme === 'dark' ? 'light' : 'dark')}>{ui.theme === 'dark' ? '☀' : '☾'}</button>
