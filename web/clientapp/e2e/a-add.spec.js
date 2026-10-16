@@ -31,7 +31,9 @@ test('Find on CAN lists what answers and marks modules already in the project', 
       const known = devs.find((x) => x.baseId === base)
       if (known) expect(cells[4]).toContain('In project as ' + known.name)
       else { fresh++; expect(cells[4]).toContain('New: not in the project') }
-      expect(cells[3]).toContain('not reported') // firmware is gap G8
+      // the scan reads the firmware from the Version reply (G8); a known module's matches its telemetry
+      expect(cells[3].trim()).toMatch(/^\d+\.\d+\.\d+$/)
+      if (known?.version) expect(cells[3].trim()).toBe(known.version.replace(/^v/, ''))
     }
     await expect(d.getByRole('checkbox')).toHaveCount(fresh)
     await expect(d.getByTestId('add-primary')).toBeDisabled()
