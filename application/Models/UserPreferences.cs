@@ -12,4 +12,8 @@ public class UserPreferences
     public string? SelectedPort { get; set; }
     public CanBitRate SelectedBitrate { get; set; }
     public NumberFormat IdFormat { get; set; }
+
+    // G10: connect to the last adapter when the app starts; reconnect when the link drops on its own.
+    public bool AutoConnect { get; set; }
+    public bool AutoReconnect { get; set; } = true;
 }

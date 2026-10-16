@@ -9,7 +9,7 @@
 
   const conn = $derived.by(() => {
     if (hub.state !== 'live') return { tone: 'stale', text: hub.state === 'reconnecting' ? 'App reconnecting…' : 'App not running' }
-    if (!live.connected) return { tone: 'stale', text: 'Not connected' }
+    if (!live.connected) return { tone: 'stale', text: live.reconnecting ? 'Adapter lost · reconnecting…' : 'Not connected' }
     return { tone: answering === total && total ? 'on' : 'warn', text: `${live.adapter ?? 'Connected'} · ${answering} of ${total} live` }
   })
 </script>

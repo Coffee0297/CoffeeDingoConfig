@@ -12,7 +12,6 @@ test('connected: step 2 lists every module with type, address, state and an edit
   await expect(page.getByText('Step 2 of 3')).toBeVisible()
   await expect(page.getByRole('list', { name: 'Steps' }).getByRole('listitem').nth(1)).toHaveAttribute('aria-current', 'step')
   await expect(page.getByText(/Connected through SLCAN/)).toBeVisible()
-  await expect(page.getByText('auto-reconnect not available yet')).toBeVisible()
   for (const d of devs) {
     const row = page.getByTestId('first-' + d.name)
     await expect(row).toContainText(d.type)

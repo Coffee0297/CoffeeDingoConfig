@@ -2,7 +2,7 @@
   // First run (board H13): connect, find the modules, name them, place them on the car map.
   // Steps 3 to 6 of the board (what the car has, questions, wiring list, apply and test) are the
   // Functions screens; "Next" goes there. Backed by telemetry, GET /api/adapters, POST /api/connect,
-  // POST /api/devices/{id}/rename. Blink LED needs firmware 5.6 (gap G12); auto-reconnect is gap G10.
+  // POST /api/devices/{id}/rename. Blink LED needs firmware 5.6 (gap G12).
   import { Page, PageHeader, Card, Button, Banner, Chip, StateDot, Empty, FwBadge } from '../../ui/index.js'
   import { live, api, toast, mutate, moduleState, hex } from '../../lib/live.svelte.js'
   import { go, href } from '../../router.svelte.js'
@@ -82,7 +82,7 @@
         <div class="conn" role="status">
           <StateDot tone={answering === mods.length && mods.length ? 'on' : 'warn'} />
           <strong>Connected through {live.adapter ?? 'an adapter'}</strong>
-          <span class="muted">{rate ?? 'speed unknown'} · {answering} of {mods.length} answering · auto-reconnect not available yet</span>
+          <span class="muted">{rate ?? 'speed unknown'} · {answering} of {mods.length} answering</span>
           <span class="grow"></span>
           <Button variant="ghost" onclick={() => (back = true)} data-testid="change-conn">Change</Button>
         </div>
