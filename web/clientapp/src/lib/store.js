@@ -178,7 +178,11 @@ export const api = {
   projSave: (FileName, Client) => j('POST', '/api/project/save', { FileName, Client }),
   projOpen: (FileName) => j('POST', '/api/project/open', { FileName }),
   projNew: () => j('POST', '/api/project/new'),
-  projDownload: () => j('GET', '/api/project/download'),   // full project JSON for a browser save
+  projDownload: () => j('GET', '/api/project/download'),
+  // function / helper block groups per module (G16): { groups: [...], dismissed: [...] }
+  groups: (guid) => j('GET', `/api/groups/${guid}`),
+  allGroups: () => j('GET', '/api/groups'),
+  putGroups: (guid, rec) => j('PUT', `/api/groups/${guid}`, rec),   // full project JSON for a browser save
   crossModuleGet: () => j('GET', '/api/system/cross-module'),   // cross-module defs deployed via MCP (for the UI to import)
   async projUpload(text) {                                  // load a project file picked on the PC
     const r = await fetch('/api/project/upload', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: text })
@@ -553,8 +557,9 @@ export function gatherClientState() {
   try {
     for (let i = 0; i < localStorage.length; i++) {
       const k = localStorage.key(i)
-      // old UI graph layout, and the redesign's flow canvas positions and function groups (per module guid)
-      if (k && /^(dingoGraphPos|dingoGraphRemotes|dingoNextFlowPos|dingoNextGroups):/.test(k)) graph[k] = localStorage.getItem(k)
+      // old UI graph layout and the redesign's flow canvas positions (per module guid); function groups are
+      // held by the server (G16, /api/groups) and merged into the file there
+      if (k && /^(dingoGraphPos|dingoGraphRemotes|dingoNextFlowPos):/.test(k)) graph[k] = localStorage.getItem(k)
     }
   } catch {}
   return {
@@ -578,7 +583,7 @@ export function restoreClientState(c) {
     luaSnippets.set(c?.lua && typeof c.lua === 'object' ? c.lua : {})
     localStorage.setItem('dingoGfxBridges', JSON.stringify(c?.bridges ?? {}))
     localStorage.setItem('pinpos', JSON.stringify(c?.pinpos ?? {}))
-    for (const [k, v] of Object.entries(c?.graph ?? {})) if (typeof v === 'string') localStorage.setItem(k, v)
+    for (const [k, v] of Object.entries(c?.graph ?? {})) if (typeof v === 'string' && !k.startsWith('dingoNextGroups:')) localStorage.setItem(k, v)
   } catch (e) { console.warn('restore client state failed', e) }
 }
 

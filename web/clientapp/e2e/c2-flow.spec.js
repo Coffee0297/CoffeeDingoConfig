@@ -5,7 +5,7 @@
 import { test, expect } from '@playwright/test'
 import { near } from './api.js'
 import { open, watchErrors } from './helpers.js'
-import { apiJson, deviceByName, waitFor } from './api.js'
+import { API, apiJson, deviceByName, waitFor } from './api.js'
 
 const TARGETS = { virtualInputs: [14, 15, 16], conditions: [30, 31, 32], timers: [8], flashers: [4], counters: [4], tables: [2], canOutputs: [30, 31, 32] }
 const KIND = { virtualInputs: 'virtualinput', conditions: 'condition', timers: 'timer', flashers: 'flasher', counters: 'counter', tables: 'table', canOutputs: 'canoutput' }
@@ -281,16 +281,15 @@ test('simulate: switch inputs and inject faults in the browser; nothing reaches 
   expect(errors).toEqual([])
 })
 
-test('suggestion banner: Replace groups blocks (browser only), Open inside, Undo, Not now, Replace all, block sheet', async ({ page }) => {
+test('suggestion banner: Replace groups blocks (a record on the server), Open inside, Undo, Not now, Replace all, block sheet', async ({ page }) => {
   const errors = watchErrors(page)
   const cb1 = await deviceByName('CB-1')
-  await openFlow(page, 'CB-1')
-  const key = await page.evaluate(() => Object.keys(localStorage).find((k) => k.startsWith('dingoNextGroups:')) ?? null)
-  const saved = key ? await page.evaluate((k) => localStorage.getItem(k), key) : null
+  const rec = () => apiJson('GET', `/api/groups/${cb1.guid}`)
+  const saved = await rec()
   const before = JSON.stringify(await fns(cb1.guid))
   try {
-    await page.evaluate(() => { for (const k of Object.keys(localStorage)) if (k.startsWith('dingoNextGroups:')) localStorage.removeItem(k) })
-    await page.reload()
+    await apiJson('PUT', `/api/groups/${cb1.guid}`, { groups: [], dismissed: [] })
+    await openFlow(page, 'CB-1')
     await expect(page.getByTestId('canvas').locator('.svelte-flow__node').first()).toBeVisible({ timeout: 15_000 })
     const sug = page.getByRole('region', { name: 'Suggestion' })
     await expect(sug).toContainText('Ready to start')
@@ -299,7 +298,7 @@ test('suggestion banner: Replace groups blocks (browser only), Open inside, Undo
     await expect(grp).toHaveCount(1)
     await expect(grp).toContainText('HELPER')
     await expect(node(page, 'virtualinput:1')).toHaveCount(0)
-    expect(await page.evaluate(() => Object.keys(localStorage).some((k) => k.startsWith('dingoNextGroups:') && localStorage.getItem(k).includes('"ready"')))).toBe(true)
+    await waitFor(async () => (await rec()).groups.some((g) => g.recipe === 'ready' && g.members.includes('virtualinput:1')), 5_000, 'group record on the server')
     const used = page.getByRole('region', { name: 'Group' })
     await used.getByRole('button', { name: 'Open inside' }).click()
     await expect(node(page, 'virtualinput:1')).toBeVisible()
@@ -325,7 +324,7 @@ test('suggestion banner: Replace groups blocks (browser only), Open inside, Undo
     await page.keyboard.press('Escape')
     await expect(sheet).toHaveCount(0)
   } finally {
-    await page.evaluate(([k, v]) => { for (const x of Object.keys(localStorage)) if (x.startsWith('dingoNextGroups:')) localStorage.removeItem(x); if (k && v) localStorage.setItem(k, v) }, [key, saved])
+    await apiJson('PUT', `/api/groups/${cb1.guid}`, saved)
   }
   expect(errors).toEqual([])
 })
@@ -410,4 +409,16 @@ test('signal from another module adds a CAN input that reads it over CAN @exclus
     await post(`/api/devices/${pdm4.guid}/function/caninput/32`, body)
   }
   expect(errors).toEqual([])
+})
+
+test('group records are checked by the server: one block in one group, a known module, a real member id (G16)', async () => {
+  const cb1 = await deviceByName('CB-1')
+  const put = (guid, body) => fetch(`${API}/api/groups/${guid}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+  const g = (id, members) => ({ id, recipe: 'threshold', kind: 'helper', name: 'T', members })
+  const twice = await put(cb1.guid, { groups: [g('a', ['condition:1']), g('b', ['condition:1'])], dismissed: [] })
+  expect(twice.status).toBe(400)
+  expect((await twice.json()).error).toMatch(/already in another group/)
+  expect((await put(cb1.guid, { groups: [g('a', ['drop table'])] })).status).toBe(400)
+  expect((await put(cb1.guid, { groups: [{ ...g('a', ['condition:1']), kind: 'macro' }] })).status).toBe(400)
+  expect((await put('00000000-0000-0000-0000-000000000000', { groups: [] })).status).toBe(404)
 })

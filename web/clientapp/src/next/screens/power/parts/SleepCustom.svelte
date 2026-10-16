@@ -70,7 +70,7 @@
     <div class="blk">
       <strong>What counts as in use</strong>
       <p class="muted">A module counts as in use while an output is on, USB is connected, or CAN traffic is seen.</p>
-      <p class="muted note">Not available yet: a list of your own "in use" signals needs the function groups record (gap G16).</p>
+      <p class="muted note">The firmware decides this itself; it has no input for your own "in use" signals. To keep a module awake on a signal, drive one of its outputs from it.</p>
     </div>
     <div class="blk">
       <strong>Force awake</strong>

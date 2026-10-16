@@ -116,7 +116,7 @@
   const projName = $derived(project.current ?? '')
   let gdata = $state({ groups: [], dismissed: [] })
   // reload when the module or the open project changes (opening a project restores its groups, G4)
-  $effect(() => { const g = guid; projName; untrack(() => { gdata = loadGroups(g) }) })
+  $effect(() => { const g = guid; projName; untrack(() => { loadGroups(g).then((d) => { if (guid === g) gdata = d }) }) })
   const groups = $derived(model ? pruneGroups(gdata.groups, model) : [])
   const suggestions = $derived(model ? suggest(model, groups, gdata.dismissed) : [])
   let lastGroup = $state(null)

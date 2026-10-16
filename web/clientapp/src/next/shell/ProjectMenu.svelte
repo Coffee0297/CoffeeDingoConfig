@@ -135,7 +135,7 @@
     busy = true
     try {
       const doc = await api.projDownload()
-      doc.dingoConfigClient = gatherClientState()
+      doc.dingoConfigClient = { ...gatherClientState(), groups: doc.dingoConfigClient?.groups ?? {} }   // groups live on the server (G16)
       const name = (project.current ? stem(project.current) : 'project') + '.json'
       download(name, doc)
       say(`Downloaded ${name} to this PC. The project in the app is not marked saved.`)

@@ -3,8 +3,10 @@
 // 2. suggest(): a matcher over the real block graph of one module that finds plain-block patterns a
 //    function or helper block covers (e.g. brake + turn combines = US rear lamp).
 // 3. Group records: "Replace" only regroups existing blocks (metadata). The blocks on the module are
-//    not changed. Records live in this browser (localStorage, per module guid) and travel in the
-//    project file's client section (G4); the function record itself is G16.
+//    not changed. Records are held by the server per module guid (/api/groups, G16) and saved in the
+//    project file, so an AI agent sees the same groups.
+
+import { api, toast } from '../../../lib/live.svelte.js'
 
 // port notation: plain = on/off, '#' = number, '*' = bundle
 export const CATALOG = [
@@ -124,14 +126,18 @@ export function suggest(model, groups = [], dismissed = []) {
   return out
 }
 
-// ---- group records (localStorage per module guid; saved with the project file, G4) ----------------
-export const GROUPS_KEY = 'dingoNextGroups:'
-const storeKey = (guid) => GROUPS_KEY + guid
-export function loadGroups(guid) {
-  try { const v = JSON.parse(localStorage.getItem(storeKey(guid)) || '{}'); return { groups: v.groups ?? [], dismissed: v.dismissed ?? [] } } catch { return { groups: [], dismissed: [] } }
+// ---- group records (G16: held by the server per module guid, saved in the project file) ----------
+const EMPTY = () => ({ groups: [], dismissed: [] })
+export async function loadGroups(guid) {
+  try { const v = await api.groups(guid); return { groups: v?.groups ?? [], dismissed: v?.dismissed ?? [] } } catch { return EMPTY() }
 }
-export function saveGroups(guid, data) {
-  try { localStorage.setItem(storeKey(guid), JSON.stringify({ groups: data.groups, dismissed: data.dismissed })) } catch { /* private mode: lives for this page only */ }
+/** Every module's record: { [guid]: { groups, dismissed } }. */
+export async function loadAllGroups() {
+  try { return (await api.allGroups()) ?? {} } catch { return {} }
+}
+export async function saveGroups(guid, data) {
+  try { await api.putGroups(guid, { groups: data.groups, dismissed: data.dismissed }); return true }
+  catch (e) { toast(`Groups not saved: ${e?.message ?? e}`, 'error', 8000); return false }
 }
 export function makeGroup(s) {
   const r = recipe(s.recipe)

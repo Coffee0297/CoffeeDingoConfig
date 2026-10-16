@@ -19,7 +19,7 @@ const Eq = 0, Gt = 2    // Operator
 const ms = (v, max) => Math.min(max, Math.max(0, Math.round(+v || 0)))
 
 export const TEMPLATES = [
-  { key: 'headlights', name: 'Headlights', icon: '💡',
+  { key: 'headlights', group: 'lights', name: 'Headlights', icon: '💡',
     desc: 'Low beam from the headlight switch, high beam from the high-beam switch while the low beam is on, and flash-to-pass at any time. Optionally only with ignition on, and low beam off while high beam is on (H4 bulbs).',
     fields: [
       { k: 'low', t: 'bool', label: 'Headlight switch (low beam)' },
@@ -43,7 +43,7 @@ export const TEMPLATES = [
       if (s.highL) await ctx.wireOutput(s.highL, high)
       if (s.highR) await ctx.wireOutput(s.highR, high)
     } },
-  { key: 'washwipe', name: 'Washer + wipers', icon: '🌧', logicOn: 'slowOut',
+  { key: 'washwipe', group: 'wipers', name: 'Washer + wipers', icon: '🌧', logicOn: 'slowOut',
     desc: 'The module’s own wiper block runs the motor: slow / fast / intermittent from the stalk, stops on the park switch, and wipes a few times after washing. The washer pump runs while the wash button is held. Needs a dingoPDM (CANBoards have no wiper block).',
     fields: [
       { k: 'slow', t: 'bool', label: 'Wiper switch: slow / on' },
@@ -63,13 +63,13 @@ export const TEMPLATES = [
       if (s.fastOut) await ctx.wireOutput(s.fastOut, w.fast)
       await ctx.wireOutput(s.pumpOut, +s.wash)
     } },
-  { key: 'simple', name: 'Simple switched circuit', icon: '🔌', desc: 'One input drives one output directly.',
+  { key: 'simple', group: 'accessories', name: 'Simple switched circuit', icon: '🔌', desc: 'One input drives one output directly.',
     fields: [{ k: 'input', t: 'bool', label: 'Driven by' }, { k: 'output', t: 'out', load: 'load', label: 'Output' }],
     build: async (ctx, s) => { await ctx.wireOutput(s.output, +s.input) } },
-  { key: 'analog', name: 'Analog triggered switch', icon: '📈', desc: 'Output turns on when an analog signal crosses a threshold (creates a Condition).',
+  { key: 'analog', group: 'accessories', name: 'Analog triggered switch', icon: '📈', desc: 'Output turns on when an analog signal crosses a threshold (creates a Condition).',
     fields: [{ k: 'analog', t: 'num', label: 'Analog signal' }, { k: 'op', t: 'op', label: 'Turn on when it is', def: 2 }, { k: 'thr', t: 'number', label: 'Threshold', def: 0 }, { k: 'output', t: 'out', load: 'load', label: 'Output' }],
     build: async (ctx, s) => { const c = await ctx.condition(+s.analog, +s.op, +s.thr, 'TP ' + ctx.outName(s.output)); await ctx.wireOutput(s.output, c) } },
-  { key: 'blinker', name: 'Blinker / hazard', icon: '↔', desc: 'Left/right (+ optional hazard) blink two outputs. Optional US mode where the rear light is also the brake light (turn signal overrides brake on that side); the high-mount 3rd brake stays independent.',
+  { key: 'blinker', group: 'signals', name: 'Blinker / hazard', icon: '↔', desc: 'Left/right (+ optional hazard) blink two outputs. Optional US mode where the rear light is also the brake light (turn signal overrides brake on that side); the high-mount 3rd brake stays independent.',
     fields: [{ k: 'left', t: 'bool', label: 'Left trigger' }, { k: 'right', t: 'bool', label: 'Right trigger' },
       { k: 'hazard', t: 'bool', label: 'Hazard trigger', opt: true }, { k: 'leftOut', t: 'out', load: 'lamp', label: 'Left output' },
       { k: 'rightOut', t: 'out', load: 'lamp', label: 'Right output' }, { k: 'rate', t: 'number', label: 'Blink rate (ms, max 5000)', def: 400, min: 0, max: 5000 },
@@ -92,7 +92,7 @@ export const TEMPLATES = [
       await ctx.wireOutput(s.rightOut, await side(s.right, 'Right'))
       if (us && s.brake3) await ctx.wireOutput(s.brake3, brake)                 // independent high-mount brake
     } },
-  { key: 'fuelpump', name: 'Fuel pump', icon: '⛽', desc: 'Primes on power-up for a moment, then runs while the engine is turning: a run signal (e.g. RPM) above a threshold, and/or a run switch (oil pressure, alternator, ECU pump request).',
+  { key: 'fuelpump', group: 'fuel', name: 'Fuel pump', icon: '⛽', desc: 'Primes on power-up for a moment, then runs while the engine is turning: a run signal (e.g. RPM) above a threshold, and/or a run switch (oil pressure, alternator, ECU pump request).',
     need: [['run', 'runSw']],
     fields: [{ k: 'run', t: 'num', label: 'Run signal (e.g. RPM)', opt: true }, { k: 'runSw', t: 'bool', label: 'Or a run switch (oil pressure / ECU pump request)', opt: true }, { k: 'thr', t: 'number', label: 'Running above', def: 300 },
       { k: 'prime', t: 'number', label: 'Prime time (ms, max 1 h)', def: 3000, min: 0, max: 3600000 }, { k: 'output', t: 'out', load: 'pump', label: 'Pump output' }],
@@ -101,7 +101,7 @@ export const TEMPLATES = [
       const prime = await ctx.timer(ctx.alwaysOn(), 2, +s.prime, 'TP Prime')             // one pulse at power-up (Timer, pulse mode)
       await ctx.wireOutput(s.output, await ctx.anyOf([run, +s.runSw || 0, prime], 'TP FuelPump'))
     } },
-  { key: 'wipers', name: 'Wipers, simple (no park switch)', icon: '🌂', desc: 'Low/High run the wiper output; Intermittent pulses it on a gap. Combines whatever you provide. For a motor with a park switch use Washer + wipers.',
+  { key: 'wipers', group: 'wipers', name: 'Wipers, simple (no park switch)', icon: '🌂', desc: 'Low/High run the wiper output; Intermittent pulses it on a gap. Combines whatever you provide. For a motor with a park switch use Washer + wipers.',
     fields: [{ k: 'low', t: 'bool', label: 'Low / On' }, { k: 'high', t: 'bool', label: 'High', opt: true },
       { k: 'int', t: 'bool', label: 'Intermittent', opt: true }, { k: 'intRate', t: 'number', label: 'Intermittent gap (ms, max 5000)', def: 3000, min: 0, max: 5000 },
       { k: 'output', t: 'out', load: 'motor', label: 'Wiper output' }],
@@ -109,10 +109,10 @@ export const TEMPLATES = [
       const flInt = s.int ? await ctx.flasher(+s.int, 700, +s.intRate, 'TP WipeInt') : 0
       await ctx.wireOutput(s.output, await ctx.anyOf([+s.low, +s.high || 0, flInt], 'TP Wipers'))
     } },
-  { key: 'afterrun', name: 'After-run (stay on after switch-off)', icon: '⏲', desc: 'Output follows a trigger and keeps running for a hold time after it drops — radiator fan or turbo cooling after ignition off, courtesy light after the door closes (creates an off-delay Timer).',
+  { key: 'afterrun', group: 'accessories', name: 'After-run (stay on after switch-off)', icon: '⏲', desc: 'Output follows a trigger and keeps running for a hold time after it drops — radiator fan or turbo cooling after ignition off, courtesy light after the door closes (creates an off-delay Timer).',
     fields: [{ k: 'trig', t: 'bool', label: 'Trigger' }, { k: 'hold', t: 'number', label: 'Hold after off (ms, max 1 h)', def: 60000, min: 0, max: 3600000 }, { k: 'output', t: 'out', load: 'fan', label: 'Output' }],
     build: async (ctx, s) => { await ctx.wireOutput(s.output, await ctx.timer(+s.trig, 1, +s.hold, 'TP ' + ctx.outName(s.output) + ' Hold')) } },
-  { key: 'pwmfan', name: 'PWM fan (duty from analog)', icon: '🌀', logicOn: 'output', desc: 'Fan output runs PWM with its duty following an analog signal (e.g. a temp sensor), with soft start. CANBoard outputs only — set a PDM output’s variable duty in its output editor.',
+  { key: 'pwmfan', group: 'cooling', name: 'PWM fan (duty from analog)', icon: '🌀', logicOn: 'output', desc: 'Fan output runs PWM with its duty following an analog signal (e.g. a temp sensor), with soft start. CANBoard outputs only — set a PDM output’s variable duty in its output editor.',
     fields: [{ k: 'analog', t: 'num', label: 'Duty source (e.g. temperature)' }, { k: 'full', t: 'number', label: 'Signal value at 100% duty', def: 5000 },
       { k: 'min', t: 'number', label: 'Min duty (%)', def: 0 }, { k: 'freq', t: 'number', label: 'PWM frequency (Hz)', def: 200 }, { k: 'output', t: 'out', load: 'fan', label: 'Fan output' }],
     build: async (ctx, s) => { await ctx.setOutputPwm(s.output, { source: +s.analog, full: +s.full, min: +s.min, freq: +s.freq }) } },
@@ -120,7 +120,7 @@ export const TEMPLATES = [
 
 // More ready-made circuits (appended so the existing keys keep their order).
 TEMPLATES.push(
-  { key: 'relaywipe', name: 'Wipers, relay-switched (self-park / Ford concealed)', icon: '🚘', logicOn: 'runOut',
+  { key: 'relaywipe', group: 'wipers', name: 'Wipers, relay-switched (self-park / Ford concealed)', icon: '🚘', logicOn: 'runOut',
     desc: 'A motor with its own park circuit, switched by a RUN relay (and a FAST relay for high speed) while it keeps its supply: open RUN and the motor parks itself. Intermittent and after-wash wipes close RUN for a set time. Ford concealed (depressed) park: when RUN opens the motor REVERSES the blades down into the hidden park, so RUN is held for whole sweeps and the supply stays on after ignition off until it has parked.',
     need: [['low', 'pos']],
     fields: [
@@ -165,7 +165,7 @@ TEMPLATES.push(
       }
       if (s.pumpOut) await ctx.wireOutput(s.pumpOut, wash)
     } },
-  { key: 'interior', name: 'Interior / courtesy light', icon: '🚪',
+  { key: 'interior', group: 'lights', name: 'Interior / courtesy light', icon: '🚪',
     desc: 'On while any door is open and for a delay after the last one closes. With ignition picked, the delay is cut short when the ignition comes on (an open door still lights it).',
     fields: [{ k: 'door1', t: 'bool', label: 'Door switch' }, { k: 'door2', t: 'bool', label: 'Door switch 2', opt: true }, { k: 'door3', t: 'bool', label: 'Door switch 3 (tailgate)', opt: true },
       { k: 'delay', t: 'number', label: 'Stay on after closing (ms, max 1 h)', def: 15000, min: 0, max: 3600000 },
@@ -178,7 +178,7 @@ TEMPLATES.push(
       await ctx.wireOutput(s.output, light)
       if (s.output2) await ctx.wireOutput(s.output2, light)
     } },
-  { key: 'reverse', name: 'Reverse lights', icon: '⏪',
+  { key: 'reverse', group: 'lights', name: 'Reverse lights', icon: '⏪',
     desc: 'On in reverse: from a gear signal (a gear-selector rotary position, or a TCU value) equal to the reverse value, and/or a reverse switch.',
     need: [['gear', 'sw']],
     fields: [{ k: 'gear', t: 'num', label: 'Gear signal (e.g. selector rotary position)', opt: true },
@@ -193,13 +193,13 @@ TEMPLATES.push(
       await ctx.wireOutput(s.left, on)
       if (s.right) await ctx.wireOutput(s.right, on)
     } },
-  { key: 'brake', name: 'Brake lights', icon: '🛑',
+  { key: 'brake', group: 'lights', name: 'Brake lights', icon: '🛑',
     desc: 'Brake switch to the brake lights and the high-mount 3rd brake light. (For US rear lamps that are both turn signal and brake light, use Blinker / hazard in US mode.)',
     fields: [{ k: 'brake', t: 'bool', label: 'Brake switch' },
       { k: 'left', t: 'out', load: 'lamp', label: 'Brake light (left, or both)' }, { k: 'right', t: 'out', load: 'lamp', label: 'Brake light right', opt: true },
       { k: 'third', t: 'out', load: 'lamp', label: '3rd (high-mount) brake light', opt: true }],
     build: async (ctx, s) => { for (const k of ['left', 'right', 'third']) if (s[k]) await ctx.wireOutput(s[k], +s.brake) } },
-  { key: 'radfan', name: 'Radiator fan (temperature, A/C, after-run)', icon: '🌡',
+  { key: 'radfan', group: 'cooling', name: 'Radiator fan (temperature, A/C, after-run)', icon: '🌡',
     desc: 'Fan on above a temperature and off again below a lower one (hysteresis, so it does not chatter), and whenever the A/C asks for it. With ignition picked it runs only with the ignition on, plus an after-run time after switch-off while it is still hot.',
     fields: [{ k: 'temp', t: 'num', label: 'Coolant temperature signal' },
       { k: 'on', t: 'number', label: 'Fan on above', def: 95 }, { k: 'off', t: 'number', label: 'Fan off below', def: 90 },
@@ -215,7 +215,7 @@ TEMPLATES.push(
       await ctx.wireOutput(s.output, fan)
       if (s.output2) await ctx.wireOutput(s.output2, fan)
     } },
-  { key: 'starter', name: 'Starter (interlock + crank limit)', icon: '🔑',
+  { key: 'starter', group: 'power', name: 'Starter (interlock + crank limit)', icon: '🔑',
     desc: 'Cranks while the start button is held with the ignition on: only in neutral / with the clutch down if you pick that switch, never while the engine already runs, and never longer than the crank limit (release the button to try again).',
     fields: [{ k: 'start', t: 'bool', label: 'Start button' }, { k: 'ign', t: 'bool', label: 'Ignition' },
       { k: 'neutral', t: 'bool', label: 'Neutral / clutch switch (must be on to crank)', opt: true },
@@ -227,7 +227,7 @@ TEMPLATES.push(
       const tooLong = await ctx.timer(req, OnDelay, +s.limit, 'TP CrankLimit')
       await ctx.wireOutput(s.output, await ctx.allOf([req, { v: tooLong, not: true }, { v: +s.running || 0, not: true }], 'TP Crank'))
     } },
-  { key: 'drl', name: 'Daytime running lights', icon: '🔆',
+  { key: 'drl', group: 'lights', name: 'Daytime running lights', icon: '🔆',
     desc: 'On with the ignition (optionally only once the engine runs) and off while the headlights are on.',
     fields: [{ k: 'ign', t: 'bool', label: 'Ignition' }, { k: 'lights', t: 'bool', label: 'Headlights on (DRL off)', opt: true },
       { k: 'running', t: 'bool', label: 'Engine running (DRL only then)', opt: true },
@@ -237,7 +237,7 @@ TEMPLATES.push(
       await ctx.wireOutput(s.left, drl)
       if (s.right) await ctx.wireOutput(s.right, drl)
     } },
-  { key: 'toggle', name: 'Push-button toggle (latching)', icon: '🔘',
+  { key: 'toggle', group: 'accessories', name: 'Push-button toggle (latching)', icon: '🔘',
     desc: 'Each press of a momentary button turns the output on, the next one off (light bar, aux lights, heated screen). Optionally it switches off when another signal goes off, e.g. the ignition.',
     fields: [{ k: 'button', t: 'bool', label: 'Push button' }, { k: 'reset', t: 'bool', label: 'Off when this goes off (e.g. ignition)', opt: true },
       { k: 'output', t: 'out', load: 'load', label: 'Output' }, { k: 'output2', t: 'out', load: 'load', label: 'Second output', opt: true }],
@@ -246,7 +246,7 @@ TEMPLATES.push(
       await ctx.wireOutput(s.output, on)
       if (s.output2) await ctx.wireOutput(s.output2, on)
     } },
-  { key: 'reminder', name: 'Lights-on reminder', icon: '🔔',
+  { key: 'reminder', group: 'lights', name: 'Lights-on reminder', icon: '🔔',
     desc: 'Beeps a buzzer while the lights are on with the ignition off (and the door open, if you pick a door switch).',
     fields: [{ k: 'lights', t: 'bool', label: 'Lights on' }, { k: 'ign', t: 'bool', label: 'Ignition' }, { k: 'door', t: 'bool', label: 'Door switch (only while open)', opt: true },
       { k: 'output', t: 'out', load: 'horn', label: 'Buzzer / chime' }],

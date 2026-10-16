@@ -488,6 +488,10 @@ public static class McpServer
             Schema("""{"type":"object","properties":{}}"""),
             _ => new(GET, "/api/templates/instances", null)),
 
+        new("list_function_groups", "List the function / helper block groups per module guid: { groups: [{ id, recipe, kind fn|helper, name, members ['condition:3', ...] }], dismissed: [suggestion keys] }. A group is only a label over existing blocks (the blocks are unchanged); the operator makes and dissolves groups in the flow builder.",
+            Schema("""{"type":"object","properties":{}}"""),
+            _ => new(GET, "/api/groups", null)),
+
         new("remove_template", "Remove an applied template: disables the blocks it created and gives its outputs back what drove them before. CAN inputs and pins another applied template still uses stay on. Burn afterwards to persist.",
             Schema("""{"type":"object","properties":{"id":{"type":"string"}},"required":["id"]}"""),
             a => new(POST, "/api/templates/remove", Json(new { id = Str(a, "id") }))),

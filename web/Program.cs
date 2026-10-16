@@ -105,7 +105,8 @@ app.UseCors("spa");
 
 app.MapHub<LiveHub>("/hub/live");
 app.MapDingoApi();
-app.MapTemplateApi(spaFiles);   // template list/preview/apply/remove (the SPA engine, in Jint) for MCP
+app.MapTemplateApi(spaFiles);
+app.MapGroupApi();   // function / helper block groups (G16)   // template list/preview/apply/remove (the SPA engine, in Jint) for MCP
 app.MapMcp();   // Streamable-HTTP MCP server at POST /mcp (+ GET /mcp/info, /mcp/skills)
 
 // AI-client discovery: /llms.txt advertises the API + bundled MCP server; /AI-CONFIG.md is the
