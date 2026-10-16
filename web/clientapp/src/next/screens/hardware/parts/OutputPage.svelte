@@ -4,7 +4,7 @@
   import { Page, PageHeader, Card, Button, Chip, StateDot, Banner, Empty, LineChart } from '../../../ui/index.js'
   import { live, defs, api, device, moduleState, isCanboard, project } from '../../../lib/live.svelte.js'
   import { href } from '../../../router.svelte.js'
-  import { pinFor } from '../../../../lib/pinmap.js'
+  import { pinFor, boardOf } from '../../../../lib/pinmap.js'
   import { outputRatingA } from '../../../../lib/apply.js'
   import OutputChain from './OutputChain.svelte'
   import OutputProtection from './OutputProtection.svelte'
@@ -155,6 +155,7 @@
 
   const title = $derived((f?.name ?? src?.name ?? '').trim() || `Output ${n}`)
   const pin = $derived(dev ? pinFor(dev, 'output', n) : null)
+  const driver = $derived(dev ? boardOf(dev)?.drivers?.[n - 1] ?? null : null)   // G21: driver chip per output
   const modState = $derived(dev ? moduleState(dev) : null)
 </script>
 
@@ -225,7 +226,7 @@
           </Card>
           <OutputWiring bind:f />
           <Card title="Module limits for this pin">
-            <p class="muted">{#if rating != null}OUT{n} is rated <strong>{rating} A</strong> continuous on the {dev.type}. The trip current cannot be set above it.{:else}No rating is known for this pin.{/if}</p>
+            <p class="muted">{#if rating != null}OUT{n} is rated <strong>{rating} A</strong> continuous on the {dev.type}{#if driver} (driver <span class="mono" data-testid="out-driver">{driver}</span>){/if}. The trip current cannot be set above it.{:else}No rating is known for this pin.{/if}</p>
           </Card>
         {:else}
           <Card title="Live state"><p class="muted" data-testid="cb-live">{state ? `Right now this output is ${state.toLowerCase()}${sig && cbRow?.pwmEnabled && sig.on ? ' at ' + sig.value + ' %' : ''}.` : 'No live value yet.'}</p></Card>

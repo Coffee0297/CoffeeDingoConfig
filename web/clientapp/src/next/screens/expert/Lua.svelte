@@ -6,13 +6,15 @@
   import { Page, PageHeader, Card, Button, Chip, StateDot, Banner, Empty, Meter, Dialog } from '../../ui/index.js'
   import { live, api, toast, project, moduleState } from '../../lib/live.svelte.js'
   import { deviceHasLua } from '../../../lib/store.js'
+  import { boardOf } from '../../../lib/pinmap.js'
   import { href } from '../../router.svelte.js'
   import { ui } from '../../shell/ui.svelte.js'
   import CodeEditor from './parts/CodeEditor.svelte'
 
   let { guid } = $props()
 
-  const CAP = 4096 // Lua space per module (firmware read buffer; gap G21: not in /api/definitions)
+  // Lua space per board (firmware LUA_SCRIPT_MAX, from the board facts in /api/definitions, G21)
+  const capOf = (d) => boardOf(d)?.luaBytes ?? 4096
   const fmt = (n) => Number(n).toLocaleString('en-US')
   // A textarea holds LF only. A script stored with CRLF keeps its CRLF on upload (the bytes on the module stay the same).
   const norm = (s) => (s ?? '').replace(/\r\n/g, '\n')
@@ -279,7 +281,7 @@
                 <span class="mt"><strong>{m.name}</strong>
                   {#if drafts[m.guid] !== undefined}<Chip tone="warn" symbol="◇">Edited</Chip>{/if}
                 </span>
-                <span class="muted ms">{loaded[m.guid] ? (t.trim() ? `${fmt(bytesOf(t))} of ${fmt(CAP)} B` : 'No script') : 'Reading…'}</span>
+                <span class="muted ms">{loaded[m.guid] ? (t.trim() ? `${fmt(bytesOf(t))} of ${fmt(capOf(m))} B` : 'No script') : 'Reading…'}</span>
                 <StateDot tone={ms.key === 'on' ? 'on' : ms.key === 'fault' ? 'fault' : ms.key === 'off' ? 'off' : 'stale'} shape={ms.shape} label={ms.word} />
               </a>
             </li>
@@ -358,9 +360,9 @@
 
           <div class="two">
             <Card title="Lua space">
-              <Meter label={`Lua space on ${cur.name}`} value={used} max={CAP} unit="B" />
-              <p class="muted">{fmt(Math.max(0, CAP - used))} B free. Space is 4 096 B per module (a fixed firmware limit).</p>
-              {#if used > CAP}<Banner tone="fault" title="Too big.">This script is larger than the space on the module. The upload will be refused.</Banner>{/if}
+              <Meter label={`Lua space on ${cur.name}`} value={used} max={capOf(cur)} unit="B" />
+              <p class="muted">{fmt(Math.max(0, capOf(cur) - used))} B free. Space is {fmt(capOf(cur))} B on a {boardOf(cur)?.name ?? cur.type} (a fixed firmware limit).</p>
+              {#if used > capOf(cur)}<Banner tone="fault" title="Too big.">This script is larger than the space on the module. The upload will be refused.</Banner>{/if}
             </Card>
             <Card title="Same script elsewhere">
               {#if twins.length}

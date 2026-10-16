@@ -20,5 +20,7 @@ public record CanboardDeviceDefinition(
     // null/empty = unknown (the UI then shows no rating).
     int[]? OutputCurrentRatings = null,
     // Timer function slots (firmware >= 5.5.107). The CANBoard has no lookup tables (2 KB config sector).
-    int NumTimers = 4
+    int NumTimers = 4,
+    // G21: board facts for the UI (see PdmDeviceDefinition.Board).
+    System.Text.Json.JsonElement? Board = null
 );

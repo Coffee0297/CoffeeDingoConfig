@@ -40,6 +40,10 @@ test('graph, trip summary and module limits are shown', async ({ page }) => {
   await expect(page.getByTestId('trips')).toContainText(/trip|Trip log/, { timeout: 30_000 })
   await expect(page.getByRole('link', { name: 'Open the trip log' })).toHaveAttribute('href', /live\/trips/)
   await expect(page.getByText(/OUT8 is rated\s*8 A/)).toBeVisible()
+  // the driver chip comes from the board facts in /api/definitions (G21): dingoPDM v7 o8 is a BTS7008-2EPA channel
+  const def = (await apiJson('GET', '/api/definitions')).pdms.find((p) => p.typeName === 'dingoPDM')
+  await expect(page.getByTestId('out-driver')).toHaveText(def.board.drivers[7])
+  expect(def.board.drivers[7]).toBe('BTS7008-2EPA')
 })
 
 test('protection: steppers, summary, revert and rating guard', async ({ page }) => {

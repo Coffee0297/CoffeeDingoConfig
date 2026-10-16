@@ -1,53 +1,23 @@
-// Physical connector pins per board, read off the hardware schematics (dingoPDM v7.5, dingoPDM-Max v1.2,
-// CANBoard v2), so
-// pickers can show "J3-8" next to an input and a template drawing can say where each wire lands.
-// Keys are '<group>:<number>' in firmware numbering: di = digital input, ai = analog input, out = output.
-// side = how an output switches its load: 'high' supplies +12 V (load to ground), 'low' pulls to ground
-// (load from a supply). An entry [conn, pin, pin2] is an output on two connector pins (the Max doubles them).
+// Physical connector pins per board, read off the hardware schematics, so pickers can show "J3-8" next to an
+// input and a template drawing can say where each wire lands. The facts live in the backend's
+// pdm-definitions.json ("board" per type, also served by /api/definitions, G21); this module reads the same
+// file so it stays synchronous. Keys are '<group>:<number>' in firmware numbering: di = digital input,
+// ai = analog input, out = output. side = how an output switches its load: 'high' supplies +12 V (load to
+// ground), 'low' pulls to ground (load from a supply). An entry [conn, pin, pin2] is an output on two
+// connector pins (the Max doubles them).
+import defs from '../../../pdm-definitions.json' with { type: 'json' }
 
-const PDM_V7 = {
-  name: 'dingoPDM v7',
-  connectors: { J1: '+12 V battery lug', J2: 'GND lug', J3: 'Deutsch DT 12-pin' },
-  side: 'high',
-  pins: {
-    'di:1': ['J3', 8], 'di:2': ['J3', 11],
-    'out:1': ['J3', 7], 'out:2': ['J3', 12], 'out:3': ['J3', 10], 'out:4': ['J3', 9],
-    'out:5': ['J3', 6], 'out:6': ['J3', 5], 'out:7': ['J3', 4], 'out:8': ['J3', 3],
-  },
-  power: { '+12V': ['J1', 1], GND: ['J2', 1], 'CAN-H': ['J3', 2], 'CAN-L': ['J3', 1] },
-}
+const byType = new Map([...(defs.pdms ?? []), ...(defs.canboards ?? [])].filter((d) => d.board).map((d) => [d.typeName.toLowerCase(), d.board]))
 
-const PDM_MAX = {
-  name: 'dingoPDM-Max',
-  connectors: { J1: '+12 V battery lug', J3: 'GND lug', J4: 'Deutsch DT 12-pin' },   // J2 is the USB-C inside
-  side: 'high',   // BTS70012-1ESP per output, each on two DT pins
-  pins: {
-    'di:1': ['J4', 9], 'di:2': ['J4', 10],
-    'out:1': ['J4', 7, 8], 'out:2': ['J4', 11, 12], 'out:3': ['J4', 5, 6], 'out:4': ['J4', 1, 2],
-  },
-  power: { '+12V': ['J1', 1], GND: ['J3', 1], 'CAN-H': ['J4', 4], 'CAN-L': ['J4', 3] },
-}
-
-const CANBOARD_V2 = {
-  name: 'CANBoard v2',
-  connectors: { J1: 'Power / CAN, 8-pin', J2: 'Analog inputs, 8-pin', J3: 'Digital inputs, 8-pin', J4: 'Outputs, 8-pin' },
-  side: 'low',   // DMN2004WK N-MOSFET per output, source to ground
-  pins: {
-    'di:1': ['J3', 1], 'di:2': ['J3', 2], 'di:3': ['J3', 3], 'di:4': ['J3', 4],
-    'di:5': ['J3', 5], 'di:6': ['J3', 6], 'di:7': ['J3', 7], 'di:8': ['J3', 8],
-    'ai:1': ['J2', 2], 'ai:2': ['J2', 3], 'ai:3': ['J2', 4], 'ai:4': ['J2', 6], 'ai:5': ['J2', 8],
-    'out:1': ['J4', 2], 'out:2': ['J4', 4], 'out:3': ['J4', 6], 'out:4': ['J4', 8],
-  },
-  // +5 V next to each output (J4-1/3/5/7), and the sensor supply on J2-1/5/7.
-  supply: { 'out:1': ['J4', 1], 'out:2': ['J4', 3], 'out:3': ['J4', 5], 'out:4': ['J4', 7] },
-  power: { '+12V': ['J1', 5], GND: ['J1', 3], 'CAN-H': ['J1', 1], 'CAN-L': ['J1', 2], '+5V': ['J2', 1] },
-}
-
+/** Board facts for a device: { name, side, luaBytes, drivers[], connectors, pins, supply?, power }, or null. */
 export function boardOf(device) {
-  const t = device?.type ?? ''
-  if (/can.?board/i.test(t)) return CANBOARD_V2
-  if (/max/i.test(t) || device?.pdmType === 1) return PDM_MAX
-  if (/pdm/i.test(t)) return PDM_V7
+  const t = (device?.type ?? '').toLowerCase()
+  if (device?.pdmType === 1) return byType.get('dingopdm-max') ?? null   // a Max saved under the 'dingoPDM' type
+  if (byType.has(t)) return byType.get(t)
+  // older project files name the type loosely ('pdm', 'canboard', 'dingoPDMMax')
+  if (/can.?board/.test(t)) return byType.get('canboard') ?? null
+  if (/max/.test(t)) return byType.get('dingopdm-max') ?? null
+  if (/^(dingo)?pdm$/.test(t)) return byType.get('dingopdm') ?? null
   return null
 }
 

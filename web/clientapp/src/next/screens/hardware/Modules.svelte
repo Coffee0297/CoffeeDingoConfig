@@ -1,8 +1,8 @@
 <script>
   // Hardware › Modules (board H15): every module in the project with its live state, rename, remove,
   // the CAN ID map, and the settings of the selected module. Backed by telemetry (live.devices),
-  // POST /devices/{id}/rename|remove|modify. Board revision is not reported (gap G21) so there is no Rev
-  // column; Identify needs firmware 5.6 (gap G12).
+  // POST /devices/{id}/rename|remove|modify. A module cannot report its own board revision (the definitions name the
+  // documented board only, G21), so there is no Rev column; Identify needs firmware 5.6 (gap G12).
   import { Page, PageHeader, Card, Button, Chip, StateDot, Empty, FwBadge } from '../../ui/index.js'
   import Confirm from '../../shell/parts/Confirm.svelte'
   import { live, api, mutate, moduleState, hex } from '../../lib/live.svelte.js'

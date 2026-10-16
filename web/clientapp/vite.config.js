@@ -19,6 +19,8 @@ export default defineConfig({
   },
   server: {
     port: 5173,
+    // src/lib/pinmap.js imports ../pdm-definitions.json (the backend's board facts, G21)
+    fs: { allow: ['..'] },
     // e2e runs write traces/screenshots here; watching them would reload the page mid-test.
     watch: { ignored: ['**/e2e-results/**', '**/test-results/**', '**/playwright-report/**'] },
     proxy: {

@@ -30,7 +30,7 @@ assert.equal(pinFor(max, 'output', 2).side, 'high')
 assert.equal(pinFor(max, 'output', 5), null)                 // four outputs
 assert.equal(pinFor(max, 'input', 2).label, 'J4-10')
 assert.match(pinSearchText(pinFor(max, 'output', 3)), /J4-5 .*J4-6 /)
-assert.equal(boardOf({ type: 'dingoPDM', pdmType: 1 }).name, 'dingoPDM-Max')
+assert.equal(boardOf({ type: 'dingoPDM', pdmType: 1 }).name, 'dingoPDM-Max v1.2')
 
 // Logic functions have no pin
 assert.equal(pinFor(cb, 'condition', 1), null)

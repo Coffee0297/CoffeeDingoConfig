@@ -21,5 +21,8 @@ public record PdmDeviceDefinition(
     int[]? OutputCurrentRatings = null,
     // Timer / lookup-table function slots (firmware >= 5.5.107). Defaults match dingoFW's PDM boards.
     int NumTimers = 8,
-    int NumTables = 2
+    int NumTables = 2,
+    // G21: board facts passed through to the UI as written in pdm-definitions.json (name with revision,
+    // output side, driver chip per output, Lua space, connector pin map). null = not documented.
+    System.Text.Json.JsonElement? Board = null
     );
