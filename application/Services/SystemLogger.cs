@@ -111,7 +111,7 @@ public class SystemLogger : IDisposable
         {
             _logWriter?.Dispose();
 
-            var timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss");
+            var timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss", System.Globalization.CultureInfo.InvariantCulture);
             var fileName = $"globallog_{timestamp}.csv";
             var filePath = Path.Combine(_logDirectory, fileName);
 
@@ -131,7 +131,7 @@ public class SystemLogger : IDisposable
                 CreateLogFile();
             }
 
-            var timestamp = entry.Timestamp.ToString("yyyy-MM-dd HH:mm:ss.fff");
+            var timestamp = entry.Timestamp.ToString("yyyy-MM-dd HH:mm:ss.fff", System.Globalization.CultureInfo.InvariantCulture);
             var level = entry.Level.ToString();
             var source = EscapeCsv(entry.Source);
             var category = EscapeCsv(entry.Category);

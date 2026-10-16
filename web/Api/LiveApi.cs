@@ -1691,7 +1691,7 @@ public static class LiveApi
 
         api.MapGet("/syslog", (SystemLogger log) => Results.Ok(
             log.GetRecentLogs(200).Select(e => new SysLogDto(
-                e.Timestamp.ToString("HH:mm:ss"), e.Level.ToString(), e.Source, e.Message)).ToArray()));
+                e.Timestamp.ToString("HH:mm:ss", System.Globalization.CultureInfo.InvariantCulture), e.Level.ToString(), e.Source, e.Message)).ToArray()));
 
         // CSV export of the CAN traffic summary.
         api.MapGet("/canlog/export", (CanMsgLogger log) =>
