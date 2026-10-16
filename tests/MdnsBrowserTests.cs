@@ -43,5 +43,12 @@ public class MdnsBrowserTests
     {
         Assert.Empty(MdnsBrowser.Parse(MdnsBrowser.Query(MdnsBrowser.ServiceType), IPAddress.Loopback));
         Assert.Empty(MdnsBrowser.Parse(Answer()[..30], IPAddress.Loopback));
+        // a label length past the end of the packet, and an A record shorter than it claims
+        var bad = Answer(); bad[12] = 0x3F;
+        Assert.Empty(MdnsBrowser.Parse(bad, IPAddress.Loopback));
+        var shortA = Answer()[..^2];
+        Assert.Equal("127.0.0.1", Assert.Single(MdnsBrowser.Parse(shortA, IPAddress.Loopback)).Address);   // PTR + SRV read: the sender stands in
+        var rnd = new Random(1);
+        for (int i = 0; i < 2000; i++) { var m = Answer(); m[rnd.Next(m.Length)] = (byte)rnd.Next(256); MdnsBrowser.Parse(m, IPAddress.Loopback); }
     }
 }

@@ -86,7 +86,9 @@ public static class MdnsBrowser
                 else if (type == 1 && len == 4) a[name] = new IPAddress(msg.AsSpan(data, 4)).ToString();
             }
         }
-        catch (IndexOutOfRangeException) { /* truncated: keep what was read */ }
+        // any malformed packet from the LAN (truncated, a label running past the end, a short record) ends the parse;
+        // what was read before it is kept. Never an exception: one bad device must not break the search.
+        catch (Exception e) when (e is IndexOutOfRangeException or ArgumentException) { }
         return ptr.Where(srv.ContainsKey).Select(n =>
         {
             var (host, port) = srv[n];
