@@ -1,6 +1,7 @@
 <script>
   import { Page, PageHeader, Banner, Checkbox, Select, Empty, FwBadge, Button } from '../../ui/index.js'
   import { live, hub } from '../../lib/live.svelte.js'
+  import { ignitionTile } from '../power/parts/ignition.js'
   import { href } from '../../router.svelte.js'
   import { feed, watchSignals, resample, keys } from './parts/feed.svelte.js'
   import { useEcu } from './parts/ecu.svelte.js'
@@ -141,7 +142,9 @@
               <Tile name={t.name} mod={t.mod} value={t.value} unit={t.unit} pct={t.pct ?? null} sub={t.sub} tone={t.tone} spark={t.key ? spark(t.key) : []} href={t.href} graph={t.graph ?? ''} />
             {/each}
             {#if g.name === 'CAR' && moduleKey === 'all'}
-              <div class="tile-fw"><span>Ignition</span><FwBadge version="5.6" /><small class="muted">start button and ignition state</small></div>
+              {@const ig = ignitionTile(live.devices)}
+              {#if ig}<Tile name="Ignition" mod="" value={ig.value} unit="" sub={ig.sub} tone={ig.value === 'Cranking' ? 'warn' : 'muted'} spark={[]} href={href('power')} graph="" />
+              {:else}<div class="tile-fw"><span>Ignition</span><FwBadge version="5.6" /><small class="muted">start button and ignition state</small></div>{/if}
             {/if}
           </div>
         {:else}

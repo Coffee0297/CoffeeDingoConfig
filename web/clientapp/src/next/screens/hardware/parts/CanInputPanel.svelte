@@ -2,13 +2,13 @@
   // CAN input (H20): pick a signal from an ECU file or another module, or type the frame position;
   // see the decoded value live; set what happens when the frames stop; learn a switch from the bus.
   import { untrack } from 'svelte'
-  import { Page, PageHeader, Card, Button, StateDot, Banner, Segmented, Switch, Stepper, Field, Checkbox, Select, LineChart, Chip, FwBadge, Empty } from '../../../ui/index.js'
+  import { Page, PageHeader, Card, Button, StateDot, Banner, Segmented, Switch, Stepper, Field, Checkbox, Select, LineChart, Chip, Empty } from '../../../ui/index.js'
   import { live, api, device, hex, toast, mutate, isPdm } from '../../../lib/live.svelte.js'
   import { href } from '../../../router.svelte.js'
   import { setRemoteLink, clearRemoteLink, remoteLinkFor } from '../../../../lib/store.js'
   import { inputModel } from './input.svelte.js'
   import { signalFeed, ring } from './feeds.svelte.js'
-  import { resample } from './util.js'
+  import { resample, olderThan } from './util.js'
   import SaveBar from './SaveBar.svelte'
   import UsedBy from './UsedBy.svelte'
   import LearnSwitch from './LearnSwitch.svelte'
@@ -22,7 +22,7 @@
   // ---- form ----
   let f = $state(null), snap = $state(''), learnedNote = $state(false)
   const seed = (r) => ({ name: r.name ?? '', enabled: !!r.enabled, id: r.id ?? 0, ide: !!r.ide, startBit: r.startBit ?? 0, bitLength: r.bitLength ?? 8, byteOrder: r.byteOrder ?? 0, signed: !!r.signed,
-    factor: r.factor ?? 1, offset: r.offset ?? 0, operator: r.operator ?? 0, operand: r.operand ?? 0, timeoutEnabled: !!r.timeoutEnabled, timeout: r.timeout ?? 1000, idText: hex(r.id ?? 0) })
+    factor: r.factor ?? 1, offset: r.offset ?? 0, operator: r.operator ?? 0, operand: r.operand ?? 0, timeoutEnabled: !!r.timeoutEnabled, timeout: r.timeout ?? 1000, timeoutValue: r.timeoutValue ?? 0, idText: hex(r.id ?? 0) })
   $effect(() => { if (!f && row) { f = seed(row); snap = JSON.stringify(f) } })
   const dirty = $derived(!!f && JSON.stringify(f) !== snap)
   function revert() { if (row) { f = seed(row); snap = JSON.stringify(f); M.state.saveErr = ''; learnedNote = false } }
@@ -43,7 +43,8 @@
   async function save() {
     const body = { name: String(f.name).trim(), enabled: f.enabled, id: parsedId, ide: f.ide, startBit: Math.trunc(Number(f.startBit)), bitLength: Math.trunc(Number(f.bitLength)),
       byteOrder: Number(f.byteOrder), signed: f.signed, factor: Number(f.factor), offset: Number(f.offset), operator: Number(f.operator), operand: Number(f.operand),
-      timeoutEnabled: f.timeoutEnabled, timeout: Math.max(0, Math.round(Number(f.timeout) || 0)) }
+      timeoutEnabled: f.timeoutEnabled, timeout: Math.max(0, Math.round(Number(f.timeout) || 0)),
+      ...(firmwareOld ? {} : { timeoutValue: Number(f.timeoutValue) || 0 }) }
     if (await M.save(body)) { snap = JSON.stringify(f); learnedNote = false }
   }
 
@@ -183,7 +184,7 @@
   $effect(() => { if (f) { opVal = String(f.operator); orderVal = String(f.byteOrder); idtVal = f.ide ? 'ext' : 'std' } })
   $effect(() => { modSel = modGuid; dbcSel = dbcGuid })
   const title = $derived(f?.name?.trim() || `CAN input ${n}`)
-  const firmwareOld = $derived(true)   // value-on-timeout needs firmware 5.6 (gap G19)
+  const firmwareOld = $derived(olderThan(dev?.version, [5, 6, 0]))   // value-on-timeout: firmware 5.6 (0x1300 sub 14)
 </script>
 
 <Page>
@@ -303,9 +304,14 @@
           <Checkbox bind:checked={f.timeoutEnabled} label="Treat it as lost after a gap" hint="No frame for this long means the sender stopped." data-testid="timeout-on" />
           <Stepper label="Timeout" bind:value={f.timeout} min={50} max={60000} step={50} unit="ms" disabled={!f.timeoutEnabled} data-testid="timeout" />
           <div class="tv">
-            <label class="nx-label" for="tval">Value to use then</label><FwBadge />
+            <label class="nx-label" for="tval">Value to use then</label>
+            {#if firmwareOld}
             <input id="tval" class="nx-input" disabled value="0" />
             <span class="muted small">{dev.name} runs {dev.version && dev.version !== 'v0.0.0' ? dev.version.replace(/^v/, '') : 'its current firmware'}. Until it has firmware 5.6 the input reads 0 after a timeout. <a href={href('hardware', 'firmware')}>Update firmware</a></span>
+            {:else}
+            <input id="tval" class="nx-input" type="number" step="any" bind:value={f.timeoutValue} disabled={!f.timeoutEnabled} data-testid="timeout-value" />
+            <span class="muted small">What the input reads while the frame is missing, for example 0 for "off" or a safe temperature. The on/off result follows the same test.</span>
+            {/if}
           </div>
         </Card>
         <UsedBy {guid} items={M.usedBy} />

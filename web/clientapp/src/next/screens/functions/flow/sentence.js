@@ -62,7 +62,25 @@ export function sentenceFor(model, n) {
     case 'canoutput':
       return [T('Send'), srcTok(model, r.input, 'input'), T('on CAN ID'), val(hexId(r.id) + (r.ide ? ' ext' : ''), 'id'), T('at bit'), val(r.startBit ?? 0, 'startBit'), T(', ×'), val(r.factor ?? 1, 'factor'), T(', every'), val((r.interval ?? 0) + ' ms', 'interval'), T('.')]
     case 'caninput':
-      return [self(n), T('reads CAN ID'), val(hexId(r.id) + (r.ide ? ' ext' : ''), 'id'), T(', bits'), val(`${r.startBit}+${r.bitLength}`, 'startBit'), T(', and is on when the value'), T(OP_WORDS[r.operator ?? 0] ?? '?'), val(r.operand ?? 0, 'operand'), T(r.timeoutEnabled ? `(no frame for ${r.timeout} ms → off).` : '.')]
+      return [self(n), T('reads CAN ID'), val(hexId(r.id) + (r.ide ? ' ext' : ''), 'id'), T(', bits'), val(`${r.startBit}+${r.bitLength}`, 'startBit'), T(', and is on when the value'), T(OP_WORDS[r.operator ?? 0] ?? '?'), val(r.operand ?? 0, 'operand'), T(r.timeoutEnabled ? `(no frame for ${r.timeout} ms → reads ${r.timeoutValue ?? 0}).` : '.')]
+    case 'math': {
+      const a = srcTok(model, r.inputA, 'inputA'), b = r.inputB ? srcTok(model, r.inputB, 'inputB') : val(r.constB ?? 0, 'constB')
+      const op = r.op ?? 0
+      const segs = [self(n), T('is')]
+      if (op <= 3) segs.push(a, T(['+', '−', '×', '÷'][op]), b)
+      else segs.push(T(['the smaller of', 'the larger of', 'the average of'][op - 4]), a, T('and'), b)
+      if ((r.factor ?? 1) !== 1) segs.push(T(', ×'), val(r.factor, 'factor'))
+      if ((r.offset ?? 0) !== 0) segs.push(T(', +'), val(r.offset, 'offset'))
+      segs.push(T('.'))
+      return segs
+    }
+    case 'canmsg': {
+      const bytes = (r.data ?? []).slice(0, r.dlc ?? 8).map((x) => Number(x).toString(16).toUpperCase().padStart(2, '0')).join(' ')
+      const id = val(hexId(r.id) + (r.ide ? ' ext' : ''), 'id')
+      return r.mode === 1
+        ? [T('Each time'), srcTok(model, r.input, 'input'), T('turns on, send'), val(bytes || '(no data)', 'data'), T('on CAN ID'), id, T('once.')]
+        : [T('While'), srcTok(model, r.input, 'input'), T('is on, send'), val(bytes || '(no data)', 'data'), T('on CAN ID'), id, T('every'), val((r.intervalMs ?? 0) + ' ms', 'intervalMs'), T('.')]
+    }
     case 'output': case 'digitaloutput': {
       const src = n.kind === 'output' ? r.inputVal : r.input
       const segs = [T('When'), srcTok(model, src, 'input'), T('is on → turn on'), self(n)]
@@ -77,6 +95,6 @@ export function sentenceFor(model, n) {
 
 /** Card heading for the sentence view: family · kind. */
 export function cardKind(n) {
-  const k = { virtualinput: 'COMBINE', condition: 'COMPARE', timer: 'TIMER · ' + (TIMER_MODES[n.row?.mode ?? 0] ?? '').toUpperCase(), flasher: 'FLASHER', counter: 'COUNTER', table: 'TABLE', canoutput: 'CAN OUTPUT', caninput: 'CAN INPUT', output: 'OUTPUT', digitaloutput: 'OUTPUT' }[n.kind] ?? n.kindLabel.toUpperCase()
+  const k = { virtualinput: 'COMBINE', condition: 'COMPARE', timer: 'TIMER · ' + (TIMER_MODES[n.row?.mode ?? 0] ?? '').toUpperCase(), flasher: 'FLASHER', counter: 'COUNTER', table: 'TABLE', canoutput: 'CAN OUTPUT', caninput: 'CAN INPUT', math: 'MATH', canmsg: 'CAN MESSAGE', output: 'OUTPUT', digitaloutput: 'OUTPUT' }[n.kind] ?? n.kindLabel.toUpperCase()
   return k
 }

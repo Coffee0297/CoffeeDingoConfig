@@ -28,11 +28,19 @@ test('reads a configured CAN input: live value, last frame, byte map and source 
   expect(errors).toEqual([])
 })
 
-test('value on timeout is disabled behind a firmware badge', async ({ page }) => {
-  await openCan(page, 29)
-  await expect(page.getByLabel('Value to use then')).toBeDisabled()
-  await expect(page.getByText('Needs firmware 5.6')).toBeVisible()
-  await expect(page.getByRole('link', { name: 'Update firmware' })).toHaveAttribute('href', '#/next/hardware/firmware')
+test('value on timeout (firmware 5.6) is saved to the module', async ({ page }) => {
+  const errors = watchErrors(page)
+  await withCan(29, async () => {
+    await openCan(page, 29)
+    const on = page.getByTestId('timeout-on')
+    if (!(await on.isChecked())) await on.check()
+    const v = page.getByLabel('Value to use then')
+    await expect(v).toBeEnabled()
+    await v.fill('85')
+    await save(page)
+    await waitFor(async () => (await row(29))?.timeoutValue === 85)
+  })
+  expect(errors).toEqual([])
 })
 
 test('picking another module\'s signal fills the frame fields and saves them', async ({ page }) => {

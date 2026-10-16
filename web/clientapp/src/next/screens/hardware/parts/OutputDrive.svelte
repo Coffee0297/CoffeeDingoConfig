@@ -1,6 +1,7 @@
 <script>
-  import { Card, Segmented, Switch, Stepper, Select, Field, FwBadge } from '../../../ui/index.js'
+  import { Card, Segmented, Switch, Stepper, Select, Field } from '../../../ui/index.js'
   import { api } from '../../../lib/live.svelte.js'
+  import { href } from '../../../router.svelte.js'
 
   let { guid, f = $bindable() } = $props()
 
@@ -63,8 +64,7 @@
   </div>
   <div class="crank">
     <strong>While the engine is cranking</strong>
-    <Segmented label="While cranking" items={[{ value: 'keep', label: 'Keep running' }, { value: 'off', label: 'Switch off while cranking' }]} value="keep" disabled />
-    <span class="muted note"><FwBadge /> Frees current and battery voltage for the starter. Needs the Ignition block (firmware 5.6), so it cannot be set yet.</span>
+    <span class="muted note">To switch it off while cranking (frees current and battery voltage for the starter), give it the Accessory role: it then follows the ignition and is off while the starter turns. Needs firmware 5.6. <a href={href('power', 'roles')}>Output roles</a></span>
   </div>
 </Card>
 

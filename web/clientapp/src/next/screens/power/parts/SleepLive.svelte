@@ -1,17 +1,19 @@
 <script>
   // Live sleep status for every module, plus Sleep now / Wake up for the whole car.
-  import { Card, Chip, StateDot, Button, Banner, FwBadge } from '../../../ui/index.js'
+  import { Card, Chip, StateDot, Button, Banner } from '../../../ui/index.js'
   import { live, api, toast, hex } from '../../../lib/live.svelte.js'
-  import { sleepStatus, canSleep } from './sleepLogic.js'
+  import { sleepStatus, canSleep, wakeWords } from './sleepLogic.js'
   import Confirm from './Confirm.svelte'
 
   const mods = $derived(live.devices.filter((d) => /pdm|canboard/i.test(d.type ?? '')))
   const rows = $derived(mods.map((d) => ({ d, st: sleepStatus(d, live.connected) })))
   const awake = $derived(rows.filter((r) => r.st.key === 'on').length)
-  const gone = $derived(rows.filter((r) => r.st.word === 'Asleep' || r.st.word === 'Not seen').length)
+  const asleep = $derived(rows.filter((r) => r.st.word === 'Asleep').length)
+  const unseen = $derived(rows.filter((r) => r.st.word === 'Not seen').length)
+  const gone = $derived(asleep + unseen)
   const banner = $derived(!live.connected ? { tone: 'warn', title: 'Not connected', text: 'Connect to the car to see which modules are awake.' }
     : gone === 0 ? { tone: 'ok', title: `Awake: ${awake} of ${mods.length} modules answer`, text: 'The sleep timer counts while nothing is in use.' }
-    : { tone: 'info', title: `${awake} of ${mods.length} modules answer`, text: `${gone} not answering. A sleeping module looks the same as an unplugged one today (gap G14).` })
+    : { tone: 'info', title: `${awake} of ${mods.length} modules answer`, text: [asleep && `${asleep} asleep`, unseen && `${unseen} not seen: asleep on older firmware, or unplugged`].filter(Boolean).join(', ') + '.' })
 
   let confirmOpen = $state(false), busy = $state(''), result = $state('')
   async function each(action, targets) {
@@ -33,13 +35,13 @@
   <Banner tone={banner.tone} title={banner.title} data-testid="sleep-banner">{banner.text}</Banner>
   <div class="nx-scroll">
     <table class="nx-table" data-testid="sleep-live">
-      <thead><tr><th>Module</th><th>Sleep</th><th>Last woke from <FwBadge version="5.6" /></th></tr></thead>
+      <thead><tr><th>Module</th><th>Sleep</th><th>Last woke from</th></tr></thead>
       <tbody>
         {#each rows as { d, st } (d.guid)}
           <tr data-module={d.name}>
             <td><strong>{d.name}</strong> <span class="muted mono">{hex(d.baseId)}</span></td>
             <td><StateDot tone={st.key} shape={st.key === 'on' ? 'dot' : st.key === 'off' ? 'ring' : 'diamond'} label={st.word} /> <span class="muted">{st.detail}</span></td>
-            <td class="muted">Not reported yet (gap G14)</td>
+            <td class="muted" data-testid="last-wake">{wakeWords(d) || (d.version && !/^v?0\.0\.0$/.test(d.version) ? 'Needs firmware 5.6' : 'Not reported')}</td>
           </tr>
         {/each}
       </tbody>

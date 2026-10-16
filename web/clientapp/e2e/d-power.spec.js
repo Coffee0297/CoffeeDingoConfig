@@ -1,6 +1,6 @@
 // Power & ignition, Ignition, Output roles, Sleep & wake.
 // Safe targets: sleep SETTINGS on CB-2 only (restored in `finally`). Anything that sleeps modules or writes the
-// PDMs' sleep settings is @exclusive. The Ignition and role controls need firmware 5.6 and must be disabled.
+// PDMs' sleep settings is @exclusive. Ignition setup and roles (firmware 5.6) write every module: @exclusive, undone at the end.
 import { test, expect } from '@playwright/test'
 import { open, watchErrors } from './helpers.js'
 import { apiJson, deviceByName, devices, waitFor } from './api.js'
@@ -21,8 +21,7 @@ test('power home: modules, roles, sleep status, links', async ({ page }) => {
   await expect(rows).toHaveCount((await devices()).length)
   await expect(page.getByTestId('power-modules').locator('tr[data-module="CB-2"]')).toContainText('Awake')
   await expect(page.getByTestId('power-modules').locator('tr[data-module="PDM-01"]')).toContainText(/Own auto-sleep|Stays awake|Master|Follower|sleep input/)
-  await expect(page.getByTestId('ignition-gap')).toContainText('firmware 5.6')
-  await expect(page.getByText('Needs firmware 5.6').first()).toBeVisible()
+  await expect(page.getByTestId('ignition-gap')).toContainText(/not set up yet|runs the ignition/)
   await page.getByRole('link', { name: 'Sleep settings', exact: true }).click()
   await expect(page).toHaveURL(/#\/next\/power\/sleep/)
   await page.goBack()
@@ -57,17 +56,18 @@ test('power home: the power-down timeline is read from the modules\' own sleep b
   expect(errors).toEqual([])
 })
 
-test('ignition: built as designed, every control is disabled behind firmware 5.6', async ({ page }) => {
+test('ignition: the setup is editable on firmware 5.6 and the rules follow the mode', async ({ page }) => {
   const errors = watchErrors(page)
   await open(page, 'power/ignition')
   await expect(page.getByRole('heading', { level: 1 })).toContainText('How is the car started?')
-  await expect(page.getByTestId('ignition-banner')).toContainText('Needs firmware 5.6')
-  for (const r of await page.getByRole('radio').all()) await expect(r).toBeDisabled()
-  expect(await page.getByRole('radio').count()).toBeGreaterThanOrEqual(5)
-  for (const c of await page.locator('button.nx-sel').all()) await expect(c).toBeDisabled()
-  await expect(page.getByRole('checkbox')).toBeDisabled()
-  await expect(page.getByRole('button', { name: 'Simulate the sequence' })).toBeDisabled()
+  await expect(page.getByTestId('ignition-banner')).toContainText(/Ignition is not set up|runs the ignition/)
+  await expect(page.getByTestId('ign-main')).toBeEnabled()
   await expect(page.getByTestId('ignition-rules')).toContainText('Ignition switch on')
+  await page.getByRole('radio', { name: /Start button only/ }).check()
+  await expect(page.getByTestId('ignition-rules')).toContainText('Press while running')
+  await expect(page.getByTestId('ign-switch')).toHaveCount(0)              // button only: no ignition switch
+  await page.getByRole('radio', { name: /Key switch/ }).check()
+  await expect(page.getByTestId('ignition-rules')).toContainText('Key at START')
   await page.getByTestId('ignition-next').click()
   await expect(page).toHaveURL(/#\/next\/power\/roles/)
   await page.goBack()
@@ -76,19 +76,17 @@ test('ignition: built as designed, every control is disabled behind firmware 5.6
   expect(errors).toEqual([])
 })
 
-test('output roles: every output is listed, every role control is disabled', async ({ page }) => {
+test('output roles: every output is listed with a role picker (firmware 5.6)', async ({ page }) => {
   const errors = watchErrors(page)
   await open(page, 'power/roles')
   const pdms = (await devices()).filter((d) => /pdm/i.test(d.type))
   const total = pdms.reduce((n, d) => n + d.outputs.length, 0)
-  await expect(page.getByTestId('roles-banner')).toContainText('firmware 5.6')
   const selects = page.locator('select[data-testid^="role-"]')
   await expect(selects).toHaveCount(total)
-  for (const s of await selects.all()) await expect(s).toBeDisabled()
-  await expect(page.getByTestId('role-PDM-04-o8')).toBeDisabled()
+  await expect(page.getByTestId('role-PDM-04-o8')).toBeEnabled()
   await expect(page.getByTestId('roles-PDM-04').locator('li')).toHaveCount(pdms.find((d) => d.name === 'PDM-04').outputs.length)
-  await expect(page.getByTestId('roles-conflicts')).toContainText('no role is stored')
-  await expect(page.getByText(`0 of ${total}`).first()).toBeVisible()
+  await expect(page.getByTestId('roles-conflicts')).toContainText(/No conflicts|Starter/)
+  await expect(page.getByText(`of ${total}`).first()).toBeVisible()
   await page.getByRole('link', { name: 'Back to ignition setup' }).click()
   await expect(page).toHaveURL(/#\/next\/power\/ignition/)
   expect(errors).toEqual([])
@@ -121,7 +119,8 @@ test('sleep & wake: shows the real per-module settings and live status', async (
   await expect(page.getByTestId('sleep-banner')).toContainText(/Awake: \d+ of \d+ modules answer/)
   await expect(page.getByTestId('sleep-live').locator('tbody tr')).toHaveCount(devs.length)
   await expect(page.getByTestId('sleep-live').locator('tr[data-module="CB-2"]')).toContainText('Awake')
-  await expect(page.getByTestId('sleep-live')).toContainText('Not reported yet')
+  // firmware 5.6 reports what last woke each module
+  await expect(page.getByTestId('sleep-live').locator('tr[data-module="PDM-01"] [data-testid=last-wake]')).toHaveText(/power-on|CAN traffic|digital input|USB/, { timeout: 10_000 })
   // Why card reads the bus
   await expect(page.getByTestId('why-verdict')).not.toHaveText('', { timeout: 15_000 })
   await expect(page.getByTestId('why-list')).toBeVisible({ timeout: 15_000 })
@@ -250,5 +249,40 @@ test('sleep & wake: Sleep now puts the modules to sleep and Wake up brings them 
   await page.getByTestId('wake-up').click()
   await expect(page.getByTestId('sleep-result')).toContainText(/Wake up sent to \d+ module/)
   await waitFor(async () => (await devices()).every((d) => d.connected), 120_000, 'every module back on the bus')
+  expect(errors).toEqual([])
+})
+
+test('ignition on PDM-01 with the others following: live state, a Starter role, then all off @exclusive', async ({ page }) => {
+  test.setTimeout(240_000)
+  const errors = watchErrors(page)
+  const all = (await devices()).filter((d) => /pdm|canboard/i.test(d.type))
+  const p1 = all.find((d) => d.name === 'PDM-01'), p4 = all.find((d) => d.name === 'PDM-04')
+  const ign = async (d) => (await apiJson('GET', `/api/devices/${d.guid}/functions`)).ignition
+  const o8 = p4.outputs.find((o) => o.number === 8)
+  try {
+    await open(page, 'power/ignition')
+    await pick(page, 'ign-main', 'PDM-01')
+    await page.getByRole('radio', { name: /Ignition switch \+ start button/ }).check()
+    await pick(page, 'ign-switch', 'Always On')                      // ignition on as soon as it is saved
+    await page.getByTestId('ign-start').click()
+    await page.getByRole('option').nth(2).click()                       // any real signal
+    await page.getByTestId('ignition-save').click()
+    await waitFor(async () => { const g = await ign(p1); return g.enabled && g.role === 0 && g.ignitionInput === 1 && g.startInput > 0 }, 30_000, 'PDM-01 main')
+    for (const d of all.filter((x) => x.guid !== p1.guid)) await waitFor(async () => { const g = await ign(d); return g.enabled && g.role === 1 && g.mainStateId === p1.baseId + 30 }, 30_000, d.name + ' follows')
+    // PDM-01 sends its state frame: the backend and the screens show it
+    await waitFor(async () => { const d = await deviceByName('PDM-01'); return d.ignition?.live && d.ignition.state === 'on' }, 15_000, 'ignition state on')
+    await open(page, 'power')
+    await expect(page.getByTestId('ignition-gap')).toContainText('PDM-01 runs the ignition. Now: Ignition.')
+    // a role: PDM-04 o8 = Starter (follows Cranking)
+    await open(page, 'power/roles')
+    await page.getByTestId('role-PDM-04-o8').selectOption('Starter')
+    const vars = await apiJson('GET', `/api/devices/${p4.guid}/inputs`)
+    const cranking = vars.find((v) => v.kind === 'ignition' && v.prop === 'Cranking').index
+    await waitFor(async () => (await deviceByName('PDM-04')).outputs.find((o) => o.number === 8).inputVal === cranking, 20_000, 'o8 follows Cranking')
+    await expect(page.getByTestId('role-PDM-04-o8')).toHaveValue('Starter')
+  } finally {
+    await apiJson('POST', `/api/devices/${p4.guid}/outputconfig`, { Number: 8, Input: o8.inputVal, Enabled: o8.enabled }).catch(() => {})
+    for (const d of all) await apiJson('POST', `/api/devices/${d.guid}/function/ignition/1`, { enabled: false, role: 0, mainStateId: 0, ignitionInput: 0, startInput: 0 }).catch(() => {})
+  }
   expect(errors).toEqual([])
 })

@@ -71,12 +71,12 @@ test('Open goes to the module page', async ({ page }) => {
   await expect(page.getByRole('heading', { level: 1, name: 'CB-2' })).toBeVisible()
 })
 
-test('Identify is off and says why', async ({ page }) => {
+test('Identify blinks a PDM; a CANBoard has no LED and only answers', async ({ page }) => {
   await open(page, 'hardware')
-  const b = page.getByRole('button', { name: /Identify PDM-01/ })
-  await expect(b).toBeDisabled()
-  await expect(b).toHaveAttribute('title', /firmware 5\.6/)
-  await expect(page.getByText('Needs firmware 5.6').first()).toBeVisible()
+  await page.getByRole('button', { name: /Identify PDM-01/ }).click()
+  await expect(page.getByText('PDM-01 is blinking its LEDs for 10 s.')).toBeVisible({ timeout: 5000 })
+  await page.getByRole('button', { name: /Identify CB-1/ }).click()
+  await expect(page.getByText('CB-1 answered. It has no status LED to blink.')).toBeVisible({ timeout: 5000 })
 })
 
 test('Find modules opens the Add module scan, Add module opens By hand tab content', async ({ page }) => {

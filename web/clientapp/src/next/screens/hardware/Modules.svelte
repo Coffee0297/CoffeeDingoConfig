@@ -2,10 +2,11 @@
   // Hardware › Modules (board H15): every module in the project with its live state, rename, remove,
   // the CAN ID map, and the settings of the selected module. Backed by telemetry (live.devices),
   // POST /devices/{id}/rename|remove|modify. Board revision is not reported (gap G21) so there is no Rev
-  // column; Identify needs firmware 5.6 (gap G12).
-  import { Page, PageHeader, Card, Button, Chip, StateDot, Empty, FwBadge } from '../../ui/index.js'
+  // column; Identify (firmware 5.6) blinks the module's LEDs.
+  import { Page, PageHeader, Card, Button, Chip, StateDot, Empty } from '../../ui/index.js'
   import Confirm from '../../shell/parts/Confirm.svelte'
-  import { live, api, mutate, moduleState, hex } from '../../lib/live.svelte.js'
+  import { live, api, mutate, moduleState, hex, blinkModule } from '../../lib/live.svelte.js'
+  import { olderThan } from './parts/util.js'
   import { href } from '../../router.svelte.js'
   import { ui } from '../../shell/ui.svelte.js'
   import { addLike } from '../../shell/parts/addmodule.svelte.js'
@@ -83,7 +84,7 @@
             <thead><tr><th>State</th><th>Type</th><th>Name</th><th>Base ID</th><th>Firmware</th><th>Last seen</th><th>Actions</th></tr></thead>
             <tbody>
               {#each mods as d (d.guid)}
-                {@const st = moduleState(d)}
+                {@const st = moduleState(d)} {@const oldFw = olderThan(d.version, [5, 6, 0])}
                 <tr class:sel={selected?.guid === d.guid} class:bad={clashes.has(d.guid)} data-testid={'row-' + d.name}>
                   <td><StateDot tone={st.key} shape={st.shape} label={st.word} /></td>
                   <td>{d.type}</td>
@@ -105,7 +106,7 @@
                   <td class="acts">
                     <Button size="sm" href={href('hardware', 'module', d.guid)} aria-label={`Open ${d.name}`}>Open</Button>
                     <Button size="sm" onclick={() => startRename(d)} aria-label={`Rename ${d.name}`}>Rename</Button>
-                    <Button size="sm" disabled title="Needs firmware 5.6: there is no identify command yet (gap G12)" aria-label={`Identify ${d.name}: blink its LED`}>Identify</Button>
+                    <Button size="sm" disabled={oldFw || !d.connected || !live.connected} title={oldFw ? `Needs firmware 5.6: ${d.name} runs ${fwText(d)}` : !d.connected || !live.connected ? 'The module is not answering' : 'Blink its LEDs for 10 s'} onclick={() => blinkModule(d)} aria-label={`Identify ${d.name}: blink its LED`}>Identify</Button>
                     <Button size="sm" variant="danger" onclick={() => (rm = d)} aria-label={`Remove ${d.name} from the project`}>Remove</Button>
                   </td>
                 </tr>
@@ -116,7 +117,7 @@
             <StateDot tone="on" label="Connected: answering now" />
             <StateDot tone="off" shape="ring" label="Asleep: wakes on its wake sources" />
             <StateDot tone="fault" shape="square" label="Not found: in the project, not on the bus" />
-            <FwBadge version="5.6" /> <span class="muted">Identify blinks a module's LED</span>
+            <span class="muted">Identify blinks a module's LEDs (firmware 5.6; a CANBoard has none and only answers)</span>
           </div>
         </Card>
 

@@ -7,8 +7,8 @@ import { near } from './api.js'
 import { open, watchErrors } from './helpers.js'
 import { apiJson, deviceByName, waitFor } from './api.js'
 
-const TARGETS = { virtualInputs: [14, 15, 16], conditions: [30, 31, 32], timers: [8], flashers: [4], counters: [4], tables: [2], canOutputs: [30, 31, 32] }
-const KIND = { virtualInputs: 'virtualinput', conditions: 'condition', timers: 'timer', flashers: 'flasher', counters: 'counter', tables: 'table', canOutputs: 'canoutput' }
+const TARGETS = { virtualInputs: [14, 15, 16], conditions: [30, 31, 32], timers: [8], flashers: [4], counters: [4], tables: [2], canOutputs: [30, 31, 32], maths: [8], canMessages: [4] }
+const KIND = { virtualInputs: 'virtualinput', conditions: 'condition', timers: 'timer', flashers: 'flasher', counters: 'counter', tables: 'table', canOutputs: 'canoutput', maths: 'math', canMessages: 'canmsg' }
 
 let pdm4
 const fns = (g) => apiJson('GET', `/api/devices/${g}/functions`)
@@ -222,6 +222,42 @@ test('timer, flasher, push-button toggle, table and CAN output inspectors write 
   expect(errors).toEqual([])
 })
 
+test('firmware 5.6: Math and CAN message blocks write the module, and the CAN message goes out on the bus', async ({ page }) => {
+  test.setTimeout(300_000)
+  const errors = watchErrors(page)
+  const snap = await snapshot()
+  try {
+    for (const arr of ['maths', 'canMessages']) for (const n of TARGETS[arr]) if ((await row(arr, n)).enabled) await put(`/api/devices/${pdm4.guid}/function/${KIND[arr]}/${n}`, { enabled: false })
+    await openFlow(page)
+    // Math 8: battery voltage × 10 + 0 (B a constant), Smaller of
+    await addBlock(page, 'Math')
+    await waitFor(async () => (await row('maths', 8)).enabled, 15_000, 'math 8')
+    await pickSource(page, 'inputA', 'Battery Voltage')
+    await insp(page).getByLabel('Result').click()
+    await page.getByRole('option', { name: 'Smaller of A, B' }).click()
+    await insp(page).getByLabel('B (no B input connected)').fill('12.5')
+    await insp(page).getByLabel('Then × factor').fill('10')
+    await save(page)
+    await waitFor(async () => { const r = await row('maths', 8); return r.inputA === 4 && r.op === 4 && r.constB === 12.5 && r.factor === 10 }, 15_000, 'math saved')
+    await expect(node(page, 'math:8')).toContainText('the smaller of A and 12.5')
+    // CAN message 4: always on → 0x7A6 [11 22 33], every 200 ms
+    await addBlock(page, 'CAN message')
+    await waitFor(async () => (await row('canMessages', 4)).enabled, 15_000, 'canmsg 4')
+    await pickSource(page, 'input', 'Always On')
+    await insp(page).getByLabel('CAN ID (hex)').fill('0x7A6')
+    await insp(page).getByLabel('Length').fill('3')
+    await insp(page).getByLabel('Byte 0').fill('11'); await insp(page).getByLabel('Byte 0').blur()
+    await insp(page).getByLabel('Byte 1').fill('22'); await insp(page).getByLabel('Byte 1').blur()
+    await insp(page).getByLabel('Byte 2').fill('33'); await insp(page).getByLabel('Byte 2').blur()
+    await insp(page).getByLabel('Every').fill('200')
+    await save(page)
+    await waitFor(async () => { const r = await row('canMessages', 4); return r.id === 0x7a6 && r.dlc === 3 && r.data[0] === 0x11 && r.data[2] === 0x33 && r.intervalMs === 200 && r.input === 1 }, 15_000, 'canmsg saved')
+    // the module sends it
+    await waitFor(async () => (await apiJson('GET', '/api/canlog')).some((m) => (m.id ?? m.Id) === 0x7a6), 15_000, 'frame 0x7A6 on the bus')
+  } finally { await restore(snap) }
+  expect(errors).toEqual([])
+})
+
 test('spare output o2: wire its input from the inspector and by dragging on the canvas, Undo restores it', async ({ page }) => {
   const errors = watchErrors(page)
   const snap = await snapshot()
@@ -342,7 +378,7 @@ test('keyboard: Tab walks blocks, Enter opens the inspector, / opens Add; search
   await expect(insp(page).getByText('· SELECTED')).toBeVisible()
   await page.keyboard.press('/')
   await expect(page.getByRole('dialog', { name: 'Add a block' })).toBeVisible()
-  await expect(page.getByRole('dialog', { name: 'Add a block' }).getByText('Needs firmware 5.6').first()).toBeVisible()
+  await expect(page.getByRole('dialog', { name: 'Add a block' }).getByTestId('add-Math')).toBeEnabled()   // firmware 5.6 on the Sim
   await page.keyboard.press('Escape')
   await page.getByTestId('find').fill('gear in')
   await page.getByRole('list', { name: 'Matching blocks' }).getByRole('button', { name: /Gear in P/ }).click()

@@ -1,11 +1,11 @@
 <script>
   // "Why will it not sleep": derived from live frame rates (GET /api/canlog counts), module telemetry and
-  // the sleep settings. Honest limits: the module does not report what woke it (gap G14).
+  // the sleep settings. Firmware 5.6 modules also say what keeps them awake and what last woke them.
   import { onDestroy } from 'svelte'
   import { Card, Button, Chip } from '../../../ui/index.js'
   import { live, hex, toast } from '../../../lib/live.svelte.js'
   import { href } from '../../../router.svelte.js'
-  import { SUB, canSleep, writeParams, moduleOfId } from './sleepLogic.js'
+  import { SUB, canSleep, writeParams, moduleOfId, wakeWords } from './sleepLogic.js'
   import { pollCanRates } from './canRates.svelte.js'
   import Confirm from './Confirm.svelte'
 
@@ -34,6 +34,9 @@
       const on = (d.outputs ?? []).filter((o) => /^on|overcurrent|warning/i.test(o.state ?? ''))
       if (on.length) list.push({ key: 'out-' + d.guid, text: `${d.name} has ${on.length} output${on.length === 1 ? '' : 's'} on (${d.current.toFixed(1)} A). An output that is on counts as in use.` })
       if (canSleep(d) && !d.sleepEnabled) list.push({ key: 'auto-' + d.guid, text: `${d.name}: automatic sleep is off.`, fix: { label: `Turn on automatic sleep for ${d.name}`, run: () => fixAuto(d) } })
+      // firmware 5.6: the module's own word
+      if ((d.sleepBlockers ?? 0) & 8) list.push({ key: 'rx-' + d.guid, text: `${d.name} says CAN traffic keeps it awake${wakeWords(d) ? `; it last woke from ${wakeWords(d)}` : ''}.` })
+      if ((d.sleepBlockers ?? 0) & 4 && !/usb/i.test(live.adapter ?? '')) list.push({ key: 'usb-' + d.guid, text: `${d.name} has a USB cable connected. It never sleeps while USB is connected.` })
     }
     const chatty = perModule.other.filter((x) => x.r >= 1)
     if (chatty.length) {
@@ -82,7 +85,7 @@
   {:else}
     <p class="muted">Nothing is keeping the bus awake. If a module does not go to sleep, or wakes again and again, the reason shows here: which frames keep the bus busy, which outputs are on, and what to change.</p>
   {/if}
-  <p class="muted note">Based on the last 2 seconds of bus traffic. The module does not report what woke it yet (gap G14).</p>
+  <p class="muted note">Based on the last 2 seconds of bus traffic, and on what modules with firmware 5.6 report about themselves.</p>
 </Card>
 
 <Confirm bind:open={() => !!offCan, (v) => { if (!v) offCan = null }} title="Stop CAN activity waking this module?" confirmLabel="Stop waking on CAN" busy={canBusy}

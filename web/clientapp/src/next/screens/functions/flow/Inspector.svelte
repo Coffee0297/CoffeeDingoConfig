@@ -6,9 +6,10 @@
    */
   import { Button, Chip, Field, Select, Segmented, Checkbox, Banner } from '../../../ui/index.js'
   import { href } from '../../../router.svelte.js'
-  import { FAM_COLOR, FAM_NAME, OPS, OP_WORDS, JOIN, TIMER_MODES, EDGES, isRelational, sourceOptions, canWire, hexId, parseId } from './model.js'
+  import { FAM_COLOR, FAM_NAME, OPS, OP_WORDS, JOIN, TIMER_MODES, EDGES, MATH_OPS, isRelational, sourceOptions, canWire, hexId, parseId } from './model.js'
   import { sentenceFor } from './sentence.js'
   import { fmt } from './livevals.js'
+  import { olderThan } from '../../hardware/parts/util.js'
 
   let { model, node, dev, lv, links = [], idMap = null, busy = false, onsave, onremove, onselect, onungroup, onopenlink } = $props()
 
@@ -26,7 +27,9 @@
     counter: ['name', 'incInput', 'decInput', 'resetInput', 'incEdge', 'decEdge', 'resetEdge', 'minCount', 'maxCount', 'wrapAround', 'holdToReset', 'resetTime'],
     table: ['name', 'xInput', 'yInput', 'xSize', 'ySize', 'xAxis', 'yAxis', 'cells'],
     canoutput: ['name', 'input', 'id', 'ide', 'startBit', 'bitLength', 'byteOrder', 'factor', 'offset', 'signed', 'interval'],
-    caninput: ['name', 'id', 'ide', 'startBit', 'bitLength', 'factor', 'offset', 'operator', 'operand', 'mode', 'timeoutEnabled', 'timeout'],
+    caninput: ['name', 'id', 'ide', 'startBit', 'bitLength', 'factor', 'offset', 'operator', 'operand', 'mode', 'timeoutEnabled', 'timeout', 'timeoutValue'],
+    math: ['name', 'inputA', 'inputB', 'op', 'constB', 'factor', 'offset'],
+    canmsg: ['name', 'input', 'id', 'ide', 'dlc', 'data', 'mode', 'intervalMs'],
     input: ['name', 'invert', 'mode', 'debounceTime'],
     digitaloutput: ['name', 'input'],
     output: ['name', 'input', 'dutyCycleInput'],
@@ -37,6 +40,7 @@
     const r = node?.row ?? {}
     const b = {}
     for (const f of EDIT[node?.kind] ?? []) b[f] = node.kind === 'output' && f === 'input' ? r.inputVal ?? 0 : r[f] ?? (f === 'argOff' ? r.arg : f.startsWith('not') || ['ide', 'single', 'wrapAround', 'holdToReset', 'signed', 'invert', 'timeoutEnabled'].includes(f) ? false : 0)
+    if (node?.kind === 'canmsg') b.data = Array.from({ length: 8 }, (_, k) => +(r.data?.[k] ?? 0))
     if (node?.kind === 'table') {
       // fixed-size arrays (8 / 8 / 64); a fresh slot is all zero, which is not an ascending axis
       b.xAxis = Array.from({ length: 8 }, (_, k) => +(r.xAxis?.[k] ?? 0)); b.yAxis = Array.from({ length: 8 }, (_, k) => +(r.yAxis?.[k] ?? 0))
@@ -64,7 +68,7 @@
       if (f === 'argOff' && !hyst) v = draft.arg
       if (JSON.stringify(v) !== JSON.stringify(base[f])) b[f] = v
     }
-    if (node?.kind === 'caninput' || node?.kind === 'canoutput') {
+    if (node?.kind === 'caninput' || node?.kind === 'canoutput' || node?.kind === 'canmsg') {
       const id = parseInt(String(idText).replace(/^0x/i, ''), 16)
       if (Number.isInteger(id) && id !== (node.row?.id ?? 0)) b.id = id
     }
@@ -72,7 +76,7 @@
   })
   const dirty = $derived(Object.keys(dirtyBody).length > 0)
   const idError = $derived.by(() => {
-    if (node?.kind !== 'caninput' && node?.kind !== 'canoutput') return ''
+    if (node?.kind !== 'caninput' && node?.kind !== 'canoutput' && node?.kind !== 'canmsg') return ''
     const id = parseInt(String(idText).replace(/^0x/i, ''), 16)
     if (!Number.isInteger(id) || id < 0) return 'Use hex, e.g. 0x7A0'
     if (id > (draft.ide ? 0x1fffffff : 0x7ff)) return draft.ide ? 'Above the 29-bit maximum' : 'Above 0x7FF: choose 29-bit'
@@ -96,6 +100,9 @@
       if (draft.ySize > 1) for (let i = 1; i < draft.ySize; i++) if (!(draft.yAxis[i] > draft.yAxis[i - 1])) return `Y point ${i + 1} must be above Y point ${i}.`
     }
     if (k === 'counter' && draft.maxCount <= draft.minCount) return 'Max must be above min.'
+    if (k === 'canmsg' && (draft.dlc < 0 || draft.dlc > 8)) return 'Length must be 0 to 8 bytes.'
+    if (k === 'canmsg' && draft.mode === 0 && (draft.intervalMs < 10 || draft.intervalMs > 60000)) return 'Repeat every 10 to 60000 ms.'
+    if (k === 'canmsg' && draft.data.some((x) => !Number.isInteger(x) || x < 0 || x > 255)) return 'Each byte must be 00 to FF.'
     return ''
   }
   let err = $state('')
@@ -103,7 +110,7 @@
     err = validate()
     if (err) return
     const body = { ...dirtyBody }
-    for (const k of Object.keys(body)) if (typeof base[k] === 'number' || ['input', 'var0', 'var1', 'var2', 'xInput', 'yInput', 'incInput', 'decInput', 'resetInput'].includes(k)) body[k] = Number(body[k])
+    for (const k of Object.keys(body)) if (typeof base[k] === 'number' || ['input', 'var0', 'var1', 'var2', 'xInput', 'yInput', 'incInput', 'decInput', 'resetInput', 'inputA', 'inputB'].includes(k)) body[k] = Number(body[k])
     await onsave?.(node.id, body, `${node.title}: ${Object.keys(body).join(', ')}`)
   }
 
@@ -228,6 +235,34 @@
         {@render seg('Active when input is', [{ value: '0', label: 'On' }, { value: '1', label: 'Off' }], String(draft.edge ?? 0), (v) => (draft.edge = Number(v)), false)}
       </div>
       {#if lv.sim}<p class="hint" role="status">Simulated time left: {Math.round((lv.left?.[node.id] ?? 0) / 100) / 10} s</p>{/if}
+    {:else if node.kind === 'math'}
+      <span class="sec">Settings</span>
+      <Select label="Result" items={MATH_OPS.map((o, i) => ({ value: String(i), label: o.label }))} bind:value={() => String(draft.op ?? 0), (v) => (draft.op = Number(v))} />
+      {#if !draft.inputB}<Field label="B (no B input connected)" type="number" step="any" bind:value={() => draft.constB ?? 0, (v) => (draft.constB = toNum(v))} />{/if}
+      <div class="two">
+        <Field label="Then × factor" type="number" step="any" bind:value={() => draft.factor ?? 1, (v) => (draft.factor = toNum(v))} />
+        <Field label="+ Offset" type="number" step="any" bind:value={() => draft.offset ?? 0, (v) => (draft.offset = toNum(v))} />
+      </div>
+      <p class="hint">Dividing by 0 gives 0. Example: oil temperature − coolant temperature, or two fuel tank senders averaged.</p>
+    {:else if node.kind === 'canmsg'}
+      <span class="sec">Frame</span>
+      <div class="two">
+        <Field label="CAN ID (hex)" mono bind:value={idText} error={idError} />
+        {@render seg('ID type', [{ value: 'false', label: '11-bit' }, { value: 'true', label: '29-bit' }], String(!!draft.ide), (v) => (draft.ide = v === 'true'), false)}
+      </div>
+      <Field label="Length" type="number" min="0" max="8" unit="bytes" bind:value={() => draft.dlc ?? 8, (v) => (draft.dlc = toNum(v))} />
+      <div class="bytes" role="group" aria-label="Data bytes">
+        {#each Array.from({ length: Math.max(0, Math.min(8, draft.dlc ?? 8)) }) as _, i (i)}
+          <input class="nx-input mono cell" aria-label={'Byte ' + i} value={(draft.data?.[i] ?? 0).toString(16).toUpperCase().padStart(2, '0')}
+            onchange={(e) => { const v = parseInt(e.currentTarget.value, 16); draft.data[i] = Number.isInteger(v) ? v : -1 }} />
+        {/each}
+      </div>
+      {@render seg('Send', [{ value: '0', label: 'Repeat while on' }, { value: '1', label: 'Once each time' }], String(draft.mode ?? 0), (v) => (draft.mode = Number(v)), false)}
+      {#if (draft.mode ?? 0) === 0}<Field label="Every" type="number" min="10" max="60000" unit="ms" bind:value={() => draft.intervalMs ?? 100, (v) => (draft.intervalMs = toNum(v))} />{/if}
+      <p class="hint">Bytes in hex. The frame goes out on the module's bus exactly as typed, for example a command another ECU listens for.</p>
+    {:else if node.kind === 'ignition'}
+      <p class="hint">The ignition and start button are set up on their own page: mode, inputs, crank limits and which module is the main one.</p>
+      <Button size="sm" href={href('power', 'ignition')}>Open ignition setup</Button>
     {:else if node.kind === 'flasher'}
       <span class="sec">Settings</span>
       <div class="two">
@@ -296,7 +331,14 @@
           <Field label="Than" type="number" step="any" bind:value={() => draft.operand ?? 0, (v) => (draft.operand = toNum(v))} />
         </div>
         <Checkbox label="Off when no frame arrives (timeout)" bind:checked={() => !!draft.timeoutEnabled, (v) => (draft.timeoutEnabled = v)} />
-        {#if draft.timeoutEnabled}<Field label="Timeout" type="number" unit="ms" bind:value={() => draft.timeout ?? 0, (v) => (draft.timeout = toNum(v))} hint="After the timeout the value reads 0. A fallback value is not available yet (gap G19)." />{/if}
+        {#if draft.timeoutEnabled}
+          {@const oldFw = olderThan(dev?.version, [5, 6, 0])}
+          <div class="two">
+            <Field label="Timeout" type="number" unit="ms" bind:value={() => draft.timeout ?? 0, (v) => (draft.timeout = toNum(v))} />
+            <Field label="Then the value is" type="number" step="any" disabled={oldFw} bind:value={() => draft.timeoutValue ?? 0, (v) => (draft.timeoutValue = toNum(v))}
+              hint={oldFw ? `Reads 0: ${dev?.name} needs firmware 5.6 for another value.` : 'Used while the frame is missing.'} />
+          </div>
+        {/if}
       {/if}
     {:else if node.kind === 'input'}
       <span class="sec">Pin</span>
@@ -341,6 +383,7 @@
 {/if}
 
 <style>
+  .bytes { display: grid; grid-template-columns: repeat(8, minmax(0, 1fr)); gap: var(--space-1); }
   .empty { display: flex; flex-direction: column; gap: 6px; padding: var(--space-4); border: 1px dashed var(--color-line-strong); border-radius: var(--radius-md); }
   .ih { display: flex; flex-direction: column; gap: 2px; }
   .fam { font-size: 11px; font-weight: 700; letter-spacing: 0.08em; }

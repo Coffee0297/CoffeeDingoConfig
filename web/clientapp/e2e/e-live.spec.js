@@ -16,7 +16,7 @@ test('dashboard shows car, output and signal tiles from live data', async ({ pag
   await open(page, 'live')
   const car = page.getByRole('region', { name: 'Car', exact: true })
   for (const n of ['Battery', 'Total current', 'Hottest module']) await expect(car.getByRole('link', { name: n, exact: true })).toBeVisible()
-  await expect(car.getByText('Needs firmware 5.6')).toBeVisible()
+  await expect(car.getByText('Ignition', { exact: true })).toBeVisible()   // firmware 5.6: a real tile
   // one temperature tile per module that answers
   await expect.poll(async () => (await page.getByRole('region', { name: 'Modules', exact: true }).getByTestId('tile').count()) - (await devs()).filter((m) => m.connected).length).toBeLessThanOrEqual(1)
   await expect(page.getByRole('region', { name: 'Modules', exact: true }).getByTestId('tile').filter({ hasText: 'PDM-01' })).toContainText('°C')
