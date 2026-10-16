@@ -35,8 +35,8 @@ public record DeviceDto(string Guid, string Name, string Type, int BaseId, bool 
     bool CanSleep = true,
     // G3: null = nothing written this session; false = written, lost at power-off; true = stored on the module.
     bool? StoredOnModule = null);
-public record AdaptersDto(string[] Adapters, string[] Ports, bool Connected, string? ActiveAdapter, string? ActivePort, int? GatewayBaseId);
-public record TelemetryDto(bool Connected, string? Adapter, long CanTotal, long CanRate, int[] Ids, DeviceDto[] Devices);
+public record AdaptersDto(string[] Adapters, string[] Ports, bool Connected, string? ActiveAdapter, string? ActivePort, int? GatewayBaseId, bool ProgrammingAllowed);
+public record TelemetryDto(bool Connected, string? Adapter, long CanTotal, long CanRate, int[] Ids, DeviceDto[] Devices, bool ProgrammingAllowed);
 public record ConnectReq(string Adapter, string Port, string Bitrate);
 public record AddDeviceReq(string Type, string Name, string BaseId);
 public record ModifyReq(string Name, string BaseId);
@@ -385,7 +385,7 @@ public class TelemetryBroadcaster(
                         bool isGateway = isPdm && gwBase is int gb && d.BaseId == gb;
                         return isGateway ? dto with { IsGateway = true } : dto;
                     }).ToArray();
-                var dto = new TelemetryDto(status.isConnected, status.activeAdapter, _total, _rate, ids, devices);
+                var dto = new TelemetryDto(status.isConnected, status.activeAdapter, _total, _rate, ids, devices, !LiveApi.IsSim(adapterManager));
 
                 await hub.Clients.All.SendAsync("telemetry", dto, ct);
               }
@@ -413,9 +413,32 @@ public static class LiveApi
     // The project as it was last saved / opened / started (G1). null until the first GET: the startup state counts as clean.
     static string? _cleanProject;
     static void MarkClean(ConfigFileManager cfg, DeviceManager dm) => _cleanProject = cfg.SerializeDevices(dm.GetDevices());
+    const string SimRefusal = "Sim adapter: programming disabled";
+    static readonly System.Text.RegularExpressions.Regex ProgrammingRoute = new(
+        @"^/api/(devices/[^/]+/(write|writeall|burn|bootloader|uploadlua|lua|flash|flash-can|apply-profile|output/\d+/test)|flash/blank|system/cross-module/deploy|sdo/(write|store))$",
+        System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+    internal static bool IsSim(ICommsAdapterManager m)
+    {
+        var (connected, active, _) = m.GetStatus();
+        return connected && string.Equals(active, "Sim", StringComparison.OrdinalIgnoreCase);
+    }
     public static void MapDingoApi(this WebApplication app)
     {
         var api = app.MapGroup("/api");
+
+        // G5: the Sim adapter replays a log; nothing on it can be programmed. Refuse every write / store /
+        // flash / deploy / output test here, so the UI, the AI agent and scripts all get the same answer.
+        app.Use(async (ctx, next) =>
+        {
+            if (HttpMethods.IsPost(ctx.Request.Method) && ProgrammingRoute.IsMatch(ctx.Request.Path.Value ?? "")
+                && IsSim(ctx.RequestServices.GetRequiredService<ICommsAdapterManager>()))
+            {
+                ctx.Response.StatusCode = 400;
+                await ctx.Response.WriteAsJsonAsync(new { ok = false, error = SimRefusal });
+                return;
+            }
+            await next();
+        });
 
         // App version for the UI footer — single source of truth is web.csproj <Version>,
         // read from the assembly name (Major.Minor.Build, e.g. 0.6.2).
@@ -429,7 +452,7 @@ public static class LiveApi
         {
             var (adapters, ports) = m.GetAvailable();
             var s = m.GetStatus();
-            return Results.Ok(new AdaptersDto(adapters, ports, s.isConnected, s.activeAdapter, s.activePort, m.GatewayBaseId));
+            return Results.Ok(new AdaptersDto(adapters, ports, s.isConnected, s.activeAdapter, s.activePort, m.GatewayBaseId, !IsSim(m)));
         });
 
         api.MapPost("/connect", async (ConnectReq r, ICommsAdapterManager m) =>

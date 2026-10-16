@@ -34,7 +34,7 @@
   }
   onMount(load)
 
-  const sim = $derived(live.adapter === 'Sim')
+  const sim = $derived(!live.programmingAllowed)
   const online = (dev) => live.connected && !!live.devices.find((d) => d.guid === dev.guid)?.connected
   const total = $derived(schema.reduce((a, d) => a + d.params.length, 0))
   const matches = $derived.by(() => {

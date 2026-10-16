@@ -66,7 +66,7 @@
   })
 
   // The module's own runtime error, polled while it is live.
-  const sim = $derived(live.adapter === 'Sim')
+  const sim = $derived(!live.programmingAllowed)
   const modLive = $derived(live.connected && !!cur?.connected)
   // The error text is read over CAN in chunks, so a read right after an upload can come back cut short.
   // An error is shown only when two reads in a row agree; an empty read clears it at once.

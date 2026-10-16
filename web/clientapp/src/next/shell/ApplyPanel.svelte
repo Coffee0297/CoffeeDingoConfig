@@ -35,7 +35,7 @@
     return [...byGuid.values()].sort((a, b) => a.name.localeCompare(b.name))
   })
   const quiet = $derived(live.devices.filter((d) => d.connected && !listed.some((x) => x.guid === d.guid)))
-  const cantProgram = $derived(!live.connected ? 'Not connected. Connect first.' : /^sim$/i.test(live.adapter ?? '') ? 'The simulator replay cannot program modules.' : '')
+  const cantProgram = $derived(!live.connected ? 'Not connected. Connect first.' : !live.programmingAllowed ? 'The simulator replay cannot program modules.' : '')
   const needWrite = $derived(listed.filter((d) => d.connected && !['written', 'stored'].includes(stOf(d)?.state) && stOf(d)?.state !== 'refused'))
   const needStore = $derived(listed.filter((d) => d.connected && ['written', 'refused'].includes(stOf(d)?.state)))
   // nothing listed: Read compares every connected module with the project
