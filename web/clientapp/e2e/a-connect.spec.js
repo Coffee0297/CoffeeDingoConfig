@@ -49,9 +49,9 @@ test('every adapter choice shows its own fields', async ({ page }) => {
   await expect(panel(page).getByRole('button', { name: 'Connect to simulator' })).toBeVisible()
   await radio(page, /Kvaser/).check()
   await expect(panel(page).getByRole('textbox', { name: 'Channel' })).toBeVisible()
-  // WiFi (gap G11) and SocketCAN are visibly not available
-  await expect(radio(page, /WiFi bridge/)).toBeDisabled()
-  await expect(panel(page).getByText('Not available yet').first()).toBeVisible()
+  // WiFi bridge (G11): search the network first; SocketCAN is visibly not on this PC
+  await radio(page, /WiFi bridge/).check()
+  await expect(panel(page).getByTestId('wifi-scan')).toBeVisible()
   await expect(radio(page, /SocketCAN/)).toBeDisabled()
   expect(errors).toEqual([])
 })
@@ -220,4 +220,22 @@ test('the backend reconnects by itself when the link drops, and a Disconnect sta
     await apiJson('POST', '/api/connection/options', { autoReconnect: opts.autoReconnect })
     await restoreConnection()
   }
+test('WiFi bridge: Search the network finds the Sim bridge and connects through it (G11) @exclusive', async ({ page }) => {
+  const errors = watchErrors(page)
+  const found = (await apiJson('GET', '/api/adapters/discover')).bridges
+  test.skip(!found.some((b) => b.url === SIM_PORT), 'the Sim does not announce its bridge (SIM_MDNS=0, or multicast is blocked)')
+  await open(page, 'hardware')
+  try {
+    await openPanel(page)
+    await panel(page).getByTestId('disconnect').click()
+    await expect(page.getByTestId('connection-pill')).toContainText('Not connected', { timeout: 15_000 })
+    await radio(page, /WiFi bridge/).check()
+    await panel(page).getByTestId('wifi-scan').click()
+    await expect(panel(page).getByTestId('wifi-bridge')).toContainText('CoffeeDingoSim')
+    await panel(page).getByRole('radiogroup', { name: 'CAN speed' }).getByRole('radio', { name: '500 k' }).click()
+    await panel(page).getByTestId('connect').click()
+    await expect(page.getByTestId('connection-pill')).toContainText(/of \d+ live/, { timeout: 30_000 })
+    expect((await apiJson('GET', '/api/adapters')).activePort).toBe(SIM_PORT)
+  } finally { await restoreConnection() }
+  expect(errors).toEqual([])
 })

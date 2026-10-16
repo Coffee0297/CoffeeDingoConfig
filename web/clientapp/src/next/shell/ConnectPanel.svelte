@@ -13,7 +13,7 @@
   // What each choice means for POST /api/connect. `adapter` must be in the backend's list to be usable.
   const OPTIONS = [
     { id: 'usb', adapter: 'USB', name: 'USB, straight to a module', sub: 'Opens the first dingoPDM or CANBoard found on USB.' },
-    { id: 'wifi', name: 'WiFi bridge', sub: 'Find a bridge on this network.', gap: 'G11' },
+    { id: 'wifi', adapter: 'SLCAN', name: 'WiFi bridge', sub: 'Find a bridge on this network.' },
     { id: 'pcan', adapter: 'PCAN', name: 'PCAN', sub: 'PEAK PCAN-USB adapter. Needs the PEAK driver.' },
     { id: 'slcan', adapter: 'SLCAN', name: 'SLCAN, serial port', sub: 'Adapters that speak SLCAN over a COM port.' },
     { id: 'tcp', adapter: 'SLCAN', name: 'SLCAN over TCP', sub: 'The simulator or a network adapter. Host and port.' },
@@ -29,6 +29,23 @@
   let channel = $state('')
   let host = $state('127.0.0.1')
   let tcpPort = $state('7778')
+  // G11: bridges found on the network (GET /api/adapters/discover, mDNS _slcan._tcp); bridge = the chosen tcp:// url
+  let bridges = $state([]), bridge = $state(''), scanningNet = $state(false), netScanned = $state(false)
+  // the last bridge used stays pickable before a search (the brief: "last one remembered")
+  function restoreBridge() {
+    const b = lastConn?.bridge
+    if (!b?.url) return
+    if (!bridges.some((x) => x.url === b.url)) bridges = [...bridges, { name: b.name ?? 'Last bridge', address: b.address ?? b.url.replace(/^tcp:\/\/|:\d+$/g, ''), port: b.port ?? Number(b.url.split(':').pop()), url: b.url }]
+    if (!bridge) bridge = b.url
+  }
+  async function scanNet() {
+    scanningNet = true
+    try {
+      bridges = (await (await fetch('/api/adapters/discover')).json()).bridges ?? []
+      if (!bridges.some((b) => b.url === bridge)) bridge = bridges[0]?.url ?? ''
+    } catch (e) { error = { title: 'Could not search the network', body: e?.message ?? String(e) } }
+    finally { scanningNet = false; netScanned = true }
+  }
   let rate = $state('500K')
   let auto = $state(false)
   let busy = $state(false)
@@ -84,6 +101,7 @@
         if (lastConn && !live.connected) { rate = lastConn.rate ?? rate; auto = !!lastConn.auto }
         else if (moduleRate && RATES.includes(moduleRate)) rate = moduleRate
         if (lastConn?.channel) channel = lastConn.channel
+        restoreBridge()
       })
     }
     wasOpen = open
@@ -96,12 +114,14 @@
     let port = ''
     if (id === 'slcan') port = serial
     else if (id === 'tcp') port = `tcp://${host.trim()}:${String(tcpPort).trim()}`
+    else if (id === 'wifi') port = bridge
     else if (id === 'pcan' || id === 'kvaser') port = channel.trim() || (id === 'pcan' ? 'PCAN_USBBUS1' : '0')
     return { adapter: o.adapter, port }
   }
   const problem = $derived.by(() => {
     if (!selOpt || !available(selOpt)) return 'This adapter is not available.'
     if (sel === 'slcan' && !serial) return 'No serial port found. Plug the adapter in and reopen this panel.'
+    if (sel === 'wifi' && !bridge) return 'Search the network and pick a bridge.'
     if (sel === 'tcp') {
       if (!host.trim()) return 'Type the host, for example 127.0.0.1.'
       if (!/^\d+$/.test(String(tcpPort).trim()) || Number(tcpPort) < 1 || Number(tcpPort) > 65535) return 'The port is a number from 1 to 65535.'
@@ -142,7 +162,7 @@
       rate = used
       // the found speed is kept: show it, so the next reconnect does not search again
       auto = false
-      lastConn = { sel, rate: used, auto, channel, host, tcpPort, serial }
+      lastConn = { sel, rate: used, auto, channel, host, tcpPort, serial, bridge: sel === 'wifi' ? bridges.find((b) => b.url === bridge) ?? { url: bridge } : lastConn?.bridge }
       try { localStorage.setItem(LAST_KEY, JSON.stringify(lastConn)) } catch {}
       toast(`Connected · ${adapter}${port ? ' ' + port : ''} · ${used}`, 'info', 3000)
       await loadInfo()
@@ -173,6 +193,7 @@
     if (!lastConn) return
     sel = lastConn.sel; rate = lastConn.rate ?? rate; auto = !!lastConn.auto
     channel = lastConn.channel ?? ''; host = lastConn.host ?? host; tcpPort = lastConn.tcpPort ?? tcpPort
+    restoreBridge()
     if (lastConn.serial && info.ports.includes(lastConn.serial)) serial = lastConn.serial
     connect()
   }
@@ -237,8 +258,13 @@
           <p class="muted">dingoConfig opens the first dingoPDM or CANBoard it finds on USB and talks to the whole bus through it. No adapter box needed.</p>
           {#if info.ports.length}<p class="muted">COM ports on this PC: <span class="mono">{info.ports.join(', ')}</span>. The module's own port is found when you connect.</p>{/if}
         {:else if sel === 'wifi'}
-          <Banner tone="info" title="Not available yet">The backend cannot find WiFi bridges on the network (gap G11). If your bridge speaks SLCAN over TCP, pick SLCAN over TCP and type its address.</Banner>
-          <Button disabled title="Not available yet: the backend has no network discovery (gap G11)">Scan the network</Button>
+          <p class="muted">Finds bridges that announce SLCAN over TCP on this network (mDNS service <span class="mono">_slcan._tcp</span>). A bridge that does not can still be reached with SLCAN over TCP and its address.</p>
+          <div><Button onclick={scanNet} busy={scanningNet} disabled={busy || scanningNet} data-testid="wifi-scan">Search the network</Button></div>
+          {#if bridges.length}
+            <Select label="Bridge" items={bridges.map((b) => ({ value: b.url, label: `${b.name} · ${b.address}:${b.port}` }))} bind:value={bridge} data-testid="wifi-bridge" />
+          {:else if netScanned && !scanningNet}
+            <p class="muted" role="status" data-testid="wifi-none">No bridge answered. Check that it is on and on the same network, or use SLCAN over TCP with its address.</p>
+          {/if}
         {:else if sel === 'pcan'}
           <Field label="Channel" bind:value={channel} placeholder="PCAN_USBBUS1" hint="PCAN needs the PEAK driver installed. Leave empty for the first channel." mono />
         {:else if sel === 'slcan'}
