@@ -315,6 +315,8 @@ test('bench: link lost mid-test shows LINK LOST, no Stop, and the module turns t
   const adapters = await apiJson('GET', '/api/adapters')
   await withOutput('PDM-05', 8, async () => {
     await armOut8()
+    // edits another test left waiting for Apply (G2) would block the bench: write them first
+    await apiJson('POST', `/api/devices/${(await deviceByName('PDM-05')).guid}/write`)
     await openOut(page, 8)
     await stepper(page, 'Hold').input.fill('8'); await stepper(page, 'Hold').input.blur()
     await start(page).click()

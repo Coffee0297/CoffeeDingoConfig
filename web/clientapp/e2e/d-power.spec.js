@@ -268,6 +268,8 @@ test('ignition on PDM-01 with the others following: live state, a Starter role, 
     await page.getByRole('option').nth(2).click()                       // any real signal
     await page.getByTestId('ignition-save').click()
     await waitFor(async () => { const g = await ign(p1); return g.enabled && g.role === 0 && g.ignitionInput === 1 && g.startInput > 0 }, 30_000, 'PDM-01 main')
+    // the page saves to the project; Apply to car sends it (G2): write every module now
+    for (const d of all) await apiJson('POST', `/api/devices/${d.guid}/write`).catch(() => {})
     for (const d of all.filter((x) => x.guid !== p1.guid)) await waitFor(async () => { const g = await ign(d); return g.enabled && g.role === 1 && g.mainStateId === p1.baseId + 30 }, 30_000, d.name + ' follows')
     // PDM-01 sends its state frame: the backend and the screens show it
     await waitFor(async () => { const d = await deviceByName('PDM-01'); return d.ignition?.live && d.ignition.state === 'on' }, 15_000, 'ignition state on')
@@ -283,6 +285,7 @@ test('ignition on PDM-01 with the others following: live state, a Starter role, 
   } finally {
     await apiJson('POST', `/api/devices/${p4.guid}/outputconfig`, { Number: 8, Input: o8.inputVal, Enabled: o8.enabled }).catch(() => {})
     for (const d of all) await apiJson('POST', `/api/devices/${d.guid}/function/ignition/1`, { enabled: false, role: 0, mainStateId: 0, ignitionInput: 0, startInput: 0 }).catch(() => {})
+    for (const d of all) await apiJson('POST', `/api/devices/${d.guid}/write`).catch(() => {})
   }
   expect(errors).toEqual([])
 })
