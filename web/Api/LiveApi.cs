@@ -407,6 +407,9 @@ public class TelemetryBroadcaster(
 // ---------- minimal REST API for commands ----------
 public static class LiveApi
 {
+    // The project as it was last saved / opened / started (G1). null until the first GET: the startup state counts as clean.
+    static string? _cleanProject;
+    static void MarkClean(ConfigFileManager cfg, DeviceManager dm) => _cleanProject = cfg.SerializeDevices(dm.GetDevices());
     public static void MapDingoApi(this WebApplication app)
     {
         var api = app.MapGroup("/api");
@@ -1440,14 +1443,20 @@ public static class LiveApi
         });
 
         // Project save/open (real config files via ConfigFileManager)
-        api.MapGet("/project", (ConfigFileManager cfg) => Results.Ok(new {
-            current = cfg.CurrentFileName, dir = cfg.WorkingDirectory,
-            files = cfg.ListFilesWithExtension("*.json").Select(f => f.Name).ToArray() }));
+        api.MapGet("/project", (ConfigFileManager cfg, DeviceManager dm) =>
+        {
+            var now = cfg.SerializeDevices(dm.GetDevices());
+            _cleanProject ??= now;
+            return Results.Ok(new {
+                current = cfg.CurrentFileName, dir = cfg.WorkingDirectory, dirty = now != _cleanProject,
+                files = cfg.ListFilesWithExtension("*.json").Select(f => f.Name).ToArray() });
+        });
 
         api.MapPost("/project/save", async (ProjReq r, ConfigFileManager cfg, DeviceManager dm) =>
         {
             Directory.CreateDirectory(cfg.WorkingDirectory);
             await cfg.SaveDevices(dm.GetDevices(), r.FileName);
+            MarkClean(cfg, dm);
             return Results.Ok(new { ok = true, current = cfg.CurrentFileName });
         });
 
@@ -1463,6 +1472,7 @@ public static class LiveApi
                 dm.ClearDevices();
                 xmod.Clear();   // cross-module defs are per-project; the UI re-imports for the new project
                 dm.AddDevices(devs);
+                MarkClean(cfg, dm);
                 return Results.Ok(new { ok = true, count = devs.Count });
             }
             catch (Exception e)
@@ -1473,7 +1483,7 @@ public static class LiveApi
 
         api.MapPost("/project/new", (ConfigFileManager cfg, DeviceManager dm, CrossModuleStore xmod) =>
         {
-            dm.ClearDevices(); xmod.Clear(); cfg.NewFile(); return Results.Ok(new { ok = true });
+            dm.ClearDevices(); xmod.Clear(); cfg.NewFile(); MarkClean(cfg, dm); return Results.Ok(new { ok = true });
         });
 
         // Local-PC project SAVE: stream the whole project (ConfigFile JSON) back so the browser
@@ -1495,6 +1505,7 @@ public static class LiveApi
                 xmod.Clear();   // cross-module defs are per-project; the UI re-imports for the new project
                 dm.AddDevices(devs);
                 cfg.NewFile();   // opened from an external file, not one of our working-dir files
+                MarkClean(cfg, dm);
                 return Results.Ok(new { ok = true, count = devs.Count });
             }
             catch (Exception e)

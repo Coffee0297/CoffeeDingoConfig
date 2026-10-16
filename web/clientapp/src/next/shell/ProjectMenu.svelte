@@ -2,7 +2,7 @@
   // Project menu (board H17, left half): Save, Save as, Open, New, browser copy, config import/export,
   // and the unsaved-changes dialog before Open / New / Upload.
   // Backed by GET /api/project, POST /api/project/save|open|new|upload, GET /api/project/download.
-  // The "unsaved" flag is tracked in the app (gap G1: the backend has no dirty flag).
+  // The "unsaved" flag comes from GET /api/project (dirty); edits set it at once.
   import { Dialog, Button, Chip, Field, Banner } from '../ui/index.js'
   import Confirm from './parts/Confirm.svelte'
   import { live, project, api, toast, refreshProject } from '../lib/live.svelte.js'

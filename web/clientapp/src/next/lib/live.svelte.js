@@ -21,15 +21,18 @@ telemetry.subscribe((t) => {
 })
 hubState.subscribe((s) => (hub.state = s))
 
-/** Project file state. `dirty` is tracked in the app (API gap G1: the backend has no flag). */
+/** Project file state. `dirty` comes from the backend; edits also set it at once so the chip does not wait for the poll. */
 export const project = $state({ current: null, dir: '', files: [], dirty: false, loaded: false })
 
 export async function refreshProject() {
   try {
+    const was = project.dirty
     const p = await api.project()
     project.current = p?.current ?? null
     project.dir = p?.dir ?? ''
     project.files = p?.files ?? []
+    // an edit that landed while this request was out is newer than the answer
+    if (typeof p?.dirty === 'boolean' && !(p.dirty === false && !was && project.dirty)) project.dirty = p.dirty
     project.loaded = true
   } catch { /* backend down: keep last */ }
 }

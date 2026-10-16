@@ -190,12 +190,20 @@ test('Save as, Save (Ctrl+S) and the unsaved chip follow each other @exclusive',
     await page.getByTestId('row-PDM-05').getByLabel('Module name').fill('zz-e2e-chip')
     await page.getByTestId('row-PDM-05').getByRole('button', { name: 'Save' }).click()
     await expect(page.getByTestId('project-chip')).toContainText('unsaved')
+    expect((await apiJson('GET', '/api/project')).dirty).toBe(true)
     await page.keyboard.press('Control+s')
     await expect(page.getByTestId('project-chip')).not.toContainText('unsaved', { timeout: 10_000 })
+    expect((await apiJson('GET', '/api/project')).dirty).toBe(false)
     const saved = await apiJson('GET', '/api/project/download')
     expect(JSON.stringify(saved)).toContain('zz-e2e-chip')
+    // a change made outside this page (another tab, the AI agent) shows too, and undoing it clears the chip
+    const g = (await devices()).find((x) => x.name === 'zz-e2e-chip').guid
+    await apiJson('POST', `/api/devices/${g}/rename`, { Name: 'zz-e2e-chip2' })
+    await expect(page.getByTestId('project-chip')).toContainText('unsaved', { timeout: 10_000 })
+    await apiJson('POST', `/api/devices/${g}/rename`, { Name: 'zz-e2e-chip' })
+    await expect(page.getByTestId('project-chip')).not.toContainText('unsaved', { timeout: 10_000 })
   } finally {
-    const d = (await devices()).find((x) => x.name === 'zz-e2e-chip')
+    const d = (await devices()).find((x) => x.name.startsWith('zz-e2e-chip'))
     if (d) await apiJson('POST', `/api/devices/${d.guid}/rename`, { Name: 'PDM-05' })
   }
   expect(errors).toEqual([])
