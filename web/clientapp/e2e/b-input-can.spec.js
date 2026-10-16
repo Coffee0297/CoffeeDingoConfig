@@ -124,15 +124,33 @@ const FRAMES = (t) => {
     { dir: 'Rx', id: 0x551, ide: false, len: 8, data: `00 00 ${noisy ? '20' : '00'} 00 00 00 00 00`, count: 100 + Math.floor(t * 10) },
   ]
 }
+// stands in for GET /api/canlog/changes (G17): a change event whenever an id's data differs from before
 async function mockBus(page) {
-  const t0 = { v: 0 }
-  await page.route('**/api/canlog', async (route) => {
-    if (route.request().method() !== 'GET') return route.continue()
-    if (!t0.v) t0.v = Date.now()
-    await route.fulfill({ json: FRAMES((Date.now() - t0.v) / 1000) })
+  const t0 = { v: 0 }, last = new Map()
+  await page.route('**/api/canlog/changes*', async (route) => {
+    const now = Date.now()
+    if (!t0.v) t0.v = now
+    const changes = []
+    for (const f of FRAMES((now - t0.v) / 1000)) {
+      const data = f.data.replace(/ /g, ''), prev = last.get(f.id) ?? null
+      if (prev !== data) { changes.push({ t: now, id: f.id, ext: false, dir: 'Rx', data, prev }); last.set(f.id, data) }
+    }
+    await route.fulfill({ json: { now, changes } })
   })
   return t0
 }
+
+test('the backend keeps a timestamped history of data changes per id (G17)', async () => {
+  const a = await apiJson('GET', '/api/canlog/changes?since=0&max=500')
+  expect(a.changes.length).toBeGreaterThan(0)
+  const c = a.changes.at(-1)
+  expect(typeof c.t).toBe('number'); expect(c.t).toBeLessThanOrEqual(a.now)
+  expect(c.data).toMatch(/^([0-9A-F]{2})*$/)
+  // polling from "now" returns only what changed after it
+  await new Promise((r) => setTimeout(r, 500))
+  const b = await apiJson('GET', '/api/canlog/changes?since=' + a.now)
+  expect(b.changes.every((x) => x.t > a.now)).toBe(true)
+})
 
 test('Learn a switch finds the bit that followed the switch and fills the frame fields', async ({ page }) => {
   const errors = watchErrors(page)

@@ -42,4 +42,32 @@ m.feed([{ dir: 'Rx', id: 5, ide: false, data: '00 00', count: 1 }, { dir: 'Rx', 
 m.feed([{ dir: 'Rx', id: 5, ide: false, data: '01 00', count: 2 }, { dir: 'Rx', id: 5, ide: true, data: '00 00', count: 2 }], 100)
 assert.equal(m.stats().bits, 1)
 
+// from the backend's change history (G17): a 30 ms pulse between two polls still counts, and the frame
+// before the first change seeds the comparison
+const h = createLearner()
+h.tick(1000)
+h.feedChanges([
+  { t: 1500, id: 0x3a1, ext: false, dir: 'Rx', data: '0010000000000000', prev: '0000000000000000' },
+  { t: 1530, id: 0x3a1, ext: false, dir: 'Rx', data: '0000000000000000', prev: '0010000000000000' },
+], 1600)
+h.feedChanges([
+  { t: 2500, id: 0x3a1, ext: false, dir: 'Rx', data: '0010000000000000', prev: '0000000000000000' },
+  { t: 2530, id: 0x3a1, ext: false, dir: 'Rx', data: '0000000000000000', prev: '0010000000000000' },
+], 9000)
+r = h.result()
+assert.equal(r.cands[0].hex, '0x3A1'); assert.equal(r.cands[0].startBit, 12); assert.equal(r.cands[0].changes, 4)
+assert.equal(h.stats().seconds, 8)
+
 console.log('learn.test.js ok')
+
+// which CAN input already reads a learned bit
+import { findReader } from './learn.js'
+const mods = [{ guid: 'a', mod: 'PDM-01', canInputs: [
+  { number: 1, name: 'Lights', enabled: true, id: 0x3a1, ide: false, startBit: 8, bitLength: 8, byteOrder: 0 },
+  { number: 2, name: 'Hazard', enabled: true, id: 0x3a1, ide: false, startBit: 12, bitLength: 1, byteOrder: 0 },
+  { number: 3, name: 'Off', enabled: false, id: 0x3a1, ide: false, startBit: 12, bitLength: 1 }] }]
+assert.equal(findReader(mods, { id: 0x3a1, ide: false, startBit: 12 }).name, 'Hazard')                  // exact wins
+assert.deepEqual(findReader(mods, { id: 0x3a1, ide: false, startBit: 9 }), { guid: 'a', mod: 'PDM-01', number: 1, name: 'Lights', exact: false })
+assert.equal(findReader(mods, { id: 0x3a1, ide: true, startBit: 12 }), null)                            // 29-bit id differs
+assert.equal(findReader(mods, { id: 0x3a2, ide: false, startBit: 12 }), null)
+console.log('findReader ok')

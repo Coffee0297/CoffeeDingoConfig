@@ -11,6 +11,8 @@
   import { renderPlotPng, downloadBlob } from './parts/plotExport.js'
   import LiveTabs from './parts/LiveTabs.svelte'
   import { LineChart } from '../../ui/index.js'
+  import LearnSwitch from '../hardware/parts/LearnSwitch.svelte'
+  import { findReader } from '../hardware/parts/learn.js'
 
   let { query = {} } = $props()
 
@@ -149,6 +151,15 @@
   const words = $derived(q.trim().toLowerCase().split(/\s+/).filter(Boolean))
   const candidates = $derived(catalog.filter((c) => !series.some((s) => s.key === c.key) && words.every((w) => `${c.name} ${c.mod} ${c.kind}`.toLowerCase().includes(w))))
   const full = $derived(series.length >= MAX)
+  // Learn a switch (G17): plot the CAN input that reads the bit that followed the switch, on any module
+  let learnOpen = $state(false), learnMiss = $state('')
+  async function useLearned(c) {
+    learnMiss = ''
+    const mods = await Promise.all(live.devices.map(async (d) => ({ guid: d.guid, mod: d.name, canInputs: (await api.functions(d.guid).catch(() => null))?.canInputs })))
+    const r = findReader(mods, c)
+    if (r) add(keys.sig(r.guid, r.name))
+    else learnMiss = `No module reads ${c.hex} bit ${c.startBit} yet. Add a CAN input for it (its page has Learn a switch too), then plot that.`
+  }
   function add(key) { if (full || series.some((s) => s.key === key)) return; series = [...series, { key, hidden: false }]; q = '' }
   const remove = (key) => (series = series.filter((s) => s.key !== key))
   const toggleHide = (key) => (series = series.map((s) => (s.key === key ? { ...s, hidden: !s.hidden } : s)))
@@ -261,8 +272,9 @@
       <Card title="Add a signal" subtitle={`${catalog.length} to choose from`}>
         <label class="nx-label" for="plot-q">Search signals</label>
         <input id="plot-q" class="nx-input" type="text" bind:value={q} placeholder="fan, battery, PDM-01, headlights" />
-        <Button size="sm" disabled title="Not available yet: the backend keeps no CAN frame history (gap G17)">Learn a switch</Button>
-        <span class="muted small">Learn a switch needs a CAN frame history from the backend (gap G17).</span>
+        <Button size="sm" disabled={!live.connected || full} onclick={() => { learnMiss = ''; learnOpen = true }} data-testid="plot-learn">Learn a switch</Button>
+        {#if learnMiss}<p class="small" role="status">{learnMiss}</p>{/if}
+        <LearnSwitch bind:open={learnOpen} onuse={useLearned} />
         {#if full}<p class="small warnT" role="status">Six signals is the most one graph can show clearly. Remove one to add another.</p>{/if}
         <div class="res">
           {#each candidates.slice(0, 8) as c (c.key)}

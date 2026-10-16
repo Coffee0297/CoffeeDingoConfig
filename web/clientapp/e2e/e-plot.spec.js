@@ -2,6 +2,7 @@
 import { test, expect } from '@playwright/test'
 import { open, watchErrors } from './helpers.js'
 import { inject, devs } from './e-util.js'
+import { apiJson } from './api.js'
 
 const rows = (page) => page.getByTestId('series-row')
 const chart = (page) => page.getByRole('img', { name: /^Line graph of the last/ })
@@ -162,10 +163,38 @@ test('a module that stops answering is called out and its line is dotted', async
   expect(errors).toEqual([])
 })
 
-test('Learn a switch is disabled and says why', async ({ page }) => {
+test('Learn a switch plots the CAN input that reads the learned bit (G17, mocked bus)', async ({ page }) => {
+  const errors = watchErrors(page)
+  // a bit some module already decodes: the first enabled CAN input with a known name
+  let target = null
+  for (const d of await devs()) {
+    const ci = ((await apiJson('GET', `/api/devices/${d.guid}/functions`)).canInputs ?? []).find((x) => x.enabled && x.name && (x.byteOrder ?? 0) === 0)
+    if (ci) { target = { mod: d.name, ...ci }; break }
+  }
+  test.skip(!target, 'no module decodes a CAN input')
+  // the bus: that bit flips four times in the first 5 s (the change history, G17)
+  const t0 = { v: 0 }, last = { v: null }
+  await page.route('**/api/canlog/changes*', async (route) => {
+    const now = Date.now(); if (!t0.v) t0.v = now
+    const on = [1.0, 2.0, 3.0, 4.0].filter((f) => (now - t0.v) / 1000 > f).length % 2 === 1
+    const bytes = new Array(8).fill(0); if (on) bytes[target.startBit >> 3] |= 1 << (target.startBit & 7)
+    const data = bytes.map((b) => b.toString(16).padStart(2, '0').toUpperCase()).join('')
+    const changes = last.v !== data ? [{ t: now, id: target.id, ext: !!target.ide, dir: 'Rx', data, prev: last.v }] : []
+    last.v = data
+    await route.fulfill({ json: { now, changes } })
+  })
   await open(page, 'live/plot')
-  await expect(page.getByRole('button', { name: 'Learn a switch' })).toBeDisabled()
-  await expect(page.getByText(/needs a CAN frame history from the backend/)).toBeVisible()
+  const before = await rows(page).count()
+  test.skip(before >= 6, 'the graph is full')
+  await page.getByTestId('plot-learn').click()
+  await page.waitForTimeout(5500)
+  await page.getByTestId('learn-stop').click()
+  await expect(page.getByTestId('learn-summary')).toBeVisible()
+  await page.getByTestId('learn-use').click()
+  await expect(rows(page)).toHaveCount(before + 1)
+  await expect(rows(page).last()).toContainText(target.name)
+  await expect(rows(page).last()).toContainText(target.mod)
+  expect(errors).toEqual([])
 })
 
 test('nothing to graph shows an empty state', async ({ page }) => {

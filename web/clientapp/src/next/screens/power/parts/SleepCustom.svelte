@@ -4,6 +4,9 @@
   import { live, api } from '../../../lib/live.svelte.js'
   import { canSleep, writeDeviceInput } from './sleepLogic.js'
   import Confirm from './Confirm.svelte'
+  import LearnSwitch from '../../hardware/parts/LearnSwitch.svelte'
+  import { findReader } from '../../hardware/parts/learn.js'
+  import { href } from '../../../router.svelte.js'
 
   const mods = $derived(live.devices.filter((d) => /pdm|canboard/i.test(d.type ?? '')))
   let selGuid = $state('')
@@ -43,6 +46,19 @@
     status = ok ? `${d.name}: ${p.kind === 'force' ? 'sleep input' : 'mute-transmit input'} ${p.n ? 'set to “' + labelOf(p.kind === 'force' ? forceItems : muteItems, p.n) + '”' : 'cleared'}.` : ''
   }
   const usb = $derived(/usb/i.test(live.adapter ?? ''))
+
+  // Learn a switch (G17): find the bit that followed the switch, then use the CAN input on this module that
+  // reads it. Nothing is written here; with no such input the operator adds one on the CAN input page.
+  let learnFor = $state(null), learnOpen = $state(false), learnMiss = $state(null)
+  function learn(kind) { learnFor = kind; learnMiss = null; learnOpen = true }
+  async function useLearned(c) {
+    const f = await api.functions(d.guid).catch(() => null)
+    const r = findReader([{ guid: d.guid, mod: d.name, canInputs: f?.canInputs }], c)
+    const sig = r && signals.find((x) => x.kind === 'caninput' && x.number === r.number)
+    if (sig) { pick(learnFor, sig.index); return }
+    const free = (f?.canInputs ?? []).find((x) => !x.enabled)
+    learnMiss = { hex: c.hex, bit: c.startBit, link: free ? href('hardware', 'module', d.guid, 'input', 'caninput', String(free.number)) : null }
+  }
 </script>
 
 <Card title="Custom" aria-label="Custom sleep settings">
@@ -56,14 +72,16 @@
       <div class="f">
         <Select label="Sleep input: sleep as soon as this is true" items={forceItems} value={String(d?.forceSleepInput ?? 0)} disabled={!d || !canSleep(d) || busy || sigState !== 'ok'} onchange={(v) => pick('force', v)} data-testid="sleep-input" />
         {#if d && !canSleep(d)}<span class="muted note">This board's firmware has no sleep, so it has no sleep input.</span>{/if}
-        <Button size="sm" disabled title="Not available yet: the backend cannot give a timestamped frame history (gap G17)">Learn a switch</Button>
+        <Button size="sm" disabled={!d || !canSleep(d) || busy || !live.connected} onclick={() => learn('force')} data-testid="learn-force">Learn a switch</Button>
       </div>
       <div class="f">
         <Select label="Mute-transmit input: stop talking on the bus while this is true" items={muteItems} value={String(d?.muteTxInput ?? 0)} disabled={!d || busy || sigState !== 'ok'} onchange={(v) => pick('mute', v)} data-testid="mute-input" />
         <span class="muted note">Config replies and your own CAN outputs are not muted.</span>
-        <Button size="sm" disabled title="Not available yet: the backend cannot give a timestamped frame history (gap G17)">Learn a switch</Button>
+        <Button size="sm" disabled={!d || busy || !live.connected} onclick={() => learn('mute')} data-testid="learn-mute">Learn a switch</Button>
       </div>
     </div>
+    {#if learnMiss}<Banner tone="info" title={`No CAN input on ${d?.name} reads ${learnMiss.hex} bit ${learnMiss.bit} yet`}>Add one first: on the CAN input page, Learn a switch fills in the ID and bit. Then pick it here.{#if learnMiss.link} <a href={learnMiss.link}>Open a free CAN input</a>{/if}</Banner>{/if}
+    <LearnSwitch bind:open={learnOpen} onuse={useLearned} />
     {#if sigState === 'error'}<p class="err" role="alert">■ Could not read this module's signal list.</p>{/if}
     {#if status}<p class="muted" role="status" data-testid="sleep-custom-status">{status}</p>{/if}
 
