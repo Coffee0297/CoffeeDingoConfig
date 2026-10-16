@@ -191,7 +191,12 @@ export async function undoTemplate(api0, devices, inst, keep = []) {
     const heir = keep.find((i) => (i.cans ?? []).some((x) => canKey(i, x) === k))
     heir.created = [...(heir.created ?? []), { ...c, guid: g }]
   }
-  for (const e of inst.enabled ?? []) if (!busyPin.has(pinKey(e))) await step(`${name(e.guid)} ${e.kind} ${e.number}`, () => api.setFunction(e.guid, e.kind, e.number, { enabled: false, ...(e.name ? { name: e.name } : {}) }))
+  for (const e of inst.enabled ?? []) {
+    if (!busyPin.has(pinKey(e))) { await step(`${name(e.guid)} ${e.kind} ${e.number}`, () => api.setFunction(e.guid, e.kind, e.number, { enabled: false, ...(e.name ? { name: e.name } : {}) })); continue }
+    // another applied template still reads the pin: it inherits switching it off (as CAN inputs do above)
+    const heir = keep.find((i) => (i.pins ?? []).some((p) => pinKey(p) === pinKey(e)))
+    if (!(heir.enabled ?? []).some((x) => pinKey(x) === pinKey(e))) heir.enabled = [...(heir.enabled ?? []), e]
+  }
   if (failed.length) throw new Error(`couldn't put back ${failed.length} thing(s): ${failed.join('; ')}`)
   // not done on the module yet: keep the instance so Remove can run again once it is back
   if (partial().length) throw new Error(partialMsg(partial(), 'Remove') + ' — Remove again once it is back')

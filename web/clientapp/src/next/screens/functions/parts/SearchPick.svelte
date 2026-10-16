@@ -8,11 +8,14 @@
   let { options = [], value = $bindable(''), label, placeholder = 'Search…', disabled = false, onpick, ...rest } = $props()
 
   const id = 'sp-' + Math.random().toString(36).slice(2, 8)
-  let q = $state(''), open = $state(false)
+  let q = $state(''), open = $state(false), inputEl = $state(null)
   const items = $derived(options.map((o, i) => ({ ...o, id: 'o' + i })))
   const current = $derived(items.find((o) => o.value === value && !(o.value === '' && value !== '')))
   const words = $derived(q.trim().toLowerCase().split(/\s+/).filter(Boolean))
   const shown = $derived(words.length ? items.filter((o) => words.every((w) => (o.label + ' ' + (o.search ?? '')).toLowerCase().includes(w))) : items)
+
+  // defaultValue only applies at mount: keep the text in step when the value or options arrive later (edit mode)
+  $effect(() => { const l = current?.label ?? ''; if (inputEl && !open) inputEl.value = l })
 
   function pick(oid) {
     const o = items.find((x) => x.id === oid)
@@ -27,7 +30,7 @@
   <Combobox.Root type="single" {disabled} bind:open value={current?.id ?? ''} onValueChange={pick} items={items.map((o) => ({ value: o.id, label: o.label }))}
     onOpenChange={(o) => { if (!o) q = '' }}>
     <div class="box">
-      <Combobox.Input class="nx-input" aria-labelledby={id} {placeholder} defaultValue={current?.label ?? ''}
+      <Combobox.Input bind:ref={inputEl} class="nx-input" aria-labelledby={id} {placeholder} defaultValue={current?.label ?? ''}
         oninput={(e) => { q = e.currentTarget.value; open = true }} {...rest} />
       <Combobox.Trigger class="tg" aria-label={'Show all: ' + label}>▾</Combobox.Trigger>
     </div>

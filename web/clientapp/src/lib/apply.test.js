@@ -73,4 +73,12 @@ await undoTemplate(a2, [{ guid: 'p', type: 'dingoPDM' }], A, [B])
 assert.deepEqual(w2, []); assert.deepEqual(B.created.map((c) => [c.guid, c.number]), [['p', 5]])
 await undoTemplate(a2, [{ guid: 'p', type: 'dingoPDM' }], B, [])
 assert.deepEqual(w2, [['caninput', 5]])
+// a shared input pin likewise: the template still reading it inherits switching it off
+const pin = { guid: 'c', kind: 'input', number: 6 }
+const C = { guid: 'p', enabled: [pin], pins: [pin] }, D = { guid: 'p', pins: [pin] }
+const w3 = []; const a3 = { setFunction: async (g, k, n, b) => w3.push([g, k, n, b.enabled]), outputConfig: async () => ({}) }
+await undoTemplate(a3, [{ guid: 'p', type: 'dingoPDM' }, { guid: 'c', type: 'CANBoard' }], C, [D])
+assert.deepEqual(w3, []); assert.deepEqual(D.enabled, [pin])
+await undoTemplate(a3, [{ guid: 'p', type: 'dingoPDM' }, { guid: 'c', type: 'CANBoard' }], D, [])
+assert.deepEqual(w3, [['c', 'input', 6, false]])
 console.log('apply ok')

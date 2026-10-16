@@ -203,6 +203,7 @@
       {:else if !hasData}
         <Empty title="Waiting for data" text="The first values arrive in a second. If nothing appears, the module may not be answering." />
       {:else if showTable}
+        <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
         <div class="nx-scroll tbl" tabindex="0" role="region" aria-label="Plot values as a table">
           <table class="nx-table">
             <caption class="muted">Same data as the graph, 13 samples across the last {fmtDur(spanSec)}. The cursor row is marked with an arrow.</caption>

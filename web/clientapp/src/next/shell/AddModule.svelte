@@ -6,7 +6,7 @@
   import { live, api, toast, defs, mutate, hex } from '../lib/live.svelte.js'
   import { ui } from './ui.svelte.js'
   import { addLike } from './parts/addmodule.svelte.js'
-  import { parseId, hexId, clashOf, freeBases, hitsObd, spanText, nextName, fwText } from '../screens/hardware/parts/ids.js'
+  import { parseId, hexId, clashOf, freeBases, hitsObd, spanText, nextName, fwText, busIds, busyIn } from '../screens/hardware/parts/ids.js'
 
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
   const devices = $derived(live.devices)
@@ -63,7 +63,8 @@
         name = nextName(live.devices, kindOf(typeSel)); nameTouched = false
         baseText = ''
       } else { tab = 'can'; name = nextName(live.devices, 'pdm'); typeSel = 'pdm:0'; baseText = '' }
-      queueMicrotask(() => { if (!baseText) baseText = hexId(freeBases(live.devices, null, kindOf(typeSel), { reserve })[0] ?? 0x700) })
+      onBus = new Set()
+      busIds().then((b) => { onBus = b; if (!baseText) baseText = hexId(freeBases(live.devices, null, kindOf(typeSel), { reserve, busy: onBus })[0] ?? 0x700) })
       if (!addLike.guid && live.connected) scan()
     }
     if (!open && wasOpen) { stopScan = true; addLike.guid = null }
@@ -165,7 +166,9 @@
     if (reserve && hitsObd(handKind, base)) return `${hexId(base)} is in the OBD-II range. Turn the reserve off to use it.`
     return ''
   })
-  const suggs = $derived(freeBases(devices, null, handKind, { reserve, count: 3 }))
+  let onBus = $state(new Set())
+  const handBusy = $derived(base != null ? busyIn(handKind, base, onBus) : null)
+  const suggs = $derived(freeBases(devices, null, handKind, { reserve, count: 3, busy: onBus }))
 
   function pickType(v) {
     typeSel = v
@@ -288,7 +291,8 @@
             <Field label="Name" bind:value={name} oninput={() => (nameTouched = true)} error={handError && /name/i.test(handError) ? handError : ''} />
             <Field label="Base CAN ID" bind:value={baseText} mono error={handError && !/name/i.test(handError) ? handError : ''} />
           </div>
-          {#if !handError}<p class="ok" role="status">✓ {spanText(handKind, base)} is free. No other module uses it.</p>{/if}
+          {#if !handError && handBusy != null}<p class="warn" role="status">Something on the bus already sends {hexId(handBusy)}, inside {spanText(handKind, base)}. The module will look connected when it is not.</p>
+          {:else if !handError}<p class="ok" role="status">✓ {spanText(handKind, base)} is free. No other module or bus traffic uses it.</p>{/if}
           <div class="row">
             <span class="muted">Free base IDs:</span>
             {#each suggs as b (b)}<Button size="sm" onclick={() => (baseText = hexId(b))}>{hexId(b)}</Button>{/each}
@@ -328,5 +332,6 @@
   .ct .muted { font-size: var(--text-xs); }
   .two { display: grid; grid-template-columns: 1fr 200px; gap: var(--space-3); }
   .ok { color: var(--color-ok); font-weight: 600; }
+  .warn { color: var(--color-warn); font-weight: 600; }
   .sm { font-size: var(--text-xs); margin-right: auto; align-self: center; }
 </style>

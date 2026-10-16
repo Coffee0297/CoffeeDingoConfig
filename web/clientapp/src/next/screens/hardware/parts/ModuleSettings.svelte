@@ -10,7 +10,7 @@
   import { ui } from '../../../shell/ui.svelte.js'
   import { addLike } from '../../../shell/parts/addmodule.svelte.js'
   import { postAction, waitRead } from '../../../shell/parts/act.js'
-  import { parseId, hexId, clashOf, freeBases, hitsObd, spanText, fwText } from './ids.js'
+  import { parseId, hexId, clashOf, freeBases, hitsObd, spanText, fwText, busIds } from './ids.js'
   import { deployToUsb } from './deploy.js'
 
   let { guid, full = false, onremoved } = $props()
@@ -49,7 +49,11 @@
   const edited = $derived(d && base !== d.baseId)
   const clash = $derived(d && base != null ? clashOf(live.devices, guid, d.type, base) : null)
   const obd = $derived(d && base != null && reserve && hitsObd(d.type, base))
-  const suggs = $derived(d ? freeBases(live.devices, guid, d.type, { reserve, count: 4 }).filter((b) => b !== d.baseId).slice(0, 3) : [])
+  let onBus = $state(new Set())
+  busIds().then((b) => (onBus = b))
+  // the module's own frames are not "other traffic"
+  const busTaken = $derived(d ? new Set([...onBus].filter((id) => id < d.baseId || id > d.baseId + 0x1f)) : onBus)
+  const suggs = $derived(d ? freeBases(live.devices, guid, d.type, { reserve, count: 4, busy: busTaken }).filter((b) => b !== d.baseId).slice(0, 3) : [])
   const baseProblem = $derived(base == null ? 'Use a hex ID from 0x001 to 0x7FF, like 0x6C0.' : '')
   const canSetBase = $derived(!!d && edited && base != null && !clash && !reBusy)
 

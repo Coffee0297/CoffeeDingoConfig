@@ -39,6 +39,7 @@
   </div>
   {#if stale}<Banner tone="warn" title="The system log is not updating.">The app could not read it. It keeps trying.</Banner>{/if}
   <section aria-label="System log" class="tbl">
+    <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
     <div class="nx-scroll" tabindex="0" role="region" aria-label="System log">
       <table class="nx-table">
         <thead><tr><th scope="col">Time</th><th scope="col">Level</th><th scope="col">Source</th><th scope="col">Message</th></tr></thead>

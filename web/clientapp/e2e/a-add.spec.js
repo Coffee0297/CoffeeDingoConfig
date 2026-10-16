@@ -57,7 +57,9 @@ test('Find on CAN shows the flooded-bus warning exactly when the frame rate is h
 test('By hand: every check is explained and Add stays off until it passes', async ({ page }) => {
   const errors = watchErrors(page)
   await open(page, 'hardware')
+  const bus = page.waitForResponse((r) => r.url().includes('/api/canlog'))
   await openAdd(page, 'By hand')
+  await bus
   const d = dlg(page)
   const name = d.getByRole('textbox', { name: 'Name' })
   const base = d.getByRole('textbox', { name: 'Base CAN ID' })
@@ -67,7 +69,7 @@ test('By hand: every check is explained and Add stays off until it passes', asyn
 
   // a fresh dialog starts valid: a free ID and the next default name
   await expect(add).toBeEnabled()
-  await expect(d.getByText(/is free\. No other module uses it\./)).toBeVisible()
+  await expect(d.getByText(/is free\. No other module or bus traffic uses it\./)).toBeVisible()
   // name checks
   await name.fill('')
   await expect(d.getByText('Give the module a name.')).toBeVisible()
@@ -153,7 +155,9 @@ test('By hand adds a module that shows as Not found, and Add like this copies a 
   await open(page, 'hardware')
   const clean = async () => { for (const d of (await devices()).filter((x) => x.name.startsWith('zz-e2e-'))) await apiJson('POST', `/api/devices/${d.guid}/remove`) }
   try {
+    const bus = page.waitForResponse((r) => r.url().includes("/api/canlog"))
     await openAdd(page, 'By hand')
+    await bus
     const d = dlg(page)
     await d.getByRole('textbox', { name: 'Name' }).fill('zz-e2e-hand')
     const sugg = d.getByRole('button', { name: /^0x[0-9A-F]{3}$/ }).first()

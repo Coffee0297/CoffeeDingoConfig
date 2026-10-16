@@ -11,7 +11,9 @@
 
   let data = $state({ items: [], errors: [], loaded: false })
   let reading = $state(false)
-  let sel = $state(guid != null && index != null ? `${guid}:${index}` : '')
+  let sel = $state('')
+  // follow the URL: a link to another trip while this page is open changes the selection
+  $effect.pre(() => { if (guid != null && index != null) sel = `${guid}:${index}` })
   let zoom = $state('whole')
 
   const logDevices = $derived(live.devices.filter((d) => (d.outputs ?? []).length > 0))

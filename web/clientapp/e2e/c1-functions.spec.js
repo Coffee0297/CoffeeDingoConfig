@@ -16,6 +16,8 @@ async function cleanup() {
   }
 }
 const outCfg = async (mod, n) => (await deviceByName(mod)).outputs.find((o) => o.number === n)
+/** Put a CB-2 input back as it was (a remove that failed half-way can leave the pin switched on). */
+const restoreIn = async (before) => { const d = await deviceByName('CB-2'); const { number, ...body } = before; await apiJson('POST', `/api/devices/${d.guid}/function/input/${number}`, body).catch(() => {}) }
 const cbIn = async (n) => { const d = await deviceByName('CB-2'); return (await apiJson('GET', `/api/devices/${d.guid}/functions`)).digitalIn.find((x) => x.number === n) }
 const instances = async () => (await apiJson('GET', '/api/templates/instances').catch(() => null)) ?? []
 const row = (page, name) => page.locator('[data-testid=fn-row]').filter({ has: page.getByText(name, { exact: true }) })
@@ -38,6 +40,7 @@ async function applyWizard(page) {
 /** Remove the selected function (panel button + confirm); try again when a module did not confirm. */
 async function removeFn(page, name) {
   const panel = page.getByTestId('fn-panel')
+  await expect(row(page, name)).toBeVisible({ timeout: 20_000 })   // the list loads after the wizard closes
   for (let i = 0; i < 6; i++) {
     if (await row(page, name).count() === 0) return
     await row(page, name).getByRole('button', { name: new RegExp(name) }).first().click()
@@ -340,10 +343,8 @@ test.describe('setup wizard', () => {
       await pick(page, 'pick-output', 'PDM-03 o8', /PDM-03 · J3-3 OUT8/)
       await page.getByTestId('wz-next').click()
       await page.getByTestId('wz-next').click().catch(() => {})
-      // the input must be picked again: the logic moved to PDM-03
-      await expect(page.getByTestId('step-issue')).toContainText('Pick: Driven by')
-      await pick(page, 'pick-input', 'CB-2 DI6', /CB-2 · J3-6 DI6/)
-      await page.getByTestId('wz-next').click()
+      // the logic moved to PDM-03: the CB-2 input reaches it over CAN, so the review adds a CAN input
+      await expect(page.getByText(/add a CAN input on PDM-03 that reads CB-2/)).toBeVisible()
       await applyWizard(page)
       await waitFor(async () => (await outCfg('PDM-03', 8)).inputVal > 0, 20_000, 'PDM-03 output 8 wired')
       await page.getByTestId('result-done').click()
@@ -380,6 +381,7 @@ test.describe('setup wizard', () => {
       expect((await instances()).filter((i) => i.name.startsWith(PFX))).toEqual([])
     } finally {
       await cleanup()
+      await restoreIn(di6)
     }
     expect(errors).toEqual([])
   })
@@ -390,6 +392,7 @@ test.describe('setup wizard', () => {
     const NAME = PFX + 'afterrun'
     const pdm3 = await deviceByName('PDM-03')
     const timersBefore = (await apiJson('GET', `/api/devices/${pdm3.guid}/functions`)).timers.filter((t) => t.enabled).length
+    const di7 = await cbIn(7)
     try {
       await open(page, 'functions/setup/afterrun')
       await page.getByTestId('fn-name').fill(NAME)
@@ -410,6 +413,7 @@ test.describe('setup wizard', () => {
       expect((await outCfg('PDM-03', 8)).inputVal).toBe(0)
     } finally {
       await cleanup()
+      await restoreIn(di7)
     }
     expect(errors).toEqual([])
   })

@@ -245,9 +245,11 @@ test('Add a module by hand, change its base ID, then remove it @exclusive', asyn
   await open(page, 'hardware')
   let g
   try {
+    const bus = page.waitForResponse((r) => r.url().includes("/api/canlog"))
     await page.getByTestId('add-module').click()
     const dlg = page.getByRole('dialog', { name: 'Add module' })
     await dlg.getByRole('tab', { name: 'By hand' }).click()
+    await bus
     await dlg.getByRole('textbox', { name: 'Name' }).fill('zz-e2e-temp')
     const sugg = dlg.getByRole('button', { name: /^0x[0-9A-F]{3}$/ }).first()
     const base = await sugg.innerText()

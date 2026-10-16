@@ -22,8 +22,9 @@ export function clashOf(devices, selfGuid, type, base) {
 export const spanText = (type, base) => `${hexId(base)} to ${hexId(base + spanAfter(type))}`
 
 /** Up to `count` free base IDs for a module of `type`, on 0x10 boundaries. `reserve` keeps 0x7DF-0x7EF free (OBD-II). */
-export function freeBases(devices, selfGuid, type, { reserve = true, count = 3 } = {}) {
+export function freeBases(devices, selfGuid, type, { reserve = true, count = 3, busy = null } = {}) {
   const used = usedIds(devices, { reserve, exclude: selfGuid })
+  for (const id of busy ?? []) used.add(id)
   const bases = (devices ?? []).filter((d) => isModule(d.type)).map((d) => d.baseId)
   const after = spanAfter(type)
   const out = []
@@ -33,6 +34,23 @@ export function freeBases(devices, selfGuid, type, { reserve = true, count = 3 }
     if (ok) out.push(b)
   }
   return out
+}
+
+/** IDs something on the bus is sending right now (from the CAN log), so a suggested base is really unused. */
+export async function busIds() {
+  try {
+    const rows = await (await fetch('/api/canlog')).json()
+    const list = Array.isArray(rows) ? rows : []
+    // an Rx id we also send is our own request echoed back by the bus, not other traffic
+    const sent = new Set(list.filter((f) => f.dir !== 'Rx').map((f) => f.id))
+    return new Set(list.filter((f) => f.dir === 'Rx' && !sent.has(f.id)).map((f) => f.id))
+  } catch { return new Set() }
+}
+
+/** The first bus ID with traffic inside the span of `type` at `base`, or null. */
+export function busyIn(type, base, busy) {
+  for (let id = base; id <= base + spanAfter(type); id++) if (busy?.has(id)) return id
+  return null
 }
 
 /** True when `base` lies in the OBD-II range that is kept free. */

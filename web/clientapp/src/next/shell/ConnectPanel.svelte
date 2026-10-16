@@ -133,6 +133,8 @@
       }
       if (!used) { error = { title: 'No traffic at any speed', body: 'No frames were heard at 500K, 250K, 125K or 1000K. Switch the ignition on if the modules are asleep, check CAN-H and CAN-L and the terminators, or pick a speed by hand.' }; return }
       rate = used
+      // the found speed is kept: show it, so the next reconnect does not search again
+      auto = false
       lastConn = { sel, rate: used, auto, channel, host, tcpPort, serial }
       try { localStorage.setItem(LAST_KEY, JSON.stringify(lastConn)) } catch {}
       toast(`Connected · ${adapter}${port ? ' ' + port : ''} · ${used}`, 'info', 3000)

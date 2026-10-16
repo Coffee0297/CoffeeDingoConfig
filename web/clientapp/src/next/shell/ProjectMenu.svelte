@@ -114,6 +114,7 @@
     busy = true
     try {
       await api.projNew()
+      live.devices = []   // the telemetry lags: an untitled project with old modules would count as unsaved
       project.dirty = false
       await refreshProject()
       ui.panel = null

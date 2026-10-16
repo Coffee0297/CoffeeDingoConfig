@@ -561,7 +561,12 @@ public static class LiveApi
                 // config reply a real dingo emits. (count threshold, not >0, so a lingering reply from a
                 // previous scan doesn't disqualify a real module on rescan.)
                 var preCount = rx.GroupBy(m => m.Id).ToDictionary(g2 => g2.Key, g2 => g2.Sum(m => m.Count));
-                var probe = candidates.Where(c => !(preCount.TryGetValue(c.baseId, out var c0) && c0 >= cyclicMinCount)).ToList();
+                // Counts are cumulative since the log started, so a module we have read or written answers
+                // at base+0 far more than 10 times. Those replies are explained by our own requests at base+1:
+                // only base+0 traffic that we never asked for marks an ECU id.
+                var asked = log.GetMessageSum().Where(m => m.Direction == DataDirection.Tx).Select(m => m.Id).ToHashSet();
+                var probe = candidates.Where(c => asked.Contains(c.baseId + 1)
+                    || !(preCount.TryGetValue(c.baseId, out var c0) && c0 >= cyclicMinCount)).ToList();
 
                 foreach (var (baseId, _, _) in probe)
                 {

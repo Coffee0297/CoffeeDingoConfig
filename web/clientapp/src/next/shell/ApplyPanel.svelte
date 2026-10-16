@@ -35,6 +35,8 @@
   const cantProgram = $derived(!live.connected ? 'Not connected. Connect first.' : /^sim$/i.test(live.adapter ?? '') ? 'The simulator replay cannot program modules.' : '')
   const needWrite = $derived(listed.filter((d) => d.connected && !['written', 'stored'].includes(session[d.guid]?.state) && session[d.guid]?.state !== 'refused'))
   const needStore = $derived(listed.filter((d) => d.connected && ['written', 'refused'].includes(session[d.guid]?.state)))
+  // nothing listed: Read compares every connected module with the project
+  const readTargets = $derived((listed.some((d) => d.connected) ? listed : live.devices).filter((d) => d.connected).map((d) => d.guid))
   const allStored = $derived(listed.length > 0 && listed.every((d) => session[d.guid]?.state === 'stored'))
   const refusedAny = $derived(listed.some((d) => session[d.guid]?.state === 'refused'))
   const writtenNotStored = $derived(listed.filter((d) => session[d.guid]?.state === 'written'))
@@ -258,13 +260,13 @@
       <Button variant="primary" busy disabled>{busyAct === 'read' ? 'Reading…' : busyAct === 'write' ? 'Applying…' : 'Storing…'}</Button>
     {:else}
       <span class="muted hint">{needWrite.length ? 'Writes live now. Lost at power-off until you store.' : needStore.length ? 'Store keeps the written values after power-off.' : ''}</span>
-      <Button onclick={() => doRead(listed.filter((d) => d.connected).map((d) => d.guid))} disabled={!listed.some((d) => d.connected)} data-testid="apply-read">Read from modules</Button>
+      <Button onclick={() => doRead(readTargets)} disabled={!readTargets.length} data-testid="apply-read">Read from modules</Button>
       {#if needStore.length}
         <!-- modules already written can be stored while others still wait to be applied -->
         <Button variant={needWrite.length ? 'secondary' : 'primary'} onclick={() => ask('burn', needStore.map((d) => d.guid))} disabled={!!cantProgram} title={cantProgram} data-testid="apply-store">Store on modules ({needStore.length})</Button>
       {/if}
-      {#if needWrite.length}
-        <Button variant="primary" onclick={() => ask('write', needWrite.map((d) => d.guid))} disabled={!!cantProgram} title={cantProgram} data-testid="apply-go">Apply to car ({needWrite.length} module{needWrite.length === 1 ? '' : 's'})</Button>
+      {#if needWrite.length || cantProgram}
+        <Button variant="primary" onclick={() => ask('write', needWrite.map((d) => d.guid))} disabled={!!cantProgram || !needWrite.length} title={cantProgram} data-testid="apply-go">Apply to car{needWrite.length ? ` (${needWrite.length} module${needWrite.length === 1 ? "" : "s"})` : ""}</Button>
       {:else if !needStore.length}
         <Button variant="primary" onclick={() => (ui.panel = null)}>Done</Button>
       {/if}
