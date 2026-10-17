@@ -13,7 +13,7 @@
   import { olderThan } from '../../hardware/parts/util.js'
   import { remoteItems, isRemoteKey } from '../../../lib/remote.js'
 
-  let { model, node, dev, lv, links = [], idMap = null, busy = false, onsave, onremove, onselect, onungroup, onopenlink } = $props()
+  let { model, node, dev, lv, links = [], idMap = null, busy = false, onsave, onremove, onselect, onungroup, onopenlink, unsaved = $bindable(false) } = $props()
 
   // ---- draft ----
   let draft = $state({})
@@ -78,6 +78,7 @@
     return b
   })
   const dirty = $derived(Object.keys(dirtyBody).length > 0)
+  $effect(() => { unsaved = dirty })   // the builder keeps the inspector open while it holds unsaved edits
   const idError = $derived.by(() => {
     if (node?.kind !== 'caninput' && node?.kind !== 'canoutput' && node?.kind !== 'canmsg') return ''
     const id = parseInt(String(idText).replace(/^0x/i, ''), 16)

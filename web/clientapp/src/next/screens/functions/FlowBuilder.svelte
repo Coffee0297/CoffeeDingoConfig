@@ -262,6 +262,13 @@
     const s = selId
     untrack(() => { if (nodes.some((n) => !!n.selected !== (n.id === s))) nodes = nodes.map((n) => (!!n.selected === (n.id === s) ? n : { ...n, selected: n.id === s })) })
   })
+  // a click on empty canvas (or Escape) closes the inspector, unless it holds edits that aren't saved yet
+  let inspUnsaved = $state(false)
+  function deselect() {
+    if (!selId) return
+    if (inspUnsaved) { toast(`${selNode?.title ?? 'This block'} has changes that aren't saved. Save or Revert them first.`, 'info', 4000); return }
+    selId = null
+  }
   function onnodeclick({ node }) {
     selId = node.id
     if (node.data?.n?.kind === 'link') { /* the inspector lists the module it links to */ }
@@ -412,6 +419,7 @@
     const typing = t instanceof HTMLElement && (t.closest('input, textarea, select, [contenteditable], [role=listbox], [role=dialog]'))
     if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z' && !typing) { e.preventDefault(); undoLast(); return }
     if (typing) return
+    if (e.key === 'Escape' && view === 'canvas' && !document.querySelector('[role=dialog]')) { deselect(); return }
     // Enter / Space on a focused block opens it in the inspector (Svelte Flow only selects it)
     if ((e.key === 'Enter' || e.key === ' ') && t instanceof HTMLElement && t.classList.contains('svelte-flow__node')) { selId = t.getAttribute('data-id'); return }
     if (e.key === '/' && view === 'canvas') { e.preventDefault(); addOpen = true; return }
@@ -580,7 +588,7 @@
       {:else}
         <div class="canvas" data-testid="canvas">
           <SvelteFlow bind:nodes bind:edges {nodeTypes} {edgeTypes} colorMode={ui.theme === 'light' ? 'light' : 'dark'} minZoom={0.3} maxZoom={2}
-            panOnDrag={[0, 1]} panActivationKey="Space" deleteKey={null} {onconnect} {isValidConnection} {onnodeclick} {onedgeclick} onpaneclick={() => (selEdge = null)} onnodedragstop={savePos}
+            panOnDrag={[0, 1]} panActivationKey="Space" deleteKey={null} {onconnect} {isValidConnection} {onnodeclick} {onedgeclick} onpaneclick={() => { selEdge = null; deselect() }} onnodedragstop={savePos}
             proOptions={{ hideAttribution: true }} defaultEdgeOptions={{ type: 'wire' }}>
             <FlowApi {onready} />
             <Background bgColor="var(--color-bg)" patternColor="var(--color-line)" gap={22} />
@@ -613,7 +621,7 @@
           <p class="muted">These signals from {devName} are read by {selNode.linkTargets[0].toName}. The CAN link is set up on that module.</p>
           {#each selNode.linkTargets as l, i (i)}<button type="button" class="lnk" onclick={() => openLink({ guid: l.toGuid, node: l.toNode })}>→ {l.toTitle} (CAN input) ›</button>{/each}
         {:else}
-          <Inspector {model} node={selNode} {dev} {lv} links={inspLinks} idMap={car?.idMap} {busy} onsave={save} onremove={askRemove} onselect={(id, c) => select(id, c)} onungroup={groupAction} onopenlink={openLink} />
+          <Inspector bind:unsaved={inspUnsaved} {model} node={selNode} {dev} {lv} links={inspLinks} idMap={car?.idMap} {busy} onsave={save} onremove={askRemove} onselect={(id, c) => select(id, c)} onungroup={groupAction} onopenlink={openLink} />
         {/if}
       {/if}
     </aside>{/if}

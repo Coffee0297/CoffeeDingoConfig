@@ -398,6 +398,17 @@ test('keyboard: Tab walks blocks, Enter opens the inspector, / opens Add; search
   expect(focusedId).toBeTruthy()
   await page.keyboard.press('Enter')
   await expect(insp(page).getByText('· SELECTED')).toBeVisible()
+  // Escape, or a click on empty canvas, closes the inspector again
+  await page.keyboard.press('Escape')
+  await expect(insp(page)).toHaveCount(0)
+  const block = page.locator(`.svelte-flow__node[data-id="${focusedId}"]`)
+  await block.click()
+  await expect(insp(page).getByText('· SELECTED')).toBeVisible()
+  await page.locator('.svelte-flow__pane').click({ position: { x: 8, y: 8 } })
+  await expect(insp(page)).toHaveCount(0)
+  await block.focus()
+  await page.keyboard.press('Enter')
+  await expect(insp(page).getByText('· SELECTED')).toBeVisible()
   await page.keyboard.press('/')
   await expect(page.getByRole('dialog', { name: 'Add a block' })).toBeVisible()
   await expect(page.getByRole('dialog', { name: 'Add a block' }).getByTestId('add-Math')).toBeEnabled()   // firmware 5.6 on the Sim
