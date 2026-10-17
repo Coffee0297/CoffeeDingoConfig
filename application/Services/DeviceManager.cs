@@ -62,6 +62,9 @@ public class DeviceManager(ILogger<DeviceManager> logger, ILoggerFactory loggerF
         lock (_filterLock)
         {
             if (_filterOwned) return;
+            // Only on a flooded bus: narrowed, the bridge drops every other module's frames, and on a normal bus that
+            // cost more than it saved (a module's wake announcement, sent while the app talked to another, was lost).
+            if (!BusFlooded) return;
             // The filter passes ONE module's block. When exchanges with two modules overlap (opening a project asks
             // every module for its version and CRC while a write is still running), narrowing to the newer one hid
             // the older one's reply: its write was never confirmed. Overlapping: open the filter until it is quiet.
@@ -86,6 +89,19 @@ public class DeviceManager(ILogger<DeviceManager> logger, ILoggerFactory loggerF
         }
     }
     private int? _filterBase;   // module the filter passes now; -1 = open because exchanges overlap; null = lifted
+    // Bus load, measured while the filter is open (narrowed, it hides most frames): frames per second.
+    private long _rxWindowStart = Environment.TickCount64, _rxInWindow, _rxRate;
+    private const long FloodedFramesPerSecond = 2500;   // ~60 % of a 500 kbit/s bus of 8-byte frames
+    private bool BusFlooded => Interlocked.Read(ref _rxRate) > FloodedFramesPerSecond;
+    private void CountFrame()
+    {
+        if (_filterBase >= 0) return;
+        Interlocked.Increment(ref _rxInWindow);
+        var now = Environment.TickCount64;
+        if (now - _rxWindowStart < 1000) return;
+        Interlocked.Exchange(ref _rxRate, Interlocked.Exchange(ref _rxInWindow, 0) * 1000 / Math.Max(1, now - _rxWindowStart));
+        _rxWindowStart = now;
+    }
 
     /// <summary>
     /// Stop the idle auto-lift so an external filter owner (the CAN flasher, which clamps to the XCP
@@ -338,6 +354,7 @@ public class DeviceManager(ILogger<DeviceManager> logger, ILoggerFactory loggerF
     /// </summary>
     public void OnCanDataReceived(CanFrame frame)
     {
+        CountFrame();
         RecordWriteOutcome(frame);
         foreach (var device in _devices.Values)
         {
