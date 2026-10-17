@@ -437,7 +437,7 @@
   }
   // A chosen source produces nothing if its function is disabled — enable it (+ toast). The var-map
   // entry names its owner (kind + slot number), so this never guesses a function by name.
-  const KIND_ARR = { input: funcs?.inputs ? 'inputs' : 'digitalIn', analoginput: 'analogIn', caninput: 'canInputs', virtualinput: 'virtualInputs', condition: 'conditions', counter: 'counters', flasher: 'flashers', timer: 'timers', table: 'tables', digitaloutput: 'digitalOut' }
+  const KIND_ARR = { analoginput: 'analogIn', caninput: 'canInputs', virtualinput: 'virtualInputs', condition: 'conditions', counter: 'counters', flasher: 'flashers', timer: 'timers', table: 'tables', digitaloutput: 'digitalOut' }
   async function enableSourceVar(idx) {
     idx = Number(idx)
     if (!idx || !current) return

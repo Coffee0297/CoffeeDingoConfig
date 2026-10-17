@@ -139,6 +139,7 @@
     <Card title="What an assistant can do" subtitle={info ? `${info.tools?.length ?? 0} tools, read from the server` : ''}>
       <Field label="Search the tools" bind:value={q} placeholder="for example lua" data-testid="ai-search" />
       <p class="muted gap">Tick a tool to be asked before it runs. Every tool that changes a module asks by default.</p>
+      <!-- svelte-ignore a11y_no_noninteractive_tabindex (a scrolling list: focusable so the keyboard can scroll it) -->
       <ul class="tools" data-testid="ai-tools" tabindex="0" aria-label="Tools the AI agent can use">
         {#each tools as t (t.name)}
           <li><span class="th"><code class="mono">{t.name}</code><Checkbox label="Ask me first" checked={asks(t.name)} onchange={(v) => setAsk(t.name, v)} data-testid={'ask-' + t.name} /></span><span class="muted">{t.description}</span></li>

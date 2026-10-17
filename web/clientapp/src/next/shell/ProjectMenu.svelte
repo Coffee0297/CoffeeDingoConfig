@@ -323,7 +323,6 @@
   .file { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); min-height: 44px; padding: 0 var(--space-3); border: 0; border-bottom: 1px solid var(--color-line); background: transparent; color: var(--color-text); text-align: left; }
   .file:hover:not(:disabled) { background: var(--color-raised); }
   .pad { padding: var(--space-3); }
-  .sm { font-size: var(--text-xs); }
   .row { display: flex; gap: var(--space-2); flex-wrap: wrap; }
   .box { display: flex; flex-direction: column; gap: var(--space-3); }
   .msg { padding: var(--space-3) var(--space-4); border-radius: var(--radius-md); background: var(--color-raised); border: 1px solid var(--color-line-strong); }

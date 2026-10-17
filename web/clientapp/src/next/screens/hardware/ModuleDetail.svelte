@@ -15,7 +15,8 @@
   const d = $derived(device(guid))
   const st = $derived(d ? moduleState(d) : null)
   const isPdm = $derived(/pdm/i.test(d?.type ?? ''))
-  let current = $state(['outputs', 'inputs', 'settings'].includes(tab) ? tab : 'outputs')
+  let current = $state('outputs')
+  $effect.pre(() => { current = ['outputs', 'inputs', 'settings'].includes(tab) ? tab : 'outputs' })   // a link to another tab while this page is open
   $effect(() => { const t = current; try { history.replaceState(null, '', href('hardware', 'module', guid, t)) } catch { /* ignore */ } })
 
   // Live signals (inputs, and CANBoard outputs), polled while this page is open.

@@ -8,7 +8,8 @@
 
   let { query = {} } = $props()
   const TABS = ['can', 'dbc', 'par', 'cmp']
-  let tab = $state(TABS.includes(query?.tab) ? query.tab : 'can')
+  let tab = $state('can')
+  $effect.pre(() => { tab = TABS.includes(query?.tab) ? query.tab : 'can' })   // a link to another tab while this screen is open
   const items = [
     { value: 'can', label: 'CAN map' },
     { value: 'dbc', label: 'DBC devices' },

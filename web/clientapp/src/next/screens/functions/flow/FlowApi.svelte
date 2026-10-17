@@ -3,5 +3,6 @@
   import { useSvelteFlow } from '@xyflow/svelte'
   let { onready } = $props()
   const flow = useSvelteFlow()
-  onready?.(flow)
+  // svelte-ignore state_referenced_locally
+  onready?.(flow)   // once, when the canvas mounts
 </script>

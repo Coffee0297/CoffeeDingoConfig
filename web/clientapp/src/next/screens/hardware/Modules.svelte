@@ -21,7 +21,8 @@
   // an ECU described by a DBC file is not a module (no firmware, base ID or settings): it gets its own list
   const mods = $derived(modulesOf(live.devices).sort((a, b) => a.baseId - b.baseId))
   const ecus = $derived(live.devices.filter((d) => !mods.includes(d)))
-  let sel = $state(query?.sel ?? null)
+  let sel = $state(null)
+  $effect.pre(() => { sel = query?.sel ?? null })   // a link to another module while this page is open
   const selected = $derived(mods.find((m) => m.guid === sel) ?? mods[0] ?? null)
 
   // Last seen: the time this browser last saw the module answering (telemetry has no per-module timestamp).

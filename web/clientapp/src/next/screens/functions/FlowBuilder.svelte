@@ -612,7 +612,7 @@
     </section>
 
     {#if inspOpen}<aside class="insp" aria-label="Inspector">
-      {#if lv.sim && sim && model}<SimPanel {model} {sim} {lv} />{/if}
+      {#if lv.sim && sim && model}<SimPanel {model} {sim} {lv} onchange={() => lv.tick++} />{/if}
       {#if model}
         {#if selNode?.kind === 'link'}
           <span class="fam">LINK · READ OVER CAN</span>
@@ -672,10 +672,8 @@
   .sug.used { flex-direction: row; align-items: center; gap: 10px; min-height: 40px; }
   .sline { display: flex; align-items: center; gap: 10px; min-height: 36px; }
   .sug.pop { border: 1px solid var(--color-line-strong); border-radius: var(--radius-md); padding: 8px 12px; position: absolute; top: 8px; right: 8px; z-index: 6; width: min(560px, calc(100% - 16px)); max-height: 60%; overflow: auto; box-shadow: var(--shadow-2); }
-  .sline.more { padding-left: 4px; }
   .swhy { font-size: 13px; margin: 0; }
   .stag { flex: none; font-size: 11px; font-weight: 700; padding: 3px 8px; border-radius: 6px; border: 0; background: var(--color-accent); color: var(--color-on-accent); white-space: nowrap; }
-  button.stag { min-height: 28px; cursor: pointer; }
   .stag.alt { background: var(--color-raised); color: var(--color-accent); }
   .st { flex: 1 1 auto; min-width: 0; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .sb { display: flex; gap: 6px; flex: none; }

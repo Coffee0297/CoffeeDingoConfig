@@ -7,7 +7,7 @@
   import { SOURCE_KINDS } from './sim.js'
   import { fmt } from './livevals.js'
 
-  let { model, sim, lv } = $props()
+  let { model, sim, lv, onchange } = $props()   // onchange: the builder recomputes its live values (lv is read only here)
   // sources that something on this module actually reads
   const sources = $derived([...model.nodes.values()].filter((n) => (SOURCE_KINDS.has(n.kind) || n.disabledSource) && n.outs.some((p) => model.consumers.has(p.idx))))
   const outputs = $derived([...model.nodes.values()].filter((n) => n.kind === 'output' || n.kind === 'digitaloutput' || n.kind === 'canoutput').filter((n) => n.enabled))
@@ -20,10 +20,10 @@
     return [0, 1000, 1]
   }
   const posName = (n, v) => n.row?.rotary?.positionNames?.[v] ?? null
-  function setBool(p, v) { sim.set(p.idx, v); sim.step(0); lv.tick++ }
-  function setNum(p, v) { sim.set(p.idx, Number(v) || 0); lv.tick++ }
-  function setCan(n, v) { sim.setCan(n.id, Number(v) || 0); lv.tick++ }
-  function setFault(n, f) { faultSel[n.id] = f; sim.fault(n.id, f); lv.tick++ }
+  function setBool(p, v) { sim.set(p.idx, v); sim.step(0); onchange() }
+  function setNum(p, v) { sim.set(p.idx, Number(v) || 0); onchange() }
+  function setCan(n, v) { sim.setCan(n.id, Number(v) || 0); onchange() }
+  function setFault(n, f) { faultSel[n.id] = f; sim.fault(n.id, f); onchange() }
   const canMax = (n) => Math.min(100000, Math.max(1, (2 ** Math.min(20, n.row?.bitLength ?? 8) - 1) * (n.row?.factor || 1)))
   const OUT_FAULTS = [{ value: 'none', label: '○ No fault' }, { value: 'oc', label: '■ Overcurrent' }, { value: 'open', label: '▲ Open load' }]
 </script>

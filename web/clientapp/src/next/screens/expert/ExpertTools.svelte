@@ -5,7 +5,8 @@
   import SimReplay from './parts/SimReplay.svelte'
 
   let { query = {} } = $props()
-  let tab = $state(query?.tab === 'sim' ? 'sim' : 'ai')
+  let tab = $state('ai')
+  $effect.pre(() => { tab = query?.tab === 'sim' ? 'sim' : 'ai' })   // a link to another tab while this screen is open
   const items = [{ value: 'ai', label: 'AI agent' }, { value: 'sim', label: 'Sim replay' }]
 </script>
 
