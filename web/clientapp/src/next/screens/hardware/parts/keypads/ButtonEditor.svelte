@@ -17,8 +17,10 @@
     return () => { alive = false }
   })
   const sigItems = $derived([{ value: '0', label: 'Not set' }, ...signals.map((s) => ({ value: String(s.index), label: s.name })), ...remote])
-  let name = $state(''), msg = $state(''), busy = $state(false)
-  $effect(() => { name = btn.name })
+  let name = $state(''), msg = $state(''), busy = $state(false), editing = false
+  // follow the saved name, but not while it is being typed: a reload after an earlier change (enable, a colour)
+  // landed mid-typing and put the old name back, losing what was typed
+  $effect(() => { const n = btn.name; untrack(() => { if (!editing) name = n }) })
   const number = $derived((pad.slot - 1) * 32 + btn.number)
 
   async function save(changes, said) {
@@ -43,7 +45,7 @@
     <Banner tone="info" title="This button does nothing yet">Switch it on below and give it a name. Its LED stays off until a state is set.</Banner>
   {/if}
   <Checkbox label="Button enabled" hint="usable as an input under its name" checked={btn.enabled} disabled={busy} onchange={(v) => save({ enabled: v }, v ? 'Button enabled.' : 'Button disabled.')} data-testid="btn-enabled" />
-  <Field label="Name on the keypad face" bind:value={name} disabled={busy} onchange={(v) => v !== btn.name && save({ name: v }, `Named “${v}”.`)} data-testid="btn-name" />
+  <Field label="Name on the keypad face" bind:value={name} disabled={busy} onfocus={() => (editing = true)} onblur={() => (editing = false)} onchange={(v) => v !== btn.name && save({ name: v }, `Named “${v}”.`)} data-testid="btn-name" />
   <div class="f"><span class="nx-label" id="act-l">What it does</span>
     <Segmented label="Button action" items={[{ value: '0', label: 'Momentary', sub: 'on while held' }, { value: '1', label: 'Toggle', sub: 'press on, press off' }]} value={String(btn.mode)} disabled={busy} onchange={(v) => Number(v) !== btn.mode && save({ mode: Number(v) }, `Action set to ${v === '1' ? 'toggle' : 'momentary'}.`)} data-testid="btn-action" /></div>
 

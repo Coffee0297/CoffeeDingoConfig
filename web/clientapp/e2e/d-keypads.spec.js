@@ -55,9 +55,18 @@ test('keypads: add on PDM-03 slot 2, map a button, LEDs, backlight, dim, expert 
 
     // Map button 1
     await page.getByTestId('key-1').click()
+    // the reload after a save can land while the name is being typed (a busy bus): it must not undo the typing
+    let slowReload = false
+    await page.route('**/api/devices/*/functions', async (r) => {
+      if (slowReload) { slowReload = false; await new Promise((x) => setTimeout(x, 2000)) }
+      await r.continue()
+    })
+    slowReload = true
     await page.getByTestId('btn-enabled').click()
     await waitFor(async () => BTN1(await slot2(pdm)).enabled, 25_000, 'button enabled')
+    await expect(page.getByTestId('btn-name')).toBeEnabled()
     await page.getByTestId('btn-name').fill('MCPVAL horn')
+    await page.waitForTimeout(2500)   // the slow reload lands now, mid-edit
     await page.getByTestId('btn-name').blur()
     await waitFor(async () => BTN1(await slot2(pdm)).name === 'MCPVAL horn', 25_000, 'button name')
     await expect(page.getByTestId('key-1')).toContainText('MCPVAL horn')
