@@ -23,7 +23,7 @@
   <TopBar />
   <div class="body">
     <Rail />
-    <main id="nx-main" tabindex="-1">
+    <main id="nx-main" tabindex="-1" inert={ui.nav}>   <!-- the phone menu drawer is open: Tab stays in it -->
       {#key key}
         {#await m.load()}
           <p class="muted loading">Loading…</p>

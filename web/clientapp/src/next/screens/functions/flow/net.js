@@ -10,4 +10,4 @@ export async function postJson(path, body) {
   return d
 }
 /** POST /devices/{id}/link-remote — fill CAN input `canInput` to decode `signal` broadcast by `sourceGuid`. */
-export const linkRemote = (guid, canInput, sourceGuid, signal) => postJson(`/api/devices/${guid}/link-remote`, { CanInput: canInput, SourceGuid: sourceGuid, Signal: signal })
+export const linkRemote = (guid, canInput, sourceGuid, signal, newRule = false) => postJson(`/api/devices/${guid}/link-remote`, { CanInput: canInput, SourceGuid: sourceGuid, Signal: signal, NewRule: newRule })

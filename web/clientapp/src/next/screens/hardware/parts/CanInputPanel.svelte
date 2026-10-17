@@ -101,7 +101,7 @@
     const src = modSrc, keep = f
     linking = true; M.state.saveErr = ''
     try {
-      const r = await linkRemote(guid, n, src.guid, s.name)
+      const r = await linkRemote(guid, n, src.guid, s.name, true)   // the row itself reads ON when not zero, not only the form
       project.dirty = true
       await M.reload()
       if (!row) return
@@ -129,7 +129,8 @@
     if (!file) return
     importing = true
     const text = await file.text()
-    await mutate(() => api.dbcImport(file.name.replace(/\.dbc$/i, ''), text, 0, false), `Imported ${file.name}`)
+    const r = await mutate(() => api.dbcImport(file.name.replace(/\.dbc$/i, ''), text, 0, false), `Imported ${file.name}`)
+    if (r?.guid) dbcGuid = r.guid   // search the file just imported, not the first ECU in the project
     importing = false
   }
 

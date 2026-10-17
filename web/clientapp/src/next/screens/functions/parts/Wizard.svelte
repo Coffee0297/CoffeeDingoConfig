@@ -75,8 +75,8 @@
     untrack(async () => {
       const out = []
       for (const d of live.devices.filter((x) => /dbc/i.test(x.type ?? ''))) {
-        const r = await api.dbcSearch(d.guid, '', 500).catch(() => null)
-        for (const g of r?.items ?? []) out.push({ value: `ecu:${d.guid}:${g.id}:${g.name}`, label: `${d.name} · ${g.name} (ECU, over CAN)`, search: `${g.messageName ?? ''} ecu dbc`, local: false, module: d.name, dbc: g, sig: { label: g.name }, bit: g.length === 1 })
+        const r = await api.dbcSearch(d.guid, '', 5000).catch(() => null)   // a car DBC holds thousands: the picker searches them all
+        for (const g of r?.items ?? []) out.push({ value: `ecu:${d.guid}:${g.id}:${g.startBit}:${g.name}`, label: `${d.name} · ${g.name} (ECU, over CAN)`, search: `${g.messageName ?? ''} ecu dbc`, local: false, module: d.name, dbc: g, sig: { label: g.name }, bit: g.length === 1 })
       }
       if (alive) ecuOpts = out
     })

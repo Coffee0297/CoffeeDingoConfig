@@ -115,7 +115,7 @@
     err = validate()
     if (err) return
     const body = { ...dirtyBody }
-    for (const k of Object.keys(body)) if (!isRemoteKey(body[k]) && typeof base[k] === 'number' || ['input', 'var0', 'var1', 'var2', 'xInput', 'yInput', 'incInput', 'decInput', 'resetInput', 'inputA', 'inputB', 'leftInput', 'rightInput', 'clockInput'].includes(k)) body[k] = Number(body[k])
+    for (const k of Object.keys(body)) if (!isRemoteKey(body[k]) && (typeof base[k] === 'number' || ['input', 'var0', 'var1', 'var2', 'xInput', 'yInput', 'incInput', 'decInput', 'resetInput', 'inputA', 'inputB', 'leftInput', 'rightInput', 'clockInput'].includes(k))) body[k] = Number(body[k])
     await onsave?.(node.id, body, `${node.title}: ${Object.keys(body).join(', ')}`)
   }
 

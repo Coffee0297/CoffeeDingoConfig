@@ -18,7 +18,7 @@ test('power home: modules, roles, sleep status, links', async ({ page }) => {
   await open(page, 'power')
   await expect(page.getByRole('heading', { level: 1, name: 'Power & ignition' })).toBeVisible()
   const rows = page.getByTestId('power-modules').locator('tbody tr')
-  await expect(rows).toHaveCount((await devices()).length)
+  await expect(rows).toHaveCount((await devices()).filter((d) => !/dbc/i.test(d.type)).length)   // modules; an ECU (DBC) has no power state
   await expect(page.getByTestId('power-modules').locator('tr[data-module="CB-2"]')).toContainText('Awake')
   await expect(page.getByTestId('power-modules').locator('tr[data-module="PDM-01"]')).toContainText(/Own auto-sleep|Stays awake|Master|Follower|sleep input/)
   await expect(page.getByTestId('ignition-gap')).toContainText(/not set up yet|runs the ignition/)
@@ -141,7 +141,7 @@ test('sleep & wake: shows the real per-module settings and live status', async (
   }
   // Live status
   await expect(page.getByTestId('sleep-banner')).toContainText(/Awake: \d+ of \d+ modules answer/)
-  await expect(page.getByTestId('sleep-live').locator('tbody tr')).toHaveCount(devs.length)
+  await expect(page.getByTestId('sleep-live').locator('tbody tr')).toHaveCount(devs.filter((d) => !/dbc/i.test(d.type)).length)   // modules, not an ECU
   await expect(page.getByTestId('sleep-live').locator('tr[data-module="CB-2"]')).toContainText('Awake')
   // firmware 5.6 reports what last woke each module
   await expect(page.getByTestId('sleep-live').locator('tr[data-module="PDM-01"] [data-testid=last-wake]')).toHaveText(/power-on|CAN traffic|digital input|USB/, { timeout: 10_000 })

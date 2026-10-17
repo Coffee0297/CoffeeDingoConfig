@@ -32,7 +32,7 @@
     const g = src, ecu = srcIsEcu, term = q
     if (!g || !ecu) return
     let alive = true
-    const t = setTimeout(() => api.dbcSearch(g, term, 60).then((r) => { if (alive) sigs = (r?.items ?? []).map((x) => ({ ...x, key: `${x.id}:${x.name}`, label: x.name, sub: `${x.messageName ?? ''} · 0x${x.id.toString(16).toUpperCase()}` })) }).catch(() => { if (alive) sigs = [] }), term ? 250 : 0)
+    const t = setTimeout(() => api.dbcSearch(g, term, 60).then((r) => { if (alive) sigs = (r?.items ?? []).map((x) => ({ ...x, key: `${x.id}:${x.startBit}:${x.name}`, label: x.name, sub: `${x.messageName ?? ''} · 0x${x.id.toString(16).toUpperCase()}` })) }).catch(() => { if (alive) sigs = [] }), term ? 250 : 0)
     return () => { alive = false; clearTimeout(t) }
   })
   const shown = $derived(srcIsEcu ? sigs : sigs.filter((s) => !q || ((s.label ?? '') + ' ' + s.name).toLowerCase().includes(q.toLowerCase())).slice(0, 80))
@@ -58,7 +58,7 @@
     {/each}
     {#if !shown.length}<p class="muted">{srcIsEcu ? 'No ECU signal matches.' : 'No broadcast signal matches.'}</p>{/if}
   </div>
-  <p class="muted hint">Uses CAN input {freeSlot?.number ?? '—'} on {dev?.name}. {srcIsEcu ? 'The ID and bits come from the ECU’s DBC.' : `The ID and bits come from ${others.find((d) => d.guid === src)?.name ?? 'the source'}'s base ID.`}</p>
+  <p class="muted hint">{srcIsEcu ? `Uses a free CAN input on ${dev?.name}` : `Uses CAN input ${freeSlot?.number ?? '—'} on ${dev?.name}`}. {srcIsEcu ? 'The ID and bits come from the ECU’s DBC.' : `The ID and bits come from ${others.find((d) => d.guid === src)?.name ?? 'the source'}'s base ID.`}</p>
   {#snippet footer()}
     <Button onclick={() => (open = false)}>Cancel</Button>
     <Button variant="primary" disabled={!pick || !freeSlot || busy} {busy} onclick={link}>Add CAN input</Button>

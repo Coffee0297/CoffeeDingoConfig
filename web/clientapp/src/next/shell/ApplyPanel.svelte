@@ -56,14 +56,15 @@
       wasOpen = o
     })
   })
-  // Reload a module's short diff / edit list when its counts change.
-  $effect(() => {
-    if (!open) return
-    const key = listed.map((d) => d.guid + ':' + d.configDiffCount + ':' + (d.pendingEdits ?? 0)).join('|')
-    untrack(() => { key; refreshDiffs() })
-  })
+  // Reload a module's short diff / edit list when its counts change (not on every poll: `listed` is a new
+  // array each time); a newer refresh wins over a slower older one.
+  const diffKey = $derived(open ? listed.map((d) => d.guid + ':' + d.configDiffCount + ':' + (d.pendingEdits ?? 0)).join('|') : '')
+  $effect(() => { if (diffKey) untrack(refreshDiffs) })
+  let diffSeq = 0
   async function refreshDiffs() {
-    for (const d of listed) {
+    const seq = ++diffSeq
+    for (const d of untrack(() => listed)) {
+      if (seq !== diffSeq) return
       if (!d.pendingEdits) edits[d.guid] = []
       else try { const r = await fetch(`/api/devices/${d.guid}/pending`); edits[d.guid] = r.ok ? await r.json() : [] } catch { edits[d.guid] = [] }
       if (!d.configDiffCount) { diffs[d.guid] = []; continue }

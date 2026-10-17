@@ -1,4 +1,5 @@
 <script>
+  import { tick } from 'svelte'
   // Car-layout map: one pin per module, dragged where it sits in the car. The layout itself (positions as %
   // of the car outline, "pinpos", saved with the project file) is shared with every map: layout.svelte.js.
   // Modules with no position wait in the tray beside the car, drawn dashed.
@@ -68,6 +69,7 @@
     const n = p ? { x: clamp(p.x + step[0]), y: clamp(p.y + step[1]) } : defaultSpot(devices, g)   // from the tray: its default spot
     setPos(g, n)
     note = `${name} moved to ${Math.round(n.x)} across, ${Math.round(n.y)} down.`
+    if (!p) tick().then(() => document.querySelector(`.pin[data-guid="${g}"]`)?.focus())   // it left the tray: a new element
   }
   function reset() { placeAt(devices, devices.map((d) => d.guid)); note = 'Layout reset to the default.' }
   function placeRest() { const n = unplaced.length; placeAt(devices, unplaced.map((d) => d.guid)); note = `${n} module${n === 1 ? '' : 's'} put on the car.` }

@@ -90,7 +90,7 @@ public record SdoNodeReq(int Node);
 // Client (G4): the app's own project state to store in the file; null keeps the one already held.
 public record ProjReq(string FileName, System.Text.Json.JsonElement? Client = null);
 public record LuaReq(string Source);
-public record LinkRemoteReq(int CanInput, string SourceGuid, string Signal);
+public record LinkRemoteReq(int CanInput, string SourceGuid, string Signal, bool? NewRule = null);   // NewRule: State = (value != 0) even on a slot in use
 public record CrossTrigReq(string Guid, int? VarIndex);
 public record CrossTargetReq(string Guid, int Output);
 public record CrossFnReq(string? Name, bool Disabled, bool Blink, int BlinkRateMs, CrossTrigReq? Trigger,
@@ -333,7 +333,7 @@ public static class DingoMap
         var reading = ui?.Reading ?? false;
         var readDone = ui?.ReadDone ?? 0;
         var readTotal = ui?.ReadTotal ?? 0;
-        if (d is IDeviceConfigurable dc) ui?.SyncEdits(dc.ConfigMismatch);   // a write or read cleared it: drop the edit list
+        if (d is IDeviceConfigurable dc) ui?.SyncEdits(() => dc.ConfigMismatch);   // a write or read cleared it: drop the edit list
         if (d is PdmDevice p)
         {
             var outs = p.Outputs.Select(o => new OutputDto(
@@ -365,7 +365,7 @@ public static class DingoMap
                 SleepBlockers: cb.SleepCountdownS != null ? cb.SleepBlockersRaw : ui?.SleepBlockers, Ignition: Ign(cb.Ignition, cb.BaseId, cb.Type));
         return new DeviceDto(d.Guid.ToString(), d.Name, d.Type, d.BaseId, d.Connected,
             0, 0, 0, "", "", "", Array.Empty<OutputDto>(), reading, readDone, readTotal, false, 30000, true, 0, 0, 0, true,
-            (d as IDeviceConfigurable)?.CanBootloader ?? false);
+            (d as IDeviceConfigurable)?.CanBootloader ?? false, CanSleep: false);   // an ECU (DBC) or other device: nothing to put to sleep
     }
 }
 
@@ -983,7 +983,7 @@ public static class LiveApi
             var (fn, paramIndex) = FunctionMap.Resolve(dev, kind, number);
             if (fn == null || paramIndex < 0) return Results.NotFound(new { error = $"unknown function {kind} #{number}" });
             using var doc = await JsonDocument.ParseAsync(req.Body);
-            var track = Track(kind.ToLowerInvariant(), number, FnLabel(kind, number, fn), fn);
+            var track = Track(CanonKind(kind), number, FnLabel(kind, number, fn), fn);
             var rejected = FunctionMap.ApplyJson(fn, doc.RootElement);
             // A field the model couldn't take (bad enum value, wrong type) must not become a silent
             // "saved": refuse, and don't push a half-applied slot to the device.
@@ -1227,7 +1227,7 @@ public static class LiveApi
         api.MapGet("/devices/{guid}/dbc/search", (string guid, string? q, int? limit, DeviceManager dm) =>
         {
             if (!Guid.TryParse(guid, out var g) || dm.GetDevice(g) is not DbcDevice d) return Results.Ok(new { count = 0, items = Array.Empty<object>() });
-            var lim = Math.Clamp(limit ?? 100, 1, 500);
+            var lim = Math.Clamp(limit ?? 100, 1, 5000);
             IEnumerable<DbcSignal> hits = d.DbcSignals;
             if (!string.IsNullOrWhiteSpace(q))
             {
@@ -1419,18 +1419,23 @@ public static class LiveApi
         {
             if (!Guid.TryParse(guid, out var g) || dm.GetDevice(g) is not IDeviceConfigurable d) return Results.NotFound();
             var ui = dm.GetDeviceUiState(g);
-            ui.SyncEdits(d.ConfigMismatch);
+            ui.SyncEdits(() => d.ConfigMismatch);
             lock (ui.Edits) return Results.Ok(ui.Edits.Select(e => new { e.Id, e.Kind, e.Number, e.Field, e.What, e.Old, e.New, e.Source, at = e.At.ToString("o") }).ToArray());
         });
         api.MapPost("/devices/{guid}/pending/{id:int}/revert", (string guid, int id, DeviceManager dm) =>
         {
             if (!Guid.TryParse(guid, out var g) || dm.GetDevice(g) is not { } dev) return Results.NotFound();
             var ui = dm.GetDeviceUiState(g);
+            if (dev is IDeviceConfigurable dc) ui.SyncEdits(() => dc.ConfigMismatch);   // just applied: the list is stale
             PendingEdit? e;
             lock (ui.Edits) e = ui.Edits.FirstOrDefault(x => x.Id == id);
-            if (e == null) return Results.NotFound(new { ok = false, error = "That change is no longer waiting." });
+            if (e == null) return Results.NotFound(new { ok = false, error = "That change is no longer waiting (it may have been applied)." });
             if (RevertEdit(dev, e) is { } err) return Results.BadRequest(new { ok = false, error = $"{e.What}: {err}" });
-            lock (ui.Edits) ui.Edits.RemoveAll(x => x.Id == id);
+            lock (ui.Edits)
+            {
+                ui.Edits.RemoveAll(x => x.Id == id);
+                if (dev is IDeviceConfigurable c2) c2.ConfigMismatch = true;   // the project now differs from the module again
+            }
             return Results.Ok(new { ok = true });
         });
 
@@ -1452,6 +1457,10 @@ public static class LiveApi
                 return Results.NotFound(new { error = $"CAN input #{r.CanInput} not found on the consumer" });
             var sig = match.Signal;
             var track = Track("caninput", r.CanInput, FnLabel("caninput", r.CanInput, ci), ci);
+            // A fresh slot defaults to State = (value == 0), which reads the remote signal inverted: claim it
+            // as State = (value != 0). A slot already in use keeps its rule (a re-link after a base-ID change)
+            // unless the caller asks for a new one (the CAN input page linking a different signal).
+            if (!ci.Enabled || r.NewRule == true) { ci.Operator = Operator.NotEqual; ci.Operand = 0; ci.Mode = InputMode.Momentary; }
             ci.Enabled = true;
             ci.Id = match.MessageId;            // absolute id = source base + offset (setter sets Ide)
             ci.StartBit = sig.StartBit;
@@ -1461,7 +1470,7 @@ public static class LiveApi
             ci.ByteOrder = sig.ByteOrder;
             ci.Signed = sig.IsSigned;
             if (string.IsNullOrWhiteSpace(ci.Name) || System.Text.RegularExpressions.Regex.IsMatch(ci.Name, @"^canInput\d+$"))
-                ci.Name = $"{src.Name} {sig.Name}";
+                ci.Name = $"{src.Name} {SignalLabel(src, sig.Name) ?? sig.Name}";   // "CB-1 Horn", not "CB-1 DigitalInput2.State"
             var info = new Dictionary<string, object?>
             {
                 ["source"] = src.Name, ["signal"] = sig.Name, ["canInput"] = r.CanInput,
@@ -1880,9 +1889,13 @@ public static class LiveApi
         if (dm.GetDevice(g) is domain.Interfaces.IDeviceConfigurable c)
         {
             var ui = dm.GetDeviceUiState(g);
-            ui.SyncEdits(c.ConfigMismatch);   // in step since the last edit: start again
-            if (t != null) RecordEdits(ui, t, Staged(http) ? "app" : http.Request.Headers["X-Dingo-Source"] == "agent" ? "agent" : "api");
-            c.ConfigMismatch = true;
+            // under the edit lock: a telemetry poll (SyncEdits) can't clear the list between the flag and the record
+            lock (ui.Edits)
+            {
+                if (!c.ConfigMismatch) ui.Edits.Clear();   // in step since the last edit: start again
+                c.ConfigMismatch = true;
+                if (t != null) RecordEdits(ui, t, Staged(http) ? "app" : http.Request.Headers["X-Dingo-Source"] == "agent" ? "agent" : "api");
+            }
         }
         return false;
     }
@@ -1893,6 +1906,13 @@ public static class LiveApi
         public Dictionary<string, string> Before { get; } = Snap();
     }
     internal static EditTrack Track(string kind, int number, string label, object obj) => new(kind, number, label, () => SnapJson(obj));
+    // the agent may use the short aliases; edits are recorded (and merged, and linked to) under the full kind
+    static string CanonKind(string kind) => kind.ToLowerInvariant() switch
+    {
+        "pin" => "input", "can" => "caninput", "cmb" => "virtualinput", "cmp" => "condition", "cnt" => "counter", "fl" => "flasher",
+        "tmr" => "timer", "tbl" => "table", "cout" => "canoutput", "wip" => "wiper", "std" => "starterdisable", "dout" => "digitaloutput",
+        "ain" => "analoginput", var k => k,
+    };
     static Dictionary<string, string> SnapJson(object o)
     {
         try

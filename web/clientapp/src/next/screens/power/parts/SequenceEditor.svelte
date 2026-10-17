@@ -28,6 +28,14 @@
       .sort((a, b) => a.delay - b.delay)
     err = ''
   }
+  // a new master: it leaves the list, the old master joins it (as a follower); the others keep their place
+  function changeMaster(g) {
+    const prev = new Map(followers.map((x) => [x.guid, x]))
+    const last = Math.max(10, ...followers.map((x) => x.delay))
+    followers = mods.filter((d) => d.guid !== g)
+      .map((d) => prev.get(d.guid) ?? { guid: d.guid, name: d.name, cb: isCb(d), on: true, delay: last })
+      .sort((a, b) => a.delay - b.delay)
+  }
   // the master's signals and its current ignition (the off-delay timer's input)
   $effect(() => {
     const g = masterGuid
@@ -87,11 +95,17 @@
       const held = tH ? o.filter((x) => x.inputIdx === tIdx(tH.number, v)).map((x) => x.number) : []
       await compileSequence(m.guid, f, v, o, isCb(m), { name: m.name, role: 'master', ign: Number(ign), frameId, sleepS, quietOn, quietS, holdOn: !!tH && held.length > 0, holdS: tH ? Math.round(tH.preset / 1000) : 0, held, frameS }, live.devices)
       done.push(m.name)
-      for (const x of followers.filter((x) => x.on)) {
+      for (const x of followers.filter((x) => x.on && x.guid !== m.guid)) {
         const d = mods.find((y) => y.guid === x.guid)
         const ff = await api.functions(d.guid), vv = await api.inputs(d.guid)
         await compileSequence(d.guid, ff, vv, outsOf(d, ff), isCb(d), { name: d.name, role: 'follower', ign: 0, frameId, sleepS: x.delay, quietOn: true, quietS: Math.max(0, x.delay - 2), holdOn: false, holdS: 0, held: [], frameS: 0 }, live.devices)
         done.push(d.name)
+      }
+      // a module left out must not keep sending the shutdown frame (a former master)
+      for (const x of followers.filter((x) => !x.on && x.guid !== m.guid)) {
+        const ff = await api.functions(x.guid)
+        for (const c of (ff.canOutputs ?? []).filter((c) => c.enabled && c.name === N_FRAME)) await api.setFunction(x.guid, 'canoutput', c.number, { enabled: false })
+        for (const t of (ff.timers ?? []).filter((t) => t.enabled && t.name === N_FRAME)) await api.setFunction(x.guid, 'timer', t.number, { enabled: false })
       }
       toast(`Shut-down order staged on ${done.join(', ')}. Apply to car sends it.`, 'info', 6000)
       open = false
@@ -102,7 +116,7 @@
 
 <Dialog bind:open title="Shut-down order" description="The master owns the ignition and sends a shutdown frame; the other modules sleep in the order below, each a set time after the frame." width={680}>
   <div class="grid">
-    <Select label="Master (has the ignition key)" items={mods.map((d) => ({ value: d.guid, label: d.name }))} bind:value={masterGuid} data-testid="seq-master" />
+    <Select label="Master (has the ignition key)" items={mods.map((d) => ({ value: d.guid, label: d.name }))} bind:value={masterGuid} onchange={changeMaster} data-testid="seq-master" />
     <Select label="Ignition signal" items={ignItems} bind:value={ign} placeholder="Pick a switch or CAN signal…" data-testid="seq-ign" />
     <Stepper label="Shutdown frame after ignition off" min={0} max={3600} unit="s" bind:value={frameS} />
     <Stepper label="Master sleeps after ignition off" min={1} max={3600} unit="s" bind:value={sleepS} />

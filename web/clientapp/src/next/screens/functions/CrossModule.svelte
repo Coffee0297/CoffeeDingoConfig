@@ -66,7 +66,8 @@
     subtitle="A switch or signal on one module turns on outputs on other modules — for example one indicator switch flashing lamps on the front and rear modules in step.">
     {#snippet actions()}
       <Button onclick={() => edit(-1)} data-testid="cm-new">+ New cross-module function</Button>
-      {#if $crossFns.length}<Button variant="primary" onclick={openSend} data-testid="cm-send">Check and send to modules…</Button>{/if}
+      <!-- also with an empty list: sending clears what deleted functions left on the modules -->
+      <Button variant="primary" onclick={openSend} data-testid="cm-send">Check and send to modules…</Button>
     {/snippet}
   </PageHeader>
 
@@ -77,7 +78,7 @@
   {:else}
     <p class="muted">Edits here change the list only. Use <b>Check and send to modules</b> to put them on the modules.</p>
     <div class="grid" data-testid="cm-list">
-      {#each $crossFns as fn, i (fn.slot ?? i)}
+      {#each $crossFns as fn, i (typeof fn.slot === 'number' ? 's' + fn.slot : 'i' + i)}
         <Card title={fn.name || 'Function ' + (i + 1)} data-testid="cm-card">
           {#snippet tag()}{#if cmfIsLua(fn)}<Chip tone="accent">Lua script</Chip>{:else}<Chip tone="ok">Native wiring</Chip>{/if}{/snippet}
           <p class="when"><span class="muted">When</span> <b>{fn.trigger?.varName || (fn.trigger?.varIndex != null ? 'signal #' + fn.trigger.varIndex : 'no signal picked')}</b>
@@ -115,7 +116,8 @@
   description={step === 'preview' ? 'Nothing has been sent yet. Check this, then continue.' : ''}>
   {#if step === 'preview'}
     {#if sendBlock}<Banner tone="warn" title="Can't send right now">{sendBlock}</Banner>{/if}
-    <CrossPreview {plan} />
+    {#if !$crossFns.length}<p data-testid="cm-send-empty">No functions in the list. Sending clears the cross-module wiring sent to the modules before.</p>
+    {:else}<CrossPreview {plan} />{/if}
   {:else if step === 'confirm'}
     <p>This writes to the modules straight away:</p>
     <ul class="list">
@@ -128,14 +130,14 @@
     {#if sendErr}<Banner tone="fault" title="Sending failed">{sendErr}</Banner>{/if}
   {:else}
     {#if !results?.length}
-      <Banner tone="warn" title="Nothing was sent">No function has a trigger signal and an output yet.</Banner>
+      <Banner tone="warn" title="Nothing was sent">{$crossFns.length ? 'No function has a trigger signal and an output yet.' : 'No module had cross-module wiring to clear.'}</Banner>
     {:else}
       {#if failed.length}<Banner tone="fault" title={`${failed.length} did not work`}>Read the lines below, fix it and send again.</Banner>
       {:else}<Banner tone="ok" title="Sent">Burn each module that changed to keep it after power-off.</Banner>{/if}
       <ul class="list" data-testid="cm-results">
         {#each results as r, i (i)}
           <li>{r.ok ? (r.written === false ? '○' : '✓') : '■'} <b>{r.name}</b>:
-            {r.ok ? (r.written === false ? `saved to the project only${r.note ? ` (${r.note})` : ''}` : (r.kind === 'lua' ? 'Lua sent' : 'wired')) : r.error}</li>
+            {r.ok ? (r.written === false ? `saved to the project only${r.note ? ` (${r.note})` : ''}` : (r.kind === 'lua' ? 'Lua sent' : r.kind === 'cleared' ? 'earlier cross-module wiring cleared' : 'wired')) : r.error}</li>
         {/each}
       </ul>
     {/if}
@@ -143,7 +145,7 @@
   {#snippet footer()}
     {#if step === 'preview'}
       <Button onclick={() => (sendOpen = false)} data-testid="cm-send-cancel">Cancel</Button>
-      <Button variant="primary" disabled={!!sendBlock || !plan?.modules.length} title={sendBlock} onclick={() => (step = 'confirm')} data-testid="cm-send-next">Continue</Button>
+      <Button variant="primary" disabled={!!sendBlock || (!plan?.modules.length && $crossFns.length > 0)} title={sendBlock} onclick={() => (step = 'confirm')} data-testid="cm-send-next">Continue</Button>
     {:else if step === 'confirm'}
       <Button onclick={() => (step = 'preview')} disabled={sending}>Back</Button>
       <Button variant="primary" busy={sending} disabled={!!sendBlock} onclick={send} data-testid="cm-confirm-send">Send to modules</Button>

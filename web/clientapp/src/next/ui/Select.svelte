@@ -10,7 +10,10 @@
   const current = $derived(items.find((i) => String(i.value) === String(value)))
   let open = $state(false), q = $state(''), qEl = $state(null)
   const searchable = $derived(items.length > 8)
-  const shown = $derived(q.trim() ? items.filter((i) => String(i.label).toLowerCase().includes(q.trim().toLowerCase())) : items)
+  const MAX = 200   // ponytail: a long list (a car DBC has thousands of signals) renders the first 200 matches; typing narrows it
+  const hits = $derived(q.trim() ? items.filter((i) => String(i.label).toLowerCase().includes(q.trim().toLowerCase())) : items)
+  // keep the picked item in the list even when it is past the cap, so the trigger shows it as selected
+  const shown = $derived(hits.length <= MAX ? hits : [...hits.slice(0, MAX), ...hits.slice(MAX).filter((i) => String(i.value) === String(value))])
   function openChanged(o) { if (o && searchable) setTimeout(() => qEl?.focus(), 30); else q = '' }
   // typing goes to the box, not the list's type-ahead; arrows, Enter, Escape and Tab still drive the list
   function qKey(e) {
@@ -37,6 +40,7 @@
             </Select.Item>
           {/each}
           {#if !shown.length}<p class="none">Nothing matches “{q}”.</p>{/if}
+          {#if hits.length > MAX}<p class="none">{hits.length - MAX} more. Type to narrow the list.</p>{/if}
         </Select.Viewport>
       </Select.Content>
     </Select.Portal>

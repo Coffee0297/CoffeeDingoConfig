@@ -24,7 +24,7 @@ public class DeviceUiState
     // (a confirmed write or read clears ConfigMismatch, and SyncEdits drops these with it). Lock on Edits.
     public List<PendingEdit> Edits { get; } = new();
     public int PendingEdits { get { lock (Edits) return Edits.Count; } }
-    public void SyncEdits(bool mismatch) { if (!mismatch) lock (Edits) Edits.Clear(); }
+    public void SyncEdits(Func<bool> mismatch) { lock (Edits) if (!mismatch()) Edits.Clear(); }   // read under the lock: an edit may be landing
     // Firmware 5.6
     public bool? HasLed { get; set; }               // Identify reply (G12)
     public bool Asleep { get; set; }                // announced "going to sleep" and quiet since (G14)

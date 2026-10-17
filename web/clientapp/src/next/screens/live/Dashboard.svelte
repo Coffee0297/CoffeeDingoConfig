@@ -105,7 +105,9 @@
     feed.tick
     const shown = [], hidden = []
     for (const d of devs) {
-      for (const s of feed.byGuid[d.guid] ?? []) {
+      // an ECU's DBC can hold thousands of signals: they are under Show hidden, the first 200 of them (Plot has them all)
+      const ecu = /dbc/i.test(d.type ?? '')
+      for (const s of (feed.byGuid[d.guid] ?? []).slice(0, ecu ? 200 : undefined)) {
         if (s.kind === 'Output') continue
         const enabled = s.enabled !== false
         const tile = {
@@ -113,7 +115,7 @@
           sub: s.kind + (d.connected ? '' : ' · module not answering'), tone: !d.connected ? 'stale' : s.on ? 'on' : 'off', key: keys.sig(d.guid, s.name),
           href: signalHref(d.guid, s), graph: href('live', 'plot', { signal: keys.sig(d.guid, s.name) }),
         }
-        if (enabled) shown.push(tile); else hidden.push({ ...tile, key: null })
+        if (enabled && !ecu) shown.push(tile); else hidden.push({ ...tile, key: null })
       }
     }
     return { shown, hidden }
@@ -135,7 +137,7 @@
     {#snippet tag()}<LiveTabs current="dashboard" />{/snippet}
     {#snippet actions()}
       <span class="muted count" role="status" data-testid="live-count" data-shown={shownCount} data-hidden={hiddenCount}
-        title={`${shownCount} values shown. ${hiddenCount} more are hidden: outputs that are off or not enabled, and signals that are not enabled. Turn on Show hidden to see them.`}>{shownCount} live values</span>
+        title={`${shownCount} values shown. ${hiddenCount} more are hidden: outputs that are off or not enabled, signals that are not enabled, and ECU signals. Turn on Show hidden to see them.`}>{shownCount} live values</span>
       <Checkbox bind:checked={showHidden} label="Show hidden" />
       <div class="sel"><Select items={moduleItems} bind:value={moduleKey} label="Module" hideLabel placeholder="All modules" /></div>
     {/snippet}

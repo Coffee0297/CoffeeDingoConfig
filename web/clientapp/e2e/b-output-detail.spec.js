@@ -35,7 +35,7 @@ test('header shows name, pin, live state and working links', async ({ page }) =>
 test('breadcrumb module link opens the module', async ({ page }) => {
   const d = await openOut(page, 8)
   await page.getByRole('navigation', { name: 'Breadcrumb' }).getByRole('link', { name: 'PDM-05' }).click()
-  await expect(page).toHaveURL(new RegExp(`#/next/hardware/module/${d.guid}$`))
+  await expect(page).toHaveURL(new RegExp(`#/next/hardware/module/${d.guid}(/outputs)?$`))   // the page names its first tab in the URL
 })
 
 test('graph, trip summary and module limits are shown', async ({ page }) => {
@@ -134,12 +134,12 @@ test('drive: off while cranking points to the Accessory role (firmware 5.6)', as
 
 test('wiring: gauge, length, colour and voltage drop are saved', async ({ page }) => {
   const errors = watchErrors(page)
-  await withOutput('PDM-05', 1, async () => {
+  await withOutput('PDM-05', 1, async (d, before) => {
     await openOut(page, 1)
-    await pickSelect(page, 'Gauge', '1.5 mm²')
+    await pickSelect(page, 'Gauge', '1.5 mm² ·')   // not "Auto: 1.5 mm²", the recommendation when the limit calls for it
     await page.getByLabel('Length, one way').fill('0.6'); await page.getByLabel('Length, one way').blur()
     await page.getByTestId('wire-color').fill('#3366cc')
-    await expect(page.getByTestId('vdrop')).toContainText(/1\.5 mm² .* over 0\.6 m at 8 A drops/)
+    await expect(page.getByTestId('vdrop')).toContainText(new RegExp(`1\\.5 mm² .* over 0\\.6 m at ${before.currentLimit} A drops`))
     await saveAndWait(page)
     await waitFor(async () => { const o = (await out(1)).o; return o.wireGaugeMm2 === 1.5 && o.wireLength === 0.6 && o.wireColor.toLowerCase() === '#3366cc' }, 15_000, 'wiring on record')
     await page.getByRole('button', { name: 'Clear' }).first().click()

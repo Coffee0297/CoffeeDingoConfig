@@ -59,7 +59,10 @@ async function apiError(r) {
 
 // G2: the redesigned UI (#/next) holds its edits until "Apply to car"; the backend saves them to the project
 // only when a request carries this header. The old UI sends none and keeps writing live.
-const STAGE = typeof location !== 'undefined' && location.hash.startsWith('#/next') ? { 'X-Dingo-Stage': '1' } : {}
+// Decided per request: the app can switch between the two UIs without a reload.
+// A step that promises to write to the car straight away (cross-module "Send to modules") lifts it while it runs.
+let unstaged = 0
+const stageHdr = () => (!unstaged && typeof location !== 'undefined' && location.hash.startsWith('#/next') ? { 'X-Dingo-Stage': '1' } : {})
 
 async function j(method, url, body, timeoutMs = 15000) {
   // Abort a hung request (wedged CAN adapter / stalled device) so callers' busy flags
@@ -70,7 +73,7 @@ async function j(method, url, body, timeoutMs = 15000) {
   try {
     r = await fetch(url, {
       method,
-      headers: body ? { 'Content-Type': 'application/json', ...STAGE } : { ...STAGE },
+      headers: body ? { 'Content-Type': 'application/json', ...stageHdr() } : stageHdr(),
       body: body ? JSON.stringify(body) : undefined,
       signal: ac.signal,
     })
@@ -721,11 +724,22 @@ export const _binBody = binBody
 
 // Disable every cross-module-owned native function (name starts "cmf") on a module, so each
 // deploy is a clean rebuild — handles edits/deletes without leaking slots (auto-pick scheme).
-async function cmfNativeCleanup(guid) {
+async function cmfNativeCleanup(guid, devices) {
   const f = await api.functions(guid)
+  let n = 0
+  const gone = []
   for (const [kind, key] of [['caninput', 'canInputs'], ['canoutput', 'canOutputs'], ['flasher', 'flashers'], ['timer', 'timers']])
     for (const x of (f?.[key] ?? []))
-      if (x.enabled && /^cmf\d/i.test(x.name ?? '')) await api.setFunction(guid, kind, x.number, { ...x, enabled: false })
+      if (x.enabled && /^cmf\d/i.test(x.name ?? '')) { await api.setFunction(guid, kind, x.number, { ...x, enabled: false }); n++; if (kind === 'caninput') gone.push(x.name) }
+  // An output that followed a cleared cmf input would drive from a dead slot: switch it off. The rules
+  // deployed after this bind the outputs still in use again; a deleted function's outputs stay off.
+  if (gone.length) {
+    const vars = await api.inputs(guid).catch(() => [])
+    const dead = new Set(vars.filter((v) => v.kind === 'caninput' && gone.includes(v.name)).map((v) => v.index))
+    for (const o of (devices ?? []).find((d) => d.guid === guid)?.outputs ?? [])
+      if (dead.has(o.inputVal)) await api.outputConfig(guid, _binBody(o, 0, false))
+  }
+  return n
 }
 
 // Deploy one native (rule) function. `i` is the function's STABLE slot (CAN IDs + cmf-names
@@ -775,18 +789,28 @@ async function deployNativeRule(f, i, devices, used) {
 
 // Deploy all cross-module functions. Native rules → CAN-in/flasher/output wiring (no Lua);
 // Lua/failover functions → per-module Lua. Cleans previously-deployed native slots first.
+// Written to the modules at once (its confirm says so), also from the redesigned UI that stages other edits.
 export async function deployCrossModule(devices) {
+  unstaged++
+  try { return await deployCrossModuleNow(devices) } finally { unstaged-- }
+}
+async function deployCrossModuleNow(devices) {
   const fns = get(crossFns)
   const results = []
   const involved = new Set()
   fns.forEach((f) => { if (f?.trigger?.guid) involved.add(f.trigger.guid); if (f?.clockMaster) involved.add(f.clockMaster); (f?.targets ?? []).forEach((t) => involved.add(t.guid)) })
+  // every module is cleaned, not just the ones in today's list: a deleted function's slots live on modules
+  // nothing in the list touches any more
+  const inList = new Set(involved)
+  for (const d of devices ?? []) if (/pdm|canboard/i.test(d.type ?? '')) involved.add(d.guid)
+  const cleared = new Set()
 
   // 1. Clean slate for native slots so re-deploys/deletes don't leak. If cleanup fails the old
   // enabled slots are still live — building fresh rules on top would leak slots / duplicate CAN
   // IDs on the bus, so record the failure and skip that module instead of silently corrupting it.
   const cleanupFailed = new Set()
   for (const g of involved) {
-    try { await cmfNativeCleanup(g) }
+    try { if (await cmfNativeCleanup(g, devices)) cleared.add(g) }
     catch (e) {
       cleanupFailed.add(g)
       const nm = (devices ?? []).find((d) => d.guid === g)?.name ?? (g ?? '').slice(0, 6)
@@ -831,8 +855,9 @@ export async function deployCrossModule(devices) {
       continue
     }
     if (deviceHasLua(d.type)) await luaHydrate(d.guid)   // keep the module's own Lua around the cmf block
+    const had = !!luaGet(d.guid, 'cmf').trim()   // a cmf block sent before: uploading without it stops it
     luaSnippets.update((v) => { v[d.guid] = { ...(v[d.guid] || {}) }; v[d.guid].cmf = lua; return { ...v } })
-    if (!lua && !c) continue
+    if (!lua && !c && !had) continue
     try {
       const ins = await api.inputs(d.guid)
       const base = ins.find((x) => x.name === 'Lua Out 1')?.index
@@ -848,6 +873,11 @@ export async function deployCrossModule(devices) {
       }
       results.push({ name: d.name, ok: true, kind: 'lua' })
     } catch (e) { results.push({ name: d.name, ok: false, error: e.message }) }
+  }
+  // modules no function uses any more, whose earlier cross-module wiring was cleared
+  for (const g of cleared) if (!inList.has(g) && !results.some((r) => r.guid === g)) {
+    const d = (devices ?? []).find((x) => x.guid === g)
+    results.push({ name: d?.name ?? g.slice(0, 6), guid: g, ok: true, written: !!d?.connected, kind: 'cleared' })
   }
   return results
 }

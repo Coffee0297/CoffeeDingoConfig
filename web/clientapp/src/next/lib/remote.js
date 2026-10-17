@@ -29,11 +29,10 @@ export async function remoteItems(selfGuid, kind = 'bool') {
     }
   }
   for (const d of devs.filter(isDbc)) {
-    // ponytail: the server caps a search at 500 signals; a bigger DBC needs a server-side search in the picker
-    const r = await api.dbcSearch(d.guid, '', 500).catch(() => null)
+    const r = await api.dbcSearch(d.guid, '', 5000).catch(() => null)   // the Select shows 200 at a time and searches the rest
     for (const s of r?.items ?? []) {
       if (kind === 'bool' && s.length !== 1) continue
-      const key = `d:${d.guid}:${s.id}:${s.name}`
+      const key = `d:${d.guid}:${s.id}:${s.startBit}:${s.name}`   // multiplexed signals can share a name in one frame
       dbcSigs.set(key, s)
       out.push({ value: key, label: `${s.name} · ${d.name} (ECU)` })
     }
@@ -66,7 +65,9 @@ export async function resolveRemote(selfGuid, value, kind = 'bool') {
   if (!src || !sig) throw new Error(`${src?.name ?? 'The source module'} no longer broadcasts ${name}.`)
   const f = await api.functions(selfGuid)
   const id = (src.baseId ?? 0) + sig.offset
-  const have = (f?.canInputs ?? []).find((c) => c.enabled && c.id === id && c.startBit === sig.startBit && c.bitLength === sig.bitLength)
+  // an on/off pick reuses only an input whose State reads ON when not zero (a "== 2" rotary input is a different signal)
+  const have = (f?.canInputs ?? []).find((c) => c.enabled && c.id === id && c.startBit === sig.startBit && c.bitLength === sig.bitLength
+    && (kind !== 'bool' || (c.operator === 1 && c.operand === 0)))
   if (have) return ciIndex(selfGuid, have.number, kind)
   const free = (f?.canInputs ?? []).findLast((c) => !c.enabled)
   if (!free) throw new Error(`No free CAN input on ${live.devices.find((d) => d.guid === selfGuid)?.name ?? 'this module'}. Free one in the flow builder.`)

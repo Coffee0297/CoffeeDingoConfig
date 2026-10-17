@@ -13,8 +13,9 @@
   const h = $derived(heard(pad.kp.id))
   // signals on other modules and ECUs: a pick claims a CAN input on the module that holds the keypad
   let remote = $state([])
+  const padGuid = $derived(pad.pdm.guid)   // `pad` is a new object on every reload: key the fetch on the guid only
   $effect(() => {
-    const g = pad.pdm.guid
+    const g = padGuid
     let alive = true
     untrack(() => remoteItems(g, 'bool')).then((r) => { if (alive) remote = r }).catch(() => {})   // untracked: reads the polled device list
     return () => { alive = false }

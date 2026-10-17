@@ -161,7 +161,9 @@
     if (!a?.guid || !b?.guid) return null
     const p = a.n.outs?.find((x) => x.type === 'bool') ?? a.n.outs?.[0]
     const ins = (b.n.ins ?? []).filter((x) => canWire(p?.type, x.accepts))
-    return p && ins.length ? { a, b, p, field: ins.find((x) => !x.src) ?? ins[0] } : null
+    // the dropped-on input when the handle names one, else the first free one; all taken: refused in onconnect
+    const field = ins.find((x) => c.targetHandle && x.id === c.targetHandle) ?? ins.find((x) => !x.src) ?? null
+    return p && ins.length ? { a, b, p, field } : null
   }
   const isValidConnection = (c) => { const e = ends(c); return !!e && e.a.guid !== e.b.guid }
   let wiring = $state(false)
@@ -171,6 +173,7 @@
     if (!e || e.a.guid === e.b.guid) return
     const { a, b, p, field } = e
     const A = mods.find((m) => m.dev.guid === a.guid), B = mods.find((m) => m.dev.guid === b.guid)
+    if (!field) { toast(`Every input of ${b.n.title} on ${B.dev.name} is already wired. Change one in its flow builder.`, 'error', 8000); return }
     // the signal A already broadcasts for that port, else a bridge frame (on/off only)
     const sig = (await broadcastOf(a.guid)).find((x) => portForSignal(A.model.nodes.get(bcNode(x.name)), x.name)?.idx === p.idx)
     const key = sig && !sig.isFloat ? `r:${a.guid}:${sig.name}` : p.type === 'bool' ? `b:${a.guid}:${p.idx}` : null
@@ -183,7 +186,7 @@
       project.dirty = true
       toast(`${b.n.title} (${field.label}) on ${B.dev.name} now follows ${a.n.title} on ${A.dev.name} over CAN. Apply to car sends it.`, 'info', 5000)
     } catch (err) { toast(`Not wired: ${err?.message ?? err}`, 'error', 8000) }
-    finally { wiring = false; await load() }
+    finally { try { await load() } finally { wiring = false } }   // no new wire until the canvas shows the last one
   }
   const nodeTypes = { car: CarNode }
   const edgeTypes = { wire: FlowEdge }
@@ -206,7 +209,7 @@
       <Checkbox bind:checked={onlyLinks} label="Only signals between modules" data-testid="wc-only-links" />
       <span class="muted hint">Hover a block to light up its wires. Hold space or the middle mouse button and drag to pan.</span>
     </div>
-    <div class="wc" bind:this={wcEl} onkeydown={onkey} onfocusin={(e) => light(nodeAt(e.target)?.getAttribute('data-id'))} onfocusout={() => light(null)} role="presentation" data-testid="whole-car">
+    <div class="wc" bind:this={wcEl} onkeydown={onkey} onfocusin={(e) => light(nodeAt(e.target)?.getAttribute('data-id'))} onfocusout={() => light(null)} role="presentation" data-testid="whole-car" data-busy={wiring} aria-busy={wiring}>
       <SvelteFlow bind:nodes bind:edges {nodeTypes} {edgeTypes} colorMode={ui.theme === 'light' ? 'light' : 'dark'} minZoom={0.4} maxZoom={1.5} nodesConnectable={!wiring} {isValidConnection} {onconnect} deleteKey={null}
         panOnDrag={[0, 1]} panActivationKey="Space" onmove={(_, v) => (vp = v)}
         onnodeclick={({ node }) => !node.data.head && openNode(node)} onnodepointerenter={({ node }) => light(node.id)} onnodepointerleave={() => light(null)} proOptions={{ hideAttribution: true }}>

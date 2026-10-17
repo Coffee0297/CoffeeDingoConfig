@@ -42,7 +42,8 @@ public class DbcDevice : IDevice
     [JsonIgnore] private string? DbcFilePath { get; set; }
     [JsonPropertyName("minId")] private int MinId { get; set; }
     [JsonPropertyName("maxId")] private int MaxId { get; set; }
-    [JsonPropertyName("dbcSignal")] public List<DbcSignal> DbcSignals { get; init; } = [];
+    // A project file sets this on load: index it there, or a reopened ECU decodes nothing
+    [JsonPropertyName("dbcSignal")] public List<DbcSignal> DbcSignals { get; init { field = value; RebuildIndex(); UpdateIdRange(); } } = [];
 
     // Id -> signals on that message, so Read() is O(1) per frame instead of scanning all
     // (a full GM DBC has ~2500 signals and the HS bus is busy).
@@ -59,10 +60,10 @@ public class DbcDevice : IDevice
     }
 
     [JsonConstructor]
-    public DbcDevice(string name, int id)
+    public DbcDevice(string name, int baseId)   // parameter names bind to the saved properties on load
     {
         Name = name;
-        BaseId = id;
+        BaseId = baseId;
         Guid =  Guid.NewGuid();
     }
     

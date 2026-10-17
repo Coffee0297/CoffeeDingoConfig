@@ -71,7 +71,9 @@ export async function addCanInputFromFrame(api, consumerGuid, frame) {
   const f = await api.functions(consumerGuid)
   // Idempotent: a CAN input already decoding this exact frame slice is reused, so clicking the same remote
   // signal twice (or from two pickers) doesn't pile up duplicates ("ignition" ×5 in every list).
-  const same = (f?.canInputs ?? []).find((x) => x.enabled && x.id === frame.id && !!x.ide === !!frame.ide && x.startBit === frame.startBit && x.bitLength === frame.length)
+  // A 1-bit input is read through its State, so only one that reads "on when not 0" is the same signal.
+  const same = (f?.canInputs ?? []).find((x) => x.enabled && x.id === frame.id && !!x.ide === !!frame.ide && x.startBit === frame.startBit && x.bitLength === frame.length
+    && (frame.length !== 1 || (x.operator === 1 && !x.operand)))
   if (same) {
     const ins0 = await api.inputs(consumerGuid).catch(() => [])
     return { number: same.number, name: same.name, reused: true,

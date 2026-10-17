@@ -47,6 +47,9 @@ test('picking another module\'s signal fills the frame fields and saves them', a
   const errors = watchErrors(page)
   await withCan(29, async () => {
     await openCan(page, 29)
+    // a fresh input starts on the ECU file when the project has one, else on another module
+    const ecu = (await apiJson('GET', '/api/devices')).some((d) => /dbc/i.test(d.type))
+    if (ecu) await page.getByRole('radio', { name: 'Another module' }).click()
     await expect(page.getByRole('radio', { name: 'Another module' })).toBeChecked()
     await pickSelect(page, 'Module', 'PDM-02')
     await page.getByTestId('search').fill('TotalCurrent')
@@ -113,8 +116,8 @@ test('timeout: switch and delay are saved', async ({ page }) => {
 test('DBC source without a file explains what to do and offers Import', async ({ page }) => {
   await openCan(page, 32)
   await page.getByRole('radio', { name: /ECU \(DBC file\)/ }).click()
-  const hasDbc = await page.getByTestId('dbc-row').count().catch(() => 0)
-  if (!hasDbc) await expect(page.getByText('No ECU file imported yet')).toBeVisible()
+  // the project's ECU signals, or (no ECU yet) what to do
+  await expect(page.getByTestId('dbc-row').first().or(page.getByText('No ECU file imported yet'))).toBeVisible()
   await expect(page.getByTestId('import-dbc')).toBeVisible()
 })
 

@@ -13,6 +13,14 @@ async function openMenu(page) {
   await expect(menu(page)).toBeVisible()
 }
 const stamp = () => 'zz-e2e-' + Date.now().toString(36)
+// the files these tests saved would otherwise pile up in the user's project list
+test.afterAll(async () => {
+  const p = await apiJson('GET', '/api/project').catch(() => null)
+  if (!p?.dir) return
+  // older than 10 min only: another worker may still be using the file it just saved
+  for (const f of fs.readdirSync(p.dir)) if (/^zz-e2e-.*\.json$/.test(f) && f !== p.current)
+    try { if (Date.now() - fs.statSync(`${p.dir}/${f}`).mtimeMs > 600_000) fs.unlinkSync(`${p.dir}/${f}`) } catch { /* in use */ }
+})
 
 test('the menu shows the project name, module count and the four file actions', async ({ page }) => {
   const errors = watchErrors(page)
