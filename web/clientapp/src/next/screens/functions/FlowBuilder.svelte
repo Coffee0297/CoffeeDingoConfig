@@ -129,6 +129,7 @@
     pushUndo({ label, groupsPrev: prev })
   }
   function replace(s) {
+    sugOpen = false   // the canvas shows the new group, with its own strip
     const g = makeGroup(s)
     setGroups({ groups: [...gdata.groups, g], dismissed: gdata.dismissed }, `Group ${g.name}`)
     lastGroup = g.id
@@ -136,6 +137,7 @@
     toast(`${s.members.length} blocks shown as the ${g.name} ${kindWord(g.kind)}. Nothing on ${devName} changed.`, 'info', 4000)
   }
   function replaceAll() {
+    sugOpen = false
     const add = suggestions.map(makeGroup)
     if (!add.length) return
     setGroups({ groups: [...gdata.groups, ...add], dismissed: gdata.dismissed }, `Group ${add.length} suggestions`)
@@ -148,7 +150,7 @@
   }
   const activeSug = $derived(suggestions[0] ?? null)
   const sugText = (s) => (s.members.length > 1 ? s.members.length + ' blocks match the ' : '1 block matches the ') + recipe(s.recipe)?.name + ' ' + kindWord(recipe(s.recipe)?.kind)
-  const matchSet = $derived(new Set(activeSug?.members ?? []))
+  const matchSet = $derived(new Set(sugOpen ? activeSug?.members ?? [] : []))   // highlighted only while the list is open
   const lastG = $derived(groups.find((g) => g.id === lastGroup) ?? null)
 
   // ---- cross-module links ----
@@ -360,7 +362,10 @@
   function onedgeclick({ edge }) { selEdge = edge.data?.link ? null : edge }
 
   // ---- add / remove ----
-  let addOpen = $state(false)
+  let addOpen = $state(untrack(() => query?.add) === '1')   // "Blank function" on Add function lands here
+  // Simulate on the function list opens the function's page with the simulator running
+  let simAsked = untrack(() => query?.sim === '1')
+  $effect(() => { if (simAsked && model && !lv.sim) { simAsked = false; untrack(startSim) } })
   let remoteOpen = $state(false)
   let sheetOpen = $state(false)
   async function addBlock(it) {
@@ -504,6 +509,7 @@
     <StateDot tone={mstate.key} shape={mstate.shape} label={mstate.word} />
     <span class="grow"></span>
     <Segmented label="Builder view" items={[{ value: 'canvas', label: 'Canvas' }, { value: 'sentence', label: 'Sentence view' }]} bind:value={view} size="sm" />
+    {#if suggestions.length && !lv.sim}<Button size="sm" onclick={() => (sugOpen = !sugOpen)} aria-expanded={sugOpen} title="Patterns here that match a function or helper block" data-testid="tool-sug">Suggestions · {suggestions.length}</Button>{/if}
     <Button size="sm" onclick={() => (palOpen = !palOpen)} aria-pressed={palOpen} data-testid="tool-palette">{palOpen ? 'Hide' : 'Show'} block list</Button>
     <Button size="sm" onclick={() => (addOpen = true)} data-testid="tool-add">+ Add</Button>
     <Button size="sm" onclick={tidy} disabled={view !== 'canvas'}>Tidy</Button>
@@ -553,23 +559,16 @@
 
     <section class="stage" aria-label={view === 'canvas' ? 'Canvas' : 'Sentence view'}>
       {#if lv.sim}<div class="simbar" role="status">Simulating: nothing is sent to the car. Change inputs on the right; values and wires update.</div>{/if}
-      {#if activeSug && !lv.sim}
-        <div class="sug" role="region" aria-label="Suggestion">
-          <div class="sline">
-            <button type="button" class="stag" aria-expanded={sugOpen} onclick={() => (sugOpen = !sugOpen)} data-testid="sug-toggle"
-              title="Patterns that match a function or helper block. Replacing only groups them on the canvas; the module runs the same blocks.">{suggestions.length} suggestion{suggestions.length === 1 ? '' : 's'} {sugOpen ? '▾' : '▸'}</button>
-            <span class="st" title={activeSug.why}><strong>{sugText(activeSug)}.</strong></span>
-            <span class="sb"><Button size="sm" variant="primary" onclick={() => replace(activeSug)} data-testid="sug-replace">Replace with {kindWord(recipe(activeSug.recipe)?.kind)}</Button>
-            <Button size="sm" variant="ghost" onclick={() => dismiss(activeSug)} data-testid="sug-dismiss">Not now</Button></span>
-          </div>
-          {#if sugOpen}
-            <p class="muted swhy">{activeSug.why} Replacing only groups them; the module runs the same blocks.</p>
-            {#each suggestions.slice(1) as s (s.key)}
-              <div class="sline more"><span class="st" title={s.why}>{sugText(s)}. <span class="muted">{s.why}</span></span>
-                <span class="sb"><Button size="sm" onclick={() => replace(s)}>Replace</Button><Button size="sm" variant="ghost" onclick={() => dismiss(s)}>Not now</Button></span></div>
-            {/each}
-            {#if suggestions.length > 1}<div class="sline more"><span class="st"></span><Button size="sm" onclick={replaceAll}>Replace all ({suggestions.length})</Button></div>{/if}
-          {/if}
+      {#if sugOpen && !lv.sim}
+        <div class="sug pop" role="region" aria-label="Suggestion">
+          <p class="muted swhy">Patterns here that match a function or helper block. Replacing only groups them on the canvas; the module runs the same blocks.</p>
+          {#each suggestions as s, i (s.key)}
+            <div class="sline"><span class="st" title={s.why}><strong>{sugText(s)}.</strong> <span class="muted">{s.why}</span></span>
+              <span class="sb"><Button size="sm" variant={i ? 'secondary' : 'primary'} onclick={() => replace(s)} data-testid={i ? undefined : 'sug-replace'}>Replace</Button>
+              <Button size="sm" variant="ghost" onclick={() => dismiss(s)} data-testid={i ? undefined : 'sug-dismiss'}>Not now</Button></span></div>
+          {:else}<p class="muted">No suggestions left on {devName}.</p>
+          {/each}
+          {#if suggestions.length > 1}<div class="sline"><span class="st"></span><Button size="sm" onclick={replaceAll}>Replace all ({suggestions.length})</Button></div>{/if}
         </div>
       {/if}
       {#if lastG && !lv.sim}
@@ -672,6 +671,7 @@
   .sug { display: flex; flex-direction: column; gap: 2px; padding: 2px 10px; border-bottom: 1px solid var(--color-line); background: var(--color-surface); }
   .sug.used { flex-direction: row; align-items: center; gap: 10px; min-height: 40px; }
   .sline { display: flex; align-items: center; gap: 10px; min-height: 36px; }
+  .sug.pop { border: 1px solid var(--color-line-strong); border-radius: var(--radius-md); padding: 8px 12px; position: absolute; top: 8px; right: 8px; z-index: 6; width: min(560px, calc(100% - 16px)); max-height: 60%; overflow: auto; box-shadow: var(--shadow-2); }
   .sline.more { padding-left: 4px; }
   .swhy { font-size: 13px; margin: 0; }
   .stag { flex: none; font-size: 11px; font-weight: 700; padding: 3px 8px; border-radius: 6px; border: 0; background: var(--color-accent); color: var(--color-on-accent); white-space: nowrap; }

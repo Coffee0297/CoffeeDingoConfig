@@ -4,6 +4,7 @@
 import { test, expect } from '@playwright/test'
 import { open, watchErrors } from './helpers.js'
 import { apiJson, deviceByName, waitFor } from './api.js'
+import { putOutput } from './b-helpers.js'
 
 const PFX = 'c1-'
 
@@ -116,16 +117,15 @@ test.describe('function list', () => {
     expect(errors).toEqual([])
   })
 
-  test('hand-built functions open in the builder; their change buttons are disabled with a reason', async ({ page }) => {
+  test('hand-built functions open in the builder and have every action a template has', async ({ page }) => {
     const errors = watchErrors(page)
     await open(page, 'functions')
     await row(page, 'Low Beam').getByRole('button', { name: /Low Beam/ }).click()
     const panel = page.getByTestId('fn-panel')
     await expect(panel.getByText(/Built by hand/)).toBeVisible()
-    for (const b of ['Simulate', 'Duplicate', 'Disable function']) await expect(panel.getByRole('button', { name: new RegExp(b) })).toBeDisabled()
-    await expect(panel.getByRole('button', { name: 'Remove' })).toHaveCount(0)
-    await expect(panel.getByText(/Hand-built blocks are changed in the flow builder/)).toBeVisible()
-    await expect(row(page, 'Low Beam').getByRole('switch')).toBeDisabled()
+    for (const b of ['Duplicate', 'Disable function', 'Remove']) await expect(panel.getByRole('button', { name: new RegExp(b) })).toBeEnabled()
+    expect(await panel.getByTestId('fn-simulate').getAttribute('href')).toMatch(/fn=Low\+Beam.*&sim=1$/)
+    await expect(row(page, 'Low Beam').getByRole('switch')).toBeEnabled()
     // the row link and the panel button both open the function's own page: its outputs and what feeds them
     const pdm = await deviceByName('PDM-02')
     const link = row(page, 'Low Beam').getByRole('link', { name: /Open Low Beam in the flow builder/ })
@@ -160,6 +160,67 @@ test.describe('function list', () => {
   })
 })
 
+test('a hand-built function: disable and enable it, duplicate it onto a spare output, remove the copy @exclusive', async ({ page }) => {
+  test.setTimeout(300_000)
+  const errors = watchErrors(page)
+  const p2 = await deviceByName('PDM-02')
+  const ARRS = { virtualInputs: 'virtualinput', conditions: 'condition', counters: 'counter', flashers: 'flasher', timers: 'timer', tables: 'table', maths: 'math' }
+  const before = await apiJson('GET', `/api/devices/${p2.guid}/functions`)
+  const outsBefore = JSON.parse(JSON.stringify(p2.outputs))
+  const out = async (n) => (await deviceByName('PDM-02')).outputs.find((o) => o.number === n)
+  const panel = page.getByTestId('fn-panel')
+  try {
+    await open(page, 'functions')
+    const low = row(page, 'Low Beam')
+    await low.getByRole('button', { name: /Low Beam/ }).click()
+    // disable: the outputs switch off; the row stays and says so; enable asks first
+    await panel.getByRole('button', { name: 'Disable function' }).click()
+    await expect(low.locator('.st')).toHaveText(/disabled/, { timeout: 30_000 })
+    await panel.getByRole('button', { name: 'Enable function' }).click()
+    await page.getByTestId('confirm-on').click()
+    await expect(low.locator('.st')).not.toHaveText(/disabled/, { timeout: 30_000 })
+    // duplicate onto the spare PDM-02 o8: copied blocks drive it, the original is untouched
+    await panel.getByTestId('fn-duplicate').click()
+    await page.getByTestId('dup-output').click()
+    await page.getByRole('option', { name: /PDM-02 · OUT8/ }).click()
+    await page.getByTestId('dup-name').fill('c1-low copy')
+    await page.getByTestId('dup-go').click()
+    await waitFor(async () => { const o = await out(8); return o.enabled && o.inputVal > 0 }, 30_000, 'o8 driven by the copy')
+    const lowOut = outsBefore.find((o) => /low beam/i.test(o.name))
+    expect((await out(lowOut.number)).inputVal).toBe(lowOut.inputVal)
+    const vars = await apiJson('GET', `/api/devices/${p2.guid}/inputs`)
+    const o8in = (await out(8)).inputVal
+    const drv = vars.find((v) => v.index === o8in)
+    // a logic block driving it is copied into a new slot; an input or CAN input it reads is shared
+    const orig = vars.find((v) => v.index === lowOut.inputVal)
+    if (['virtualinput', 'condition', 'counter', 'flasher', 'timer', 'table', 'math'].includes(orig.kind)) expect([drv.kind, drv.number]).not.toEqual([orig.kind, orig.number])
+    else expect(o8in).toBe(lowOut.inputVal)
+    const copy = row(page, 'c1-low copy')
+    await expect(copy).toBeVisible({ timeout: 30_000 })
+    // remove the copy: o8 switched off and unwired, the original still runs
+    await copy.getByRole('button', { name: /c1-low copy/ }).click()
+    await panel.getByRole('button', { name: 'Remove' }).click()
+    await page.getByTestId('confirm-remove').click()
+    await expect(copy).toHaveCount(0, { timeout: 30_000 })
+    await waitFor(async () => { const o = await out(8); return !o.enabled && !o.inputVal }, 30_000, 'o8 free again')
+    expect((await out(lowOut.number)).inputVal).toBe(lowOut.inputVal)
+  } finally {
+    const now = await apiJson('GET', `/api/devices/${p2.guid}/functions`)
+    for (const [arr, kind] of Object.entries(ARRS))
+      for (const r of before[arr] ?? []) {
+        const c = (now[arr] ?? []).find((x) => x.number === r.number)
+        if (c && JSON.stringify(c) !== JSON.stringify(r)) await apiJson('POST', `/api/devices/${p2.guid}/function/${kind}/${r.number}`, r).catch(() => {})
+      }
+    const live = await deviceByName('PDM-02')
+    for (const o of outsBefore) {
+      const c = live.outputs.find((x) => x.number === o.number)
+      if (['enabled', 'inputVal', 'name'].some((k) => c?.[k] !== o[k])) await putOutput(p2.guid, o).catch(() => {})
+    }
+    await apiJson('POST', `/api/devices/${p2.guid}/writeall`, undefined, 60_000).catch(() => {})
+  }
+  expect(errors).toEqual([])
+})
+
 test.describe('add function', () => {
   test('cards, chips, search, badges and the disabled ones', async ({ page }) => {
     const errors = watchErrors(page)
@@ -183,7 +244,7 @@ test.describe('add function', () => {
     await expect(page.getByText('No function matches')).toBeVisible()
     await page.getByTestId('tpl-search').fill('')
     // blank function is visibly not available; the ignition card opens the ignition setup (firmware 5.6)
-    await expect(page.getByRole('button', { name: /Blank function/ })).toBeDisabled()
+    expect(await page.getByTestId('tpl-blank').getAttribute('href')).toMatch(/functions\/flow\/[0-9a-f-]{36}\?add=1$/)
     await expect(page.getByRole('link', { name: 'Ignition & start button' })).toHaveAttribute('href', /power\/ignition/)
     // a card opens the wizard
     await page.getByRole('link', { name: 'Headlights', exact: true }).click()

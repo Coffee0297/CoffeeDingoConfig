@@ -5,9 +5,11 @@
   import { fnHref } from './model.svelte.js'
   import { templateByKey, ago } from './catalog.js'
 
-  let { row, st, busy = false, onremove, onturn } = $props()
+  let { row, st, busy = false, onremove, onturn, onduplicate } = $props()
   const tpl = $derived(row.inst ? templateByKey(row.inst.key) : null)
-  const turnWhy = $derived(!row.inst ? 'Hand-built blocks cannot be disabled here: change them in the flow builder.' : !st.known ? 'The module is not live.' : '')
+  const turnWhy = $derived(!st.known ? 'The module is not live.' : '')
+  // Simulate opens the function's own page with the simulator running
+  const simHref = $derived(fnHref(row) + '&sim=1')
 </script>
 
 <aside class="pn" aria-label="Selected function" data-testid="fn-panel">
@@ -25,19 +27,17 @@
   </p>
   <div class="acts">
     <Button variant="primary" href={fnHref(row)}>Open in builder</Button>
-    <Button disabled title="Simulate lands with the flow builder" aria-label="Simulate (not available yet: the simulator comes with the flow builder)">Simulate</Button>
+    <Button href={simHref} data-testid="fn-simulate">Simulate</Button>
     {#if row.inst}
       <Button href={href('functions', 'setup', row.inst.key, { edit: row.inst.id })} disabled={busy}>Change settings</Button>
       <Button href={href('functions', 'setup', row.inst.key, { from: row.inst.id })} disabled={busy}>Duplicate</Button>
-      <Button disabled={busy || !!turnWhy} onclick={() => onturn(st.enabled)}>{st.enabled ? 'Disable function' : 'Enable function'}</Button>
-      <Button variant="danger" disabled={busy} onclick={onremove}>Remove</Button>
     {:else}
-      <Button disabled aria-label="Duplicate (not available: hand-built blocks cannot be copied here)">Duplicate</Button>
-      <Button disabled aria-label="Disable function (not available: hand-built blocks)">Disable function</Button>
+      <Button disabled={busy} onclick={onduplicate} data-testid="fn-duplicate">Duplicate</Button>
     {/if}
+    <Button disabled={busy || !!turnWhy} onclick={() => onturn(st.enabled)}>{st.enabled ? 'Disable function' : 'Enable function'}</Button>
+    <Button variant="danger" disabled={busy} onclick={onremove}>Remove</Button>
   </div>
-  {#if !row.inst}<p class="muted note">Duplicate, disable and remove work on functions made from a template. Hand-built blocks are changed in the flow builder.</p>{/if}
-  {#if turnWhy && row.inst}<p class="muted note">{turnWhy}</p>{/if}
+  {#if turnWhy}<p class="muted note">{turnWhy}</p>{/if}
 </aside>
 
 <style>

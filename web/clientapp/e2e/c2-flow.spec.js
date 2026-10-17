@@ -349,7 +349,10 @@ test('suggestion banner: Replace groups blocks (a record on the server), Open in
     await apiJson('PUT', `/api/groups/${cb1.guid}`, { groups: [], dismissed: [] })
     await openFlow(page, 'CB-1')
     await expect(page.getByTestId('canvas').locator('.svelte-flow__node').first()).toBeVisible({ timeout: 15_000 })
+    // suggestions wait behind a toolbar button instead of covering the canvas
     const sug = page.getByRole('region', { name: 'Suggestion' })
+    await expect(sug).toHaveCount(0)
+    await page.getByTestId('tool-sug').click()
     await expect(sug).toContainText('Ready to start')
     await page.getByTestId('sug-replace').click()
     const grp = page.locator('.svelte-flow__node[data-id^="grp:"]')
@@ -365,6 +368,7 @@ test('suggestion banner: Replace groups blocks (a record on the server), Open in
     await settle(page)
     await page.getByTestId('tool-undo').click()   // undo the grouping
     await expect(grp).toHaveCount(0)
+    if (!(await sug.count())) await page.getByTestId('tool-sug').click()
     await expect(sug).toContainText('Ready to start')
     await page.getByTestId('sug-dismiss').click()
     await expect(sug).not.toContainText('Ready to start')

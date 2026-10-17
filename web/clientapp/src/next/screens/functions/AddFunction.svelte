@@ -1,9 +1,9 @@
 <script>
+  import { live, isPdm, isCanboard } from '../../lib/live.svelte.js'
   // Add a function: every ready-made template as a card (what it does, what it needs). Picking one opens the
   // setup wizard. "in use" comes from the applied templates; the cards come from templates.js.
   import { Page, PageHeader, Button, Chip, FwBadge, Empty } from '../../ui/index.js'
   import { has56 } from '../power/parts/ignition.js'
-  import { live } from '../../lib/live.svelte.js'
   import { href } from '../../router.svelte.js'
   import { TEMPLATES } from '../../../lib/templates.js'
   import { templateInstances, syncTemplates } from '../../../lib/store.js'
@@ -31,6 +31,7 @@
     return w.every((x) => hay.includes(x))
   }))
   const chips = $derived([{ key: 'all', name: 'All', n: cards.length }, ...SYSTEMS.map((s) => ({ key: s.key, name: s.name, n: cards.filter((c) => c.system === s.key).length })).filter((c) => c.n)])
+  const blankMod = $derived(live.devices.find(isPdm) ?? live.devices.find(isCanboard))
 </script>
 
 <Page wide>
@@ -38,7 +39,8 @@
     subtitle="Pick what the car should do. Every one is built from ordinary blocks you can open and change later.">
     {#snippet actions()}
       <input class="nx-input srch" type="search" bind:value={q} placeholder="fan, wipers, start button…" aria-label="Search templates" data-testid="tpl-search" />
-      <Button disabled aria-label="Blank function (not available yet: the backend keeps no function record)" title="Not available yet: the backend keeps no function record for an empty function">Blank function</Button>
+      <!-- a blank function: the flow builder of the first PDM with Add open; pick another module there -->
+      <Button href={blankMod ? href('functions', 'flow', blankMod.guid, { add: '1' }) : href('functions', 'flow')} title="Start from an empty canvas: add blocks and wire them to an output" data-testid="tpl-blank">Blank function</Button>
     {/snippet}
   </PageHeader>
 

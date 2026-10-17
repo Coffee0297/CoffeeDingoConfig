@@ -588,3 +588,47 @@ test('cross-module function: a CB-1 switch blinks an output on two PDMs on the S
   } finally { await simSwitch('CB-1.di5', false); await restore(snap) }
   expect(errors).toEqual([])
 })
+
+// ---------------------------------------------------------------- hand-built Duplicate copies the blocks
+test('a hand-built function duplicated onto a spare output gets its own copy of the blocks; removing the copy frees them @exclusive', async ({ page }) => {
+  const errors = watchErrors(page)
+  const snap = await snapshot(['PDM-04'])
+  const pdm = snap[0].d
+  const orig = pdm.outputs.find((o) => o.name === 'Left Reverse Light')
+  const vmap = await vars(pdm.guid)
+  const drv = vmap.find((v) => v.index === orig.inputVal)   // the "Reverse" combine block
+  const out2 = async () => (await deviceByName('PDM-04')).outputs.find((o) => o.number === 2)
+  try {
+    await open(page, 'functions')
+    await page.addStyleTag({ content: '.tw { pointer-events: none }' })
+    const panel = page.getByTestId('fn-panel')
+    await page.getByTestId('fn-search').fill('Reverse Light')
+    await page.locator('[data-testid=fn-row]').filter({ hasText: 'Reverse Light' }).first().getByRole('button').first().click()
+    await panel.getByTestId('fn-duplicate').click()
+    await page.getByTestId('dup-output').click()
+    await page.getByRole('option', { name: /PDM-04 · OUT2/ }).click()
+    await page.getByTestId('dup-name').fill('c4 reverse copy')
+    await page.getByTestId('dup-go').click()
+    await waitFor(async () => (await out2()).enabled && (await out2()).inputVal > 0, 30_000, 'o2 driven by the copy')
+    const now = await vars(pdm.guid)
+    const o2in = (await out2()).inputVal
+    const cv = now.find((v) => v.index === o2in)
+    expect(cv.kind).toBe(drv.kind)
+    expect(cv.number).not.toBe(drv.number)   // its own block…
+    const f = await fns(pdm.guid)
+    const a = f.virtualInputs.find((x) => x.number === drv.number), b = f.virtualInputs.find((x) => x.number === cv.number)
+    expect([b.var0, b.var1, b.var2, b.cond0, b.cond1, b.not0, b.not1]).toEqual([a.var0, a.var1, a.var2, a.cond0, a.cond1, a.not0, a.not1])   // …reading the same inputs
+    expect(b.name).toBe(a.name + ' copy')
+    // remove the copy: o2 free again, the copied block switched off, the original untouched
+    await page.getByTestId('fn-search').fill('c4 reverse copy')
+    await page.locator('[data-testid=fn-row]').filter({ hasText: 'c4 reverse copy' }).first().getByRole('button').first().click()
+    await panel.getByRole('button', { name: 'Remove' }).click()
+    await page.getByTestId('confirm-remove').click()
+    await waitFor(async () => !(await out2()).enabled && !(await out2()).inputVal, 30_000, 'o2 free again')
+    const g = await fns(pdm.guid)
+    expect(g.virtualInputs.find((x) => x.number === cv.number).enabled).toBe(false)
+    expect(g.virtualInputs.find((x) => x.number === drv.number).enabled).toBe(true)
+    expect((await deviceByName('PDM-04')).outputs.find((o) => o.number === orig.number).inputVal).toBe(orig.inputVal)
+  } finally { await restore(snap) }
+  expect(errors).toEqual([])
+})

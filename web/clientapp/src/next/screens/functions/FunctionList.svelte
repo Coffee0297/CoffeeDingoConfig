@@ -1,9 +1,11 @@
 <script>
   // Functions: what the car does, grouped by system. Applied templates are "function blocks"; every other
   // enabled output is read from the module blocks (helper / blocks / custom code). Live state comes from the
-  // 10 Hz telemetry. Remove / turn off / duplicate work on applied templates; the rest opens the flow builder.
+  // 10 Hz telemetry. Remove / turn off / duplicate work on every function: a template's through its record, a
+  // hand-built one on its outputs and the blocks that feed them (parts/handbuilt.js).
   import { untrack } from 'svelte'
-  import { Page, PageHeader, Button, Chip, Banner, Empty, Dialog } from '../../ui/index.js'
+  import { Page, PageHeader, Button, Chip, Banner, Empty, Dialog, Select, Field } from '../../ui/index.js'
+  import { spareOutputs } from './parts/handbuilt.js'
   import { live } from '../../lib/live.svelte.js'
   import { href } from '../../router.svelte.js'
   import { templateInstances } from '../../../lib/store.js'
@@ -17,10 +19,19 @@
 
   let q = $state(''), chip = $state('all'), selectedId = $state('')
   let confirmRemove = $state(false), confirmOn = $state(false)
+  // Duplicate of a hand-built function: a spare output and a name
+  let dup = $state(null)
+  function askDuplicate() { const r = selected; const spares = spareOutputs(r); dup = { row: r, spares, target: spares[0] ? spares[0].guid + '|' + spares[0].n : '', name: r.name + ' 2' } }
+  async function doDuplicate() {
+    const d = dup, t = d.spares.find((x) => x.guid + '|' + x.n === d.target)
+    dup = null
+    if (t && (await M.duplicate(d.row, t, d.name.trim() || d.row.name + ' 2'))) selectedId = ''
+  }
 
   // reload when modules appear / disappear or the applied list changes (an agent may apply templates too)
   // (derived values only notify when they change; reading live.devices in the effect would re-run it at 10 Hz)
-  const modKey = $derived(live.devices.map((d) => d.guid + d.connected).join())
+  // and when an output's name, driver or on/off changes (an edit here or anywhere else lands on the next poll)
+  const modKey = $derived(live.devices.map((d) => d.guid + d.connected + (d.outputs ?? []).map((o) => `${o.name}|${o.inputVal}|${o.enabled}`).join()).join())
   $effect(() => { modKey; $templateInstances; if (modKey) untrack(() => M.load()) })
   $effect(() => { untrack(() => M.syncTemplates()) })
 
@@ -49,7 +60,7 @@
   const breakdown = $derived(`On ${moduleCount} modules. Made of ${kinds('fn')} from templates, ${kinds('helper')} helpers, ${kinds('blocks')} groups of blocks and ${kinds('lua')} custom code (Lua).`)
 
   async function turn(row, enable) { if (enable) { confirmOn = true; return } await M.setEnabled(row, false) }
-  async function doRemove() { const r = selected; confirmRemove = false; if (r?.inst) await M.remove(r) }
+  async function doRemove() { const r = selected; confirmRemove = false; if (r) await M.remove(r) }
   async function doOn() { const r = selected; confirmOn = false; if (r) await M.setEnabled(r, true) }
 </script>
 
@@ -99,18 +110,31 @@
         {/each}
       </div>
       {#if selected}
-        <FunctionPanel row={selected} st={states[selected.id]} busy={m.busy} onremove={() => (confirmRemove = true)} onturn={(enabled) => turn(selected, !enabled)} />
+        <FunctionPanel row={selected} st={states[selected.id]} busy={m.busy} onremove={() => (confirmRemove = true)} onturn={(enabled) => turn(selected, !enabled)} onduplicate={askDuplicate} />
       {/if}
     </div>
   {/if}
 </Page>
 
 <Dialog bind:open={confirmRemove} title={`Remove “${selected?.name ?? ''}”?`} description="This changes the modules right away.">
-  <p>Its blocks are switched off and its outputs go back to what they did before. Other functions are not touched.</p>
+  <p>{selected?.inst ? 'Its blocks are switched off and its outputs go back to what they did before.' : 'Its outputs are switched off and unwired, and the blocks only it uses are switched off. Inputs and blocks other functions also use stay.'} Other functions are not touched.</p>
   <p class="muted">If a module is off the bus, the change is kept in the project and sent when it is back (Apply).</p>
   {#snippet footer()}
     <Button onclick={() => (confirmRemove = false)}>Cancel</Button>
     <Button variant="danger" onclick={doRemove} data-testid="confirm-remove">Remove function</Button>
+  {/snippet}
+</Dialog>
+
+<Dialog open={!!dup} onclose={() => (dup = null)} title={`Duplicate “${dup?.row.name ?? ''}”`} description="Its blocks are copied into free slots and drive a spare output. The inputs it reads are shared.">
+  {#if dup?.spares.length}
+    <Select label="Spare output" items={dup.spares.map((x) => ({ value: x.guid + '|' + x.n, label: x.label }))} bind:value={dup.target} data-testid="dup-output" />
+    <Field label="Name" bind:value={dup.name} data-testid="dup-name" />
+  {:else}
+    <p>No spare output on {dup?.row.modules.join(', ')}: every output is in use or switched on. Free one on its Hardware page first.</p>
+  {/if}
+  {#snippet footer()}
+    <Button onclick={() => (dup = null)}>Cancel</Button>
+    <Button variant="primary" disabled={!dup?.target} onclick={doDuplicate} data-testid="dup-go">Duplicate</Button>
   {/snippet}
 </Dialog>
 

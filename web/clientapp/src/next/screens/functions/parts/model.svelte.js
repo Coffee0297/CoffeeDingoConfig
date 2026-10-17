@@ -10,6 +10,7 @@ import { live, api, mutate } from '../../../lib/live.svelte.js'
 import { templateInstances, syncTemplates } from '../../../../lib/store.js'
 import { isMod, isCb, undoTemplate, binBody } from '../../../../lib/apply.js'
 import { pinFor } from '../../../../lib/pinmap.js'
+import { removeHandBuilt, duplicateHandBuilt } from './handbuilt.js'
 import { templateByKey, templateSystem, outputSystem, functionName, remoteText, systemName } from './catalog.js'
 import { isInput, blank } from '../../../../lib/templates.js'
 
@@ -43,7 +44,7 @@ export function createModel() {
 
   /** Outputs of the module as {number, name, input (var index), enabled}. */
   function outsOf(p) {
-    return isCb(p.d) ? (p.f?.digitalOut ?? []).map((o) => ({ number: o.number, name: o.name, input: o.enabled ? o.input : 0, enabled: !!o.enabled }))
+    return isCb(p.d) ? (p.f?.digitalOut ?? []).map((o) => ({ number: o.number, name: o.name, input: o.input ?? 0, enabled: !!o.enabled }))
       : (p.d.outputs ?? []).map((o) => ({ number: o.number, name: o.name, input: o.inputVal ?? 0, enabled: o.enabled !== false }))
   }
 
@@ -82,7 +83,8 @@ export function createModel() {
     const groups = new Map()
     for (const p of Object.values(info)) {
       for (const o of outsOf(p)) {
-        if (!o.enabled || !(o.input > 0) || taken.has(`${p.d.guid}:${o.number}`)) continue
+        // a switched-off output that still has its driver is a disabled function (Enable puts it back)
+        if (!(o.input > 0) || taken.has(`${p.d.guid}:${o.number}`)) continue
         const v = p.vars.find((x) => x.index === o.input)
         const driver = v?.kind === 'lua' ? 'lua' : ['sys', 'input', 'analoginput', 'caninput'].includes(v?.kind) ? 'helper' : 'blocks'
         const label = functionName(o.name), key = outputSystem(o.name) + '|' + label.toLowerCase()
@@ -143,18 +145,32 @@ export function createModel() {
     } finally { m.busy = false }
   }
 
-  /** Remove an applied function: its blocks are disabled and its outputs put back as they were. */
+  /** Remove a function: a template's blocks are undone; a hand-built one's outputs and own blocks are switched off. */
   async function remove(row) {
     m.busy = true
     try {
-      const others = get(templateInstances).filter((i) => i.id !== row.inst.id)
-      const ok = await mutate(async () => { await undoTemplate(api, live.devices, row.inst, others); templateInstances.set(others); return true }, `Removed “${row.name}”.`)
+      const others = get(templateInstances).filter((i) => i.id !== row.inst?.id)
+      const ok = await mutate(async () => {
+        if (row.inst) { await undoTemplate(api, live.devices, row.inst, others); templateInstances.set(others) }
+        else await removeHandBuilt(row)
+        return true
+      }, `Removed “${row.name}”.`)
       await load()
       return !!ok
     } finally { m.busy = false }
   }
 
-  return { m, load, stateOf, setEnabled, remove, syncTemplates }
+  /** Copy a hand-built function onto a spare output (`target` from spareOutputs). */
+  async function duplicate(row, target, name) {
+    m.busy = true
+    try {
+      const ok = await mutate(async () => { const n = await duplicateHandBuilt(row, target, name); return n + 1 }, `Made “${name}”.`)
+      await load()
+      return !!ok
+    } finally { m.busy = false }
+  }
+
+  return { m, load, stateOf, setEnabled, remove, duplicate, syncTemplates }
 }
 export { systemName }
 

@@ -5,8 +5,8 @@
   import { fnHref } from './model.svelte.js'
 
   let { row, st, selected = false, busy = false, onselect, ontoggle } = $props()
-  const canToggle = $derived(!!row.inst && st.known && !row.missing)
-  const why = $derived(row.inst ? (st.known ? '' : 'Needs the module live') : 'Hand-built blocks: change them in the flow builder')
+  const canToggle = $derived(st.known && !row.missing)
+  const why = $derived(st.known ? '' : 'Needs the module live')
   const shape = $derived(st.tone === 'fault' ? 'square' : st.on ? 'dot' : 'ring')
 </script>
 
