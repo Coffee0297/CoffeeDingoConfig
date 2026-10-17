@@ -29,7 +29,7 @@ conn.on('notify', (e) => {
   const lvl = (e?.level ?? e?.Level ?? '').toString()
   const kind = lvl === 'Error' || lvl === 'Warning' ? 'error' : 'info'
   const msg = (e?.source ? e.source + ': ' : '') + (e?.message ?? e?.Message ?? '')
-  if (msg.trim()) toast(msg, kind, kind === 'error' ? 8000 : 4000)
+  if (msg.trim()) toast(msg, kind, kind === 'error' ? 8000 : 4000, kind === 'error' ? 'notify:' + (e?.source ?? '') : null)
 })
 conn.onreconnecting(() => { hubState.set('reconnecting'); telemetry.update((t) => ({ ...t, stale: true })) })
 conn.onreconnected(() => hubState.set('live'))

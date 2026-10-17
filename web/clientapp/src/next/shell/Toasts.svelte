@@ -6,7 +6,7 @@
   {#each $toasts as t (t.id)}
     <div class="t" data-kind={t.kind} role={t.kind === 'error' ? 'alert' : 'status'}>
       <span aria-hidden="true">{t.kind === 'error' ? '■' : '●'}</span>
-      <span class="m">{t.msg}</span>
+      <span class="m">{t.msg}{#if t.count > 1} <b>({t.count} messages)</b>{/if}</span>
       <button type="button" aria-label="Dismiss message" onclick={() => dismiss(t.id)}>✕</button>
     </div>
   {/each}
