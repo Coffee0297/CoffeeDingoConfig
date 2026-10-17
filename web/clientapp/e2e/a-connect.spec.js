@@ -183,9 +183,7 @@ test('the backend reconnects by itself when the link drops, and a Disconnect sta
   // a relay in front of the Sim bridge, so the test can cut the link and refuse it for a moment
   const sim = new URL(SIM_PORT.replace(/^tcp:/, 'http:'))
   const socks = new Set()
-  let refuse = false
   const relay = net.createServer((c) => {
-    if (refuse) { c.destroy(); return }
     const up = net.connect(Number(sim.port), sim.hostname)
     socks.add(c); socks.add(up)
     const end = () => { c.destroy(); up.destroy(); socks.delete(c); socks.delete(up) }
@@ -201,13 +199,13 @@ test('the backend reconnects by itself when the link drops, and a Disconnect sta
     expect((await apiJson('POST', '/api/connect', { Adapter: 'SLCAN', Port: port, Bitrate: '500K' })).ok).toBe(true)
     expect((await apiJson('GET', '/api/adapters')).last).toMatchObject({ adapter: 'SLCAN', port })
     await open(page, 'hardware')
-    // the link drops and stays down for 4 s: the top bar says the app is reconnecting
-    refuse = true
-    for (const s of [...socks]) s.destroy()
+    // the link drops and stays down for 4 s (the bridge is gone: its port refuses): the top bar says reconnecting
+    const relayPort = relay.address().port
+    await new Promise((r) => { relay.close(r); for (const s of [...socks]) s.destroy() })
     await waitFor(async () => (await apiJson('GET', '/api/adapters')).reconnecting, 10_000, 'reconnecting')
     await expect(page.getByText('Adapter lost · reconnecting…')).toBeVisible()
     await new Promise((r) => setTimeout(r, 4000))
-    refuse = false
+    await new Promise((r) => relay.listen(relayPort, '127.0.0.1', r))   // back on the same port
     await waitFor(async () => { const a = await apiJson('GET', '/api/adapters'); return a.connected && a.activePort === port }, 40_000, 'reconnected')   // the retry backoff can pass 20 s
     expect((await apiJson('GET', '/api/adapters')).reconnecting).toBe(false)
     // the user's Disconnect is not undone

@@ -27,7 +27,8 @@ test('stats match what the modules report', async ({ page }) => {
   const hot = Math.max(...d.filter((x) => x.connected).map((x) => x.temp))
   expect(Math.abs(parseFloat(await page.getByTestId('stat-temp').innerText()) - hot)).toBeLessThan(3)
   const enabled = d.flatMap((x) => x.outputs ?? []).filter((o) => o.enabled !== false)
-  await expect(page.getByTestId('stat-outputs')).toContainText(`of ${enabled.length}`)
+  const digital = d.flatMap((x) => x.digitalOut ?? []).filter((o) => o.enabled)   // a CANBoard's outputs count too
+  await expect(page.getByTestId('stat-outputs')).toContainText(`of ${enabled.length + digital.length}`)
   const worst = enabled.reduce((s, o) => s + o.currentLimit, 0)
   await expect(page.getByText(`of ${Math.round(worst)} A if every output hit its limit`)).toBeVisible()
   await expect(page.getByTestId('stat-ignition')).toHaveText(/Not set up|Off|On|Cranking|Running|—/)

@@ -190,8 +190,10 @@ test('Deploy to USB checks the board before it allows anything', async ({ page }
   await page.getByRole('button', { name: /Deploy to the module on USB/ }).click()
   await page.getByTestId('usb-check').click()
   const r = await apiJson('POST', '/api/usb/identify')
-  if (r.gatewayBaseId != null) await expect(page.getByText(`base ${hex3(r.gatewayBaseId)}`)).toBeVisible()
-  await expect(page.getByText(/Board check passed|Board check failed|could not tell what board/)).toBeVisible()
+  if (r.gatewayBaseId != null) {
+    await expect(page.getByText(`base ${hex3(r.gatewayBaseId)}`)).toBeVisible()
+    await expect(page.getByText(/Board check passed|Board check failed|could not tell what board/)).toBeVisible()
+  } else await expect(page.getByText('No module answered on USB.')).toBeVisible()   // a plain CAN adapter: nothing to deploy to
   // Deploy only enables with a passed board check on a different module than the one that is being replaced
   const dep = page.getByTestId('deploy-usb')
   if (await page.getByText('Board check passed').count()) await expect(dep).toBeEnabled()

@@ -161,9 +161,11 @@ test('Re-address how-it-works and Deploy to USB sections open', async ({ page })
   await expect(side(page).getByText('Puts this module')).toBeVisible()
   await side(page).getByTestId('usb-check').click()
   const r = await apiJson('POST', '/api/usb/identify')
-  if (r.gatewayBaseId != null) await expect(side(page).getByText(`base ${hex3(r.gatewayBaseId)}`)).toBeVisible()
-  // Deploy stays off until the board check passes; the boards are checked, not assumed
-  await expect(side(page).getByText(/Board check|could not tell what board/)).toBeVisible()
+  // Deploy stays off until the board check passes; the boards are checked, not assumed (no module on USB: it says so)
+  if (r.gatewayBaseId != null) {
+    await expect(side(page).getByText(`base ${hex3(r.gatewayBaseId)}`)).toBeVisible()
+    await expect(side(page).getByText(/Board check|could not tell what board/)).toBeVisible()
+  } else await expect(side(page).getByText('No module answered on USB.')).toBeVisible()
 })
 
 test('Rename: the inline editor validates and Cancel leaves the name alone', async ({ page }) => {
