@@ -1,4 +1,5 @@
 // Pure helpers that turn the live module list into the numbers and "needs a look" items on Car home.
+import { outputsOf } from '../../../lib/live.svelte.js'
 export const num = (v) => (Number.isFinite(v) ? v : 0)
 export const fmt1 = (v) => (Number.isFinite(v) ? v.toFixed(1) : '-')
 
@@ -15,7 +16,7 @@ export function worstCaseA(devices) {
 
 export function outputCounts(devices) {
   let on = 0, total = 0
-  for (const d of devices) for (const o of d.outputs ?? []) if (o.enabled !== false) { total++; if (isOn(o) && d.connected) on++ }
+  for (const d of devices) for (const o of outputsOf(d)) if (o.enabled !== false) { total++; if (isOn(o) && d.connected) on++ }
   return { on, total }
 }
 

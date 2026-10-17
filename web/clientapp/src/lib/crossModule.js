@@ -98,7 +98,7 @@ const hx = (n) => '0x' + Number(n).toString(16).toUpperCase()
 export function previewCrossModule(fns, devices) {
   const dev = (g) => (devices ?? []).find((d) => d.guid === g)
   const nm = (g) => dev(g)?.name ?? 'a module not in the project'
-  const outNm = (g, n) => { const o = (dev(g)?.outputs ?? []).find((x) => x.number === n); return `O${n}${o?.name?.trim() ? ' ' + o.name.trim() : ''}` }
+  const outNm = (g, n) => { const o = [...(dev(g)?.outputs ?? []), ...(dev(g)?.digitalOut ?? [])].find((x) => x.number === n); return `O${n}${o?.name?.trim() ? ' ' + o.name.trim() : ''}` }
   const mods = new Map()
   const M = (g) => { if (!mods.has(g)) mods.set(g, { guid: g, name: nm(g), steps: [], lua: '', outputs: [], errors: [] }); return mods.get(g) }
   const skipped = []

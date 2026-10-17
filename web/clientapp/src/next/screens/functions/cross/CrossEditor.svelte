@@ -7,7 +7,7 @@
   import { untrack } from 'svelte'
   import { get } from 'svelte/store'
   import { Dialog, Button, Field, Select, Stepper, Checkbox, Banner, Chip } from '../../../ui/index.js'
-  import { live, api, isPdm, isCanboard } from '../../../lib/live.svelte.js'
+  import { live, api, isPdm, isCanboard, outputsOf } from '../../../lib/live.svelte.js'
   import { crossFns, cmfIsLua, deviceHasLua, nextCmfSlot } from '../../../../lib/store.js'
   import { blankCrossFn, commitCrossFn, involvedOf, previewCrossModule, normalizeCrossFn } from '../../../../lib/crossModule.js'
   import CodeEditor from '../../expert/parts/CodeEditor.svelte'
@@ -24,8 +24,8 @@
   let f = $state(init)
 
   // live.devices is replaced on every poll: rebuild the module lists only when something we show changes
-  const devKey = $derived(live.devices.map((d) => [d.guid, d.name, d.type, d.connected, (d.outputs ?? []).map((o) => o.number + '=' + (o.name ?? '')).join(',')].join('/')).join('|'))
-  const devs = $derived.by(() => { devKey; return untrack(() => live.devices.map((d) => ({ guid: d.guid, name: d.name, type: d.type, connected: d.connected, outputs: (d.outputs ?? []).map((o) => ({ number: o.number, name: o.name })) }))) })
+  const devKey = $derived(live.devices.map((d) => [d.guid, d.name, d.type, d.connected, outputsOf(d).map((o) => o.number + '=' + (o.name ?? '')).join(',')].join('/')).join('|'))
+  const devs = $derived.by(() => { devKey; return untrack(() => live.devices.map((d) => ({ guid: d.guid, name: d.name, type: d.type, connected: d.connected, outputs: outputsOf(d).map((o) => ({ number: o.number, name: o.name })) }))) })
   const isMod = (d) => isPdm(d) || isCanboard(d)
   const mods = $derived(devs.filter(isMod))
   const dName = (g) => devs.find((d) => d.guid === g)?.name ?? 'a module not in the project'

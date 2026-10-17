@@ -380,3 +380,54 @@ test('ignition signals as rules: NOT engine running, a number above 300 OR a swi
   }
   expect(errors).toEqual([])
 })
+
+test('ignition: build the signals myself, as blocks (flow builder) or in Lua (the rules become a stub) @exclusive', async ({ page }) => {
+  test.setTimeout(240_000)
+  const errors = watchErrors(page)
+  const p1 = await deviceByName('PDM-01')
+  const fns = () => apiJson('GET', `/api/devices/${p1.guid}/functions`)
+  const before = await fns()
+  const luaBefore = (await apiJson('GET', `/api/devices/${p1.guid}/lua?stored=true`)).source ?? ''
+  try {
+    // ignition on PDM-01: switch = Always On, start = a signal, engine running = NOT a signal (a Combine helper)
+    await open(page, 'power/ignition')
+    await pick(page, 'ign-main', 'PDM-01')
+    await page.getByRole('radio', { name: /Ignition switch \+ start button/ }).check()
+    await pick(page, 'ign-switch', 'Always On')
+    await page.getByTestId('ign-start').click()
+    await page.getByRole('option').nth(2).click()
+    await page.getByTestId('ign-running').click()
+    await page.getByRole('option').nth(3).click()
+    await page.getByTestId('ign-running-not').click()
+    await page.getByTestId('ignition-save').click()
+    await waitFor(async () => (await fns()).ignition?.enabled, 30_000, 'ignition saved')
+    // blocks: the flow builder opens on PDM-01 with the Ignition block
+    await page.getByTestId('ign-self-blocks').click()
+    await expect(page).toHaveURL(/functions\/flow\/.*fn=Ignition/)
+    await expect(page.getByTestId('canvas').locator('.svelte-flow__node[data-id="ignition:1"]')).toBeVisible({ timeout: 20_000 })
+    // lua: the signals come from Lua Outs, the stub keeps the rules, the helper is freed
+    await open(page, 'power/ignition')
+    await pick(page, 'ign-main', 'PDM-01')
+    await page.getByTestId('ign-self-lua').click()
+    await expect(page).toHaveURL(/expert\/lua\//, { timeout: 120_000 })   // the Lua is uploaded and read back (~35 s)
+    const lua = (await apiJson('GET', `/api/devices/${p1.guid}/lua?stored=true`)).source
+    expect(lua).toMatch(/local function fn_ignition\(\)/)
+    expect(lua).toMatch(/setLuaOut\(\d+, \(not \(readVar\(\d+\) ~= 0\)\) and 1 or 0\)\s+-- Lua Out \d+ -> Running/)
+    expect(lua).toMatch(/fn_ignition\(\)\s*$|\n\s+fn_ignition\(\)/)
+    const f = await fns(), vmap = await apiJson('GET', `/api/devices/${p1.guid}/inputs`)
+    for (const k of ['ignitionInput', 'startInput', 'runningInput']) expect(vmap.find((v) => v.index === f.ignition[k])?.kind).toBe('lua')
+    expect(f.virtualInputs.some((v) => v.enabled && /^Ign /.test(v.name))).toBe(false)
+  } finally {
+    await apiJson('POST', `/api/devices/${p1.guid}/lua`, { Source: luaBefore }, 120_000).catch(() => {})
+    for (const d of (await devices()).filter((x) => /pdm|canboard/i.test(x.type)))
+      await apiJson('POST', `/api/devices/${d.guid}/function/ignition/1`, { enabled: false, role: 0, mainStateId: 0, ignitionInput: 0, startInput: 0, crankAllowInput: 0, runningInput: 0 }).catch(() => {})
+    const now = await fns()
+    for (const [arr, kind] of [['conditions', 'condition'], ['virtualInputs', 'virtualinput']])
+      for (const x of now[arr]) {
+        const was = before[arr].find((y) => y.number === x.number)
+        if (JSON.stringify(was) !== JSON.stringify(x)) await apiJson('POST', `/api/devices/${p1.guid}/function/${kind}/${x.number}`, was).catch(() => {})
+      }
+    await apiJson('POST', `/api/devices/${p1.guid}/writeall`, undefined, 60_000).catch(() => {})
+  }
+  expect(errors).toEqual([])
+})

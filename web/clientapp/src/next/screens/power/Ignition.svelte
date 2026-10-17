@@ -10,6 +10,7 @@
   import { remoteItems } from '../../lib/remote.js'
   import SignalRule from './parts/SignalRule.svelte'
   import { decodeRule, compileRule, ruleSet } from './parts/signalRule.js'
+  import { ignitionBlocksHref, ignitionToLua } from './parts/ignitionSelf.js'
 
   const MODES = [
     { value: 0, name: 'Ignition switch + start button', what: 'A switch (or key with only ON) powers the ignition. The button only cranks, and only while the ignition is on.' },
@@ -119,6 +120,13 @@
     if (failed.length) toast(`Ignition not saved everywhere: ${failed.join('; ')}`, 'error', 9000)
     else toast(`Ignition saved: ${main.name} is the main module${follow && followers.length ? `, ${followers.length} follow it` : ''}. Apply to car to store it.`, 'info', 5000)
   }
+  // Build the signals yourself (the Ignition block stays): its blocks in the flow builder, or Lua that feeds it
+  async function selfLua() {
+    err = ''; busy = true
+    try { location.hash = await ignitionToLua(mainGuid, rules, FIELDS, f.mode === 1 ? ['ignitionInput'] : []); project.dirty = true }
+    catch (e) { err = e?.message ?? String(e) }
+    finally { busy = false }
+  }
   async function turnOff() {
     busy = true
     for (const d of capable) if (funcsOf[d.guid]?.enabled) { try { await api.setFunction(d.guid, 'ignition', 1, { enabled: false }); funcsOf[d.guid].enabled = false } catch (e) { toast(`${d.name}: ${e?.message ?? e}`, 'error', 8000) } }
@@ -197,6 +205,10 @@
     <Button href={href('power')} data-testid="ignition-cancel">Cancel</Button>
     {#if ready && Object.values(funcsOf).some((g) => g?.enabled)}<Button variant="danger" disabled={busy} onclick={turnOff} data-testid="ignition-off">Turn ignition off</Button>{/if}
     <span class="grow"></span>
+    {#if isOn}
+      <Button href={ignitionBlocksHref(main)} title="The Ignition block and the blocks that feed it, in the flow builder" data-testid="ign-self-blocks">Build the signals myself: blocks</Button>
+      {#if main && !isCanboard(main)}<Button disabled={busy} onclick={selfLua} title="Each signal from a Lua Out; a stub doing today's rules is added to the module's Lua" data-testid="ign-self-lua">…in Lua</Button>{/if}
+    {/if}
     <Button disabled={!ready || busy} busy={busy} onclick={save} data-testid="ignition-save">Save</Button>
     <Button variant="primary" href={href('power', 'roles')} data-testid="ignition-next">Next: output roles</Button>
   </div>

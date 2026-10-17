@@ -738,8 +738,19 @@ async function cmfNativeCleanup(guid, devices) {
     const dead = new Set(vars.filter((v) => v.kind === 'caninput' && gone.includes(v.name)).map((v) => v.index))
     for (const o of (devices ?? []).find((d) => d.guid === guid)?.outputs ?? [])
       if (dead.has(o.inputVal)) await api.outputConfig(guid, _binBody(o, 0, false))
+    for (const o of f?.digitalOut ?? [])   // a CANBoard's digital outputs
+      if (o.enabled && dead.has(o.input)) await api.setFunction(guid, 'digitaloutput', o.number, { enabled: false, input: 0 })
   }
   return n
+}
+
+// Drive output `n` of module `guid` from var `v`: a PDM output keeps its protection settings, a CANBoard
+// digital output only has an input.
+async function bindTarget(devices, guid, n, v) {
+  const d = (devices ?? []).find((x) => x.guid === guid)
+  if (/canboard/i.test(d?.type ?? '')) return api.setFunction(guid, 'digitaloutput', n, { enabled: true, input: v })
+  const o = (d?.outputs ?? []).find((x) => x.number === n)
+  if (o) await api.outputConfig(guid, _binBody(o, v))
 }
 
 // Deploy one native (rule) function. `i` is the function's STABLE slot (CAN IDs + cmf-names
@@ -762,8 +773,7 @@ async function deployNativeRule(f, i, devices, used) {
     for (const t of f.targets) {
       await api.setFunction(t.guid, 'caninput', await free(t.guid, 'canInputs'), canIn(TRIG, `cmf${i}trg`))
       const v = await varByName(t.guid, `cmf${i}trg`)
-      const o = (devices.find((d) => d.guid === t.guid)?.outputs ?? []).find((x) => x.number === t.output)
-      if (o && v != null) await api.outputConfig(t.guid, _binBody(o, v))
+      if (v != null) await bindTarget(devices, t.guid, t.output, v)
     }
     return
   }
@@ -782,8 +792,7 @@ async function deployNativeRule(f, i, devices, used) {
   for (const t of f.targets) {
     await api.setFunction(t.guid, 'caninput', await free(t.guid, 'canInputs'), canIn(CLK, `cmf${i}clk`))
     const v = await varByName(t.guid, `cmf${i}clk`)
-    const o = (devices.find((d) => d.guid === t.guid)?.outputs ?? []).find((x) => x.number === t.output)
-    if (o && v != null) await api.outputConfig(t.guid, _binBody(o, v))
+    if (v != null) await bindTarget(devices, t.guid, t.output, v)
   }
 }
 

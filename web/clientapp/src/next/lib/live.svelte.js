@@ -61,6 +61,11 @@ export function tempLimits(d) {
 export const isPdm = (d) => /pdm/i.test(d?.type ?? '')
 /** Modules only: an ECU described by a DBC file is a device in the project, but not a module (no firmware, quiet when the car is off). */
 export const modulesOf = (devices) => devices.filter((d) => !/dbc/i.test(d.type ?? ''))
+/** A module's outputs in one shape: a PDM's smart outputs as reported, a CANBoard's digital outputs (on/off, no
+ *  current or trip) normalised to the same fields. */
+export const outputsOf = (d) => (/canboard/i.test(d?.type ?? '')
+  ? (d.digitalOut ?? []).map((o) => ({ number: o.number, name: o.name, enabled: o.enabled, state: o.on ? 'On' : 'Off', current: 0, inputVal: o.input, digital: true }))
+  : d?.outputs ?? [])
 export const isCanboard = (d) => /canboard/i.test(d?.type ?? '')
 export const hex = (n) => '0x' + Number(n ?? 0).toString(16).toUpperCase().padStart(3, '0')
 

@@ -1,7 +1,7 @@
 <script>
   import { untrack } from 'svelte'
   import { Page, PageHeader, Button, Banner, Empty, StateDot, FwBadge } from '../../ui/index.js'
-  import { live, project, pendingModules } from '../../lib/live.svelte.js'
+  import { live, project, pendingModules, outputsOf } from '../../lib/live.svelte.js'
   import { ignitionTile } from '../power/parts/ignition.js'
   import { ui } from '../../shell/ui.svelte.js'
   import { href } from '../../router.svelte.js'
@@ -94,7 +94,7 @@
     const now = Date.now(), dt = lastT ? now - lastT : TAU
     lastT = now
     const a = Math.min(1, dt / TAU), next = {}, prev = untrack(() => avg)   // read untracked: this effect writes avg
-    for (const d of answering) for (const o of d.outputs ?? []) {
+    for (const d of answering) for (const o of outputsOf(d)) {
       const k = rkey(d, o)
       if (isOn(o) || isTripped(o)) seenOn[k] = now
       next[k] = prev[k] == null ? num(o.current) : prev[k] + a * (num(o.current) - prev[k])
@@ -103,7 +103,7 @@
   })
   const running = $derived.by(() => {
     const now = Date.now()
-    const rows = answering.flatMap((d) => (d.outputs ?? []).filter((o) => isOn(o) || isTripped(o) || now - (seenOn[rkey(d, o)] ?? 0) < LINGER).map((o) => ({ d, o, k: rkey(d, o), a: avg[rkey(d, o)] ?? num(o.current) })))
+    const rows = answering.flatMap((d) => outputsOf(d).filter((o) => isOn(o) || isTripped(o) || now - (seenOn[rkey(d, o)] ?? 0) < LINGER).map((o) => ({ d, o, k: rkey(d, o), a: avg[rkey(d, o)] ?? num(o.current) })))
     const keys = rows.map((r) => r.k)
     if (now - orderAt > REORDER || keys.some((k) => !order.includes(k))) {
       order = [...rows].sort((x, y) => y.a - x.a).map((r) => r.k)
@@ -185,7 +185,7 @@
               <StateDot tone={isTripped(r.o) ? 'fault' : 'on'} shape={isTripped(r.o) ? 'square' : 'dot'} />
               <span class="nm">{r.o.name?.trim() || 'Output ' + r.o.number}<small class="muted">{r.d.name}</small></span>
               <span class="why muted">{isTripped(r.o) ? r.o.state : r.o.input ? 'from ' + r.o.input : ''}</span>
-              <span class="val mono">{fmt1(r.a)} A</span>
+              <span class="val mono">{r.o.digital ? (isOn(r.o) ? "on" : "off") : fmt1(r.a) + " A"}</span>
             </a>
           {:else}
             <p class="muted">{live.connected ? 'No outputs are on.' : 'Connect to see what is on.'}</p>

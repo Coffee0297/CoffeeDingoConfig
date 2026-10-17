@@ -20,7 +20,7 @@ const ident = (s, used) => {
 }
 
 /** Lua Out var indexes on `guid` that nothing reads and the module's Lua does not set. */
-async function freeLuaOuts(guid, source) {
+export async function freeLuaOuts(guid, source) {
   const dev = live.devices.find((d) => d.guid === guid)
   const [funcs, vmap] = await Promise.all([api.functions(guid), api.inputs(guid)])
   const model = buildModel(dev, funcs, vmap)
@@ -65,13 +65,20 @@ export async function buildMyself(mode, { tpl, sel, relays, name, inOpt, outOpts
   lines.push('  -- your logic: drive each output with setLuaOut (1 = on, 0 = off)')
   for (const f of outsF) lines.push(`  setLuaOut(${luaFor[f.k].number - 1}, 0)   -- ${luaFor[f.k].name} -> ${outOpts.find((o) => o.value === sel[f.k])?.label?.split(' · ').slice(0, 2).join(' · ') ?? f.label} (${f.label})`)
   lines.push('end', '')
-  const stub = lines.join('\n')
-  let src
-  if (/^\s*function\s+onTick\s*\(\s*\)\s*$/m.test(stored))
-    src = stored.replace(/^(\s*)function\s+onTick\s*\(\s*\)\s*$/m, (m) => `${stub}\n${m}\n  ${fn}()`)
-  else if (/onTick/.test(stored)) src = `${stored.replace(/\s*$/, '\n\n')}${stub}-- call ${fn}() from your onTick\n`   // an onTick this can't edit safely
-  else src = `${stored ? stored.replace(/\s*$/, '\n\n') : ''}${stub}\nfunction onTick()\n  ${fn}()\nend\n${/setTickRate/.test(stored) ? '' : 'setTickRate(50)\n'}`
-  const r = await fetch(`/api/devices/${logicGuid}/lua`, { method: 'POST', headers: { 'Content-Type': 'application/json', ...(location.hash.startsWith('#/next') ? { 'X-Dingo-Stage': '1' } : {}) }, body: JSON.stringify({ Source: src }) })
-  if (!r.ok) throw new Error((await r.json().catch(() => null))?.error ?? `Lua not saved (HTTP ${r.status})`)
+  await saveLua(logicGuid, withStub(stored, fn, lines.join('\n')))
   return href('expert', 'lua', logicGuid)
+}
+
+/** `stored` with `stub` (defining local function `fn`) added before its onTick, which calls it. */
+export function withStub(stored, fn, stub) {
+  if (/^\s*function\s+onTick\s*\(\s*\)\s*$/m.test(stored))
+    return stored.replace(/^(\s*)function\s+onTick\s*\(\s*\)\s*$/m, (m) => `${stub}\n${m}\n  ${fn}()`)
+  if (/onTick/.test(stored)) return `${stored.replace(/\s*$/, '\n\n')}${stub}-- call ${fn}() from your onTick\n`   // an onTick this can't edit safely
+  return `${stored ? stored.replace(/\s*$/, '\n\n') : ''}${stub}\nfunction onTick()\n  ${fn}()\nend\n${/setTickRate/.test(stored) ? '' : 'setTickRate(50)\n'}`
+}
+
+/** Save a module's Lua to the project (staged in the new UI: Apply sends it). */
+export async function saveLua(guid, src) {
+  const r = await fetch(`/api/devices/${guid}/lua`, { method: 'POST', headers: { 'Content-Type': 'application/json', ...(location.hash.startsWith('#/next') ? { 'X-Dingo-Stage': '1' } : {}) }, body: JSON.stringify({ Source: src }) })
+  if (!r.ok) throw new Error((await r.json().catch(() => null))?.error ?? `Lua not saved (HTTP ${r.status})`)
 }

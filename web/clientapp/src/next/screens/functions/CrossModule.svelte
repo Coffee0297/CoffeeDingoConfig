@@ -5,7 +5,7 @@
   // "Check and send" previews what each module gets, asks to confirm, then runs the same deploy as the old UI.
   import { onMount, untrack } from 'svelte'
   import { Page, PageHeader, Card, Button, Chip, Banner, Empty, Dialog } from '../../ui/index.js'
-  import { live, toast } from '../../lib/live.svelte.js'
+  import { live, toast, outputsOf } from '../../lib/live.svelte.js'
   import { href } from '../../router.svelte.js'
   import { crossFns, deployCrossModule, cmfIsLua } from '../../../lib/store.js'
   import { importBackendCrossFns, previewCrossModule, normalizeCrossFn } from '../../../lib/crossModule.js'
@@ -24,8 +24,8 @@
   })
 
   // live.devices is replaced on every poll: names only change when the key does
-  const nameKey = $derived(live.devices.map((d) => d.guid + '=' + d.name + '=' + (d.outputs ?? []).map((o) => o.name ?? '').join(',')).join('|'))
-  const devs = $derived.by(() => { nameKey; return untrack(() => live.devices.map((d) => ({ guid: d.guid, name: d.name, outputs: (d.outputs ?? []).map((o) => ({ number: o.number, name: o.name })) }))) })
+  const nameKey = $derived(live.devices.map((d) => d.guid + '=' + d.name + '=' + outputsOf(d).map((o) => o.name ?? '').join(',')).join('|'))
+  const devs = $derived.by(() => { nameKey; return untrack(() => live.devices.map((d) => ({ guid: d.guid, name: d.name, outputs: outputsOf(d).map((o) => ({ number: o.number, name: o.name })) }))) })
   const dName = (g) => devs.find((d) => d.guid === g)?.name ?? 'missing module'
   const outLabel = (t) => { const o = devs.find((d) => d.guid === t.guid)?.outputs.find((x) => x.number === t.output); return `${dName(t.guid)} O${t.output}${o?.name?.trim() ? ' ' + o.name.trim() : ''}` }
 

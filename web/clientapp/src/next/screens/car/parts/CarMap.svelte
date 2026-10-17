@@ -4,7 +4,7 @@
   // of the car outline, "pinpos", saved with the project file) is shared with every map: layout.svelte.js.
   // Modules with no position wait in the tray beside the car, drawn dashed.
   import { Button, StateDot } from '../../../ui/index.js'
-  import { moduleState, live } from '../../../lib/live.svelte.js'
+  import { moduleState, live, outputsOf } from '../../../lib/live.svelte.js'
   import { href } from '../../../router.svelte.js'
   import { isTripped, isOn, fmt1, num, olderFirmware } from './summary.js'
   import { layout, refreshLayout, setPos, unplace, persistLayout, defaultSpot, placeAt } from './layout.svelte.js'
@@ -27,7 +27,7 @@
   function pinInfo(d) {
     const st = moduleState(d)
     const tripped = (d.outputs ?? []).some(isTripped)
-    const on = (d.outputs ?? []).filter(isOn).length
+    const on = outputsOf(d).filter(isOn).length
     let tone = st.key, shape = st.shape, word = st.word, border = 'line'
     let value
     if (!d.connected) { value = live.connected ? 'not answering' : 'no connection'; border = 'fault' }

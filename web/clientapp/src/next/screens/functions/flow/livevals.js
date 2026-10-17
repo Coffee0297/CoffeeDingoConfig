@@ -31,6 +31,10 @@ export function liveOf(v, sig, dev, model) {
       if (v.prop === 'Fault') return /fault/i.test(o.state ?? '')
       return null
     }
+    case 'digitaloutput': {   // a CANBoard output
+      const o = (dev?.digitalOut ?? []).find((x) => x.number === v.number)
+      return o ? !!o.on : null
+    }
     case 'analoginput': {
       if (v.prop === 'Millivolts') return num(sig.get('Analog input|' + name)?.value)
       if (v.prop === 'Rotary Position') return num(sig.get('Rotary position|' + name + ' Pos')?.value)
