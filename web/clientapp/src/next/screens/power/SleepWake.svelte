@@ -6,6 +6,7 @@
   import WakeMatrix from './parts/WakeMatrix.svelte'
   import SleepLive from './parts/SleepLive.svelte'
   import WontSleep from './parts/WontSleep.svelte'
+  import SleepLog from './parts/SleepLog.svelte'
   let props = $props()
 </script>
 
@@ -21,6 +22,7 @@
     <div class="col">
       <SleepLive />
       <WontSleep />
+      <SleepLog />
     </div>
   </div>
 </Page>

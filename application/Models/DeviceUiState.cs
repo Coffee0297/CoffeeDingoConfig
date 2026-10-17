@@ -34,10 +34,17 @@ public class DeviceUiState
     public int WakeCount { get; set; }
     public int? SleepBlockers { get; set; }         // bit0 sleep off, bit1 outputs on, bit2 USB, bit3 CAN traffic
     public bool SleepInfoAsked { get; set; }        // asked once per connect
+    // Sleep and wake log (5.6.3): one row per "going to sleep" goodbye and per wake report, newest last, 40 kept
+    public List<SleepEvent> SleepLog { get; } = new();
+    public bool WakeLogged { get; set; }            // this wake is in the log already
+    public bool CheckAfterWake { get; set; }        // a config check skipped while it slept: run it when it talks again
+    public void LogSleep(string kind, string why) { lock (SleepLog) { SleepLog.Add(new SleepEvent(DateTime.UtcNow, kind, why)); if (SleepLog.Count > 40) SleepLog.RemoveAt(0); } }
     public DateTime VersionAskedAt { get; set; }    // last automatic version request (unknown version)
 }
 
 /// <summary>One staged (not yet applied) field change. Kind/Number/Field address it for a revert: kind "output",
 /// "device" or a FunctionMap kind; OldJson is the field's JSON before the first edit. Source: app (this UI,
 /// X-Dingo-Stage), agent (MCP) or api (REST without the header, saved while the module was offline).</summary>
+public record SleepEvent(DateTime At, string Kind, string Why);
+
 public record PendingEdit(int Id, string Kind, int Number, string Field, string What, string Old, string New, string OldJson, string NewJson, string Source, DateTime At);

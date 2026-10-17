@@ -441,6 +441,7 @@ internal class ParamProtocol(IDeviceConfigurable device, List<DeviceParameter> @
 
             case MessageCommand.Sleep:
                 if (data.Length != 8) return;
+                if (data[1] == 'Z' && data[2] == 'Z' && data[3] == 'Z') return;   // the 5.6 goodbye, not a reply to a sleep request
 
                 if (data[5] == 1) //Successful sleep
                 {

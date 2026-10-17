@@ -1414,6 +1414,18 @@ public static class LiveApi
             return Results.Ok(d.LastConfigDiff);
         });
 
+        // Sleep and wake log (firmware 5.6.3): every module's "going to sleep" and "woke" reports, newest first.
+        api.MapGet("/sleep-log", (DeviceManager dm) =>
+        {
+            var rows = new List<(IDevice d, SleepEvent e)>();
+            foreach (var d in dm.GetAllDevices())
+            {
+                var ui = dm.GetDeviceUiState(d.Guid);
+                lock (ui.SleepLog) rows.AddRange(ui.SleepLog.Select(e => (d, e)));
+            }
+            return Results.Ok(rows.OrderByDescending(r => r.e.At).Select(r => new { module = r.d.Name, guid = r.d.Guid, kind = r.e.Kind, why = r.e.Why, at = r.e.At.ToString("o") }).ToArray());
+        });
+
         // Item 7: the edits saved to the project and waiting for "Apply to car", one row per field, and a revert of one.
         api.MapGet("/devices/{guid}/pending", (string guid, DeviceManager dm) =>
         {

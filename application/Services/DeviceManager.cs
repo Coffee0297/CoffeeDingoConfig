@@ -270,6 +270,10 @@ public class DeviceManager(ILogger<DeviceManager> logger, ILoggerFactory loggerF
     {
         var device = GetDevice(deviceId);
         if (device is not IDeviceConfigurable deviceConfigurable) return;
+        // A module that said goodbye is going to sleep (its goodbye is the frame that "reconnected" it): a request
+        // now would be CAN traffic and wake the whole car. Check once it is really awake again (NoteAwake).
+        var ui = GetDeviceUiState(deviceId);
+        if (ui.Asleep) { ui.CheckAfterWake = true; return; }
         // Called only on the connect edge: assume out-of-sync until a Read/Write (or CRC match)
         // confirms otherwise, so the UI prompts the operator to Read the device before editing.
         deviceConfigurable.ConfigMismatch = true;
@@ -323,13 +327,30 @@ public class DeviceManager(ILogger<DeviceManager> logger, ILoggerFactory loggerF
             ui.WakeReason = frame.Payload[1]; ui.WakeSource = frame.Payload[2];
             ui.WakeCount = frame.Payload[3] | frame.Payload[4] << 8;
             ui.SleepBlockers = frame.Payload[6];
+            // the module announces it after every boot (5.6.3) and answers when asked: log each wake once
+            if (!ui.WakeLogged)
+            {
+                ui.WakeLogged = true;
+                var why = WakeWhy(device, ui.WakeReason ?? 0, ui.WakeSource);
+                ui.LogSleep("wake", why);
+                logger.LogInformation("{Name} is awake: {Why}", device.Name, why);
+            }
             return;
         }
         // "going to sleep" (firmware 5.6): [Sleep, 'Z', 'Z', 'Z', why, ...]
         else if (cmd == domain.Enums.MessageCommand.Sleep && frame.Payload[1] == 'Z' && frame.Payload[2] == 'Z' && frame.Payload[3] == 'Z')
         {
             var ui = GetDeviceUiState(device.Guid);
-            ui.Asleep = true; ui.AsleepSince = DateTime.UtcNow; ui.SleepInfoAsked = false;
+            ui.Asleep = true; ui.AsleepSince = DateTime.UtcNow; ui.SleepInfoAsked = false; ui.WakeLogged = false;
+            var why = frame.Payload[4] switch
+            {
+                1 => "nothing kept it awake (no CAN traffic, no output on) for its sleep delay",
+                2 => "its force-sleep input is on",
+                3 => "it was asked to sleep (Sleep now)",
+                _ => "reason not given",
+            };
+            ui.LogSleep("sleep", why);
+            logger.LogInformation("{Name} is going to sleep: {Why}", device.Name, why);
             return;
         }
         else { if (cmd == domain.Enums.MessageCommand.Write) GetDeviceUiState(device.Guid).StoredOnModule = false; return; }
@@ -368,6 +389,21 @@ public class DeviceManager(ILogger<DeviceManager> logger, ILoggerFactory loggerF
         }, 2000)
         : Task.FromResult(false);
 
+    // SleepInfo wake reason in words; a digital input by its name in the project
+    private static string WakeWhy(IDevice device, int reason, int source) => reason switch
+    {
+        1 => "woke on CAN traffic",
+        2 => $"woke on digital input {source}" + (InputName(device, source) is { Length: > 0 } n ? $" ({n})" : ""),
+        3 => "woke on USB",
+        _ => "powered on (or reset)",
+    };
+    private static string? InputName(IDevice device, int n) => device switch
+    {
+        PdmDevice p => p.Inputs.FirstOrDefault(i => i.Number == n)?.Name,
+        domain.Devices.Canboard.CanboardDevice c => c.DigitalInputs.FirstOrDefault(i => i.Number == n)?.Name,
+        _ => null,
+    };
+
     /// <summary>G14 (firmware 5.6): ask why the module last woke; the reply lands in its DeviceUiState.</summary>
     public void RequestSleepInfo(Guid deviceId)
     {
@@ -385,6 +421,7 @@ public class DeviceManager(ILogger<DeviceManager> logger, ILoggerFactory loggerF
     {
         var ui = GetDeviceUiState(device.Guid);
         ui.Asleep = false;
+        if (ui.CheckAfterWake) { ui.CheckAfterWake = false; CheckConfig(device.Guid); }
         if (device is not IDeviceConfigurable c) return;
         // version unknown (no Read since the project opened): ask once, so firmware 5.6 features show up
         if (domain.Common.Firmware.Of(c.Version).Major == 0)
