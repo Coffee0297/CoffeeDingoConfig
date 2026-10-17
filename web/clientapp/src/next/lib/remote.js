@@ -28,11 +28,14 @@ export async function remoteItems(selfGuid, kind = 'bool') {
         out.push({ value: `b:${d.guid}:${v.index}`, label: `${v.name} · ${d.name} (over CAN, sent on a new frame)` })
     }
   }
+  const seen = new Set()
   for (const d of devs.filter(isDbc)) {
     const r = await api.dbcSearch(d.guid, '', 5000).catch(() => null)   // the Select shows 200 at a time and searches the rest
     for (const s of r?.items ?? []) {
       if (kind === 'bool' && s.length !== 1) continue
       const key = `d:${d.guid}:${s.id}:${s.startBit}:${s.name}`   // multiplexed signals can share a name in one frame
+      if (seen.has(key)) continue   // a DBC can list a signal twice: one item, or the keyed list breaks
+      seen.add(key)
       dbcSigs.set(key, s)
       out.push({ value: key, label: `${s.name} · ${d.name} (ECU)` })
     }

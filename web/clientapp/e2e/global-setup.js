@@ -21,5 +21,5 @@ export default async function globalSetup() {
     devs = await apiJson('GET', '/api/devices')
   }
   // Every module in the project should answer on the Sim before tests start.
-  await waitFor(async () => (await apiJson('GET', '/api/devices')).every((d) => d.connected), 30_000, 'all modules connected')
+  await waitFor(async () => (await apiJson('GET', '/api/devices')).every((d) => d.connected || /dbc/i.test(d.type)), 30_000, 'all modules connected')   // an ECU (DBC) shows only while it sends
 }

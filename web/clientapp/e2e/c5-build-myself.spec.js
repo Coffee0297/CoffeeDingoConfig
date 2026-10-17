@@ -1,7 +1,7 @@
 // "Build it myself" from the function setup: the template's inputs and outputs are set up, the logic is yours.
 // Blocks: the flow builder opens on the function's page with the input and the output on it (spare PDM-05 o8).
 // Lua: the output follows a free Lua Out and a stub that reads the input is added to the module's Lua (spare
-// PDM-03 o8: PDM-03 runs no Lua, so its Lua Outs are free). Puts the outputs, pins and Lua back.
+// PDM-03 o8, with a small program of its own). Puts the outputs, pins and Lua back.
 import { test, expect } from '@playwright/test'
 import { open, watchErrors } from './helpers.js'
 import { apiJson, deviceByName, waitFor } from './api.js'
@@ -31,6 +31,8 @@ test('build it myself in blocks or in Lua: the inputs and outputs are ready, the
   const luaBefore = (await apiJson('GET', `/api/devices/${p3.guid}/lua?stored=true`)).source ?? ''
   const fnsBefore = { [p5.guid]: await apiJson('GET', `/api/devices/${p5.guid}/functions`), [p3.guid]: await apiJson('GET', `/api/devices/${p3.guid}/functions`) }
   try {
+    // a small program of its own: the stub must fit, and the program must be kept
+    await apiJson('POST', `/api/devices/${p3.guid}/lua`, { Source: '-- c5 keep\nfunction onTick()\nend\n' }, 120_000)
     // blocks: the function's page with the output and the input on the canvas
     await wizardTo(page, 'wz-self-blocks', 'PDM-05')
     await expect(page.getByTestId('fn-title')).toHaveText(/c5 my own|Simple/, { timeout: 30_000 })
@@ -42,7 +44,7 @@ test('build it myself in blocks or in Lua: the inputs and outputs are ready, the
     await wizardTo(page, 'wz-self-lua', 'PDM-03')
     await expect(page).toHaveURL(new RegExp(`expert/lua/${p3.guid}`), { timeout: 60_000 })
     const lua = (await apiJson('GET', `/api/devices/${p3.guid}/lua?stored=true`)).source
-    expect(lua.startsWith(luaBefore.trimEnd())).toBe(true)                  // the existing program is kept
+    expect(lua.startsWith('-- c5 keep')).toBe(true)                  // the existing program is kept
     const m = lua.match(/setLuaOut\((\d+), 0\)\s+-- Lua Out (\d+)/)
     expect(m).toBeTruthy()
     expect(+m[2]).toBe(+m[1] + 1)

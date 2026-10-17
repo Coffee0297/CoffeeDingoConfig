@@ -21,7 +21,7 @@ test('shows the live connection through SLCAN over TCP', async ({ page }) => {
   await expect(status).toContainText('Connected through SLCAN')
   await expect(status).toContainText(ad.activePort)
   const devs = await devices()
-  await expect(status).toContainText(`${devs.length} of ${devs.length} modules answering`)
+  await expect(status).toContainText(`${devs.filter((d) => d.connected).length} of ${devs.length} modules answering`)   // an ECU that sends nothing (on the Sim) is not answering
   await expect(radio(page, /SLCAN over TCP/)).toBeChecked()
   await expect(panel(page).getByText('In use')).toBeVisible()
   // the host and port fields show the live address
@@ -171,7 +171,7 @@ test('Auto-detect keeps the speed where frames arrive @exclusive', async ({ page
     await panel(page).getByRole('radiogroup', { name: 'CAN speed' }).getByRole('radio', { name: 'Auto-detect' }).click()
     await panel(page).getByRole('button', { name: 'Reconnect' }).click()
     await expect(panel(page).getByTestId('connect-status')).toContainText('Connected through SLCAN', { timeout: 40_000 })
-    await waitFor(async () => (await devices()).every((d) => d.connected), 30_000, 'modules answering')
+    await waitFor(async () => (await devices()).every((d) => d.connected || /dbc/i.test(d.type)), 30_000, 'modules answering')
     await expect(panel(page).getByRole('radiogroup', { name: 'CAN speed' }).getByRole('radio', { name: '500 k' })).toBeChecked()
   } finally { await restoreConnection() }
   expect(errors).toEqual([])
@@ -208,7 +208,7 @@ test('the backend reconnects by itself when the link drops, and a Disconnect sta
     await expect(page.getByText('Adapter lost · reconnecting…')).toBeVisible()
     await new Promise((r) => setTimeout(r, 4000))
     refuse = false
-    await waitFor(async () => { const a = await apiJson('GET', '/api/adapters'); return a.connected && a.activePort === port }, 20_000, 'reconnected')
+    await waitFor(async () => { const a = await apiJson('GET', '/api/adapters'); return a.connected && a.activePort === port }, 40_000, 'reconnected')   // the retry backoff can pass 20 s
     expect((await apiJson('GET', '/api/adapters')).reconnecting).toBe(false)
     // the user's Disconnect is not undone
     await apiJson('POST', '/api/disconnect')

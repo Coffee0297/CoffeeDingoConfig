@@ -120,6 +120,8 @@ test('firmware: update all over CAN with real release files @exclusive', async (
   await open(page, 'hardware/firmware')
   await page.getByTestId('fw-files').setInputFiles(names.map((n) => path.join(dir, n)))
   const btn = page.getByTestId('fw-update-all')
+  // the files are read and checked first: wait until every CAN module has a verdict, then look at the button
+  await expect(page.locator('[data-testid^="fw-status-"]').filter({ hasText: 'Choose release files first' })).toHaveCount(0, { timeout: 15_000 })
   if (await btn.isEnabled()) {
     await btn.click()
     await page.getByTestId('confirm-go').click()
@@ -128,7 +130,8 @@ test('firmware: update all over CAN with real release files @exclusive', async (
     await expect(page.getByTestId('fw-pause')).toContainText('Will pause after this module')
     await expect(page.getByTestId('fw-pause')).toHaveCount(0, { timeout: 600_000 })
   }
-  for (const d of await apiJson('GET', '/api/devices')) expect(d.connected).toBe(true)
+  // every module answers again (one may still be rebooting from the test before)
+  await waitFor(async () => (await apiJson('GET', '/api/devices')).filter((x) => !/dbc/i.test(x.type)).every((d) => d.connected), 60_000, 'every module answering')
 })
 
 test('firmware: the release list loads a release\'s files through the backend and checks each image (G7)', async ({ page }) => {

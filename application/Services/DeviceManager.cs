@@ -186,6 +186,8 @@ public class DeviceManager(ILogger<DeviceManager> logger, ILoggerFactory loggerF
         {
             if(device.UpdateIsConnected())
                 CheckConfig(device.Guid);
+            else
+                RecheckUnanswered(device);
         }
 
         return snapshot;
@@ -263,6 +265,8 @@ public class DeviceManager(ILogger<DeviceManager> logger, ILoggerFactory loggerF
         {
             if(device.UpdateIsConnected())
                 CheckConfig(device.Guid);
+            else
+                RecheckUnanswered(device);
         }
 
         return devices;
@@ -280,8 +284,23 @@ public class DeviceManager(ILogger<DeviceManager> logger, ILoggerFactory loggerF
         // confirms otherwise, so the UI prompts the operator to Read the device before editing.
         deviceConfigurable.ConfigMismatch = true;
         deviceConfigurable.LastConfigDiff = new List<domain.Models.ConfigDiffEntry>();
+        ui.CheckAskedAt = DateTime.UtcNow; ui.CheckRetries = 0;
         var msg = deviceConfigurable.GetCheckMsg();
         QueueMessage(msg);
+    }
+
+    /// <summary>
+    /// The check on connect got no answer (a module still booting, a busy bus) and nothing was edited since:
+    /// ask again, 3 times at most, 15 s apart, so a module in step is not left showing "differs".
+    /// </summary>
+    private void RecheckUnanswered(IDevice device)
+    {
+        if (device is not IDeviceConfigurable c || !c.ConfigMismatch || !device.Connected) return;
+        var ui = GetDeviceUiState(device.Guid);
+        if (ui.Asleep || ui.CheckRetries >= 3 || DateTime.UtcNow - ui.CheckAskedAt < TimeSpan.FromSeconds(15)) return;
+        lock (ui.Edits) if (ui.Edits.Count > 0) return;   // a real difference: Apply sorts it
+        ui.CheckAskedAt = DateTime.UtcNow; ui.CheckRetries++;
+        QueueMessage(c.GetCheckMsg());
     }
 
     /// <summary>
@@ -329,6 +348,7 @@ public class DeviceManager(ILogger<DeviceManager> logger, ILoggerFactory loggerF
             ui.WakeReason = frame.Payload[1]; ui.WakeSource = frame.Payload[2];
             ui.WakeCount = frame.Payload[3] | frame.Payload[4] << 8;
             ui.SleepBlockers = frame.Payload[6];
+            ui.CheckRetries = 0; ui.CheckAskedAt = DateTime.UtcNow;   // it (re)booted: unanswered config checks get another round
             // the module announces it after every boot (5.6.3) and answers when asked: log each wake once
             if (!ui.WakeLogged)
             {

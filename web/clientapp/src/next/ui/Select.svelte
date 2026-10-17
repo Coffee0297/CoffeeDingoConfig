@@ -11,7 +11,9 @@
   let open = $state(false), q = $state(''), qEl = $state(null)
   const searchable = $derived(items.length > 8)
   const MAX = 200   // ponytail: a long list (a car DBC has thousands of signals) renders the first 200 matches; typing narrows it
-  const hits = $derived(q.trim() ? items.filter((i) => String(i.label).toLowerCase().includes(q.trim().toLowerCase())) : items)
+  // a duplicate value breaks the keyed list (and with it the search): keep the first
+  const uniq = $derived.by(() => { const s = new Set(); return items.filter((i) => !s.has(String(i.value)) && s.add(String(i.value))) })
+  const hits = $derived(q.trim() ? uniq.filter((i) => String(i.label).toLowerCase().includes(q.trim().toLowerCase())) : uniq)
   // keep the picked item in the list even when it is past the cap, so the trigger shows it as selected
   const shown = $derived(hits.length <= MAX ? hits : [...hits.slice(0, MAX), ...hits.slice(MAX).filter((i) => String(i.value) === String(value))])
   function openChanged(o) { if (o && searchable) setTimeout(() => qEl?.focus(), 30); else q = '' }

@@ -21,7 +21,7 @@ export async function restoreConnection() {
   if (!ad.connected || ad.activePort !== SIM_PORT) {
     await apiJson('POST', '/api/connect', { Adapter: 'SLCAN', Port: SIM_PORT, Bitrate: '500K' })
   }
-  await waitFor(async () => (await devices()).every((d) => d.connected), 30_000, 'all modules answering again')
+  await waitFor(async () => (await devices()).every((d) => d.connected || /dbc/i.test(d.type)), 30_000, 'all modules answering again')
 }
 
 /** Put the fixture project back (used after New / Open tests). */
@@ -31,7 +31,7 @@ export async function restoreProject() {
   const r = await fetch(API + '/api/project/upload', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: fs.readFileSync(FIXTURE, 'utf8') })
   if (!r.ok) throw new Error('could not restore the project: ' + (await r.text()))
   await waitFor(async () => (await devices()).length >= 7, 15_000, 'project restored')
-  await waitFor(async () => (await devices()).every((d) => d.connected), 30_000, 'modules answering again')
+  await waitFor(async () => (await devices()).every((d) => d.connected || /dbc/i.test(d.type)), 30_000, 'modules answering again')
 }
 
 export const hex3 = (n) => '0x' + n.toString(16).toUpperCase().padStart(3, '0')
@@ -41,7 +41,7 @@ export async function forceRestoreProject() {
   const r = await fetch(API + '/api/project/upload', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: fs.readFileSync(FIXTURE, 'utf8') })
   if (!r.ok) throw new Error('could not restore the project: ' + (await r.text()))
   await waitFor(async () => (await devices()).length >= 7, 15_000, 'project restored')
-  await waitFor(async () => (await devices()).every((d) => d.connected), 30_000, 'modules answering again')
+  await waitFor(async () => (await devices()).every((d) => d.connected || /dbc/i.test(d.type)), 30_000, 'modules answering again')
 }
 
 /** Wait until a module answers (other runs on the shared Sim can briefly take one off the bus). */

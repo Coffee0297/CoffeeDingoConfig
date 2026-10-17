@@ -124,7 +124,7 @@ test('Export config and Export template download JSON; Export combined DBC opens
   const [c] = await Promise.all([page.waitForEvent('download'), menu(page).getByRole('button', { name: 'Export config…' }).click()])
   expect(c.suggestedFilename()).toMatch(/-export\.json$/)
   const cfg = JSON.parse(fs.readFileSync(await c.path(), 'utf8'))
-  expect(cfg.devices.length).toBe((await devices()).length)
+  expect(cfg.devices.length).toBe((await devices()).filter((d) => !/dbc/i.test(d.type)).length)   // ECUs go out with Export combined DBC
   await expect(menu(page).getByText(/Exported \d+ modules? without Lua\./)).toBeVisible()
   const [t] = await Promise.all([page.waitForEvent('download'), menu(page).getByRole('button', { name: 'Export template…' }).click()])
   expect(t.suggestedFilename()).toBe('dingopdm-template.json')
@@ -241,6 +241,7 @@ test('New project, Upload and Open replace the project and warn about unsaved ch
     await menu(page).getByTestId('saveas-go').click()
     await waitFor(async () => (await apiJson('GET', '/api/project')).current === file + '.json', 10_000, 'file saved')
     const n = (await devices()).length
+    const saved = (await apiJson('GET', '/api/project')).dir + '/' + file + '.json'   // uploaded below: the same car, whatever project is open
     await page.keyboard.press('Escape')
 
     // make it dirty, then New: the warning offers Cancel / Discard / Save
@@ -263,9 +264,9 @@ test('New project, Upload and Open replace the project and warn about unsaved ch
 
     // Upload the fixture through the file picker
     await openMenu(page)
-    await menu(page).getByTestId('proj-upload-input').setInputFiles(FIXTURE)
+    await menu(page).getByTestId('proj-upload-input').setInputFiles(saved)
     await waitFor(async () => (await devices()).length === n, 15_000, 'upload restored the modules')
-    await waitFor(async () => (await devices()).every((d) => d.connected), 30_000, 'modules answering')
+    await waitFor(async () => (await devices()).every((d) => d.connected || /dbc/i.test(d.type)), 30_000, 'modules answering')
 
     // Open the saved zz file from the list (the project from the fixture is unsaved, so Save first is offered)
     await openMenu(page)
