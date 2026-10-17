@@ -61,6 +61,7 @@ public class DeviceManager(ILogger<DeviceManager> logger, ILoggerFactory loggerF
         if (_setReceiveFilter is null) return;
         lock (_filterLock)
         {
+            if (_filterOwned) return;
             // The filter passes ONE module's block. When exchanges with two modules overlap (opening a project asks
             // every module for its version and CRC while a write is still running), narrowing to the newer one hid
             // the older one's reply: its write was never confirmed. Overlapping: open the filter until it is quiet.
@@ -93,8 +94,17 @@ public class DeviceManager(ILogger<DeviceManager> logger, ILoggerFactory loggerF
     /// </summary>
     public void SuspendConfigFilter()
     {
-        lock (_filterLock) _filterIdleTimer?.Change(Timeout.Infinite, Timeout.Infinite);
+        lock (_filterLock) { _filterIdleTimer?.Change(Timeout.Infinite, Timeout.Infinite); _filterOwned = true; }
     }
+
+    /// <summary>The flash is over: config exchanges arm the filter again.</summary>
+    public void ResumeConfigFilter()
+    {
+        lock (_filterLock) { _filterOwned = false; _filterBase = null; }
+    }
+    // A CAN flash owns the filter (the bootloader's reply id): a version request or config check sent meanwhile
+    // (a module reconnecting after its own update) re-aimed it at that module and the bootloader's replies were lost.
+    private bool _filterOwned;
 
     /// <summary>
     /// Get UI state for a device (creates device UI state if it doesn't exist)

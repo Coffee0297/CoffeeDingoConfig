@@ -168,7 +168,7 @@ public sealed class CanFlashService(
             logger.LogError(ex, "CAN flash error");
             return Fail(log, "Error: " + ex.Message);
         }
-        finally { adapters.ActiveAdapter?.SetReceiveFilter(null); _busy = false; }
+        finally { adapters.ActiveAdapter?.SetReceiveFilter(null); dm.ResumeConfigFilter(); _busy = false; }
     }
 
     private FlashResult Fail(StringBuilder log, string msg)

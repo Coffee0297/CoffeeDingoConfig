@@ -132,9 +132,19 @@ test('firmware: update all over CAN with real release files @exclusive', async (
     await page.getByTestId('fw-pause').click()
     await expect(page.getByTestId('fw-pause')).toContainText('Will pause after this module')
     await expect(page.getByTestId('fw-pause')).toHaveCount(0, { timeout: 600_000 })
+    // the updated module runs the new firmware: it reports the files' version (asked again until it does: a module
+    // reboots after an update, the Sim restarts its emulation for it)
+    const done = (await page.locator('[data-testid^="fw-status-"]').filter({ hasText: 'Done' }).first().getAttribute('data-testid')).replace('fw-status-', '')
+    const want = 'v' + names[0].match(/v(\d+)-(\d+)-(\d+)\./).slice(1).join('.')
+    await waitFor(async () => {
+      const d = await deviceByName(done)
+      if (d.connected) await apiJson('POST', `/api/devices/${d.guid}/version`).catch(() => {})
+      await new Promise((r) => setTimeout(r, 3000))
+      return (await deviceByName(done)).version === want
+    }, 300_000, `${done} reports ${want}`)
   }
   // every module answers again (one may still be rebooting from the test before)
-  await waitFor(async () => (await apiJson('GET', '/api/devices')).filter((x) => !/dbc/i.test(x.type)).every((d) => d.connected), 60_000, 'every module answering')
+  await waitFor(async () => (await apiJson('GET', '/api/devices')).filter((x) => !/dbc/i.test(x.type)).every((d) => d.connected), 240_000, 'every module answering')   // the Sim restarts to boot updated firmware
 })
 
 test('firmware: the release list loads a release\'s files through the backend and checks each image (G7)', async ({ page }) => {
@@ -197,8 +207,7 @@ test('firmware: a module waiting in its bootloader is found, shown and restarted
   const cb = await deviceByName('CB-1')
   try {
     await apiJson('POST', `/api/devices/${cb.guid}/bootloader?can=true`)   // the CAN-update entry: OpenBLT waits for a tool
-    // the Sim's Renode reset reloads the app without OpenBLT (its README: bootloader not verified), so a module
-    // there never stays in its bootloader; on a bench with real modules it does
+    // the Sim plays OpenBLT (its server/vblt.js): the module is held there until the tool restarts it
     const stays = await waitFor(async () => !(await deviceByName('CB-1')).connected, 8_000, 'CB-1 left its firmware').then(() => true, () => false)
     test.skip(!stays, 'the Sim does not keep a module in its OpenBLT bootloader')
     await open(page, 'hardware/firmware')
