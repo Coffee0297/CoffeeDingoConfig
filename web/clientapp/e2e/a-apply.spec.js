@@ -5,7 +5,7 @@ import { test, expect } from '@playwright/test'
 // A write or read can be lost while another run is hammering the shared bus: try those again.
 test.describe.configure({ retries: 1 })
 import { open, watchErrors } from './helpers.js'
-import { apiJson, devices, deviceByName, waitFor } from './api.js'
+import { apiJson, devices, deviceByName, waitFor, API } from './api.js'
 import { restoreConnection, ready } from './a-util.js'
 
 const panel = (page) => page.getByRole('dialog', { name: 'Apply to car' })
@@ -263,4 +263,20 @@ test('a saved edit in the redesign waits for Apply to car: counted, shown, and w
     await apiJson('POST', `/api/devices/${d.guid}/outputconfig`, { Number: 1, CurrentLimit: out.currentLimit })
   }
   expect(errors).toEqual([])
+})
+
+test('a direct write of a block that has waiting changes clears them from the list @exclusive', async () => {
+  const d = await deviceByName('PDM-02')
+  const v = (await apiJson('GET', `/api/devices/${d.guid}/functions`)).virtualInputs.find((x) => !x.enabled)
+  const url = `/api/devices/${d.guid}/function/virtualinput/${v.number}`
+  const waiting = async () => (await apiJson('GET', `/api/devices/${d.guid}/pending`)).some((e) => e.kind === 'virtualinput' && e.number === v.number)
+  try {
+    // staged, as the app does: listed as waiting
+    const r = await fetch(API + url, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Dingo-Stage': '1' }, body: JSON.stringify({ name: 'a-apply staged' }) })
+    expect(r.ok).toBe(true)
+    expect(await waiting()).toBe(true)
+    // written straight to the module (a script, the agent): the module has the whole block now
+    await apiJson('POST', url, { name: v.name })
+    expect(await waiting()).toBe(false)
+  } finally { await apiJson('POST', url, { name: v.name }).catch(() => {}) }
 })

@@ -1884,7 +1884,12 @@ public static class LiveApi
 
     private static async Task<bool> IsLiveEditAsync(HttpContext http, Guid g, DeviceManager dm, ICommsAdapterManager adapters, EditTrack? t = null)
     {
-        if (!Staged(http) && await IsLiveModuleAsync(g, dm, adapters)) return true;
+        if (!Staged(http) && await IsLiveModuleAsync(g, dm, adapters))
+        {
+            // written to the module now, the whole slot: its waiting rows are no longer waiting
+            if (t != null) { var u = dm.GetDeviceUiState(g); lock (u.Edits) u.Edits.RemoveAll(e => e.Kind == t.Kind && e.Number == t.Number); }
+            return true;
+        }
         // Saved to the project only (staged, or the module is offline): remember what changed for the Apply panel.
         if (dm.GetDevice(g) is domain.Interfaces.IDeviceConfigurable c)
         {
