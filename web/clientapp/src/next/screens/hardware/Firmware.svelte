@@ -83,12 +83,17 @@
     } catch (e) { toast('Could not load the release: ' + (e?.message ?? e), 'error', 8000) } finally { loadingRel = false }
   }
   // pre-flight: what each image says it is (board marker), its version, and which modules it fits
+  // while the chosen files are read, a file's version is only what its name says (often nothing): every module
+  // looked out of date for a moment and Update all offered to flash the image they already run
+  let checking = $state(false)
   async function checkAll() {
+    checking = true
     const out = {}
     for (const f of files) {
       try { out[f.name] = await (await fetch('/api/firmware/check?name=' + encodeURIComponent(f.name), { method: 'POST', body: f })).json() } catch { /* the module checks it again */ }
     }
     checks = out
+    checking = false
   }
   // what the modules run now, and how a release compares (a downgrade asks first)
   const installed = $derived(mods.filter((d) => d.connected && d.version).map((d) => cleanVersion(d.version)))
@@ -176,7 +181,7 @@
         <Button onclick={() => (pausing = !pausing)} data-testid="fw-pause">{pausing ? 'Will pause after this module' : 'Pause after this module'}</Button>
       {:else}
         <Button onclick={readVersions} busy={reading} disabled={!live.connected} data-testid="fw-read-versions">Read versions</Button>
-        <Button variant="primary" disabled={!!blocked || busy || !plan.length} onclick={() => (confirm = { mode: 'all', plan })} data-testid="fw-update-all">Update {plan.length} module{plan.length === 1 ? '' : 's'} over CAN</Button>
+        <Button variant="primary" disabled={!!blocked || busy || checking || !plan.length} onclick={() => (confirm = { mode: 'all', plan })} data-testid="fw-update-all">{checking ? 'Checking the files…' : `Update ${plan.length} module${plan.length === 1 ? '' : 's'} over CAN`}</Button>
       {/if}
     {/snippet}
   </PageHeader>
@@ -236,7 +241,7 @@
                 <div class="prog"><div class="bar" role="progressbar" aria-label={`${d.name} progress`} aria-valuenow={c.pct} aria-valuemin="0" aria-valuemax="100"><span style="width: {c.pct}%" class:bad={c.state === 'failed'} class:ok={c.state === 'done'}></span></div>
                   <span class:fault={c.state === 'failed'} data-testid={`fw-status-${d.name}`}>{c.state === 'failed' ? '■ ' : ''}{c.text}</span></div>
               </td>
-              <td><Button size="sm" disabled={!!blocked || busy || !reach(d) || !p || !f || (d.connected && upToDate(d, f))} onclick={() => ask(d)} data-testid={`fw-update-${d.name}`}>{p === 'usb' ? 'Update over USB' : 'Update'}</Button>
+              <td><Button size="sm" disabled={!!blocked || busy || checking || !reach(d) || !p || !f || (d.connected && upToDate(d, f))} onclick={() => ask(d)} data-testid={`fw-update-${d.name}`}>{p === 'usb' ? 'Update over USB' : 'Update'}</Button>
                 {#if d.inBootloader}<Button size="sm" variant="ghost" disabled={!!blocked || busy} onclick={() => leaveBootloader(d)} data-testid={`fw-restart-${d.name}`}>Restart it</Button>{/if}</td>
             </tr>
           {/each}
