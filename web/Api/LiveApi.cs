@@ -1822,8 +1822,10 @@ public static class LiveApi
             // These talk to live hardware over CAN. The writes are fire-and-forget, so without
             // a guard they "succeed" silently against an empty bus. Refuse unless the adapter is
             // connected AND the target module is actually broadcasting (seen within ~500 ms).
-            string[] liveActions = ["read", "readall", "write", "writeall", "burn", "sleep", "wakeup", "bootloader", "version", "uploadlua"];
+            string[] liveActions = ["read", "readall", "write", "writeall", "burn", "sleep", "bootloader", "version", "uploadlua"];
             if (liveActions.Contains(action) && await RequireLiveModuleAsync(g, dm, adapters, action) is { } bad) return bad;
+            // Wake up is for a module that is NOT answering (asleep, or woken by CAN and still quiet): only the adapter must be there
+            if (action == "wakeup" && !adapters.GetStatus().isConnected) return Results.Text("Not connected to a CAN adapter — connect first.", "text/plain", null, 400);
 
             switch (action)
             {

@@ -49,7 +49,7 @@
   </div>
   <div class="actions">
     <Button variant="danger" disabled={!sleepTargets.length || !!busy} busy={busy === 'sleep'} onclick={() => (confirmOpen = true)} data-testid="sleep-now">Sleep now</Button>
-    <Button disabled={!live.connected || !!busy} busy={busy === 'wakeup'} onclick={() => each('wakeup', wakeTargets.filter((d) => d.connected))} data-testid="wake-up">Wake up</Button>
+    <Button disabled={!live.connected || !!busy} busy={busy === 'wakeup'} onclick={() => each('wakeup', wakeTargets)} data-testid="wake-up">Wake up</Button>
     <span class="muted note">Both ask every module that answers. A module asleep cannot answer sleep; it needs a wake source.</span>
   </div>
   {#if result}<p class="muted" role="status" data-testid="sleep-result">{result}</p>{/if}

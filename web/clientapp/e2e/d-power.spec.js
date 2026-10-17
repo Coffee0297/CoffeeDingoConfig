@@ -272,7 +272,7 @@ test('sleep & wake: Sleep now puts the modules to sleep and Wake up brings them 
   await page.waitForTimeout(8000)
   await page.getByTestId('wake-up').click()
   await expect(page.getByTestId('sleep-result')).toContainText(/Wake up sent to \d+ module/)
-  await waitFor(async () => (await devices()).every((d) => d.connected || /dbc/i.test(d.type)), 120_000, 'every module back on the bus')
+  await waitFor(async () => (await devices()).every((d) => d.connected || /dbc/i.test(d.type)), 30_000, 'every module back on the bus')   // Wake up reaches the silent ones too
   expect(errors).toEqual([])
 })
 
