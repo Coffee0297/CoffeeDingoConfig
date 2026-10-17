@@ -37,6 +37,7 @@ public class DeviceUiState
     // Sleep and wake log (5.6.3): one row per "going to sleep" goodbye and per wake report, newest last, 40 kept
     public List<SleepEvent> SleepLog { get; } = new();
     public bool WakeLogged { get; set; }            // this wake is in the log already
+    public bool CheckAfterVersion { get; set; }     // a config check waiting for the firmware version (it decides the param set)
     public bool CheckAfterWake { get; set; }        // a config check skipped while it slept: run it when it talks again
     // The config check on connect can go unanswered (a module still booting, a busy bus): ask again a few times
     public DateTime CheckAskedAt { get; set; }

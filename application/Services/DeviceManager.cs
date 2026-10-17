@@ -61,15 +61,30 @@ public class DeviceManager(ILogger<DeviceManager> logger, ILoggerFactory loggerF
         if (_setReceiveFilter is null) return;
         lock (_filterLock)
         {
-            _setReceiveFilter(baseId, baseId + 15);   // config reply (base+0), status (base+2..) and XCP (base+12/13)
-            domain.Devices.RxFilterWindow.Narrow(baseId, baseId + 15);   // the other modules aren't gone, just hidden
+            // The filter passes ONE module's block. When exchanges with two modules overlap (opening a project asks
+            // every module for its version and CRC while a write is still running), narrowing to the newer one hid
+            // the older one's reply: its write was never confirmed. Overlapping: open the filter until it is quiet.
+            var other = (_filterBase is { } b && b != baseId) || _confirms.Keys.Any(k => k.BaseId != baseId);
+            if (other || _filterBase == -1)
+            {
+                _filterBase = -1;
+                _setReceiveFilter(null, null);
+                domain.Devices.RxFilterWindow.Lift();
+            }
+            else
+            {
+                _filterBase = baseId;
+                _setReceiveFilter(baseId, baseId + 15);   // config reply (base+0), status (base+2..) and XCP (base+12/13)
+                domain.Devices.RxFilterWindow.Narrow(baseId, baseId + 15);   // the other modules aren't gone, just hidden
+            }
             _filterIdleTimer ??= new System.Threading.Timer(_ =>
             {
-                lock (_filterLock) { _setReceiveFilter?.Invoke(null, null); domain.Devices.RxFilterWindow.Lift(); }
+                lock (_filterLock) { _filterBase = null; _setReceiveFilter?.Invoke(null, null); domain.Devices.RxFilterWindow.Lift(); }
             });
             _filterIdleTimer.Change(FilterIdleMs, Timeout.Infinite);
         }
     }
+    private int? _filterBase;   // module the filter passes now; -1 = open because exchanges overlap; null = lifted
 
     /// <summary>
     /// Stop the idle auto-lift so an external filter owner (the CAN flasher, which clamps to the XCP
@@ -280,6 +295,9 @@ public class DeviceManager(ILogger<DeviceManager> logger, ILoggerFactory loggerF
         // now would be CAN traffic and wake the whole car. Check once it is really awake again (NoteAwake).
         var ui = GetDeviceUiState(deviceId);
         if (ui.Asleep) { ui.CheckAfterWake = true; return; }
+        // Firmware not known yet: the app would CRC only the oldest firmware's params and call a module "in step"
+        // that lost its newer settings. Ask which firmware it runs; the check runs when the answer comes.
+        if (!VersionKnown(device)) { ui.CheckAfterVersion = true; RequestVersion(deviceId); return; }
         // Called only on the connect edge: assume out-of-sync until a Read/Write (or CRC match)
         // confirms otherwise, so the UI prompts the operator to Read the device before editing.
         deviceConfigurable.ConfigMismatch = true;
@@ -298,6 +316,7 @@ public class DeviceManager(ILogger<DeviceManager> logger, ILoggerFactory loggerF
         if (device is not IDeviceConfigurable c || !c.ConfigMismatch || !device.Connected) return;
         var ui = GetDeviceUiState(device.Guid);
         if (ui.Asleep || ui.CheckRetries >= 3 || DateTime.UtcNow - ui.CheckAskedAt < TimeSpan.FromSeconds(15)) return;
+        if (_confirms.ContainsKey((device.BaseId, domain.Enums.MessageCommand.WriteAllComplete))) return;   // not into a write: see WriteDeviceConfigConfirmed
         lock (ui.Edits) if (ui.Edits.Count > 0) return;   // a real difference: Apply sorts it
         ui.CheckAskedAt = DateTime.UtcNow; ui.CheckRetries++;
         QueueMessage(c.GetCheckMsg());
@@ -335,6 +354,12 @@ public class DeviceManager(ILogger<DeviceManager> logger, ILoggerFactory loggerF
         if (frame.Payload.Length != 8) return;
         var cmd = (domain.Enums.MessageCommand)frame.Payload[0];
         bool ok;
+        if (cmd == domain.Enums.MessageCommand.Version && GetDeviceUiState(device.Guid) is { CheckAfterVersion: true } vu && VersionKnown(device))
+        {
+            vu.CheckAfterVersion = false;
+            CheckConfig(device.Guid);
+            return;
+        }
         if (cmd == domain.Enums.MessageCommand.WriteAllComplete)
         {
             if (outgoing.Any(f => f.Name == "WriteAll (retry)")) return;   // CRC short, ParamProtocol re-sends: not final
@@ -392,9 +417,26 @@ public class DeviceManager(ILogger<DeviceManager> logger, ILoggerFactory loggerF
 
     /// <summary>Write (changed params, or all) and wait until the module reports it received them (CRC match).
     /// False on a CRC mismatch after the retries or no answer within 30 s — the module keeps its old config.</summary>
-    public Task<bool> WriteDeviceConfigConfirmed(Guid deviceId, bool all) => GetDevice(deviceId) is { } d
-        ? Confirmed(d, domain.Enums.MessageCommand.WriteAllComplete, () => all ? WriteAllDeviceConfig(deviceId) : WriteDeviceConfig(deviceId), 30000)
-        : Task.FromResult(false);
+    public async Task<bool> WriteDeviceConfigConfirmed(Guid deviceId, bool all)
+    {
+        if (GetDevice(deviceId) is not { } d) return false;
+        // A Write All resets every param the app does not send to its default, and until the module reports its
+        // firmware the app sends only the oldest firmware's params: a write then wiped the newer settings (math
+        // blocks, CAN messages, ignition…). Learn the version first; without it, do not write.
+        if (!await EnsureVersionAsync(d)) { logger.LogWarning("{Name}: firmware version unknown, not writing (it would reset its newer settings)", d.Name); return false; }
+        return await Confirmed(d, domain.Enums.MessageCommand.WriteAllComplete, () => all ? WriteAllDeviceConfig(deviceId) : WriteDeviceConfig(deviceId), 30000);
+    }
+
+    public static bool VersionKnown(IDevice d) => d is IDeviceConfigurable c && domain.Common.Firmware.Of(c.Version).Major > 0;
+
+    /// <summary>Ask for the firmware version unless it is known, and wait up to <paramref name="ms"/> for it.</summary>
+    public async Task<bool> EnsureVersionAsync(IDevice d, int ms = 4000)
+    {
+        if (VersionKnown(d)) return true;
+        RequestVersion(d.Guid);
+        for (var until = DateTime.UtcNow.AddMilliseconds(ms); DateTime.UtcNow < until && !VersionKnown(d);) await Task.Delay(50);
+        return VersionKnown(d);
+    }
 
     /// <summary>G12 (firmware 5.6): blink the module's LEDs for <paramref name="seconds"/> s. Waits for the reply
     /// (2 s); the reply says whether the board has an LED (a CANBoard has none).</summary>

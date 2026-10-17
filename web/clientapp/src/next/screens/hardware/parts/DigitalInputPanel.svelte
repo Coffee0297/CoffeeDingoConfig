@@ -78,7 +78,7 @@
   $effect(() => {
     feed.ts
     untrack(() => {
-      if (test.phase === 'waiting' && sig && !!sig.on !== test.base) { stopTimer(); test.at = (Date.now() - test.start) / 1000; test.phase = 'seen' }
+      if (test.phase === 'waiting' && sig && !!sig.on !== test.base) { stopTimer(); test.at = (Date.now() - test.start) / 1000; test.phase = 'seen'; lastChange = Date.now() }   // the change the test saw is the last change too
     })
   })
   $effect(() => () => stopTimer())

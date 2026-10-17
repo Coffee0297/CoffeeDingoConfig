@@ -1830,7 +1830,9 @@ public static class LiveApi
                 case "readall": dm.ReadAllDeviceConfig(g); break;
                 case "write" or "writeall":
                     if (!await dm.WriteDeviceConfigConfirmed(g, all: action == "writeall"))
-                        return Results.Json(new { ok = false, error = "The module didn't confirm the write (see Logs) — it keeps its previous config" }, statusCode: 409);
+                        return Results.Json(new { ok = false, error = dm.GetDevice(g) is { } wd && !DeviceManager.VersionKnown(wd)
+                            ? "The module hasn't said which firmware it runs, so nothing was written (a write now could reset its newer settings). Try again in a moment."
+                            : "The module didn't confirm the write (see Logs) — it keeps its previous config" }, statusCode: 409);
                     // the project's Lua belongs to the config: send it unless this app already saw it on the module
                     if (dm.GetDevice(g) is PdmDevice && dm.GetDeviceUiState(g).LuaOnModule != dm.GetStoredLua(g)
                         && !await dm.UploadLuaAsync(g, dm.GetStoredLua(g)))

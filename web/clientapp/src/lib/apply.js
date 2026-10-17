@@ -72,8 +72,11 @@ export async function addCanInputFromFrame(api, consumerGuid, frame) {
   // Idempotent: a CAN input already decoding this exact frame slice is reused, so clicking the same remote
   // signal twice (or from two pickers) doesn't pile up duplicates ("ignition" ×5 in every list).
   // A 1-bit input is read through its State, so only one that reads "on when not 0" is the same signal.
+  // Same bits only when read the same way: byte order and sign, and for a number its scale (an RPM read as Intel,
+  // or raw instead of ×0.25, is a different value even at the same start bit).
   const same = (f?.canInputs ?? []).find((x) => x.enabled && x.id === frame.id && !!x.ide === !!frame.ide && x.startBit === frame.startBit && x.bitLength === frame.length
-    && (frame.length !== 1 || (x.operator === 1 && !x.operand)))
+    && (x.byteOrder ?? 0) === (frame.byteOrder ?? 0) && !!x.signed === !!frame.isSigned
+    && (frame.length === 1 ? x.operator === 1 && !x.operand : (x.factor ?? 1) === (frame.factor ?? 1) && (x.offset ?? 0) === (frame.offset ?? 0)))
   if (same) {
     const ins0 = await api.inputs(consumerGuid).catch(() => [])
     return { number: same.number, name: same.name, reused: true,
