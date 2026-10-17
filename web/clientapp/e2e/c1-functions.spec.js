@@ -71,7 +71,7 @@ test.describe('function list', () => {
     // every row names its kind and a state word
     for (const r of await page.getByTestId('fn-row').all()) {
       await expect(r.locator('.kind')).toHaveText(/FUNCTION BLOCK|HELPER|BLOCKS|CUSTOM CODE/)
-      await expect(r.getByText(/^(ON [\d.]+ A|off|tripped|disabled|not reported|no connection)$/)).toBeVisible()
+      await expect(r.getByText(/^(ON( [\d.]+ A)?|off|tripped|disabled|not reported|no connection)$/)).toBeVisible()
     }
     // the live state matches the module: a row says "on" only when an output of it is on
     const low = row(page, 'Low Beam')
@@ -97,7 +97,7 @@ test.describe('function list', () => {
     for (const r of await page.getByTestId('fn-row').all()) await expect(r.locator('.kind')).toHaveText('CUSTOM CODE (LUA)')
     // on now chip: every row has an "on" state
     await page.getByRole('button', { name: /^On now/ }).click()
-    for (const r of await page.getByTestId('fn-row').all()) await expect(r.locator('.st')).toHaveText(/^\s*ON /)
+    for (const r of await page.getByTestId('fn-row').all()) await expect(r.locator('.st')).toHaveText(/^\s*ON\b/)
     await page.getByRole('button', { name: /^All/ }).click()
     expect(await page.getByTestId('fn-row').count()).toBe(total)
     // search by name, by pin and by module; unknown text shows the empty state

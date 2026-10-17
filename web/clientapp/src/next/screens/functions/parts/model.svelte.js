@@ -111,7 +111,9 @@ export function createModel() {
     let on = false, fault = false, amps = 0, known = 0, enabled = true
     for (const o of row.outputs) {
       const d = live.devices.find((x) => x.guid === o.guid)
-      const out = d?.outputs?.find((x) => x.number === o.n)
+      // a CANBoard's outputs are digital outputs: on/off only, no current or trip
+      const dout = isCb(d) && d.connected ? d.digitalOut?.find((x) => x.number === o.n) : null
+      const out = dout ? { enabled: dout.enabled, state: dout.on ? 'On' : 'Off', current: 0 } : d?.outputs?.find((x) => x.number === o.n)
       if (!out) continue
       known++
       if (out.enabled === false) enabled = false
@@ -122,7 +124,7 @@ export function createModel() {
     if (!known) return { on: false, known: false, enabled: true, text: 'not reported', tone: 'stale' }
     if (fault) return { on, known, enabled, text: 'tripped', tone: 'fault' }
     if (!enabled) return { on: false, known, enabled, text: 'disabled', tone: 'off' }
-    return on ? { on, known, enabled, text: `ON ${amps.toFixed(1)} A`, tone: 'on' } : { on, known, enabled, text: 'off', tone: 'off' }
+    return on ? { on, known, enabled, text: amps > 0 ? `ON ${amps.toFixed(1)} A` : 'ON', tone: 'on' } : { on, known, enabled, text: 'off', tone: 'off' }
   }
 
   /** Turn every output of an applied function off (or back on). Writes each output's own config. */

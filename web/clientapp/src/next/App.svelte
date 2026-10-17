@@ -13,6 +13,21 @@
   import AddModule from './shell/AddModule.svelte'
 
   const m = $derived(match(route.parts))
+  // The app was rebuilt while this tab stayed open: its screens have new file names and the old ones are gone.
+  // Reload once (not again within 30 s, so a screen that is really missing still shows its error).
+  const STALE = /dynamically imported module|Importing a module script failed|error loading dynamically/i
+  function load(m) {
+    return m.load().catch((e) => {
+      let last = 0
+      try { last = Number(sessionStorage.getItem('nx-reloaded') || 0) } catch { /* storage blocked */ }
+      if (STALE.test(String(e?.message)) && Date.now() - last > 30_000) {
+        try { sessionStorage.setItem('nx-reloaded', String(Date.now())) } catch { /* storage blocked */ }
+        location.reload()
+        return new Promise(() => {})   // keep showing Loading… until the page reloads
+      }
+      throw e
+    })
+  }
   // Key by the whole route so a screen remounts (fresh state) when its params change.
   const key = $derived(route.parts.join('/'))
 
@@ -25,7 +40,7 @@
     <Rail />
     <main id="nx-main" tabindex="-1" inert={ui.nav}>   <!-- the phone menu drawer is open: Tab stays in it -->
       {#key key}
-        {#await m.load()}
+        {#await load(m)}
           <p class="muted loading">Loading…</p>
         {:then mod}
           <mod.default {...m.params} query={route.query} />

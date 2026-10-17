@@ -45,7 +45,10 @@ public record DeviceDto(string Guid, string Name, string Type, int BaseId, bool 
     WakeDto? LastWake = null,            // G14: why it last woke
     int? SleepCountdownS = null,         // G14: seconds until auto-sleep (null = not counting)
     int? SleepBlockers = null,           // G14: bit0 sleep off, bit1 outputs on, bit2 USB, bit3 CAN traffic
-    IgnitionDto? Ignition = null);
+    IgnitionDto? Ignition = null,
+    // CANBoard: its digital outputs (a PDM's are Outputs), live: number, enabled, on
+    DigitalOutDto[]? DigitalOut = null);
+public record DigitalOutDto(int Number, bool Enabled, bool On);
 public record WakeDto(string Reason, int Source, int Count);
 public record IgnitionDto(bool Enabled, string Role, string State, bool Dash, int MainStateId, int StateId, bool Live);
 public record AdaptersDto(string[] Adapters, string[] Ports, bool Connected, string? ActiveAdapter, string? ActivePort, int? GatewayBaseId, bool ProgrammingAllowed,
@@ -362,7 +365,8 @@ public static class DingoMap
                 cb.SleepEnabled, cb.SleepTimeoutMs, cb.SleepIgnoreAlwaysOn, cb.ForceSleepInput, cb.MuteTxInput, cb.WakeDigInputMask, cb.WakeOnCan,
                 cb.CanBootloader, cb.Connected && cb.ConfigMismatch, cb.LastConfigDiff.Count, CanSleep: cb.CanSleep, StoredOnModule: ui?.StoredOnModule, InBootloader: !cb.Connected && ui?.InBootloader == true, PendingEdits: cb.ConfigMismatch ? ui?.PendingEdits ?? 0 : 0,
                 HasLed: ui?.HasLed, Asleep: ui?.Asleep == true && !cb.Connected, LastWake: Wake(ui), SleepCountdownS: cb.SleepCountdownS,
-                SleepBlockers: cb.SleepCountdownS != null ? cb.SleepBlockersRaw : ui?.SleepBlockers, Ignition: Ign(cb.Ignition, cb.BaseId, cb.Type));
+                SleepBlockers: cb.SleepCountdownS != null ? cb.SleepBlockersRaw : ui?.SleepBlockers, Ignition: Ign(cb.Ignition, cb.BaseId, cb.Type),
+                DigitalOut: cb.DigitalOutputs.Select(o => new DigitalOutDto(o.Number, o.Enabled, o.State)).ToArray());
         return new DeviceDto(d.Guid.ToString(), d.Name, d.Type, d.BaseId, d.Connected,
             0, 0, 0, "", "", "", Array.Empty<OutputDto>(), reading, readDone, readTotal, false, 30000, true, 0, 0, 0, true,
             (d as IDeviceConfigurable)?.CanBootloader ?? false, CanSleep: false);   // an ECU (DBC) or other device: nothing to put to sleep
