@@ -1,3 +1,4 @@
+import { href } from '../../../router.svelte.js'
 // The car's functions, derived from what the API really has:
 //  - applied templates (templateInstances): function blocks, with their picks, blocks and outputs
 //  - every other enabled output, grouped by name across modules ("Left Low Beam" + "Right Low Beam" = "Low Beam"),
@@ -156,3 +157,11 @@ export function createModel() {
   return { m, load, stateOf, setEnabled, remove, syncTemplates }
 }
 export { systemName }
+
+/** A function's own page in the flow builder: its outputs (and a template's blocks) and what feeds them. */
+export function fnHref(row) {
+  const show = [...row.outputs.map((o) => `${o.guid}|o:${o.n}`),
+    ...(row.inst?.created ?? []).filter((c) => c.kind !== 'caninput').map((c) => `${c.guid ?? row.inst.guid}|${c.kind}:${c.number}`)]
+  const at = row.outputs.find((o) => o.guid === row.logicGuid) ? row.logicGuid : row.outputs[0]?.guid ?? row.logicGuid
+  return href('functions', 'flow', at, { fn: row.name, show: show.join(',') })
+}

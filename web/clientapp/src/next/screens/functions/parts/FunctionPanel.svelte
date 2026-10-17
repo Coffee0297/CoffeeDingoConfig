@@ -2,6 +2,7 @@
   /** The selected function: its sentence, what it uses, where it came from, and what you can do with it. */
   import { Button, StateDot } from '../../../ui/index.js'
   import { href } from '../../../router.svelte.js'
+  import { fnHref } from './model.svelte.js'
   import { templateByKey, ago } from './catalog.js'
 
   let { row, st, busy = false, onremove, onturn } = $props()
@@ -23,7 +24,7 @@
     {:else}Built by hand in the flow builder.{/if}
   </p>
   <div class="acts">
-    <Button variant="primary" href={href('functions', 'flow', row.logicGuid)}>Open in builder</Button>
+    <Button variant="primary" href={fnHref(row)}>Open in builder</Button>
     <Button disabled title="Simulate lands with the flow builder" aria-label="Simulate (not available yet: the simulator comes with the flow builder)">Simulate</Button>
     {#if row.inst}
       <Button href={href('functions', 'setup', row.inst.key, { edit: row.inst.id })} disabled={busy}>Change settings</Button>

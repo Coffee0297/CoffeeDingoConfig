@@ -2,6 +2,7 @@
   /** One function in the list: name, sentence, modules, live state (the main signal), the Enabled switch, link to the flow builder. */
   import { StateDot, Chip, Switch } from '../../../ui/index.js'
   import { href } from '../../../router.svelte.js'
+  import { fnHref } from './model.svelte.js'
 
   let { row, st, selected = false, busy = false, onselect, ontoggle } = $props()
   const canToggle = $derived(!!row.inst && st.known && !row.missing)
@@ -22,7 +23,7 @@
     <Switch checked={st.enabled && st.known} disabled={!canToggle || busy} label="" aria-label={'Enabled: ' + row.name + (why ? ' (' + why + ')' : '')}
       onchange={(v) => ontoggle?.(v)} />
   </span>
-  <a class="open" href={href('functions', 'flow', row.logicGuid)} aria-label={'Open ' + row.name + ' in the flow builder'}>Open ›</a>
+  <a class="open" href={fnHref(row)} aria-label={'Open ' + row.name + ' in the flow builder'}>Open ›</a>
 </div>
 
 <style>

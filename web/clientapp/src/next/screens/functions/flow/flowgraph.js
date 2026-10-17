@@ -19,7 +19,7 @@ export function portForSignal(node, sigName) {
  *   pos: {id: {x,y}}, match: Set<nodeId>, lv }
  */
 export function buildFlow(model, groups, opts) {
-  const { remoteIn = new Map(), linksOut = [], pos = {}, match = new Set(), lv, linkNodes = false } = opts
+  const { remoteIn = new Map(), linksOut = [], pos = {}, match = new Set(), lv, linkNodes = false, scope = null } = opts
   const readers = (id) => [...new Set(linksOut.filter((l) => l.from === id).map((l) => l.toName))]
   const collapsed = groups.filter((g) => !g.expanded)
   const memberOf = new Map()
@@ -72,6 +72,14 @@ export function buildFlow(model, groups, opts) {
     show.push({ id: 'link:' + guid, kind: 'link', fam: 'link', kindLabel: 'Link', title: '→ ' + ls[0].toName, sub: `read over CAN · ${ins.length} signal${ins.length === 1 ? '' : 's'}`, ins, outs: [], incomplete: [], linkOut: 'click to open ' + ls[0].toName, linkGuid: guid, linkTargets: ls, row: null, enabled: true, deletable: false })
   }
 
+  // one function's page: only the blocks in `scope` (a group when one of its members is in it)
+  if (scope) {
+    const kept = new Set(show.filter((n) => n.kind === 'group' ? n.group.members.some((m) => scope.has(m)) : scope.has(n.id)).map((n) => n.id))
+    for (let i = show.length - 1; i >= 0; i--) {
+      const n = show[i]
+      if (!(kept.has(n.id) || (n.kind === 'link' && n.ins.some((p) => kept.has(p.fromNode))))) show.splice(i, 1)
+    }
+  }
   const disp = new Map(show.map((n) => [n.id, n]))
   const mapId = (id) => (memberOf.has(id) ? 'grp:' + memberOf.get(id).id : id)
   const edges = []
@@ -98,3 +106,19 @@ export function buildFlow(model, groups, opts) {
   return { nodes, edges, disp }
 }
 const short = (t) => (t.length > 14 ? t.slice(0, 13) + '…' : t)
+
+/** The blocks a function's page shows: `roots` (its outputs / blocks) and everything that feeds them. */
+export function upstreamOf(model, roots) {
+  const seen = new Set(), stack = roots.filter((id) => model.nodes.has(id))
+  while (stack.length) {
+    const id = stack.pop()
+    if (seen.has(id)) continue
+    seen.add(id)
+    for (const p of model.nodes.get(id)?.ins ?? []) {
+      const src = p.src ? model.byIdx.get(p.src) : null
+      const sid = src ? (src.kind === 'sys' ? 'sys' : src.kind === 'lua' ? 'lua' : `${src.kind}:${src.number}`) : null
+      if (sid && model.nodes.has(sid) && !seen.has(sid)) stack.push(sid)
+    }
+  }
+  return seen
+}

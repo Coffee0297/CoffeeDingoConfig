@@ -27,7 +27,7 @@
   import { createSim } from './flow/sim.js'
   import { suggest, loadGroups, saveGroups, makeGroup, pruneGroups, kindWord, recipe } from './flow/helpers.js'
   import { loadCar, remoteSource, carLinks } from './flow/car.js'
-  import { buildFlow } from './flow/flowgraph.js'
+  import { buildFlow, upstreamOf } from './flow/flowgraph.js'
   import { writeBlock, prevBody, clearsFor, landed } from './flow/ops.js'
   import { linkRemote } from './flow/net.js'
   import { resolveRemote, isRemoteKey } from '../../lib/remote.js'
@@ -189,9 +189,18 @@
   let nodes = $state.raw([])
   let edges = $state.raw([])
   let disp = $state.raw(new Map())
+  // One function's page (?fn=Headlights&show=<guid>|o:3,<guid>|timer:2,…): its outputs / blocks on this module and
+  // everything that feeds them. Its parts on other modules are one click away.
+  const fnName = $derived(query?.fn ?? '')
+  const showList = $derived((query?.show ?? '').split(',').filter(Boolean).map((x) => x.split('|')))
+  const fnRoots = $derived(showList.filter(([g]) => g === guid).map(([, id]) => id.replace(/^o:/, dev && isCanboard(dev) ? 'digitaloutput:' : 'output:')))
+  const fnMods = $derived([...new Set(showList.map(([g]) => g))].map((g) => modules.find((d) => d.guid === g)).filter(Boolean))
+  const scope = $derived(model && fnRoots.length ? upstreamOf(model, fnRoots) : null)
+  $effect(() => { query?.show; fitted = false })   // a new page: fit it again
   $effect(() => {
     if (!model) { nodes = []; edges = []; return }
-    const f = buildFlow(model, groups, { remoteIn, linksOut, pos, match: matchSet, lv, linkNodes: showLinks })
+    // ponytail: a function page lays itself out (whole-module positions would scatter a few blocks); drags there aren't kept
+    const f = buildFlow(model, groups, { remoteIn, linksOut, pos: scope ? {} : pos, match: matchSet, lv, linkNodes: showLinks, scope })
     untrack(() => {
       const sel = selId
       nodes = f.nodes.map((n) => (n.id === sel ? { ...n, selected: true } : n))
@@ -221,6 +230,7 @@
     else flow.setViewport({ x: 60 - Math.min(...xs) * 0.85, y: 16 - Math.min(...ys) * 0.85, zoom: 0.85 })
   }
   function savePos() {
+    if (scope) return
     const p = { ...pos }
     for (const n of nodes) p[n.id] = n.position
     pos = p
@@ -474,8 +484,14 @@
 {:else}
 <div class="fb" data-busy={busy}>
   <div class="bar">
-    <nav aria-label="Breadcrumb" class="cr"><a href={href('functions')}>Functions</a><span aria-hidden="true">›</span><span aria-current="page">Flow builder</span></nav>
-    <h1>{devName} · blocks</h1>
+    <nav aria-label="Breadcrumb" class="cr"><a href={href('functions')}>Functions</a><span aria-hidden="true">›</span>{#if fnName}<a href={href('functions', 'flow', guid)}>{devName}</a><span aria-hidden="true">›</span><span aria-current="page">{fnName}</span>{:else}<span aria-current="page">Flow builder</span>{/if}</nav>
+    {#if fnName}
+      <h1 data-testid="fn-title">{fnName}</h1>
+      {#if fnMods.length > 1}<div class="fnmods" role="group" aria-label={'Where ' + fnName + ' runs'}>{#each fnMods as m (m.guid)}<Button size="sm" variant={m.guid === guid ? 'primary' : 'secondary'} aria-pressed={m.guid === guid} href={href('functions', 'flow', m.guid, { fn: fnName, show: query.show })}>{m.name}</Button>{/each}</div>{:else}<span class="muted">on {devName}</span>{/if}
+      <Button size="sm" variant="ghost" href={href('functions', 'flow', guid)} data-testid="fn-whole">Show all of {devName}</Button>
+    {:else}
+      <h1>{devName} · blocks</h1>
+    {/if}
     <div class="msel"><Select label="Module" hideLabel items={modItems} value={guid} onchange={(v) => v !== guid && go('functions', 'flow', v)} data-testid="module-select" /></div>
     <StateDot tone={mstate.key} shape={mstate.shape} label={mstate.word} />
     <span class="grow"></span>
@@ -622,6 +638,7 @@
   .cr a:hover { color: var(--color-text); text-decoration: underline; }
   h1 { font-size: var(--text-xl); font-weight: 700; margin-right: var(--space-2); }
   .msel { width: 220px; }
+  .fnmods { display: flex; gap: 4px; flex-wrap: wrap; }
   .grow { flex: 1 1 auto; }
   .warnc { color: var(--color-on-accent); font-weight: 700; }
   .cols { flex: 1 1 auto; min-height: 0; display: grid; grid-template-columns: 240px minmax(0, 1fr) 360px; border: 1px solid var(--color-line); border-radius: var(--radius-lg); overflow: hidden; background: var(--color-surface); }
