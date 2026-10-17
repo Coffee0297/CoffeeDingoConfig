@@ -13,6 +13,7 @@
   import SearchPick from './SearchPick.svelte'
   import PreviewAside from './PreviewAside.svelte'
   import Drawings from './Drawings.svelte'
+  import { buildMyself } from './buildMyself.js'
 
   let { tpl, editId = '', fromId = '' } = $props()
 
@@ -195,6 +196,26 @@
       applyErr = 'Failed: ' + e.message + (/roll-back/.test(e.message) ? ' Some changes may still be on the modules. Apply again, or remove the function from the list.' : editing ? ' The previous version was removed. Fix it and apply again.' : ' Nothing was left half-built. You can apply again.')
     } finally { busy = false; await loadOutputs() }
   }
+  // "Build it myself": the same inputs and outputs, your own logic in the flow builder or in Lua (buildMyself.js)
+  async function buildSelf(mode) {
+    applyErr = ''
+    const issue = applyIssues(); if (issue) { applyErr = issue; return }
+    busy = true
+    try {
+      const s = { ...sel }
+      for (const f of fIn) {   // ECU picks become CAN inputs on the logic module, as Apply does
+        const o = inOpt(f.k)
+        if (!o?.dbc) continue
+        const r = await addCanInputFromDbc(logicGuid, o.dbc)
+        s[f.k] = f.t === 'bool' ? (r.stateIndex ?? r.valueIndex) : (r.valueIndex ?? r.stateIndex)
+      }
+      const url = await buildMyself(mode, { tpl, sel: s, relays, name, inOpt, outOpts, logicGuid, others: get(templateInstances) })
+      project.dirty = true
+      toast(mode === 'lua' ? 'Inputs and outputs are ready: the Lua stub is on the module, write your logic in it.' : 'Inputs and outputs are ready: wire your logic between them.', 'info', 5000)
+      location.hash = url
+    } catch (e) { applyErr = 'Not built: ' + (e?.message ?? e) }
+    finally { busy = false }
+  }
   const takenNames = $derived(fOut.filter((f) => outOpt(f.k)?.used && !(editing?.wired ?? []).map((w) => (/^\d+$/.test(String(w)) ? `${editing.guid}:${w}` : String(w))).includes(sel[f.k])).map((f) => outOpt(f.k).label.split(' · ').slice(0, 3).join(' · ')))
   const next = () => { if (!stepIssue) { step = Math.min(step + 1, steps.length - 1); maxStep = Math.max(maxStep, step) } }
   const nextName = $derived(steps[step + 1]?.name)
@@ -296,6 +317,10 @@
         <span class="sp"></span>
         {#if step > 0}<Button onclick={() => (step = step - 1)} data-testid="wz-back">Back</Button>{/if}
         {#if cur.id === 'check'}
+          {#if !editing}
+            <Button {busy} disabled={busy || !!stepIssue} onclick={() => buildSelf('blocks')} title="Same inputs and outputs, your own blocks: opens the flow builder with them on the canvas" data-testid="wz-self-blocks">Build it myself: blocks</Button>
+            <Button {busy} disabled={busy || !!stepIssue} onclick={() => buildSelf('lua')} title="Same inputs and outputs, your own Lua: the outputs follow Lua Outs and a stub reads every input" data-testid="wz-self-lua">…in Lua</Button>
+          {/if}
           <Button variant="primary" {busy} disabled={busy || !!stepIssue} onclick={() => apply(false)} data-testid="wz-apply">{editing ? 'Apply again' : 'Apply'}</Button>
         {:else}
           <Button variant="primary" disabled={!!stepIssue} onclick={next} data-testid="wz-next">Next: {nextName}</Button>

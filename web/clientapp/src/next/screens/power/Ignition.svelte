@@ -7,7 +7,9 @@
   import { href } from '../../router.svelte.js'
   import { live, api, toast, project, isCanboard } from '../../lib/live.svelte.js'
   import { olderThan, parseVersion } from '../hardware/parts/util.js'
-  import { remoteItems, resolveRemote, isRemoteKey } from '../../lib/remote.js'
+  import { remoteItems } from '../../lib/remote.js'
+  import SignalRule from './parts/SignalRule.svelte'
+  import { decodeRule, compileRule, ruleSet } from './parts/signalRule.js'
 
   const MODES = [
     { value: 0, name: 'Ignition switch + start button', what: 'A switch (or key with only ON) powers the ignition. The button only cranks, and only while the ignition is on.' },
@@ -43,12 +45,19 @@
 
   // ---- the setup, seeded from the module that is main today (or the first PDM) ----
   let mainGuid = $state(''), f = $state(null), follow = $state(true), busy = $state(false), err = $state('')
-  let funcsOf = $state({}), boolsOf = $state({})
+  let funcsOf = $state({}), boolsOf = $state({}), numsOf = $state({}), fullOf = {}, vmapOf = {}
+  // the four signals, each a rule: [NOT] signal [is above N] [OR / AND …] (parts/signalRule.js)
+  const FIELDS = { ignitionInput: 'Switch', startInput: 'Start', crankAllowInput: 'Crank OK', runningInput: 'Running' }
+  let rules = $state({})
+  const word = (v) => v.name + (v.prop && v.prop !== 'Value' && v.prop !== 'State' ? ' · ' + v.prop : '')
   async function load(d) {
     try {
-      const [fn, vars] = await Promise.all([api.functions(d.guid), api.inputs(d.guid, 'bool', true)])
+      const [fn, vars, inUse] = await Promise.all([api.functions(d.guid), api.inputs(d.guid), fetch(`/api/devices/${d.guid}/inputs?inUse=true`).then((r) => r.json())])
       funcsOf[d.guid] = fn?.ignition ?? null
-      boolsOf[d.guid] = (vars ?? []).filter((v) => v.index > 0 && v.kind !== 'ignition').map((v) => ({ value: String(v.index), label: v.name + (v.prop && v.prop !== 'Value' && v.prop !== 'State' ? ' · ' + v.prop : '') }))
+      fullOf[d.guid] = fn; vmapOf[d.guid] = vars ?? []   // the whole var map: rules are read back from any slot
+      const usable = (inUse ?? []).filter((v) => v.index > 0 && v.kind !== 'ignition' && !(v.name ?? '').startsWith('Ign '))
+      boolsOf[d.guid] = usable.filter((v) => v.type === 'bool').map((v) => ({ value: String(v.index), label: word(v) }))
+      numsOf[d.guid] = usable.filter((v) => v.type !== 'bool').map((v) => ({ value: String(v.index), label: word(v) }))
     } catch { /* offline module: no list */ }
   }
   let seeded = false
@@ -63,36 +72,27 @@
   function pick(guid) {
     mainGuid = guid
     const g = funcsOf[guid] ?? {}
-    f = { mode: g.mode ?? 0, ignitionInput: g.ignitionInput ?? 0, startInput: g.startInput ?? 0, crankAllowInput: g.crankAllowInput ?? 0, runningInput: g.runningInput ?? 0,
-      maxCrankS: (g.maxCrankMs ?? 5000) / 1000, crankWhileHeld: g.crankWhileHeld ?? true, dashHoldS: (g.dashHoldMs ?? 0) / 1000 }
+    f = { mode: g.mode ?? 0, maxCrankS: (g.maxCrankMs ?? 5000) / 1000, crankWhileHeld: g.crankWhileHeld ?? true, dashHoldS: (g.dashHoldMs ?? 0) / 1000 }
+    rules = Object.fromEntries(Object.keys(FIELDS).map((k) => [k, decodeRule(g[k] ?? 0, fullOf[guid], vmapOf[guid] ?? [])]))
   }
   const main = $derived(mods.find((d) => d.guid === mainGuid) ?? null)
   // on/off signals on other modules and ECUs; Save links the picked one to a CAN input on the main module
-  let remote = $state([])
+  let remote = $state([]), remoteNum = $state([])
   $effect(() => {
     const g = mainGuid
     if (!g) return
     let alive = true
-    untrack(() => remoteItems(g, 'bool')).then((r) => { if (alive) remote = r })   // untracked: it reads the polled device list
+    untrack(() => Promise.all([remoteItems(g, 'bool'), remoteItems(g, 'num')])).then(([b, n]) => { if (alive) { remote = b; remoteNum = n } })   // untracked: reads the polled device list
     return () => { alive = false }
   })
   const items = $derived([{ value: '0', label: '— not set' }, ...(boolsOf[mainGuid] ?? []), ...remote])
+  const numItems = $derived([...(numsOf[mainGuid] ?? []), ...remoteNum])
   const followers = $derived(capable.filter((d) => d.guid !== mainGuid))
   const isOn = $derived(!!funcsOf[mainGuid]?.enabled && funcsOf[mainGuid]?.role === 0)
-  const num = (v) => (isRemoteKey(v) ? v : +v)
-  /** Turn picked remote signals into local var indexes on the main module; returns false when it could not. */
-  async function linkRemotes() {
-    const keys = ['ignitionInput', 'startInput', 'crankAllowInput', 'runningInput'].filter((k) => isRemoteKey(f[k]))
-    if (!keys.length) return true
-    const done = {}
-    for (const k of keys) f[k] = done[f[k]] ??= await resolveRemote(mainGuid, f[k], 'bool')
-    await load(main)
-    return true
-  }
   function problem() {
     if (!f) return 'Pick the main module first.'
-    if (f.mode !== 1 && !f.ignitionInput) return f.mode === 2 ? 'Pick the key ON signal.' : 'Pick the ignition switch.'
-    if (!f.startInput) return f.mode === 2 ? 'Pick the key START signal.' : 'Pick the start button.'
+    if (f.mode !== 1 && !ruleSet(rules.ignitionInput)) return f.mode === 2 ? 'Pick the key ON signal.' : 'Pick the ignition switch.'
+    if (!ruleSet(rules.startInput)) return f.mode === 2 ? 'Pick the key START signal.' : 'Pick the start button.'
     if (!(f.maxCrankS >= 0.5 && f.maxCrankS <= 30)) return 'Max crank time must be 0.5 to 30 s.'
     if (!(f.dashHoldS >= 0 && f.dashHoldS <= 60)) return 'Dash hold must be 0 to 60 s.'
     return ''
@@ -101,11 +101,15 @@
     err = problem()
     if (err) return
     busy = true
-    try { if (!(await linkRemotes())) { busy = false; return } } catch (e) { err = e?.message ?? String(e); busy = false; return }
+    // each rule becomes one signal: a picked one as is, or helper blocks for NOT / OR / AND / a number test
+    const sig = {}
+    try { for (const [k, label] of Object.entries(FIELDS)) sig[k] = await compileRule(mainGuid, label, f.mode === 1 && k === 'ignitionInput' ? null : rules[k]) }
+    catch (e) { err = e?.message ?? String(e); busy = false; return }
+    await load(main)
     const failed = []
     const put = async (d, body) => { try { const r = await api.setFunction(d.guid, 'ignition', 1, body); funcsOf[d.guid] = { ...(funcsOf[d.guid] ?? {}), ...body }; return r } catch (e) { failed.push(`${d.name}: ${e?.message ?? e}`) } }
-    await put(main, { enabled: true, role: 0, mode: f.mode, ignitionInput: Number(f.ignitionInput), startInput: Number(f.startInput), crankAllowInput: Number(f.crankAllowInput),
-      runningInput: Number(f.runningInput), maxCrankMs: Math.round(f.maxCrankS * 1000), crankWhileHeld: f.crankWhileHeld, dashHoldMs: Math.round(f.dashHoldS * 1000), mainStateId: 0 })
+    await put(main, { enabled: true, role: 0, mode: f.mode, ignitionInput: sig.ignitionInput, startInput: sig.startInput, crankAllowInput: sig.crankAllowInput,
+      runningInput: sig.runningInput, maxCrankMs: Math.round(f.maxCrankS * 1000), crankWhileHeld: f.crankWhileHeld, dashHoldMs: Math.round(f.dashHoldS * 1000), mainStateId: 0 })
     for (const d of followers) {
       if (follow) await put(d, { enabled: true, role: 1, mainStateId: stateIdOf(main) })
       else if (funcsOf[d.guid]?.enabled) await put(d, { enabled: false })
@@ -159,17 +163,17 @@
     <div class="fields">
       {#if (f?.mode ?? 0) !== 1}
         <div class="field"><div><strong>{f?.mode === 2 ? 'Key at ON' : 'Ignition switch'}</strong><div class="muted hint">held on while the ignition should be on</div></div>
-          <Select label="Ignition switch" hideLabel {items} value={String(f?.ignitionInput ?? 0)} onchange={(v) => (f.ignitionInput = num(v))} disabled={!ready || busy} data-testid="ign-switch" /></div>
+          {#if rules.ignitionInput}<SignalRule bind:rule={rules.ignitionInput} {items} {numItems} label={f?.mode === 2 ? 'Key at ON' : 'Ignition switch'} disabled={!ready || busy} testid="ign-switch" />{/if}</div>
       {/if}
       <div class="field"><div><strong>{f?.mode === 2 ? 'Key at START' : 'Start button'}</strong><div class="muted hint">a pin, a keypad button, or a bit in a CAN frame</div></div>
-        <Select label="Start button" hideLabel {items} value={String(f?.startInput ?? 0)} onchange={(v) => (f.startInput = num(v))} disabled={!ready || busy} data-testid="ign-start" /></div>
+        {#if rules.startInput}<SignalRule bind:rule={rules.startInput} {items} {numItems} label={f?.mode === 2 ? 'Key at START' : 'Start button'} disabled={!ready || busy} testid="ign-start" />{/if}</div>
       <div class="field"><div><strong>Also required to crank</strong><div class="muted hint">clutch or brake pressed, neutral · optional</div></div>
-        <Select label="Also required to crank" hideLabel {items} value={String(f?.crankAllowInput ?? 0)} onchange={(v) => (f.crankAllowInput = num(v))} disabled={!ready || busy} data-testid="ign-allow" /></div>
-      <div class="field"><div><strong>Engine running</strong><div class="muted hint">stops the starter; no cranking while it runs · optional</div></div>
-        <Select label="Engine running" hideLabel {items} value={String(f?.runningInput ?? 0)} onchange={(v) => (f.runningInput = num(v))} disabled={!ready || busy} data-testid="ign-running" /></div>
+        {#if rules.crankAllowInput}<SignalRule bind:rule={rules.crankAllowInput} {items} {numItems} label={'Also required to crank'} disabled={!ready || busy} testid="ign-allow" />{/if}</div>
+      <div class="field"><div><strong>Engine running</strong><div class="muted hint">stops the starter; no cranking while it runs · optional. An ECU's RPM works too: pick it, then "is above" 300</div></div>
+        {#if rules.runningInput}<SignalRule bind:rule={rules.runningInput} {items} {numItems} label={'Engine running'} disabled={!ready || busy} testid="ign-running" />{/if}</div>
       <div class="field"><div><strong>Max crank time</strong><div class="muted hint">then release and press again</div></div>
         <div class="stp"><Stepper label="Seconds of cranking at most" min={0.5} max={30} step={0.5} decimals={1} unit="s" bind:value={() => f?.maxCrankS ?? 5, (v) => f && (f.maxCrankS = +v)} disabled={!ready || busy} data-testid="ign-crank" /></div></div>
-      <div class="field"><div><strong>Dash stays on after off</strong><div class="muted hint">the Dash role keeps power this long</div></div>
+      <div class="field"><div><strong>Dash hold after the key is off</strong><div class="muted hint">outputs with the Dash role (gauges, radio, clock…) follow the ignition, but stay on this many seconds after it goes off. 0 = they go off with the ignition</div></div>
         <div class="stp"><Stepper label="Seconds the dash stays on" min={0} max={60} step={1} unit="s" bind:value={() => f?.dashHoldS ?? 0, (v) => f && (f.dashHoldS = +v)} disabled={!ready || busy} data-testid="ign-dash" /></div></div>
     </div>
   </Card>
@@ -207,7 +211,7 @@
   .mode span { display: flex; flex-direction: column; gap: 4px; }
   .mode input { margin-top: 4px; width: 20px; height: 20px; }
   .fields { display: flex; flex-direction: column; }
-  .field { display: grid; grid-template-columns: minmax(200px, 1fr) minmax(260px, 1.3fr); gap: var(--space-4); align-items: center; padding: var(--space-2) 0; border-bottom: 1px solid var(--color-line); }
+  .field { display: grid; grid-template-columns: minmax(200px, 1fr) minmax(260px, 1.6fr); gap: var(--space-4); align-items: center; padding: var(--space-2) 0; border-bottom: 1px solid var(--color-line); }
   .hint { font-size: var(--text-xs); }
   .stp :global(.nx-label) { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; }   /* the row already names it */
   .hold { border: 0; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--space-2); }

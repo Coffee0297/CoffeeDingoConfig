@@ -248,6 +248,8 @@ public class DeviceManager(ILogger<DeviceManager> logger, ILoggerFactory loggerF
         RemoveAllCyclicTimers();
         _devices.Clear();
         _requestQueue.Clear();
+        // waiting edits belong to the project that was open (what the modules know, like their Lua, stays)
+        foreach (var ui in _deviceUiState.Values) lock (ui.Edits) ui.Edits.Clear();
         logger.LogInformation("All devices cleared");
     }
 
@@ -1147,7 +1149,9 @@ public class DeviceManager(ILogger<DeviceManager> logger, ILoggerFactory loggerF
     public async Task<bool> UploadLuaAsync(Guid deviceId, string source)
     {
         var up = StartLuaUpload(deviceId, source);
-        return up != null && await Task.WhenAny(up, Task.Delay(TimeSpan.FromSeconds(90))) == up && up.Result;
+        var ok = up != null && await Task.WhenAny(up, Task.Delay(TimeSpan.FromSeconds(90))) == up && up.Result;
+        if (ok) GetDeviceUiState(deviceId).LuaOnModule = source ?? "";
+        return ok;
     }
 
     /// <summary>Start a Lua upload; null when refused (too big / not a PDM). The task completes true once the

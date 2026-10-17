@@ -280,3 +280,15 @@ test('a direct write of a block that has waiting changes clears them from the li
     expect(await waiting()).toBe(false)
   } finally { await apiJson('POST', url, { name: v.name }).catch(() => {}) }
 })
+
+test('opening the project again starts with nothing waiting @exclusive', async () => {
+  const p = await apiJson('GET', '/api/project')
+  test.skip(!p.current || p.dirty, 'needs a saved project file with no unsaved changes (reopening drops them)')
+  const d = await deviceByName('PDM-02')
+  const v = (await apiJson('GET', `/api/devices/${d.guid}/functions`)).virtualInputs.find((x) => !x.enabled)
+  const r = await fetch(`${API}/api/devices/${d.guid}/function/virtualinput/${v.number}`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Dingo-Stage': '1' }, body: JSON.stringify({ name: 'a-apply staged' }) })
+  expect(r.ok).toBe(true)
+  expect((await deviceByName('PDM-02')).pendingEdits).toBeGreaterThan(0)
+  await apiJson('POST', '/api/project/open', { FileName: p.current }, 60_000)   // the staged edit is not in the file
+  await waitFor(async () => (await devices()).every((x) => !x.pendingEdits), 15_000, 'no waiting edits after reopening')
+})

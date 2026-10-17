@@ -1011,6 +1011,7 @@ public static class LiveApi
                     return Results.BadRequest(new { ok = false, error = "upload rejected (too big, or not a Lua-capable PDM)" });
                 if (await Task.WhenAny(up, Task.Delay(TimeSpan.FromSeconds(90))) != up || !up.Result)
                     return Results.Json(new { ok = false, written = false, error = "Lua upload didn't verify on the module (see Logs) — it keeps its previous program" }, statusCode: 409);
+                dm.GetDeviceUiState(g).LuaOnModule = r.Source ?? "";
             }
             // Slot lint: setLuaOut(n) drives "Lua Out n+1". A whole project was found with every call one slot high —
             // each output silently ran its neighbour's rule. Say so at upload time.
@@ -1830,6 +1831,10 @@ public static class LiveApi
                 case "write" or "writeall":
                     if (!await dm.WriteDeviceConfigConfirmed(g, all: action == "writeall"))
                         return Results.Json(new { ok = false, error = "The module didn't confirm the write (see Logs) — it keeps its previous config" }, statusCode: 409);
+                    // the project's Lua belongs to the config: send it unless this app already saw it on the module
+                    if (dm.GetDevice(g) is PdmDevice && dm.GetDeviceUiState(g).LuaOnModule != dm.GetStoredLua(g)
+                        && !await dm.UploadLuaAsync(g, dm.GetStoredLua(g)))
+                        return Results.Json(new { ok = false, error = "Settings written, but the Lua program didn't verify on the module (see Logs) — it keeps its previous program" }, statusCode: 409);
                     break;
                 case "burn":
                     if (!await dm.BurnSettingsConfirmed(g))

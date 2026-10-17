@@ -37,7 +37,11 @@ public class DeviceUiState
     // Sleep and wake log (5.6.3): one row per "going to sleep" goodbye and per wake report, newest last, 40 kept
     public List<SleepEvent> SleepLog { get; } = new();
     public bool WakeLogged { get; set; }            // this wake is in the log already
-    public bool CheckAfterWake { get; set; }        // a config check skipped while it slept: run it when it talks again
+    public bool CheckAfterWake { get; set; }
+    // The Lua program this app last saw verified on the module (null = unknown since the app started). Apply
+    // ("write") uploads the project's program when it differs, so a stale program (an earlier project, a test,
+    // another tool) never keeps running behind the project's back; an empty project program clears it.
+    public string? LuaOnModule { get; set; }        // a config check skipped while it slept: run it when it talks again
     public void LogSleep(string kind, string why) { lock (SleepLog) { SleepLog.Add(new SleepEvent(DateTime.UtcNow, kind, why)); if (SleepLog.Count > 40) SleepLog.RemoveAt(0); } }
     public DateTime VersionAskedAt { get; set; }    // last automatic version request (unknown version)
 }

@@ -321,3 +321,62 @@ test('ignition on PDM-01 with the others following: live state, a Starter role, 
   }
   expect(errors).toEqual([])
 })
+
+test('ignition signals as rules: NOT engine running, a number above 300 OR a switch; read back, then all off @exclusive', async ({ page }) => {
+  test.setTimeout(240_000)
+  const errors = watchErrors(page)
+  const p1 = await deviceByName('PDM-01')
+  const fns = () => apiJson('GET', `/api/devices/${p1.guid}/functions`)
+  const before = await fns()
+  const vmap = await apiJson('GET', `/api/devices/${p1.guid}/inputs`)
+  const byIdx = (i) => vmap.find((v) => v.index === i)
+  try {
+    await open(page, 'power/ignition')
+    await pick(page, 'ign-main', 'PDM-01')
+    await page.getByRole('radio', { name: /Ignition switch \+ start button/ }).check()
+    await pick(page, 'ign-switch', 'Always On')
+    await page.getByTestId('ign-start').click()
+    await page.getByRole('option').nth(2).click()
+    // engine running = NOT a signal
+    await page.getByTestId('ign-running').click()
+    await page.getByRole('option').nth(3).click()
+    await page.getByTestId('ign-running-not').click()
+    // crank allowed = a number is above 300 OR a switch
+    await page.getByTestId('ign-allow').click()
+    await page.getByRole('searchbox').fill('(number)')
+    await page.getByRole('option', { name: /\(number\)$/ }).first().click()
+    await page.getByTestId('ign-allow-val').fill('300')
+    await page.getByTestId('ign-allow-or').click()
+    await page.getByTestId('ign-allow-b').click()
+    await page.getByRole('option').nth(2).click()
+    await page.getByTestId('ignition-save').click()
+    await waitFor(async () => (await fns()).ignition?.enabled, 30_000, 'ignition saved')
+    const f = await fns()
+    const vi = (idx) => f.virtualInputs.find((x) => x.number === byIdx(idx)?.number && byIdx(idx)?.kind === 'virtualinput')
+    const run = vi(f.ignition.runningInput)
+    expect(run.name).toBe('Ign Running')
+    expect([run.not0, run.not1, run.var0 === run.var1]).toEqual([true, true, true])
+    const allow = vi(f.ignition.crankAllowInput)
+    expect([allow.name, allow.cond0]).toEqual(['Ign Crank OK', 1])
+    const cmp = f.conditions.find((x) => byIdx(allow.var0)?.kind === 'condition' && x.number === byIdx(allow.var0).number)
+    expect([cmp.name, cmp.operator, cmp.arg]).toEqual(['Ign Crank OK A', 2, 300])
+    // the page reads the rules back
+    await open(page, 'power/ignition')
+    await pick(page, 'ign-main', 'PDM-01')
+    await expect(page.getByTestId('ign-running-not')).toHaveAttribute('aria-pressed', 'true')
+    await expect(page.getByTestId('ign-allow-val')).toHaveValue('300')
+    await expect(page.getByTestId('ign-allow-b')).toBeVisible()
+  } finally {
+    const now = await fns()
+    // the followers too: Save made every 5.6 module follow PDM-01
+    for (const d of (await devices()).filter((x) => /pdm|canboard/i.test(x.type)))
+      await apiJson('POST', `/api/devices/${d.guid}/function/ignition/1`, { enabled: false, role: 0, mainStateId: 0, ignitionInput: 0, startInput: 0, crankAllowInput: 0, runningInput: 0 }).catch(() => {})
+    for (const [arr, kind] of [['conditions', 'condition'], ['virtualInputs', 'virtualinput']])
+      for (const x of now[arr]) {
+        const was = before[arr].find((y) => y.number === x.number)
+        if (JSON.stringify(was) !== JSON.stringify(x)) await apiJson('POST', `/api/devices/${p1.guid}/function/${kind}/${x.number}`, was).catch(() => {})
+      }
+    await apiJson('POST', `/api/devices/${p1.guid}/writeall`, undefined, 60_000).catch(() => {})
+  }
+  expect(errors).toEqual([])
+})
