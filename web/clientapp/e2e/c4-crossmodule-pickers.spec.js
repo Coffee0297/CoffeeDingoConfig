@@ -395,9 +395,10 @@ test('flow builder: Signal from another module finds an ECU signal in the DBC an
 // ---------------------------------------------------------------- 8. setup wizard with an ECU input
 const instanceIds = async () => ((await apiJson('GET', '/api/templates/instances').catch(() => null)) ?? []).map((i) => i.id)
 /** Remove every applied function that is not in `keep` (what the function list's Remove calls). */
-async function removeInstances(keep) {
+async function removeInstances(keep, strict = false) {
   await new Promise((r) => setTimeout(r, 600))   // the page mirrors its list to the server a moment after a change
-  for (const id of await instanceIds()) if (!keep.includes(id)) await retry(() => apiJson('POST', '/api/templates/remove', { id }, 120_000)).catch(() => {})
+  // strict (the step under test): a failed remove fails the test with its reason; cleanup stays lenient
+  for (const id of await instanceIds()) if (!keep.includes(id)) await retry(() => apiJson('POST', '/api/templates/remove', { id }, 120_000)).catch((e) => { if (strict) throw e })
 }
 
 test('setup wizard: an ECU signal as the input of a simple function; applied, checked, removed @exclusive', async ({ page }) => {
@@ -426,8 +427,13 @@ test('setup wizard: an ECU signal as the input of a simple function; applied, ch
     await waitFor(async () => (await deviceByName('PDM-05')).outputs.find((o) => o.number === 8).inputVal === st, 15_000, 'o8 follows the ECU signal')
     // remove it again (what the function list's Remove calls)
     expect((await instanceIds()).filter((id) => !keep.includes(id))).toHaveLength(1)
-    await removeInstances(keep)
-    await waitFor(async () => (await newCanInputs(snap[0])).length === 0 && !(await deviceByName('PDM-05')).outputs.find((o) => o.number === 8).inputVal, 60_000, 'function removed')
+    await removeInstances(keep, true)
+    await waitFor(async () => {
+      const left = (await newCanInputs(snap[0])).map((c) => 'CAN input ' + c.number)
+      const o8 = (await deviceByName('PDM-05')).outputs.find((o) => o.number === 8).inputVal
+      if (left.length || o8) throw new Error(`still there: ${[...left, o8 ? 'o8 input ' + o8 : ''].filter(Boolean).join(', ')}`)
+      return true
+    }, 60_000, 'function removed')
   } finally { await removeInstances(keep); await restore(snap) }
   expect(errors).toEqual([])
 })

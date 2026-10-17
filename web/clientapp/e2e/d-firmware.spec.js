@@ -125,6 +125,7 @@ test('firmware: update all over CAN with real release files @exclusive', async (
   const btn = page.getByTestId('fw-update-all')
   // the files are read and checked first: wait until every CAN module has a verdict, then look at the button
   await expect(page.locator('[data-testid^="fw-status-"]').filter({ hasText: 'Choose release files first' })).toHaveCount(0, { timeout: 15_000 })
+  await expect(btn).not.toContainText('Checking the files', { timeout: 30_000 })   // until then a file's version is unknown
   if (await btn.isEnabled()) {
     await btn.click()
     await page.getByTestId('confirm-go').click()
@@ -205,6 +206,7 @@ test('firmware: a module waiting in its bootloader is found, shown and restarted
   test.setTimeout(120_000)
   const errors = watchErrors(page)
   const cb = await deviceByName('CB-1')
+  let restarted = false
   try {
     await apiJson('POST', `/api/devices/${cb.guid}/bootloader?can=true`)   // the CAN-update entry: OpenBLT waits for a tool
     // the Sim plays OpenBLT (its server/vblt.js): the module is held there until the tool restarts it
@@ -219,8 +221,11 @@ test('firmware: a module waiting in its bootloader is found, shown and restarted
     await waitFor(async () => (await deviceByName('CB-1')).connected, 30_000, 'CB-1 runs its firmware again')
     await expect(page.getByTestId('fw-version-CB-1')).not.toHaveText('in bootloader')
     expect((await deviceByName('CB-1')).inBootloader).toBe(false)
+    restarted = true
   } finally {
-    if (!(await deviceByName('CB-1')).connected) { await simReset('CB-1'); await waitFor(async () => (await deviceByName('CB-1')).connected, 60_000, 'CB-1 back after a Sim reset') }
+    // skipped or failed: the Sim may still hold CB-1 in its bootloader even while it looks connected (it then
+    // swallows CB-1's config traffic and every later test that writes CB-1 fails), so reset it either way
+    if (!restarted) { await simReset('CB-1'); await waitFor(async () => (await deviceByName('CB-1')).connected, 60_000, 'CB-1 back after a Sim reset') }
   }
   expect(errors).toEqual([])
 })

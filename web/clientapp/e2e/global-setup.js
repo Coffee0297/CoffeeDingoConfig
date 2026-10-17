@@ -12,14 +12,12 @@ export default async function globalSetup() {
     await apiJson('POST', '/api/connect', { Adapter: 'SLCAN', Port: port, Bitrate: '500K' })
   }
 
-  let devs = await apiJson('GET', '/api/devices')
-  if (!devs.length) {
-    const file = process.env.E2E_PROJECT
-    if (!file || !fs.existsSync(file)) throw new Error('No project loaded and E2E_PROJECT is not set to a project file matching the Sim scene.')
-    const r = await fetch(API + '/api/project/upload', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: fs.readFileSync(file, 'utf8') })
-    if (!r.ok) throw new Error('Project upload failed: ' + (await r.text()))
-    devs = await apiJson('GET', '/api/devices')
-  }
+  // Always the fixture, never the project that happens to be open: the tests save, rename and write modules, and
+  // an uploaded project has no file name, so nothing they do can overwrite the operator's own project file.
+  const file = process.env.E2E_PROJECT
+  if (!file || !fs.existsSync(file)) throw new Error('Set E2E_PROJECT to a project file matching the Sim scene (the tests replace the open project with it).')
+  const r = await fetch(API + '/api/project/upload', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: fs.readFileSync(file, 'utf8') })
+  if (!r.ok) throw new Error('Project upload failed: ' + (await r.text()))
   // Every module in the project should answer on the Sim before tests start.
   await waitFor(async () => (await apiJson('GET', '/api/devices')).every((d) => d.connected || /dbc/i.test(d.type)), 30_000, 'all modules connected')   // an ECU (DBC) shows only while it sends
 }

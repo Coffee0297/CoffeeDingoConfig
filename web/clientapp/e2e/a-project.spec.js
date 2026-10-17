@@ -73,7 +73,7 @@ test('Save as: a bad name is explained, an existing name needs a second press, n
   await menu(page).getByTestId('saveas-go').click()
   await expect(menu(page).getByText('Use letters, numbers, spaces, dashes and underscores only.')).toBeVisible()
   // an existing name: first press only warns (no overwrite)
-  await name.fill(before.files[0].replace(/\.json$/i, ''))
+  await name.fill(before.files.find((f) => f !== before.current).replace(/\.json$/i, ''))   // the open file's own name is just Save
   await menu(page).getByTestId('saveas-go').click()
   await expect(menu(page).getByText(/already exists\. Press Save again to replace it\./)).toBeVisible()
   await menu(page).getByRole('button', { name: 'Back' }).click()
