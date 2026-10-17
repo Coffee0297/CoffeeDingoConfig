@@ -1,7 +1,7 @@
 // Hardware › Modules: table, selection, CAN ID map, settings side panel, rename, remove.
 import { test, expect } from '@playwright/test'
 import { open, watchErrors } from './helpers.js'
-import { apiJson, devices, deviceByName, waitFor } from './api.js'
+import { apiJson, devices, modules, deviceByName, waitFor } from './api.js'
 import { guidOf, hex3 } from './a-util.js'
 
 const side = (page) => page.getByRole('complementary', { name: 'Module settings' })
@@ -9,7 +9,7 @@ const side = (page) => page.getByRole('complementary', { name: 'Module settings'
 test('table lists every project module with its live state', async ({ page }) => {
   const errors = watchErrors(page)
   await open(page, 'hardware')
-  const devs = await devices()
+  const devs = await modules()
   await expect(page.getByRole('heading', { level: 1, name: 'Modules' })).toBeVisible()
   await expect(page.getByText(`${devs.length} in this project`)).toBeVisible()
   const rows = page.getByRole('table', { name: 'Module table' }).locator('tbody tr')
@@ -20,12 +20,16 @@ test('table lists every project module with its live state', async ({ page }) =>
     await expect(row).toContainText(hex3(d.baseId))
     await expect(row).toContainText(d.connected ? 'Connected' : 'Not found')
   }
+  // ECUs from a DBC are not modules: their own list, not in the table
+  const ecus = (await devices()).filter((d) => /dbc/i.test(d.type))
+  if (ecus.length) for (const e of ecus) await expect(page.getByTestId('ecu-list')).toContainText(e.name)
+  else await expect(page.getByTestId('ecu-list')).toHaveCount(0)
   expect(errors).toEqual([])
 })
 
 test('rows are sorted by base ID', async ({ page }) => {
   await open(page, 'hardware')
-  const devs = (await devices()).sort((a, b) => a.baseId - b.baseId)
+  const devs = (await modules()).sort((a, b) => a.baseId - b.baseId)
   const texts = await page.getByRole('table', { name: 'Module table' }).locator('tbody tr td:nth-child(3)').allInnerTexts()
   expect(texts.map((t) => t.trim())).toEqual(devs.map((d) => d.name))
 })
@@ -43,7 +47,7 @@ test('selecting a module shows its settings', async ({ page }) => {
 
 test('the CAN ID map names every module', async ({ page }) => {
   await open(page, 'hardware')
-  const devs = await devices()
+  const devs = await modules()
   const label = await page.getByRole('img', { name: /CAN base IDs from/ }).getAttribute('aria-label')
   for (const d of devs) expect(label).toContain(`${d.name} at ${hex3(d.baseId)}`)
   expect(label).not.toContain('clash')

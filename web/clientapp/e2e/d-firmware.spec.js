@@ -118,6 +118,9 @@ test('firmware: update all over CAN with real release files @exclusive', async (
   const fs = await import('node:fs'), path = await import('node:path')
   const names = fs.readdirSync(dir).filter((n) => /\.srec$/i.test(n))
   await open(page, 'hardware/firmware')
+  // every module's version known first: an unknown one counts as "needs the update" until it answers
+  await page.getByTestId('fw-read-versions').click()
+  await waitFor(async () => (await apiJson('GET', '/api/devices')).filter((x) => !/dbc/i.test(x.type)).every((d) => d.version), 30_000, 'every version known')
   await page.getByTestId('fw-files').setInputFiles(names.map((n) => path.join(dir, n)))
   const btn = page.getByTestId('fw-update-all')
   // the files are read and checked first: wait until every CAN module has a verdict, then look at the button

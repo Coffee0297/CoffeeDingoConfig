@@ -1,7 +1,7 @@
 // Connect panel (top-bar connection pill): adapters, speed, connect / disconnect, USB identify.
 import { test, expect } from '@playwright/test'
 import { open, watchErrors } from './helpers.js'
-import { apiJson, devices, waitFor } from './api.js'
+import { apiJson, devices, modules, waitFor } from './api.js'
 import { restoreConnection, SIM_PORT } from './a-util.js'
 
 const panel = (page) => page.getByRole('dialog', { name: 'Connection' })
@@ -20,8 +20,8 @@ test('shows the live connection through SLCAN over TCP', async ({ page }) => {
   const status = page.getByTestId('connect-status')
   await expect(status).toContainText('Connected through SLCAN')
   await expect(status).toContainText(ad.activePort)
-  const devs = await devices()
-  await expect(status).toContainText(`${devs.filter((d) => d.connected).length} of ${devs.length} modules answering`)   // an ECU that sends nothing (on the Sim) is not answering
+  const devs = await modules()
+  await expect(status).toContainText(`${devs.length} of ${devs.length} modules answering`)   // ECUs from a DBC are not counted
   await expect(radio(page, /SLCAN over TCP/)).toBeChecked()
   await expect(panel(page).getByText('In use')).toBeVisible()
   // the host and port fields show the live address

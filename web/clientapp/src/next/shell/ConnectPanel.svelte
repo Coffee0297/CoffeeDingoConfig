@@ -2,7 +2,7 @@
   // Connect panel (board H14): pick an adapter, set the CAN speed, connect / disconnect.
   // Backed by GET /api/adapters, POST /api/connect, /api/disconnect, /api/usb/identify.
   import { Dialog, Banner, Button, Chip, Select, Field, Switch, Segmented } from '../ui/index.js'
-  import { live, api, toast, hex } from '../lib/live.svelte.js'
+  import { live, api, toast, hex, modulesOf } from '../lib/live.svelte.js'
   import { ui } from './ui.svelte.js'
 
   const RATES = ['125K', '250K', '500K', '1000K']
@@ -202,9 +202,9 @@
     if (busy) return { tone: 'info', mark: '◌ Connecting', title: step || 'Connecting…', body: 'This can take about 5 seconds.' }
     if (error) return { tone: 'fault', mark: '■ Not connected', title: error.title, body: error.body }
     if (live.connected) {
-      const answering = live.devices.filter((d) => d.connected).length
+      const mods = modulesOf(live.devices), answering = mods.filter((d) => d.connected).length
       const via = `${live.adapter ?? info.activeAdapter ?? 'Adapter'}${info.activePort ? ' · ' + info.activePort : ''}`
-      return { tone: simActive ? 'warn' : 'ok', mark: simActive ? '◆ Simulator replay' : '● Connected', title: `Connected through ${via}`, body: `${moduleRate ?? 'speed unknown'} · ${answering} of ${live.devices.length} modules answering${info.gatewayBaseId != null ? ` · the module on USB is ${hex(info.gatewayBaseId)}` : ''}.` }
+      return { tone: simActive ? 'warn' : 'ok', mark: simActive ? '◆ Simulator replay' : '● Connected', title: `Connected through ${via}`, body: `${moduleRate ?? 'speed unknown'} · ${answering} of ${mods.length} modules answering${info.gatewayBaseId != null ? ` · the module on USB is ${hex(info.gatewayBaseId)}` : ''}.` }
     }
     return { tone: 'info', mark: '○ Not connected', title: 'Not connected', body: 'Pick an adapter and the CAN speed, then connect. Nothing can be read from or written to the car until you do.' }
   })

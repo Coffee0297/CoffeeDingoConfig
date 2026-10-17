@@ -59,6 +59,8 @@ export function tempLimits(d) {
 }
 
 export const isPdm = (d) => /pdm/i.test(d?.type ?? '')
+/** Modules only: an ECU described by a DBC file is a device in the project, but not a module (no firmware, quiet when the car is off). */
+export const modulesOf = (devices) => devices.filter((d) => !/dbc/i.test(d.type ?? ''))
 export const isCanboard = (d) => /canboard/i.test(d?.type ?? '')
 export const hex = (n) => '0x' + Number(n ?? 0).toString(16).toUpperCase().padStart(3, '0')
 

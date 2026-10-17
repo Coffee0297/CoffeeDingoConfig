@@ -93,4 +93,13 @@ public class SRecordImageTests
         Assert.True(SRecordImage.BoardMatches("CANBoard v2", "CANBoard"));
         Assert.Null(SRecordImage.ParseText(S3(0x08004000, 1, 2, 3)).BoardMarker());
     }
+
+    [Fact]
+    public void VersionMarker_ReadFromSrecAndBin()
+    {
+        var bytes = new byte[] { 1 }.Concat(System.Text.Encoding.ASCII.GetBytes("DINGO_FW=5.6.4")).Concat(new byte[] { 0, 7 }).ToArray();
+        Assert.Equal("5.6.4", SRecordImage.ParseText(S3(0x08004000, bytes)).VersionMarker());
+        Assert.Equal("5.6.4", SRecordImage.Marker([bytes], "DINGO_FW="));   // a .bin is one block
+        Assert.Null(SRecordImage.ParseText(S3(0x08004000, 1, 2, 3)).VersionMarker());
+    }
 }

@@ -1,13 +1,13 @@
 // First run (#/next/connect): connect, find and name the modules, place them on the car map.
 import { test, expect } from '@playwright/test'
 import { open, watchErrors } from './helpers.js'
-import { apiJson, devices, deviceByName, waitFor } from './api.js'
+import { apiJson, devices, modules, deviceByName, waitFor } from './api.js'
 import { hex3, restoreConnection } from './a-util.js'
 
 test('connected: step 2 lists every module with type, address, state and an editable name', async ({ page }) => {
   const errors = watchErrors(page)
   await open(page, 'connect')
-  const devs = (await devices()).sort((a, b) => a.baseId - b.baseId)
+  const devs = (await modules()).sort((a, b) => a.baseId - b.baseId)
   await expect(page.getByRole('heading', { level: 1, name: `${devs.length} modules found. Name them.` })).toBeVisible()
   await expect(page.getByText('Step 2 of 3')).toBeVisible()
   await expect(page.getByRole('list', { name: 'Steps' }).getByRole('listitem').nth(1)).toHaveAttribute('aria-current', 'step')

@@ -27,6 +27,8 @@ public static partial class FirmwareCatalog
     // release asset name -> board, kind: dingopdm_v7_FW_v5-5-112.srec, dingopdmmax_v1_FW_v5-5-112.bin, canboard_v2_FW_...
     [GeneratedRegex(@"^(dingopdm_v7|dingopdmmax_v1|canboard_v2)_FW_v(\d+)-(\d+)-(\d+)\.(srec|bin)$", RegexOptions.IgnoreCase)]
     private static partial Regex AssetName();
+    [GeneratedRegex(@"v(\d+)[.-](\d+)[.-](\d+)\.(srec|s19|bin)$", RegexOptions.IgnoreCase)]
+    private static partial Regex NameVersion();
     static string BoardOf(string prefix) => prefix.ToLowerInvariant() switch
     {
         "dingopdm_v7" => "dingoPDM", "dingopdmmax_v1" => "dingoPDM-Max", _ => "CANBoard",
@@ -87,30 +89,25 @@ public static partial class FirmwareCatalog
     {
         var problems = new List<string>();
         var isSrec = name.EndsWith(".srec", StringComparison.OrdinalIgnoreCase) || name.EndsWith(".s19", StringComparison.OrdinalIgnoreCase);
-        string? marker = null;
+        IEnumerable<byte[]> blocks = [data];
         if (isSrec)
         {
-            try { marker = SRecordImage.ParseText(System.Text.Encoding.ASCII.GetString(data)).BoardMarker(); }
-            catch (InvalidDataException) { problems.Add("Not an S-record image: it has no data records."); }
+            try { blocks = SRecordImage.ParseText(System.Text.Encoding.ASCII.GetString(data)).Segments.Select(s => s.Data).ToList(); }
+            catch (InvalidDataException) { problems.Add("Not an S-record image: it has no data records."); blocks = []; }
         }
-        else
-        {
-            var key = "DINGO_BOARD="u8;
-            int i = data.AsSpan().IndexOf(key);
-            if (i >= 0)
-            {
-                int start = i + key.Length, end = Array.IndexOf(data, (byte)0, start);
-                var s = System.Text.Encoding.ASCII.GetString(data, start, (end < 0 ? data.Length : end) - start);
-                marker = s.StartsWith("Dingo Electronics ") ? s["Dingo Electronics ".Length..] : s;
-            }
-        }
+        var marker = SRecordImage.BoardName(SRecordImage.Marker(blocks, "DINGO_BOARD="));
+        var imageVersion = SRecordImage.Marker(blocks, "DINGO_FW=");
         var m = AssetName().Match(name);
         var nameBoard = m.Success ? BoardOf(m.Groups[1].Value) : null;
-        var version = m.Success ? $"{m.Groups[2].Value}.{m.Groups[3].Value}.{m.Groups[4].Value}" : null;
+        // the image says which version it is (5.6.4 on); older images only by name: "…_FW_v5-6-4.bin", "…_v5.6.4.bin"
+        var nv = NameVersion().Match(name);
+        var nameVersion = nv.Success ? $"{nv.Groups[1].Value}.{nv.Groups[2].Value}.{nv.Groups[3].Value}" : null;
+        var version = imageVersion ?? nameVersion;
+        if (imageVersion is not null && nameVersion is not null && imageVersion != nameVersion) problems.Add($"The file name says {nameVersion}, but the image is {imageVersion}.");
         var board = marker is null ? nameBoard : Regex.Replace(marker, @"\s+v\d+$", "");
         if (marker is null) problems.Add("The image carries no board marker (firmware before 5.5.109): only the file name says which board it is for.");
         else if (nameBoard is not null && !SRecordImage.BoardMatches(marker, nameBoard)) problems.Add($"The file name says {nameBoard}, but the image is built for {board}.");
-        if (version is null) problems.Add("The file name does not give a version.");
+        if (version is null) problems.Add("Neither the image nor the file name gives a version.");
         var modules = board is null ? [] : devices.Where(d => SRecordImage.BoardMatches(board, d.Type))
             .Select(d => new { guid = d.Guid, name = d.Name, current = CurrentVersion(d) }).ToList<object>();
         return new { name, kind = isSrec ? "srec" : "bin", size = data.Length, board, marker, version, modules, problems };

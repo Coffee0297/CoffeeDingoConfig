@@ -4,7 +4,7 @@
   // Functions screens; "Next" goes there. Backed by telemetry, GET /api/adapters, POST /api/connect,
   // POST /api/devices/{id}/rename, /identify (Blink LED, firmware 5.6).
   import { Page, PageHeader, Card, Button, Banner, Chip, StateDot, Empty } from '../../ui/index.js'
-  import { live, api, toast, mutate, moduleState, hex, blinkModule } from '../../lib/live.svelte.js'
+  import { live, api, toast, mutate, moduleState, hex, blinkModule, modulesOf } from '../../lib/live.svelte.js'
   import { go, href } from '../../router.svelte.js'
   import { ui } from '../../shell/ui.svelte.js'
   import CarMap from '../car/parts/CarMap.svelte'
@@ -22,9 +22,9 @@
   // the same layout the Car screen's map uses: a module with no position sits in the map's tray
   const placed = $derived(layout.pos)
 
-  const mods = $derived([...live.devices].sort((a, b) => a.baseId - b.baseId))
+  const mods = $derived(modulesOf(live.devices).sort((a, b) => a.baseId - b.baseId))
   const step = $derived(!live.connected || back ? 1 : 2)
-  const answering = $derived(live.devices.filter((d) => d.connected).length)
+  const answering = $derived(mods.filter((d) => d.connected).length)
   const rate = $derived(live.devices.find((d) => d.bitrate)?.bitrate)
   const unplaced = $derived(mods.filter((d) => !placed[d.guid]))
   const STEPS = ['Connect', 'Find and name', 'Add functions']

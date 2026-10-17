@@ -33,3 +33,6 @@ export async function deviceByName(name) {
 
 /** Values the module stores as 32-bit floats read back as e.g. 0.30000001 — compare with a tolerance. */
 export const near = (a, b, eps = 1e-4) => Math.abs(Number(a) - Number(b)) <= eps * Math.max(1, Math.abs(Number(b)))
+
+/** Project modules only (PDMs, CANBoards): an ECU from a DBC file is listed apart. */
+export async function modules() { return (await devices()).filter((d) => !/dbc/i.test(d.type)) }

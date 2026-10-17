@@ -18,7 +18,9 @@
 
   const pathOf = (d) => flashPath(d, live.connected)
   const fileFor = (d) => { const p = pathOf(d); return p ? files.find((f) => boardOfFile(f.name)?.key === boardOf(d).key && f.name.toLowerCase().endsWith(extFor(p))) ?? null : null }
-  const upToDate = (d, f) => !!f && !!fileVersion(f.name) && cleanVersion(d.version) === fileVersion(f.name)
+  // the version the image carries (5.6.4 on, read by the pre-flight check), else what the file name says
+  const verOf = (f) => checks[f.name]?.version ?? fileVersion(f.name)
+  const upToDate = (d, f) => !!f && !!verOf(f) && cleanVersion(d.version) === verOf(f)
   // reachable: answering, or found waiting in its bootloader (G9: a CAN update can run from there)
   const reach = (d) => d.connected || (d.inBootloader && pathOf(d) === 'can')
   const plan = $derived(mods.filter((d) => pathOf(d) === 'can' && reach(d)).map((d) => ({ d, file: fileFor(d) })).filter((p) => p.file && !upToDate(p.d, p.file)))
@@ -208,7 +210,7 @@
       <ul class="files mono" data-testid="fw-file-list">
         {#each files as f (f.name)}
           {@const c = checks[f.name]}
-          <li>{f.name} <span class="muted">· {c?.board ?? boardOfFile(f.name)?.label ?? 'board not in the name'}{fileVersion(f.name) ? ' · ' + fileVersion(f.name) : ''}{c ? ` · fits ${c.modules.length ? c.modules.map((m) => m.name).join(', ') : 'no module in this project'}` : ''}</span>
+          <li>{f.name} <span class="muted">· {c?.board ?? boardOfFile(f.name)?.label ?? 'board not in the name'}{verOf(f) ? ' · ' + verOf(f) : ''}{c ? ` · fits ${c.modules.length ? c.modules.map((m) => m.name).join(', ') : 'no module in this project'}` : ''}</span>
             {#each c?.problems ?? [] as p (p)}<br /><span class="warnT" data-testid="fw-check-problem">▲ {p}</span>{/each}</li>
         {/each}
       </ul>
@@ -269,7 +271,7 @@
   {#if confirm?.plan}
     <p>One at a time, in this order. Keep the car powered. Outputs on each module switch off while it restarts.</p>
     <ul class="files mono" data-testid="fw-all-list">
-      {#each confirm.plan as p (p.d.guid)}<li>{p.d.name} · {cleanVersion(p.d.version) || '?'} → {fileVersion(p.file.name) ?? p.file.name}</li>{/each}
+      {#each confirm.plan as p (p.d.guid)}<li>{p.d.name} · {cleanVersion(p.d.version) || '?'} → {verOf(p.file) ?? p.file.name}</li>{/each}
     </ul>
     <p class="muted">The link module (USB) is not part of this run. Update it last, on its own.</p>
   {/if}

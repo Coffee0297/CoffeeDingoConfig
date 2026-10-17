@@ -1,9 +1,10 @@
 <script>
-  import { live, project, hub, pendingModules, unstoredModules } from '../lib/live.svelte.js'
+  import { live, project, hub, pendingModules, unstoredModules, modulesOf } from '../lib/live.svelte.js'
   import { ui, setTheme } from './ui.svelte.js'
 
-  const total = $derived(live.devices.length)
-  const answering = $derived(live.devices.filter((d) => d.connected).length)
+  const mods = $derived(modulesOf(live.devices))   // an ECU from a DBC is quiet whenever the car is off: not a fault
+  const total = $derived(mods.length)
+  const answering = $derived(mods.filter((d) => d.connected).length)
   const pending = $derived(pendingModules().length)
   const unstored = $derived(unstoredModules().length)
   // G2: edits saved and held for Apply, across the connected modules

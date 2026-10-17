@@ -6,7 +6,7 @@
   import { DropdownMenu } from 'bits-ui'
   import { Page, PageHeader, Card, Button, Chip, StateDot, Empty } from '../../ui/index.js'
   import Confirm from '../../shell/parts/Confirm.svelte'
-  import { live, api, mutate, moduleState, hex, blinkModule } from '../../lib/live.svelte.js'
+  import { live, api, mutate, moduleState, hex, blinkModule, modulesOf } from '../../lib/live.svelte.js'
   import { olderThan } from './parts/util.js'
   import { href } from '../../router.svelte.js'
   import { ui } from '../../shell/ui.svelte.js'
@@ -18,7 +18,9 @@
 
   let { query } = $props()
 
-  const mods = $derived([...live.devices].sort((a, b) => a.baseId - b.baseId))
+  // an ECU described by a DBC file is not a module (no firmware, base ID or settings): it gets its own list
+  const mods = $derived(modulesOf(live.devices).sort((a, b) => a.baseId - b.baseId))
+  const ecus = $derived(live.devices.filter((d) => !mods.includes(d)))
   let sel = $state(query?.sel ?? null)
   const selected = $derived(mods.find((m) => m.guid === sel) ?? mods[0] ?? null)
 
@@ -73,7 +75,7 @@
 </script>
 
 <Page wide>
-  <PageHeader crumbs={[{ label: 'Hardware' }, { label: 'Modules' }]} title="Modules" subtitle={`${mods.length} in this project`}>
+  <PageHeader crumbs={[{ label: 'Hardware' }, { label: 'Modules' }]} title="Modules" subtitle={`${mods.length} in this project${ecus.length ? ` · ${ecus.length} ECU${ecus.length === 1 ? '' : 's'} from a DBC` : ''}`}>
     {#snippet actions()}
       <Button onclick={() => (ui.addModule = true)} data-testid="find-modules">Find modules</Button>
       <Button variant="primary" onclick={() => { addLike.guid = null; ui.addModule = true }} data-testid="add-module">Add module</Button>
@@ -137,6 +139,17 @@
             <span class="muted">Click a row to see its settings; the name opens the module. Identify blinks a module's LEDs (firmware 5.6; a CANBoard has none and only answers)</span>
           </div>
         </Card>
+
+        {#if ecus.length}
+          <Card title="ECUs" subtitle="Other controllers on the bus, known from their DBC file. Their signals can drive anything: pick them in any signal list." data-testid="ecu-list">
+            <ul class="ecus">
+              {#each ecus as e (e.guid)}
+                <li><strong>{e.name}</strong><StateDot tone={e.connected ? 'on' : 'off'} label={e.connected ? 'Sending' : 'Nothing heard: off, or not on this bus'} /></li>
+              {/each}
+            </ul>
+            <Button size="sm" href={href('expert', 'can', { tab: 'dbc' })}>Manage ECUs and DBC files</Button>
+          </Card>
+        {/if}
 
         <Card title="CAN ID map" subtitle="Each module takes a span of IDs (PDM 30, CANBoard 14, plus one guard). Two boxes at the same position are a clash.">
           <div class="map" role="img" aria-label={mapLabel}>
@@ -210,4 +223,6 @@
     tr.sel td { background: transparent; }
     tr.sel td:first-child { box-shadow: none; }
   }
+  .ecus { list-style: none; margin: 0 0 var(--space-3); padding: 0; display: flex; flex-direction: column; gap: 6px; }
+  .ecus li { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; }
 </style>

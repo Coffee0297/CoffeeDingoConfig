@@ -32,16 +32,24 @@ public sealed class SRecordImage
     /// The board the image is built for, from dingoFW's "DINGO_BOARD=" marker (v5.5.109 on) without the vendor
     /// prefix, e.g. "dingoPDM v7". Null for an older image with no marker.
     /// </summary>
-    public string? BoardMarker()
+    public string? BoardMarker() => BoardName(Marker(Segments.Select(x => x.Data), "DINGO_BOARD="));
+
+    /// <summary>"Dingo Electronics dingoPDM v7" -> "dingoPDM v7".</summary>
+    public static string? BoardName(string? marker) => marker is not null && marker.StartsWith("Dingo Electronics ") ? marker["Dingo Electronics ".Length..] : marker;
+
+    /// <summary>The firmware version the image carries in dingoFW's "DINGO_FW=" marker (5.6.4 on), e.g. "5.6.4". Null for an older image.</summary>
+    public string? VersionMarker() => Marker(Segments.Select(x => x.Data), "DINGO_FW=");
+
+    /// <summary>The zero-terminated text after <paramref name="key"/> in the first block that holds it (a .bin is one block).</summary>
+    public static string? Marker(IEnumerable<byte[]> blocks, string key)
     {
-        var key = "DINGO_BOARD="u8;
-        foreach (var s in Segments)
+        var k = Encoding.ASCII.GetBytes(key);
+        foreach (var d in blocks)
         {
-            int i = s.Data.AsSpan().IndexOf(key);
+            int i = d.AsSpan().IndexOf(k);
             if (i < 0) continue;
-            int start = i + key.Length, end = Array.IndexOf(s.Data, (byte)0, start);
-            var name = Encoding.ASCII.GetString(s.Data, start, (end < 0 ? s.Data.Length : end) - start);
-            return name.StartsWith("Dingo Electronics ") ? name["Dingo Electronics ".Length..] : name;
+            int start = i + k.Length, end = Array.IndexOf(d, (byte)0, start);
+            return Encoding.ASCII.GetString(d, start, (end < 0 ? d.Length : end) - start);
         }
         return null;
     }
