@@ -83,9 +83,9 @@ test('Apply asks first, names the consequence, and Cancel sends nothing', async 
   await openPanel(page)
   const row = await reveal(page, 'PDM-02')
   await row.getByRole('button', { name: 'Apply PDM-02' }).click()
-  const ask = panel(page).getByTestId('apply-confirm')
+  const ask = page.getByTestId('apply-confirm')
   await expect(ask).toContainText("Write the project's settings to 1 module now?")
-  await expect(ask).toContainText('lost at power-off until you store them')
+  await expect(ask).toContainText('lost at power-off, and when a module sleeps, until you store them')
   await ask.getByRole('button', { name: 'Cancel' }).click()
   await expect(ask).toHaveCount(0)
   // Store asks too, with a different warning
@@ -105,7 +105,7 @@ test('Apply to car writes PDM-02 and then offers Store (nothing is stored)', asy
   await openPanel(page)
   const row = await reveal(page, 'PDM-02')
   await row.getByRole('button', { name: 'Apply PDM-02' }).click()
-  await panel(page).getByTestId('apply-confirm-yes').click()
+  await page.getByTestId('apply-confirm-yes').click()
   const card = panel(page).getByTestId('apply-PDM-02')
   await expect(card).toContainText(/Written, not stored|Refused|Failed/, { timeout: 60_000 })
   if ((await card.innerText()).includes('Failed')) {
@@ -119,7 +119,7 @@ test('Apply to car writes PDM-02 and then offers Store (nothing is stored)', asy
   await expect(card).toContainText('✓ Written')
   await expect(card).toContainText('○ Stored on module')
   // other modules written earlier and not stored are named alongside it
-  await expect(panel(page).getByText(/PDM-02.* loses? these changes at power-off\./)).toBeVisible()
+  await expect(panel(page).getByText(/PDM-02.* loses? these changes at power-off and every time (it|they) sleeps?/)).toBeVisible()
   // the second step is now the one to take
   await expect(panel(page).getByTestId('apply-store')).toContainText(/Store on modules \(\d+\)/)
   // the backend knows it too (G3): closing and reopening the panel, or another page, still shows it
@@ -176,14 +176,14 @@ test('Apply to car for every module, then Store on modules, then the read-back c
   // a module an earlier test wrote but did not store has nothing left to write: only Store is offered for it
   if (await panel(page).getByTestId('apply-go').count() && await panel(page).getByTestId('apply-go').isEnabled()) {
     await panel(page).getByTestId('apply-go').click()
-    await panel(page).getByTestId('apply-confirm-yes').click()
+    await page.getByTestId('apply-confirm-yes').click()
   }
   await expect(panel(page).getByTestId('apply-store').or(panel(page).getByRole('button', { name: 'Done' }))).toBeVisible({ timeout: 180_000 })
   for (const d of pending) await expect(panel(page).getByTestId('apply-' + d.name)).toContainText(/Written, not stored|Refused|Failed/)
   // Store the ones that were written
   if (await panel(page).getByTestId('apply-store').count()) {
     await panel(page).getByTestId('apply-store').click()
-    await panel(page).getByTestId('apply-confirm-yes').click()
+    await page.getByTestId('apply-confirm-yes').click()
     await expect(panel(page).getByText(/stored and read back|Written, not stored/).first()).toBeVisible({ timeout: 240_000 })
     for (const d of pending) {
       const card = panel(page).getByTestId('apply-' + d.name)
@@ -212,7 +212,7 @@ test('Stop after this module leaves the rest unchanged @exclusive', async ({ pag
   const pending = (await devices()).filter((d) => d.connected && d.configMismatch)
   test.skip(pending.length < 2, 'needs at least two modules that differ')
   await panel(page).getByTestId('apply-go').click()
-  await panel(page).getByTestId('apply-confirm-yes').click()
+  await page.getByTestId('apply-confirm-yes').click()
   await panel(page).getByTestId('apply-stop').click()
   await expect(panel(page).getByText('Stopped. Modules not reached yet are unchanged.')).toBeVisible({ timeout: 120_000 })
 })
@@ -253,11 +253,11 @@ test('a saved edit in the redesign waits for Apply to car: counted, shown, and w
     await expect(panel(page).getByTestId('apply-PDM-05')).toContainText('this browser')
     // Read would replace it: asks first
     await row.getByRole('button', { name: 'Read PDM-05' }).click()
-    await expect(panel(page).getByTestId('apply-confirm')).toContainText('replaced by what the modules have')
-    await panel(page).getByTestId('apply-confirm').getByRole('button', { name: 'Cancel' }).click()
+    await expect(page.getByTestId('apply-confirm')).toContainText('replaced by what the modules have')
+    await page.getByTestId('apply-confirm').getByRole('button', { name: 'Cancel' }).click()
     // Apply writes it: nothing waits any more
     await row.getByRole('button', { name: 'Apply PDM-05' }).click()
-    await panel(page).getByTestId('apply-confirm-yes').click()
+    await page.getByTestId('apply-confirm-yes').click()
     await waitFor(async () => (await deviceByName('PDM-05')).pendingEdits === 0, 60_000, 'PDM-05 written')
   } finally {
     await apiJson('POST', `/api/devices/${d.guid}/outputconfig`, { Number: 1, CurrentLimit: out.currentLimit })

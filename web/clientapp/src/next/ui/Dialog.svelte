@@ -1,3 +1,7 @@
+<script module>
+  let depth = 0   // dialogs open now: one opened over another (a confirmation over a panel) stacks above it, scrim too
+</script>
+
 <script>
   /**
    * Modal dialog (Bits UI Dialog: focus trap, Esc closes, focus returns to the opener).
@@ -6,12 +10,14 @@
    */
   import { Dialog } from 'bits-ui'
   let { open = $bindable(false), title, description = '', width = 560, children, footer, onclose, ...rest } = $props()
+  let z = $state(900)
+  $effect(() => { if (open) { z = 900 + 2 * depth++; return () => depth-- } })
 </script>
 
 <Dialog.Root bind:open onOpenChange={(o) => { if (!o) onclose?.() }}>
   <Dialog.Portal>
-    <Dialog.Overlay class="nx-scrim" />
-    <Dialog.Content class="nx-dialog" style="width: min({width}px, calc(100vw - 32px))" {...rest}>
+    <Dialog.Overlay class="nx-scrim" style="z-index: {z}" />
+    <Dialog.Content class="nx-dialog" style="width: min({width}px, calc(100vw - 32px)); z-index: {z + 1}" {...rest}>
       <div class="hd">
         <Dialog.Title class="nx-dialog-title">{title}</Dialog.Title>
         <Dialog.Close class="nx-x" aria-label="Close">✕</Dialog.Close>
@@ -31,4 +37,6 @@
   :global(.nx-x) { width: 40px; height: 40px; border-radius: var(--radius-md); border: 1px solid var(--color-line-strong); background: var(--color-surface); color: var(--color-text); }
   .body { display: flex; flex-direction: column; gap: var(--space-3); }
   .ft { display: flex; justify-content: flex-end; gap: var(--space-2); flex-wrap: wrap; padding-top: var(--space-2); }
+  /* the buttons stay at the bottom edge while a long dialog scrolls (Apply to car had to be scrolled to) */
+  .ft { position: sticky; bottom: calc(-1 * var(--space-5)); margin: 0 calc(-1 * var(--space-5)) calc(-1 * var(--space-5)); padding: var(--space-3) var(--space-5) var(--space-5); background: var(--color-surface); border-top: 1px solid var(--color-line); }
 </style>

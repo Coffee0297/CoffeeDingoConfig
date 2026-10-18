@@ -194,7 +194,7 @@
   const confirmText = $derived(asking ? (asking.act === 'read'
     ? `Read ${asking.guids.length} module${asking.guids.length === 1 ? '' : 's'} into the project? Changes you saved but did not apply yet are replaced by what the modules have.`
     : asking.act === 'write'
-    ? `Write the project's settings to ${asking.guids.length} module${asking.guids.length === 1 ? '' : 's'} now? Outputs follow the new limits and rules at once. The values are lost at power-off until you store them.`
+    ? `Write the project's settings to ${asking.guids.length} module${asking.guids.length === 1 ? '' : 's'} now? Outputs follow the new limits and rules at once. The values are lost at power-off, and when a module sleeps, until you store them.`
     : `Store the current settings permanently in the flash of ${asking.guids.length} module${asking.guids.length === 1 ? '' : 's'}? This replaces what they start up with.`) : '')
 
   const short = (e) => `${e.name}`
@@ -212,19 +212,10 @@
   <Banner tone={banner.tone} title={banner.title}>{banner.body}</Banner>
   {#if cantProgram}<Banner tone="warn" title="Programming is off">{cantProgram}</Banner>{/if}
   {#if writtenNotStored.length && !busyAct}
-    <Banner tone="warn" title="Written, not stored">{writtenNotStored.map((d) => d.name).join(', ')} lose{writtenNotStored.length === 1 ? 's' : ''} these changes at power-off. Store {writtenNotStored.length === 1 ? 'it' : 'them'} before you switch the car off.</Banner>
+    <Banner tone="warn" title="Written, not stored">{writtenNotStored.map((d) => d.name).join(', ')} lose{writtenNotStored.length === 1 ? 's' : ''} these changes at power-off and every time {writtenNotStored.length === 1 ? 'it sleeps' : 'they sleep'} (waking restarts a module from what it has stored). Store {writtenNotStored.length === 1 ? 'it' : 'them'} before you switch the car off.</Banner>
   {/if}
   {#if note}<p class="muted" role="status">{note}</p>{/if}
 
-  {#if asking}
-    <div class="ask" role="alertdialog" aria-label="Confirm" data-testid="apply-confirm">
-      <p>{confirmText}</p>
-      <div class="row">
-        <Button onclick={() => (asking = null)}>Cancel</Button>
-        <Button variant={asking.act === 'burn' ? 'danger' : 'primary'} onclick={confirmAsk} data-testid="apply-confirm-yes">{asking.act === 'write' ? 'Yes, write now' : asking.act === 'read' ? 'Yes, read and replace' : 'Yes, store permanently'}</Button>
-      </div>
-    </div>
-  {/if}
 
   <div class="mods">
     {#each listed as d (d.guid)}
@@ -300,6 +291,14 @@
     {/if}
   </div>
 
+  <!-- a popup over the panel, not a box at the top of a long list the buttons are at the bottom of -->
+  <Dialog bind:open={() => !!asking, (v) => { if (!v) asking = null }} title={asking?.act === 'write' ? 'Apply to car?' : asking?.act === 'read' ? 'Read from modules?' : 'Store on modules?'} width={520} role="alertdialog" data-testid="apply-confirm">
+    <p>{confirmText}</p>
+    {#snippet footer()}
+      <Button onclick={() => (asking = null)}>Cancel</Button>
+      <Button variant={asking?.act === 'burn' ? 'danger' : 'primary'} onclick={confirmAsk} data-testid="apply-confirm-yes">{asking?.act === 'write' ? 'Yes, write now' : asking?.act === 'read' ? 'Yes, read and replace' : 'Yes, store permanently'}</Button>
+    {/snippet}
+  </Dialog>
   {#snippet footer()}
     {#if busyAct}
       <Button onclick={() => (stop = true)} data-testid="apply-stop">Stop after this module</Button>
@@ -340,8 +339,6 @@
   .okm { color: var(--color-ok); }
   .sm { font-size: var(--text-xs); }
   .pad { padding: var(--space-3); }
-  .ask { display: flex; flex-direction: column; gap: var(--space-3); padding: var(--space-3) var(--space-4); border: 2px solid var(--color-warn); border-radius: var(--radius-md); background: var(--color-warn-soft); }
-  .row { display: flex; gap: var(--space-2); }
   .quiet summary { cursor: pointer; min-height: 36px; display: flex; align-items: center; font-weight: 600; }
   .qrow { display: flex; align-items: center; gap: var(--space-3); padding: 6px 0; border-bottom: 1px solid var(--color-line); }
   .hint { margin-right: auto; align-self: center; font-size: var(--text-xs); }

@@ -5,7 +5,7 @@
   import { untrack } from 'svelte'
   import { Dialog, Button, Select, Stepper, Checkbox, Banner } from '../../../ui/index.js'
   import { api, live, hex, toast } from '../../../lib/live.svelte.js'
-  import { compileSequence, N_SLEEP, N_HOLD, N_FRAME, tIdx } from '../../../../lib/sleepSeq.js'
+  import { compileSequence, sequenceShortfall, N_SLEEP, N_HOLD, N_FRAME, tIdx } from '../../../../lib/sleepSeq.js'
   import { remoteItems, resolveRemote } from '../../../lib/remote.js'
   let { open = $bindable(false), seq } = $props()
 
@@ -13,6 +13,10 @@
   const isCb = (d) => /canboard/i.test(d?.type ?? '')
   let masterGuid = $state(''), ign = $state(0), sleepS = $state(30), quietOn = $state(true), quietS = $state(28), frameS = $state(3), frameId = $state(0x5AA)
   let followers = $state([])   // [{ guid, name, on, delay }] in shut-down order
+  // a new follower sleeps just after the master has gone quiet (sooner, the master's traffic wakes it again)
+  const firstSafe = () => Math.max(1, (quietOn ? quietS : sleepS) - frameS + 1)
+  // the master's times changed: a follower that would now sleep before the bus is quiet moves up to the first safe time
+  const lift = () => { const m = firstSafe(); if (followers.some((x) => x.delay < m)) followers = followers.map((x) => (x.delay < m ? { ...x, delay: m } : x)) }
   let mf = null, mv = $state([]), busy = $state(false), err = $state('')
 
   // seed once per open from what the modules hold (untracked: devices and seq refresh on every poll)
@@ -24,14 +28,14 @@
     const s = pm[masterGuid] ?? {}
     sleepS = s.sleepS ?? 30; quietOn = s.quietS != null || s.sleepS == null; quietS = s.quietS ?? Math.max(1, sleepS - 2); frameS = s.frameS ?? 3; frameId = s.frame?.id ?? 0x5AA
     followers = mods.filter((d) => d.guid !== masterGuid)
-      .map((d) => ({ guid: d.guid, name: d.name, sleeps: d.canSleep !== false, on: !s.frame || !!pm[d.guid]?.follows, delay: pm[d.guid]?.follows ? pm[d.guid].sleepS ?? 10 : 10 }))
+      .map((d) => ({ guid: d.guid, name: d.name, sleeps: d.canSleep !== false, on: !s.frame || !!pm[d.guid]?.follows, delay: pm[d.guid]?.follows ? pm[d.guid].sleepS ?? firstSafe() : firstSafe() }))
       .sort((a, b) => a.delay - b.delay)
     err = ''
   }
   // a new master: it leaves the list, the old master joins it (as a follower); the others keep their place
   function changeMaster(g) {
     const prev = new Map(followers.map((x) => [x.guid, x]))
-    const last = Math.max(10, ...followers.map((x) => x.delay))
+    const last = Math.max(firstSafe(), ...followers.map((x) => x.delay))
     followers = mods.filter((d) => d.guid !== g)
       .map((d) => prev.get(d.guid) ?? { guid: d.guid, name: d.name, sleeps: d.canSleep !== false, on: true, delay: last })
       .sort((a, b) => a.delay - b.delay)
@@ -76,6 +80,11 @@
     if (quietOn && !(quietS >= 0 && quietS < sleepS)) return 'The bus must go quiet before the master sleeps.'
     if (!(frameS >= 0 && frameS < sleepS)) return 'The shutdown frame must go out before the master sleeps.'
     if (followers.some((f) => f.on && !(f.delay >= 1 && f.delay <= 3600))) return 'Each module sleeps 1–3600 s after the frame.'
+    // A module woken by CAN traffic starts again (a full reset): one that sleeps while the master still talks is woken
+    // straight away, talks, and wakes the master after it slept: the car never settles. Sleep after the bus is quiet.
+    const quietAt = quietOn ? quietS : sleepS
+    const early = followers.filter((f) => f.on && frameS + f.delay < quietAt)
+    if (early.length) return `${early.map((f) => f.name).join(', ')} would sleep while the master still talks (it goes quiet ${quietAt} s after ignition off), and that traffic wakes ${early.length === 1 ? 'it' : 'them'} again. Make each wait at least ${quietAt - frameS} s after the frame, or let the master go quiet sooner.`
     return ''
   }
   const outsOf = (d, f) => (isCb(d) ? (f.digitalOut ?? []).map((x) => ({ number: x.number, inputIdx: x.input | 0 })) : (d.outputs ?? []).map((x) => ({ number: x.number, inputIdx: x.inputVal | 0 })))
@@ -87,19 +96,27 @@
     const done = []
     try {
       const m = mods.find((d) => d.guid === masterGuid)
-      ign = String(await resolveRemote(m.guid, ign, 'bool'))
-      const f = await api.functions(m.guid), v = await api.inputs(m.guid)
-      mv = v
+      let f = await api.functions(m.guid), v = await api.inputs(m.guid)
       // keep the held outputs the old designer may have set up
       const tH = (f.timers ?? []).find((t) => t.enabled && t.name === N_HOLD), o = outsOf(m, f)
       const held = tH ? o.filter((x) => x.inputIdx === tIdx(tH.number, v)).map((x) => x.number) : []
-      await compileSequence(m.guid, f, v, o, isCb(m), { name: m.name, role: 'master', ign: Number(ign), frameId, sleepS, quietOn, quietS, holdOn: !!tH && held.length > 0, holdS: tH ? Math.round(tH.preset / 1000) : 0, held, frameS }, live.devices)
-      done.push(m.name)
+      const plan = [{ d: m, f, v, o, p: { name: m.name, role: 'master', ign: Number(ign), frameId, sleepS, quietOn, quietS, holdOn: !!tH && held.length > 0, holdS: tH ? Math.round(tH.preset / 1000) : 0, held, frameS } }]
       for (const x of followers.filter((x) => x.on && x.guid !== m.guid)) {
         const d = mods.find((y) => y.guid === x.guid)
-        const ff = await api.functions(d.guid), vv = await api.inputs(d.guid)
-        await compileSequence(d.guid, ff, vv, outsOf(d, ff), isCb(d), { name: d.name, role: 'follower', ign: 0, frameId, sleepS: x.delay, quietOn: true, quietS: Math.max(0, x.delay - 2), holdOn: false, holdS: 0, held: [], frameS: 0 }, live.devices)
-        done.push(d.name)
+        const ff = await api.functions(d.guid)
+        plan.push({ d, f: ff, v: await api.inputs(d.guid), o: outsOf(d, ff), p: { name: d.name, role: 'follower', ign: 0, frameId, sleepS: x.delay, quietOn: true, quietS: 0, autoSleep: d.sleepEnabled !== false, holdOn: false, holdS: 0, held: [], frameS: 0 } })   // quiet at the frame: a follower never wakes the others
+      }
+      // every module first: nothing is changed unless all of them have the slots
+      const short = plan.map((s) => [s.p.name, sequenceShortfall(s.f, isCb(s.d), s.p)]).filter(([, w]) => w)
+      if (short.length) { err = `Nothing changed. ${short.map(([n, w]) => `${n} needs ${w}`).join('; ')}. Free one there, or untick ${short.length === 1 ? 'that module' : 'those modules'}: a module left out keeps its own sleep settings.`; return }
+      // the ignition from another module or the ECU becomes a CAN input on the master: the first change, after the check
+      ign = String(await resolveRemote(m.guid, ign, 'bool'))
+      f = await api.functions(m.guid); v = await api.inputs(m.guid); mv = v
+      plan[0] = { ...plan[0], f, v, o: outsOf(m, f), p: { ...plan[0].p, ign: Number(ign) } }
+      const own = []
+      for (const s of plan) {
+        if ((await compileSequence(s.d.guid, s.f, s.v, s.o, isCb(s.d), s.p, live.devices)).autoOnly) own.push(s.p.name)
+        done.push(s.p.name)
       }
       // a module left out must not keep sending the shutdown frame (a former master)
       for (const x of followers.filter((x) => !x.on && x.guid !== m.guid)) {
@@ -107,7 +124,7 @@
         for (const c of (ff.canOutputs ?? []).filter((c) => c.enabled && c.name === N_FRAME)) await api.setFunction(x.guid, 'canoutput', c.number, { enabled: false })
         for (const t of (ff.timers ?? []).filter((t) => t.enabled && t.name === N_FRAME)) await api.setFunction(x.guid, 'timer', t.number, { enabled: false })
       }
-      toast(`Shut-down order staged on ${done.join(', ')}. Apply to car sends it.`, 'info', 6000)
+      toast(`Shut-down order staged on ${done.join(', ')}.${own.length ? ` ${own.join(', ')} had no free timer: ${own.length === 1 ? 'it goes' : 'they go'} quiet at the frame and sleep${own.length === 1 ? 's' : ''} on ${own.length === 1 ? 'its' : 'their'} own once the bus is quiet.` : ''} Apply to car sends it.`, 'info', 9000)
       open = false
     } catch (e) { err = `${e.message}. ${done.length ? 'Done so far: ' + done.join(', ') + '.' : ''}` }
     finally { busy = false }
@@ -118,10 +135,10 @@
   <div class="grid">
     <Select label="Master (has the ignition key)" items={mods.map((d) => ({ value: d.guid, label: d.name }))} bind:value={masterGuid} onchange={changeMaster} data-testid="seq-master" />
     <Select label="Ignition signal" items={ignItems} bind:value={ign} placeholder="Pick a switch or CAN signal…" data-testid="seq-ign" />
-    <Stepper label="Shutdown frame after ignition off" min={0} max={3600} unit="s" bind:value={frameS} />
-    <Stepper label="Master sleeps after ignition off" min={1} max={3600} unit="s" bind:value={sleepS} />
-    <Checkbox label="Bus goes quiet before the master sleeps" bind:checked={quietOn} />
-    {#if quietOn}<Stepper label="Quiet after ignition off" min={0} max={3600} unit="s" bind:value={quietS} />{/if}
+    <Stepper label="Shutdown frame after ignition off" min={0} max={3600} unit="s" bind:value={frameS} onchange={lift} />
+    <Stepper label="Master sleeps after ignition off" min={1} max={3600} unit="s" bind:value={sleepS} onchange={lift} />
+    <Checkbox label="Bus goes quiet before the master sleeps" bind:checked={quietOn} onchange={lift} />
+    {#if quietOn}<Stepper label="Quiet after ignition off" min={0} max={3600} unit="s" bind:value={quietS} onchange={lift} />{/if}
   </div>
   <p class="muted">Frame <span class="mono">{hex(frameId)}</span>. Modules after the frame, first to sleep at the top:</p>
   <div class="head muted" aria-hidden="true"><span>Module</span><span>After the frame</span><span>Then</span><span>Order</span></div>

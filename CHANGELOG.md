@@ -13,6 +13,13 @@ All notable changes to **dingoConfig** are recorded here. Versions follow [SemVe
 ### Fixed
 - **A CANBoard sleeps** (firmware 5.5.111 on): the app said it never sleeps, gave it no sleep input, left it out of
   Sleep now and made it only go quiet in the shut-down order. Older CANBoard firmware still only goes quiet.
+- **Shut-down order** never settled: followers slept while the master still talked, its traffic woke them (a wake is a
+  full restart), they woke the master again. Followers now go quiet the moment the frame arrives (no timer needed),
+  must sleep after the master goes quiet (the dialog says so, and lifts them when the master's times change), and one
+  with no free timer goes quiet and then sleeps on its own auto-sleep. Every module is checked for free slots first:
+  a missing one no longer leaves the car half on the new order.
+- **Apply to car** asks in a popup (it was a box at the top of a long list, the button at the bottom); a dialog's
+  buttons stay at its bottom edge while it scrolls. Written-not-stored now says a module also loses it when it sleeps.
 - **Shut-down order** dialog: one row per module (name, seconds after the frame, what it does, order) under one
   heading, instead of a squeezed stepper and a two-line label per module.
 - **Flash over CAN refuses a `.srec` built for another board** (from its `DINGO_BOARD` marker): a dingoPDM v7
