@@ -26,8 +26,8 @@ export async function compileSequence(g, f, v, o, cb, p, devices) {
   } else {
     const c = CI.find((x) => x.enabled && x.name === N_MASTER); if (c) await api.setFunction(g, 'caninput', c.number, { enabled: false })
   }
-  // A CANBoard never sleeps (no force-sleep input): as a follower it only goes quiet on CAN when the master says so.
-  const canSleep = !cb
+  // A CANBoard sleeps from firmware 5.5.111 (f.device.canSleep); an older one only goes quiet on CAN when the master says so.
+  const canSleep = f?.device?.canSleep ?? !cb
   let nS = 0
   if (canSleep) { nS = timer(N_SLEEP); await api.setFunction(g, 'timer', nS, { enabled: true, name: N_SLEEP, input: trig, edge, mode: 0, preset: Math.round(p.sleepS * 1000) }) }
   else { const t = T.find((x) => x.enabled && x.name === N_SLEEP); if (t) await api.setFunction(g, 'timer', t.number, { enabled: false }) }

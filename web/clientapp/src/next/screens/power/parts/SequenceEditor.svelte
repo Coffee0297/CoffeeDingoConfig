@@ -24,7 +24,7 @@
     const s = pm[masterGuid] ?? {}
     sleepS = s.sleepS ?? 30; quietOn = s.quietS != null || s.sleepS == null; quietS = s.quietS ?? Math.max(1, sleepS - 2); frameS = s.frameS ?? 3; frameId = s.frame?.id ?? 0x5AA
     followers = mods.filter((d) => d.guid !== masterGuid)
-      .map((d) => ({ guid: d.guid, name: d.name, cb: isCb(d), on: !s.frame || !!pm[d.guid]?.follows, delay: pm[d.guid]?.follows ? pm[d.guid].sleepS ?? 10 : 10 }))
+      .map((d) => ({ guid: d.guid, name: d.name, sleeps: d.canSleep !== false, on: !s.frame || !!pm[d.guid]?.follows, delay: pm[d.guid]?.follows ? pm[d.guid].sleepS ?? 10 : 10 }))
       .sort((a, b) => a.delay - b.delay)
     err = ''
   }
@@ -33,7 +33,7 @@
     const prev = new Map(followers.map((x) => [x.guid, x]))
     const last = Math.max(10, ...followers.map((x) => x.delay))
     followers = mods.filter((d) => d.guid !== g)
-      .map((d) => prev.get(d.guid) ?? { guid: d.guid, name: d.name, cb: isCb(d), on: true, delay: last })
+      .map((d) => prev.get(d.guid) ?? { guid: d.guid, name: d.name, sleeps: d.canSleep !== false, on: true, delay: last })
       .sort((a, b) => a.delay - b.delay)
   }
   // the master's signals and its current ignition (the off-delay timer's input)
@@ -124,14 +124,17 @@
     {#if quietOn}<Stepper label="Quiet after ignition off" min={0} max={3600} unit="s" bind:value={quietS} />{/if}
   </div>
   <p class="muted">Frame <span class="mono">{hex(frameId)}</span>. Modules after the frame, first to sleep at the top:</p>
+  <div class="head muted" aria-hidden="true"><span>Module</span><span>After the frame</span><span>Then</span><span>Order</span></div>
   <ol class="order" data-testid="seq-order">
     {#each followers as x, i (x.guid)}
       <li>
         <Checkbox label={x.name} bind:checked={x.on} />
-        <span class="stp"><Stepper label={'Seconds after the frame for ' + x.name} min={1} max={3600} unit="s" bind:value={x.delay} onchange={resort} disabled={!x.on} /></span>
-        <span class="muted note">{x.cb ? 'goes quiet (a CANBoard never sleeps)' : 'sleeps'}</span>
-        <Button size="sm" variant="ghost" aria-label={'Move ' + x.name + ' up'} disabled={i === 0} onclick={() => move(i, -1)}>↑</Button>
-        <Button size="sm" variant="ghost" aria-label={'Move ' + x.name + ' down'} disabled={i === followers.length - 1} onclick={() => move(i, 1)}>↓</Button>
+        <Stepper label={'Seconds after the frame for ' + x.name} hideLabel min={1} max={3600} unit="s" bind:value={x.delay} onchange={resort} disabled={!x.on} />
+        <span class="note" class:muted={!x.on}>{!x.on ? 'left out' : x.sleeps ? 'sleeps' : 'goes quiet (firmware older than 5.5.111 cannot sleep)'}</span>
+        <span class="mv">
+          <Button size="sm" variant="ghost" aria-label={'Move ' + x.name + ' up'} disabled={i === 0} onclick={() => move(i, -1)}>↑</Button>
+          <Button size="sm" variant="ghost" aria-label={'Move ' + x.name + ' down'} disabled={i === followers.length - 1} onclick={() => move(i, 1)}>↓</Button>
+        </span>
       </li>
     {/each}
   </ol>
@@ -141,9 +144,13 @@
 
 <style>
   .grid { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-3); }
-  .order { margin: 0; padding-left: 22px; display: flex; flex-direction: column; gap: 6px; }
-  .order li { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; }
-  .stp { width: 150px; }
-  .note { flex: 1 1 auto; font-size: var(--text-xs); }
+  /* one row per module: name | stepper | what happens | order; the column heading replaces a label per row */
+  .head, .order li { display: grid; grid-template-columns: 120px 236px minmax(0, 1fr) 76px;   /* fixed widths: the heading is its own grid */ align-items: center; gap: var(--space-3); }
+  .head { font-size: var(--text-xs); text-transform: uppercase; letter-spacing: .04em; padding: 0 var(--space-2); margin-top: var(--space-2); }
+  .order { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; }
+  .order li { padding: var(--space-2); border-top: 1px solid var(--color-line); }
+  .note { font-size: var(--text-sm); }
+  .mv { display: flex; gap: 2px; }
+  @media (max-width: 560px) { .head { display: none; } .order li { grid-template-columns: 1fr auto; } .order li > :global(:nth-child(-n+2)) { grid-column: 1 / -1; } }   /* name, then stepper, each a full row */
   @media (max-width: 900px) { .grid { grid-template-columns: 1fr; } }
 </style>

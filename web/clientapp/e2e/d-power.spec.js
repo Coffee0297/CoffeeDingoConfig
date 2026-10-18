@@ -138,7 +138,7 @@ test('sleep & wake: shows the real per-module settings and live status', async (
   if (cb.canSleep === false) {
     await expect(page.getByTestId('wake-CB-2-di1')).toBeDisabled()
     await expect(m.locator('tr[data-module="CB-2"]')).toContainText("No sleep in this firmware")
-  }
+  } else if (cb.connected) await expect(page.getByTestId('wake-CB-2-di1')).toBeEnabled()   // a CANBoard sleeps from 5.5.111
   // Live status
   await expect(page.getByTestId('sleep-banner')).toContainText(/Awake: \d+ of \d+ modules answer/)
   await expect(page.getByTestId('sleep-live').locator('tbody tr')).toHaveCount(devs.filter((d) => !/dbc/i.test(d.type)).length)   // modules, not an ECU
@@ -160,8 +160,10 @@ test('sleep & wake: mute-transmit input of CB-2 changes and is restored', async 
   try {
     await open(page, 'power/sleep')
     await pick(page, 'sleep-custom-module', 'CB-2')
-    await expect(page.getByTestId('sleep-input')).toBeDisabled() // a CANBoard without sleep has no sleep input
-    await expect(page.getByText("This board's firmware has no sleep, so it has no sleep input.")).toBeVisible()
+    if (cb.canSleep === false) {   // a CANBoard older than 5.5.111: no sleep, so no sleep input
+      await expect(page.getByTestId('sleep-input')).toBeDisabled()
+      await expect(page.getByText("This board's firmware has no sleep, so it has no sleep input.")).toBeVisible()
+    } else await expect(page.getByTestId('sleep-input')).toBeEnabled()   // it sleeps like a PDM (5.5.111 on)
     const sigs = (await apiJson('GET', `/api/devices/${cb.guid}/inputs?type=bool&inUse=true`)).filter((s) => s.kind !== 'sys')
     const origName = sigs.find((s) => s.index === orig)?.name
     // clear it (no confirmation needed to clear)

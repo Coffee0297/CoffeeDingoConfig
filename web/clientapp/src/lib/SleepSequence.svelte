@@ -149,7 +149,7 @@
     const bad = validate(); if (bad) { msg = bad; err = true; return }
     const followers = role === 'master' ? devices.filter((d) => d.guid !== guid && d.guid in others && others[d.guid]) : []
     if (role === 'master' && followers.length &&
-        !confirm(`${me?.name ?? 'This module'} becomes the sleep master: it broadcasts frame ${hx(frameId)} (byte 0 = 1) ${frameS} s after ignition off.\n\nThese modules will follow it — their sleep trigger becomes that frame, sleeping ${FOLLOWER_SLEEP_S} s after it (quiet on CAN at ${FOLLOWER_QUIET_S} s; a CANBoard only goes quiet — it never sleeps):\n  • ${followers.map((d) => d.name).join('\n  • ')}\n\nContinue?`)) return
+        !confirm(`${me?.name ?? 'This module'} becomes the sleep master: it broadcasts frame ${hx(frameId)} (byte 0 = 1) ${frameS} s after ignition off.\n\nThese modules will follow it — their sleep trigger becomes that frame, sleeping ${FOLLOWER_SLEEP_S} s after it (quiet on CAN at ${FOLLOWER_QUIET_S} s; a CANBoard older than firmware 5.5.111 only goes quiet):\n  • ${followers.map((d) => d.name).join('\n  • ')}\n\nContinue?`)) return
     busy = true; msg = ''; err = false
     try {
       const r = await compileSequence(guid, funcs, vars, outs, isCb, { name: me?.name, role, ign, frameId, sleepS: S, quietOn, quietS: Number(quietS), holdOn, holdS: Number(holdS), held, frameS: Number(frameS) }, devices)

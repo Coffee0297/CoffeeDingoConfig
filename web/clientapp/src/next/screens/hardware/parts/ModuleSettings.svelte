@@ -257,7 +257,7 @@
 
       <section aria-label="Sleep and wake" class="blk">
         <div class="bh"><strong>Sleep and wake</strong></div>
-        <p class="muted">{d.canSleep === false ? `${d.name} cannot sleep: its firmware has CAN sleep switched off.` : `Sleep timeout, wake sources and the shutdown sequence live on the Sleep and wake screen.`}</p>
+        <p class="muted">{d.canSleep === false ? `${d.name} cannot sleep: its firmware is older than 5.5.111.` : `Sleep timeout, wake sources and the shutdown sequence live on the Sleep and wake screen.`}</p>
         <div class="row"><Button href={href('power', 'sleep')} data-testid="to-sleep">Open Sleep and wake</Button></div>
       </section>
     {/if}

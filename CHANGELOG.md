@@ -11,6 +11,10 @@ All notable changes to **dingoConfig** are recorded here. Versions follow [SemVe
   that version are skipped; one that fails is reported and the rest carry on.
 
 ### Fixed
+- **A CANBoard sleeps** (firmware 5.5.111 on): the app said it never sleeps, gave it no sleep input, left it out of
+  Sleep now and made it only go quiet in the shut-down order. Older CANBoard firmware still only goes quiet.
+- **Shut-down order** dialog: one row per module (name, seconds after the frame, what it does, order) under one
+  heading, instead of a squeezed stepper and a two-line label per module.
 - **Flash over CAN refuses a `.srec` built for another board** (from its `DINGO_BOARD` marker): a dingoPDM v7
   and a -Max share the MCU and app address, so nothing else told their images apart.
 - A PDM flashed over CAN now reports its new version at the end (only the CANBoard did).

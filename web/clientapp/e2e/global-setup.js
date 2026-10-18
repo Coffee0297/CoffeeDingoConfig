@@ -20,4 +20,12 @@ export default async function globalSetup() {
   if (!r.ok) throw new Error('Project upload failed: ' + (await r.text()))
   // Every module in the project should answer on the Sim before tests start.
   await waitFor(async () => (await apiJson('GET', '/api/devices')).every((d) => d.connected || /dbc/i.test(d.type)), 30_000, 'all modules connected')   // an ECU (DBC) shows only while it sends
+  // ...and hold the fixture: the modules keep whatever was written last (another project), and a test that writes one
+  // setting and "restores" the fixture's value then leaves a mix (CB-2 muted by its own ignition input, silent for good)
+  for (const d of (await apiJson('GET', '/api/devices')).filter((x) => /pdm|canboard/i.test(x.type))) {
+    for (const a of ['writeall', ...(/pdm/i.test(d.type) ? ['uploadlua'] : []), 'burn']) {
+      const r = await fetch(`${API}/api/devices/${d.guid}/${a}`, { method: 'POST' })
+      if (!r.ok) throw new Error(`${d.name} ${a}: ${await r.text()}`)
+    }
+  }
 }

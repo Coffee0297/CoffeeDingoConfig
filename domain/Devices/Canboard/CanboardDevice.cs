@@ -33,7 +33,10 @@ public class CanboardDevice : IDeviceConfigurable
     [JsonIgnore] protected int NumMath { get; private set; } = 4;
     [JsonIgnore] protected int NumCanMessages { get; private set; } = 2;
     
-    [JsonIgnore] public bool CanSleep { get; } = false;
+    // Firmware 5.5.111 put the CANBoard to sleep (STOP) like the PDM; older firmware only goes quiet (mute TX).
+    // Version not read yet: assumed able, like a PDM, so the sleep settings do not vanish until it answers.
+    [JsonIgnore] public static readonly Version SleepSince = new(5, 5, 111);
+    [JsonIgnore] public bool CanSleep => domain.Common.Firmware.Of(Version).Major == 0 || domain.Common.Firmware.Has(Version, SleepSince);
     [JsonPropertyName("canBootloader")] public bool CanBootloader { get; } = true;   // OpenBLT XCP-over-CAN bootloader
 
     [JsonIgnore] public const int BaseIndex = 0x0000;

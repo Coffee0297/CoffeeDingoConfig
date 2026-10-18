@@ -547,7 +547,7 @@
       <div class="field" style="max-width:360px"><label>Stop the cyclic telemetry while this signal is on</label>
         <SearchSelect options={ssOpts(setSigOpts, true)} bind:value={setMuteTx} placeholder="— none —" disabled={setSigState !== 'ok'} /></div>
       <p class="hint" style="margin-top:6px">Lets a whole fleet go quiet on cue so every module's idle timer can run out (bus traffic otherwise keeps them awake).
-        Config replies and your own CAN outputs are not muted.{#if !setCanSleep} This is the only sleep-related setting a CANBoard has — its firmware never sleeps.{/if}</p>
+        Config replies and your own CAN outputs are not muted.{#if !setCanSleep} This is the only sleep-related setting this module has: its firmware is older than 5.5.111 and cannot sleep.{/if}</p>
       </details>
 
       {#if setCanSleep}

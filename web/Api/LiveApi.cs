@@ -924,7 +924,7 @@ public static class LiveApi
                     counters = c.Counters, flashers = c.Flashers, timers = c.Timers, canOutputs = c.CanOutputs,
                     maths = c.Maths, canMessages = c.CanMessages, ignition = c.Ignition,   // firmware 5.6
                     comfortBlinks = new[] { c.ComfortBlink },   // 5.6.1
-                    device = new { forceSleepInput = 0, muteTxInput = c.MuteTxInput, canSleep = c.CanSleep },
+                    device = new { forceSleepInput = c.ForceSleepInput, muteTxInput = c.MuteTxInput, canSleep = c.CanSleep },
                 });
             return Results.Ok(new { });
         });
@@ -945,12 +945,12 @@ public static class LiveApi
                 if (v.OwnerKind == "sys") return $"\"{DingoMap.VarLabel(v)}\" is always true on a running module — as the {what} it would {(what == "force-sleep input" ? "park the module 1 s after every boot" : "mute its telemetry for good")}; pick a real condition";
                 return null;
             }
-            if (r.ForceSleepInput is { } fs && dev is not PdmDevice) return Results.BadRequest(new { ok = false, error = "this board never sleeps — it has no force-sleep input" });
+            if (r.ForceSleepInput is { } fs && !cfg.CanSleep) return Results.BadRequest(new { ok = false, error = "this module's firmware cannot sleep (a CANBoard sleeps from 5.5.111): it has no force-sleep input" });
             if (Check(r.ForceSleepInput, "force-sleep input") is { } e1) return Results.BadRequest(new { ok = false, error = e1 });
             if (Check(r.MuteTxInput, "mute-TX input") is { } e2) return Results.BadRequest(new { ok = false, error = e2 });
             Dictionary<string, string> DevSnap() => dev is PdmDevice q
                 ? new() { ["forceSleepInput"] = q.ForceSleepInput.ToString(), ["muteTxInput"] = q.MuteTxInput.ToString() }
-                : new() { ["muteTxInput"] = ((CanboardDevice)dev).MuteTxInput.ToString() };
+                : new() { ["forceSleepInput"] = ((CanboardDevice)dev).ForceSleepInput.ToString(), ["muteTxInput"] = ((CanboardDevice)dev).MuteTxInput.ToString() };
             var track = new EditTrack("device", 0, "Module", DevSnap);
             switch (dev)
             {
@@ -959,6 +959,7 @@ public static class LiveApi
                     if (r.MuteTxInput is { } b) p.MuteTxInput = b;
                     break;
                 case CanboardDevice c:
+                    if (r.ForceSleepInput is { } f) c.ForceSleepInput = f;
                     if (r.MuteTxInput is { } m) c.MuteTxInput = m;
                     break;
             }
@@ -975,7 +976,7 @@ public static class LiveApi
                     if (r.MuteTxInput is { } b) dm.WriteParam(g, 0x0000, 11, (uint)b);
                 });
             }
-            var (fsNow, mtNow) = dev is PdmDevice pp ? (pp.ForceSleepInput, pp.MuteTxInput) : (0, ((CanboardDevice)dev).MuteTxInput);
+            var (fsNow, mtNow) = dev is PdmDevice pp ? (pp.ForceSleepInput, pp.MuteTxInput) : (((CanboardDevice)dev).ForceSleepInput, ((CanboardDevice)dev).MuteTxInput);
             if (res is null) return Results.Ok(new { ok = true, written = false, staged = Staged(http), forceSleepInput = fsNow, muteTxInput = mtNow });
             return WriteReport(res, new() { ["forceSleepInput"] = fsNow, ["muteTxInput"] = mtNow });
         });

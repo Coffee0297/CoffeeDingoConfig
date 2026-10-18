@@ -23,7 +23,7 @@
     if (!ok) el.checked = !on
     if (ok) status = `${d.name}: ${kind === 'di' ? `DI${bit + 1}` : 'CAN activity'} ${on ? 'now wakes' : 'no longer wakes'} the module.`
   }
-  const why = (d) => !canSleep(d) ? 'No sleep in this firmware: no wake sources.' : !d.connected ? 'Not on the bus. Connect it to change this.' : ''
+  const why = (d) => !canSleep(d) ? 'No sleep in this firmware (a CANBoard sleeps from 5.5.111): no wake sources.' : !d.connected ? 'Not on the bus. Connect it to change this.' : ''
 </script>
 
 <Card title="Wake sources, per module" subtitle="A sleeping module wakes when any ticked source happens. USB always wakes it." aria-label="Wake sources">
