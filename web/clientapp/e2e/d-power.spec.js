@@ -23,16 +23,14 @@ test('power home: modules, roles, sleep status, links', async ({ page }) => {
   await expect(page.getByTestId('power-modules').locator('tr[data-module="PDM-01"]')).toContainText(/Own auto-sleep|Stays awake|Master|Follower|sleep input/)
   await expect(page.getByTestId('ignition-gap')).toContainText(/not set up yet|runs the ignition/)
   if (await page.getByTestId('ignition-setup').count()) await expect(page.getByTestId('ignition-setup')).toHaveAttribute('href', /power\/ignition/)
-  // shut-down order editor: opens seeded, ↑/↓ swap modules but keep the time slots; Cancel writes nothing
+  // sleep editor: every module but the master follows; staging needs a keep-awake signal; Cancel writes nothing
   await page.getByTestId('edit-sequence').click()
-  const dlg = page.getByRole('dialog', { name: 'Shut-down order' })
-  const items = dlg.getByTestId('seq-order').locator('li')
-  await expect(items).toHaveCount((await devices()).filter((d) => /pdm|canboard/i.test(d.type)).length - 1)
-  const nameOf = async (k) => (await items.nth(k).getByRole('button', { name: /^Move .* down$/ }).getAttribute('aria-label')).replace(/^Move | down$/g, '')
-  const first = await nameOf(0), second = await nameOf(1)
-  await dlg.getByRole('button', { name: 'Move ' + first + ' down' }).click()
-  await expect(items.nth(0)).toContainText(second)
-  await expect(items.nth(1)).toContainText(first)
+  const dlg = page.getByRole('dialog', { name: 'Sleep' })
+  await expect(dlg.getByTestId('sleep-followers').getByRole('checkbox')).toHaveCount((await devices()).filter((d) => /pdm|canboard/i.test(d.type)).length - 1)
+  if (/none/.test(await dlg.getByTestId('sleep-in-0').innerText())) {   // no master set up yet
+    await page.getByTestId('sleep-stage').click()
+    await expect(dlg).toContainText('Pick at least one signal that keeps the car awake')
+  }
   await dlg.getByRole('button', { name: 'Cancel' }).click()
   await expect(dlg).toBeHidden()
   await page.getByRole('link', { name: 'Sleep settings', exact: true }).click()
@@ -46,24 +44,24 @@ test('power home: modules, roles, sleep status, links', async ({ page }) => {
 test('power home: the power-down timeline is read from the modules\' own sleep blocks', async ({ page }) => {
   const errors = watchErrors(page)
   const pdm = await deviceByName('PDM-01')
-  // The Sim has no sequence set up: feed the screen the blocks the old designer writes, without touching a module.
-  await page.route(`**/api/devices/${pdm.guid}/functions`, async (route) => {
+  // feed the screen a master's blocks without touching a module: awake 60 s, pre-sleep 20 s before as a 0.5 s pulse
+  await page.route(`**/api/devices/*/functions`, async (route) => {
     const r = await route.fetch(), j = await r.json()
-    const tm = (name, s) => ({ name, enabled: true, preset: s * 1000 })
-    j.timers = [...(j.timers ?? []), tm('Sleep · off delay', 30), tm('Sleep · quiet CAN', 28), tm('Sleep · hold outputs', 5), tm('Sleep · shutdown frame', 15)]
-    j.canOutputs = [...(j.canOutputs ?? []), { name: 'Sleep · shutdown frame', enabled: true, id: 0x5aa, interval: 500 }]
+    if (route.request().url().includes(pdm.guid)) {
+      const tm = (name, s, input = 3) => ({ name, enabled: true, preset: s * 1000, input })
+      j.timers = [tm('Sleep · awake', 60), tm('Sleep · pre-sleep start', 40), tm('Sleep · pre-sleep', 0.5), ...(j.timers ?? []).slice(3)]
+    }
     await route.fulfill({ response: r, json: j })
   })
   await open(page, 'power')
   const tl = page.getByTestId('power-timeline')
   await expect(tl).toBeVisible()
-  await expect(page.getByTestId('sequence-source')).toContainText('PDM-01')
-  await expect(tl).toContainText('Quiet bus')
+  await expect(page.getByTestId('sequence-source')).toContainText('PDM-01 is the master')
+  await expect(tl).toContainText('Pre-sleep')
   await expect(tl).toContainText('Asleep')
-  await expect(page.getByTestId('power-rules')).toContainText('0x5AA')
-  await expect(page.getByTestId('power-rules')).toContainText('every 500 ms for 15 s')
-  await expect(page.getByTestId('power-rules')).toContainText('All modules sleep 30 s after ignition off')
-  await expect(page.getByTestId('power-modules').locator('tr[data-module="PDM-01"]')).toContainText('Master: sends the shutdown frame')
+  await expect(page.getByTestId('power-rules')).toContainText('The car stays awake 60 s after')
+  await expect(page.getByTestId('power-rules')).toContainText('20 s before sleep as a 0.5 s pulse')
+  await expect(page.getByTestId('power-modules').locator('tr[data-module="PDM-01"]')).toContainText('Sleep master')
   await page.getByRole('link', { name: 'Open sleep settings' }).click()
   await expect(page).toHaveURL(/#\/next\/power\/sleep/)
   expect(errors).toEqual([])

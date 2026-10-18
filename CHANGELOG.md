@@ -10,7 +10,18 @@ All notable changes to **dingoConfig** are recorded here. Versions follow [SemVe
   the bus with the CAN bootloader gets the file named for its board and is flashed in turn. Modules already on
   that version are skipped; one that fails is reported and the rest carry on.
 
+### Changed
+- **Sleep** replaces the Shut-down order (Power page). One master keeps the car awake while any of up to three
+  signals is on (ignition, a door, any input or a signal from another module) and for a set time after, gives a
+  pre-sleep signal before the end (held, or a pulse; plus an optional wake pulse when the car is used again in that
+  time: a Pi halts and wakes on it), then goes quiet. Every other module watches the master's own status frame and goes
+  quiet and sleeps when it stops, so no extra frame is needed and a module that wakes alone goes back to sleep. Built
+  from existing blocks on firmware 5.5.111+; separate from the ignition, which is just one of the signals. Use
+  **Sleep · awake** and **Sleep · pre-sleep** as the input of any output (the Pi and radio, the Pi's halt line).
+
 ### Fixed
+- Linking a signal from another module into a free CAN input names the input afresh (a reused slot kept the name of
+  what it last read). Several picks resolved together no longer take the same free slot.
 - **A CANBoard sleeps** (firmware 5.5.111 on): the app said it never sleeps, gave it no sleep input, left it out of
   Sleep now and made it only go quiet in the shut-down order. Older CANBoard firmware still only goes quiet.
 - **Shut-down order** never settled: followers slept while the master still talked, its traffic woke them (a wake is a

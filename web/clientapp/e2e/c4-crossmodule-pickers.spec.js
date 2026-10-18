@@ -285,9 +285,9 @@ test('sleep & wake custom: the sleep input from another module, staged, then put
 })
 
 const ALL = ['PDM-01', 'PDM-02', 'PDM-03', 'PDM-04', 'PDM-05', 'CB-1', 'CB-2']
-const N_SLEEP = 'Sleep · off delay', N_FRAME = 'Sleep · shutdown frame'
+const N_AWAKE = 'Sleep · awake', N_QUIET = 'Sleep · master quiet'
 
-test('shut-down order: a new master leaves the list, its ignition comes from CB-1 over CAN; staged, then put back @exclusive', async ({ page }) => {
+test('sleep: a master keeps the car awake on a CB-1 switch over CAN, the others follow its status frame; staged, then put back @exclusive', async ({ page }) => {
   test.setTimeout(420_000)
   const errors = watchErrors(page)
   const snap = await snapshot(ALL)
@@ -295,29 +295,25 @@ test('shut-down order: a new master leaves the list, its ignition comes from CB-
   try {
     await open(page, 'power')
     await page.getByTestId('edit-sequence').click()
-    const dlg = page.getByRole('dialog', { name: 'Shut-down order' })
-    const order = dlg.getByTestId('seq-order').locator('li')
-    await pickFrom(page, dlg.getByTestId('seq-master'), null, /^PDM-02$/)
-    // the new master is not in the follower list; every other module is (the old master too)
-    await expect(order).toHaveCount(ALL.length - 1)
-    await expect(order.filter({ hasText: 'PDM-02' })).toHaveCount(0)
-    for (const n of ALL.filter((x) => x !== 'PDM-02')) await expect(order.filter({ hasText: n })).toHaveCount(1)
-    await pickFrom(page, dlg.getByTestId('seq-ign'), 'Ignition · CB-1', /^Ignition · CB-1 \(over CAN\)$/)
-    // PDM-03 has no free timer for a sleep step on this car: leave it out
-    await dlg.getByRole('checkbox', { name: 'PDM-03', exact: true }).uncheck()
-    await page.getByTestId('seq-apply').click()
+    const dlg = page.getByRole('dialog', { name: 'Sleep' })
+    const fol = dlg.getByTestId('sleep-followers').getByRole('checkbox')
+    await pickFrom(page, dlg.getByTestId('sleep-master'), null, /^PDM-02$/)
+    // the master is not in the follower list; every other module is
+    await expect(fol).toHaveCount(ALL.length - 1)
+    await expect(dlg.getByTestId('sleep-followers')).not.toContainText('PDM-02')
+    await pickFrom(page, dlg.getByTestId('sleep-in-0'), 'Ignition · CB-1', /^Ignition · CB-1 \(over CAN\)$/)
+    await page.getByTestId('sleep-stage').click()
     await expect(dlg).toHaveCount(0, { timeout: 180_000 })
-    // PDM-02's off-delay reads a CAN input on PDM-02 that decodes CB-1's ignition switch
+    // PDM-02's keep-awake timer reads a CAN input on PDM-02 that decodes CB-1's ignition switch
     const f2 = await fns(p2.guid)
-    const t = f2.timers.find((x) => x.enabled && x.name === N_SLEEP)
+    const t = f2.timers.find((x) => x.enabled && x.name === N_AWAKE)
     const frame = await cbFrame()
     const ci = f2.canInputs.find((c) => c.enabled && c.id === frame && c.startBit === 34 && c.bitLength === 1 && c.operator === 1 && c.operand === 0)
     expect(ci).toBeTruthy()
     expect(t.input).toBe(await ciVar(p2.guid, ci.number))
-    expect(f2.canOutputs.filter((c) => c.enabled && c.name === N_FRAME)).toHaveLength(1)
-    // only one module sends the shutdown frame
+    // every other module watches PDM-02's first status frame (base + 2) for silence
     for (const s of snap.filter((x) => x.d.name !== 'PDM-02'))
-      expect((await fns(s.d.guid)).canOutputs.filter((c) => c.enabled && c.name === N_FRAME), s.d.name).toHaveLength(0)
+      expect((await fns(s.d.guid)).canInputs.filter((c) => c.enabled && c.name === N_QUIET && c.id === p2.baseId + 2), s.d.name).toHaveLength(1)
   } finally { await restore(snap) }
   expect(errors).toEqual([])
 })

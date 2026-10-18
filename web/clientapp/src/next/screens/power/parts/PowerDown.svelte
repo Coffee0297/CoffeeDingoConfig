@@ -1,70 +1,50 @@
 <script>
-  // Power-down timeline, built from the sequence the modules hold (see sequence.svelte.js).
+  // Sleep: the setup the modules hold (see sequence.svelte.js), as a timeline from the moment nothing is in use.
   import { Card, Banner, Button } from '../../../ui/index.js'
-  import { live, hex } from '../../../lib/live.svelte.js'
+  import { live } from '../../../lib/live.svelte.js'
   import { href } from '../../../router.svelte.js'
-  import SequenceEditor from './SequenceEditor.svelte'
+  import SleepSetup from './SleepSetup.svelte'
   let { seq } = $props()
   let editOpen = $state(false)
 
   const mods = $derived(live.devices.filter((d) => /pdm|canboard/i.test(d.type ?? '')))
-  const frameMod = $derived(mods.find((d) => seq.state.perModule[d.guid]?.frame) ?? null)
-  // The sequence lives on the master if there is one (it sends the shutdown frame), else on the first module with an off delay.
-  const master = $derived(frameMod ?? mods.find((d) => seq.state.perModule[d.guid]?.sleepS != null) ?? null)
+  const master = $derived(mods.find((d) => seq.state.perModule[d.guid]?.master) ?? null)
   const s = $derived(master ? seq.state.perModule[master.guid] : null)
-  const plan = $derived.by(() => {
-    if (!s || s.sleepS == null) return null
-    const end = Math.max(1, s.sleepS)
-    const marks = [{ at: 0, name: 'Ignition off' }]
-    if (s.holdS) marks.push({ at: Math.min(s.holdS, end), name: 'Held outputs off' })
-    if (s.frame && s.frameS) marks.push({ at: Math.min(s.frameS, end), name: `Shutdown frame ${hex(s.frame.id)} ends` })
-    if (s.quietS != null) marks.push({ at: Math.min(s.quietS, end), name: 'Bus goes quiet' })
-    marks.push({ at: end, name: 'Modules sleep' })
-    marks.sort((a, b) => a.at - b.at)
-    const segs = []
-    for (let i = 0; i < marks.length - 1; i++) {
-      const dur = marks[i + 1].at - marks[i].at
-      if (dur <= 0) continue
-      const quiet = s.quietS != null && marks[i].at >= s.quietS
-      segs.push({ name: quiet ? 'Quiet bus' : s.holdS && marks[i].at < s.holdS ? 'Outputs held' : 'Awake, ignition off', dur, quiet })
-    }
-    return { end, marks, segs }
-  })
+  const follows = $derived(mods.filter((d) => seq.state.perModule[d.guid]?.follows).map((d) => d.name))
+  const ins = $derived((s?.inputs ?? []).map((i) => seq.state.names[i] ?? `signal ${i}`))
+  const awakeS = $derived(s ? s.keepS - (s.preS ?? 0) : 0)
 </script>
 
-<Card title="Power-down after the ignition goes off" aria-label="Power-down">
+<Card title="Sleep" aria-label="Sleep">
   {#if !live.connected}
-    <Banner tone="warn" title="Not connected">The timeline is read from the modules. Connect to the car to see it.</Banner>
+    <Banner tone="warn" title="Not connected">The setup is read from the modules. Connect to the car to see it.</Banner>
   {:else if !seq.state.loaded}
     <p class="muted" role="status">Reading the modules…</p>
-  {:else if !plan}
-    <Banner tone="info" title="No power-down order is set up" data-testid="no-sequence">Each module sleeps by its own timer (see the table). Set an order to have the module with the ignition key tell the others when to sleep.
-      {#snippet actions()}<Button size="sm" onclick={() => (editOpen = true)} disabled={!live.connected} data-testid="edit-sequence">Set the shut-down order</Button>{/snippet}
+  {:else if !s}
+    <Banner tone="info" title="No sleep master is set up" data-testid="no-sequence">Each module sleeps by its own timer (see the table). Set a master to keep the car awake for a set time after the ignition or a door goes off, give a pre-sleep signal, then put every module to sleep together.
+      {#snippet actions()}<Button size="sm" onclick={() => (editOpen = true)} disabled={!live.connected} data-testid="edit-sequence">Set up sleep</Button>{/snippet}
     </Banner>
   {:else}
-    <p class="muted" data-testid="sequence-source">Read from {master.name}: {frameMod ? 'it sends the shutdown frame.' : 'it holds the off delay.'}</p>
-    <div class="tl" role="img" aria-label={`Power-down timeline: ${plan.marks.map((m) => `${m.at} s ${m.name}`).join(', ')}`} data-testid="power-timeline">
-      {#each plan.segs as g, i (i)}
-        <div class="seg" class:quiet={g.quiet} style="flex: {g.dur} 1 0"><span class="n">{g.name}</span><span class="l mono">{g.dur} s</span></div>
-      {/each}
-      <div class="seg end" style="flex: {Math.max(1, plan.end / 3)} 1 0"><span class="n">Asleep</span><span class="l mono">until a wake source</span></div>
+    <p class="muted" data-testid="sequence-source">{master.name} is the master: it keeps the car awake while {ins.join(' or ') || 'its signal'} is on.</p>
+    <div class="tl" role="img" aria-label={`Sleep timeline: awake ${awakeS} s, pre-sleep ${s.preS ?? 0} s, then asleep`} data-testid="power-timeline">
+      <div class="seg" style="flex: {Math.max(1, awakeS)} 1 0"><span class="n">Awake</span><span class="l mono">{awakeS} s</span></div>
+      {#if s.preS}<div class="seg pre" style="flex: {s.preS} 1 0"><span class="n">Pre-sleep</span><span class="l mono">{s.preS} s</span></div>{/if}
+      <div class="seg end" style="flex: {Math.max(1, s.keepS / 3)} 1 0"><span class="n">Asleep</span><span class="l mono">until a wake source</span></div>
     </div>
     <ul class="muted rules" data-testid="power-rules">
-      <li>Ignition outputs switch off when the ignition goes off.</li>
-      {#if s.holdS}<li>Held outputs stay on for {s.holdS} s.</li>{/if}
-      {#if s.frame}<li>Shutdown frame <span class="mono">{hex(s.frame.id)}</span> every {s.frame.intervalMs} ms for {s.frameS ?? '?'} s, so the other modules know.</li>{/if}
-      {#if s.quietS != null}<li>The bus goes quiet {s.quietS} s after ignition off.</li>{/if}
-      <li>All modules sleep {plan.end} s after ignition off. A door, a switch or CAN traffic wakes them.</li>
+      <li>The car stays awake {s.keepS} s after {ins.length > 1 ? 'all of them are' : 'it is'} off; turning one on again starts over.</li>
+      {#if s.preS}<li><strong>Sleep · pre-sleep</strong> comes on {s.preS} s before sleep{s.pulseS ? ` as a ${s.pulseS} s pulse` : ', until sleep'}{s.wakeS ? `; used again in that time, a ${s.wakeS} s wake pulse` : ''}.</li>{/if}
+      <li>Then {master.name} goes quiet: {follows.length ? follows.join(', ') : 'no module'} go{follows.length === 1 ? 'es' : ''} quiet and sleep{follows.length === 1 ? 's' : ''}, and {master.name} a few seconds later.</li>
     </ul>
   {/if}
-  <div class="acts">{#if plan}<Button size="sm" onclick={() => (editOpen = true)} data-testid="edit-sequence">Change the shut-down order</Button>{/if}<Button size="sm" href={href('power', 'sleep')}>Open sleep settings</Button></div>
+  <div class="acts">{#if s}<Button size="sm" onclick={() => (editOpen = true)} data-testid="edit-sequence">Change the sleep</Button>{/if}<Button size="sm" href={href('power', 'sleep')}>Open sleep settings</Button></div>
 </Card>
-<SequenceEditor bind:open={editOpen} {seq} />
+<SleepSetup bind:open={editOpen} {seq} />
 
 <style>
   .tl { display: flex; gap: 4px; min-height: 64px; }
   .seg { border-radius: var(--radius-md); background: var(--color-on-soft); padding: 8px 10px; display: flex; flex-direction: column; justify-content: center; min-width: 0; border: 1px solid var(--color-line); }
-  .seg.quiet { background: var(--color-warn-soft); }
+  .seg.pre { background: var(--color-warn-soft); }
   .seg.end { background: var(--color-raised); }
   .n { font-weight: 600; font-size: var(--text-sm); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .l { font-size: var(--text-xs); color: var(--color-text-muted); }

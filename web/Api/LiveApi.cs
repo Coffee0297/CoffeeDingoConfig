@@ -1478,6 +1478,7 @@ public static class LiveApi
             // A fresh slot defaults to State = (value == 0), which reads the remote signal inverted: claim it
             // as State = (value != 0). A slot already in use keeps its rule (a re-link after a base-ID change)
             // unless the caller asks for a new one (the CAN input page linking a different signal).
+            var wasFree = !ci.Enabled;
             if (!ci.Enabled || r.NewRule == true) { ci.Operator = Operator.NotEqual; ci.Operand = 0; ci.Mode = InputMode.Momentary; }
             ci.Enabled = true;
             ci.Id = match.MessageId;            // absolute id = source base + offset (setter sets Ide)
@@ -1487,7 +1488,8 @@ public static class LiveApi
             ci.Offset = sig.Offset;
             ci.ByteOrder = sig.ByteOrder;
             ci.Signed = sig.IsSigned;
-            if (string.IsNullOrWhiteSpace(ci.Name) || System.Text.RegularExpressions.Regex.IsMatch(ci.Name, @"^canInput\d+$"))
+            // a free slot keeps the name of what it last read ("CB-1 Sleep · awake" on an ignition bit): name it afresh
+            if (wasFree || string.IsNullOrWhiteSpace(ci.Name) || System.Text.RegularExpressions.Regex.IsMatch(ci.Name, @"^canInput\d+$"))
                 ci.Name = $"{src.Name} {SignalLabel(src, sig.Name) ?? sig.Name}";   // "CB-1 Horn", not "CB-1 DigitalInput2.State"
             var info = new Dictionary<string, object?>
             {

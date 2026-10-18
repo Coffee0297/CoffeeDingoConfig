@@ -7,8 +7,8 @@
   const mods = $derived(live.devices.filter((d) => /pdm|canboard/i.test(d.type ?? '')))
   function role(d) {
     const s = seq.state.perModule[d.guid]
-    if (s?.frame) return 'Master: sends the shutdown frame'
-    if (s?.follows) return "Follower: sleeps on the master's frame"
+    if (s?.master) return 'Sleep master: keeps the car awake, then says "sleep now"'
+    if (s?.follows) return `Sleeps on the master's "sleep now"`
     if (!canSleep(d)) return d.muteTxInput ? 'Goes quiet on request' : 'Stays awake (firmware older than 5.5.111: no sleep)'
     if (d.sleepEnabled) return `Own auto-sleep, ${Math.round(d.sleepTimeoutMs / 1000)} s`
     return d.forceSleepInput ? 'Sleeps on its sleep input' : 'Stays awake'
