@@ -6,6 +6,9 @@ All notable changes to **dingoConfig** are recorded here. Versions follow [SemVe
 ## [Unreleased]
 
 ### Fixed
+- **A module wired to the master's "Sleep · awake" over CAN never slept**: the master goes quiet the moment "awake"
+  ends, so the last frame still said 1 and the output (the Pi + radio on PDM-03) stayed on. Staging gives those CAN
+  inputs a 2 s timeout that reads 0 when the master is silent.
 - **Sleep with another device on the bus**: an ECU that kept talking with the key off woke the modules, they saw "not
   in use", were forced asleep, and its next frame woke them again, over and over. Nothing forces a sleep now: the
   master and the others go quiet, and each module sleeps on its own auto-sleep once the bus has been quiet for its

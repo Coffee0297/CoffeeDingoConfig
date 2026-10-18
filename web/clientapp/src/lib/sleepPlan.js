@@ -118,6 +118,11 @@ export async function compileFollower(g, f, v, master) {
   // never > 255), only the timeout value does, so the input is on exactly while the master is silent
   await api.setFunction(g, 'caninput', c.number, { enabled: true, name: N.quiet, id: master.baseId + 2, ide: false, startBit: 0, bitLength: 8, factor: 1, offset: 0, operator: 2, operand: 255, mode: 0, byteOrder: 0, signed: false, timeoutEnabled: true, timeout: 2000, timeoutValue: 256 })
   const s = idx(v, 'caninput', c.number)
+  // an output on the master's "Sleep · awake" over CAN would hold the last frame's 1 once the master goes quiet and
+  // keep this module awake for good: read 0 when the master is silent
+  for (const x of f.canInputs ?? [])
+    if (x.enabled && x.name?.includes(' Sleep · ') && x.id >= master.baseId && x.id < master.baseId + 8 && !(x.timeoutEnabled && x.timeoutValue === 0))
+      await api.setFunction(g, 'caninput', x.number, { ...x, timeoutEnabled: true, timeout: 2000, timeoutValue: 0 })
   await api.deviceInputs(g, f.device?.canSleep === false ? { muteTxInput: s } : { forceSleepInput: 0, muteTxInput: s })
 }
 
