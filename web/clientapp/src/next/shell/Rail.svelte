@@ -44,7 +44,6 @@
   <div class="phone ex">
     <button type="button" class="tool" onclick={() => { ui.nav = false; ui.palette = true }}>Search</button>
     <button type="button" class="tool" aria-label={ui.theme === 'dark' ? 'Use light theme' : 'Use dark theme'} onclick={() => setTheme(ui.theme === 'dark' ? 'light' : 'dark')}>{ui.theme === 'dark' ? '☀ Light theme' : '☾ Dark theme'}</button>
-    <a class="tool" href="#/" title="Back to the current dingoConfig UI">Old UI</a>
   </div>
 </nav>
 

@@ -1,5 +1,5 @@
 // Tiny non-blocking toast store — replaces native alert() for hardware write feedback
-// (alert freezes the 10 Hz telemetry render loop). Rendered by the Toaster in App.svelte.
+// (alert freezes the 10 Hz telemetry render loop). Rendered by next/shell/Toasts.svelte.
 import { writable } from 'svelte/store'
 
 export const toasts = writable([])

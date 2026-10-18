@@ -65,8 +65,9 @@ test('unknown route shows not found with a way back', async ({ page }) => {
   await expect(page).toHaveURL(/#\/next\/car/)
 })
 
-test('Old UI link returns to the current app', async ({ page }) => {
-  await open(page, 'car')
-  await page.getByRole('link', { name: 'Old UI' }).click()
-  await expect(page).not.toHaveURL(/#\/next/)
+test('an address from before the redesign opens Car home, and there is no Old UI link', async ({ page }) => {
+  await page.goto('/#/system')
+  await expect(page).toHaveURL(/#\/next\/car$/)
+  await expect(page.getByRole('heading', { level: 1 })).toBeVisible()
+  await expect(page.getByRole('link', { name: 'Old UI' })).toHaveCount(0)
 })

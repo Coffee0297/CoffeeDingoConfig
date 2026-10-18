@@ -34,7 +34,6 @@
   </button>
   <button type="button" class="chip search desk" onclick={() => (ui.palette = true)} aria-keyshortcuts="Control+K">Search · <span class="mono">Ctrl K</span></button>
   <button type="button" class="chip icon desk" aria-label={ui.theme === 'dark' ? 'Use light theme' : 'Use dark theme'} onclick={() => setTheme(ui.theme === 'dark' ? 'light' : 'dark')}>{ui.theme === 'dark' ? '☀' : '☾'}</button>
-  <a class="old desk" href="#/" title="Back to the current dingoConfig UI">Old UI</a>
 </header>
 
 <style>
@@ -53,8 +52,6 @@
   .apply.has { background: var(--color-warn-soft); border-color: var(--color-warn); color: var(--color-warn); font-weight: 700; }
   .search { border-radius: var(--radius-md); color: var(--color-text-muted); }
   .icon { width: 40px; justify-content: center; padding: 0; border-radius: var(--radius-md); }
-  .old { font-size: var(--text-xs); color: var(--color-text-muted); padding: var(--space-2) var(--space-1); }
-  .old:hover { color: var(--color-text); }
   .proj { min-width: 0; }
   .pn { overflow: hidden; text-overflow: ellipsis; }
   .menu, .narrow { display: none; }
