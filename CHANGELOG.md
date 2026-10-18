@@ -5,6 +5,10 @@ All notable changes to **dingoConfig** are recorded here. Versions follow [SemVe
 
 ## [Unreleased]
 
+## [0.11.0] — 2026-10-18
+
+The redesigned UI is the app (the old UI is gone). Needs firmware 5.6.4 for the sleep, ignition and math features.
+
 ### Added
 - **⬆ Update all over CAN** (System view): pick the release `.srec` files, one per board type; every module on
   the bus with the CAN bootloader gets the file named for its board and is flashed in turn. Modules already on
