@@ -34,7 +34,7 @@
     <ul class="muted rules" data-testid="power-rules">
       <li>The car stays awake {s.keepS} s after {ins.length > 1 ? 'all of them are' : 'it is'} off; turning one on again starts over.</li>
       {#if s.preS}<li><strong>Sleep · pre-sleep</strong> comes on {s.preS} s before sleep{s.pulseS ? ` as a ${s.pulseS} s pulse` : ', until sleep'}{s.wakeS ? `; used again in that time, a ${s.wakeS} s wake pulse` : ''}.</li>{/if}
-      <li>Then {master.name} goes quiet: {follows.length ? follows.join(', ') : 'no module'} go{follows.length === 1 ? 'es' : ''} quiet and sleep{follows.length === 1 ? 's' : ''}, and {master.name} a few seconds later.</li>
+      <li>Then {master.name} goes quiet, {follows.length ? follows.join(', ') : 'no module'} with it, and each module sleeps once the bus has been quiet for its sleep delay. Another device still talking (an ECU) keeps them awake but silent until it stops.</li>
     </ul>
   {/if}
   <div class="acts">{#if s}<Button size="sm" onclick={() => (editOpen = true)} data-testid="edit-sequence">Change the sleep</Button>{/if}<Button size="sm" href={href('power', 'sleep')}>Open sleep settings</Button></div>

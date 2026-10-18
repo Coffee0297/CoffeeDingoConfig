@@ -5,6 +5,17 @@ All notable changes to **dingoConfig** are recorded here. Versions follow [SemVe
 
 ## [Unreleased]
 
+### Fixed
+- **Sleep with another device on the bus**: an ECU that kept talking with the key off woke the modules, they saw "not
+  in use", were forced asleep, and its next frame woke them again, over and over. Nothing forces a sleep now: the
+  master and the others go quiet, and each module sleeps on its own auto-sleep once the bus has been quiet for its
+  sleep delay, so they stay awake but silent until the ECU stops. Staging refuses a module with auto-sleep off. The
+  master needs one timer less (a CANBoard master has room for the wake pulse).
+- **Changing the Sleep setup** kept outputs on the old blocks: a re-stage can move "Sleep · pre-sleep" to another slot,
+  so an output wired to it read another block. Outputs, CAN outputs, timers and virtual inputs that used a Sleep
+  signal follow it to its new slot.
+- "Last woke from" counted 1 wake after any number of wakes (firmware 5.6.5 fixes the count).
+
 ## [0.11.0] — 2026-10-18
 
 The redesigned UI is the app (the old UI is gone). Needs firmware 5.6.4 for the sleep, ignition and math features.

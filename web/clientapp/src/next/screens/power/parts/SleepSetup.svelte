@@ -5,7 +5,7 @@
   import { untrack } from 'svelte'
   import { Dialog, Button, Select, Stepper, Checkbox, Banner } from '../../../ui/index.js'
   import { api, live, toast } from '../../../lib/live.svelte.js'
-  import { shortfall, clearSleep, compileMaster, compileFollower } from '../../../../lib/sleepPlan.js'
+  import { shortfall, clearSleep, compileMaster, compileFollower, sleepSignals, repointSleep } from '../../../../lib/sleepPlan.js'
   import { remoteItems, resolveRemote } from '../../../lib/remote.js'
   import { SUB } from './sleepLogic.js'
   let { open = $bindable(false), seq } = $props()
@@ -48,6 +48,9 @@
     if (!(preS >= 0 && preS < keepS)) return 'The pre-sleep signal starts before the end: 0 up to the stay-awake time.'
     if (pulseS && !(pulseS > 0 && pulseS <= preS)) return 'The pulse must fit before the end: no longer than its start before sleep.'
     if (wakeS && !(wakeS > 0 && wakeS <= 60)) return 'The wake pulse is 0 (none) up to 60 s.'
+    // each module sleeps on its own auto-sleep once the bus is quiet (nothing forces it: see lib/sleepPlan.js)
+    const off = mods.filter((d) => (d.guid === masterGuid || others[d.guid]) && d.canSleep !== false && d.sleepEnabled === false)
+    if (off.length) return `Automatic sleep is off on ${off.map((d) => d.name).join(', ')}: turn it on in Sleep settings, or leave ${off.length === 1 ? 'it' : 'them'} out. Each module sleeps on its own once the bus is quiet.`
     return ''
   }
 
@@ -66,25 +69,26 @@
       // another module's signal becomes a CAN input on the master: one at a time (in parallel both took the same free slot)
       plan.inputs = []
       for (const k of picked) plan.inputs.push(await resolveRemote(m.guid, k, 'bool'))
-      const auto = []
       for (const x of all) {
+        x.before = sleepSignals(x.v)
         await clearSleep(x.d.guid, x.f, x.v)
         const f = await api.functions(x.d.guid)
         if (x.d.guid === m.guid) await compileMaster(x.d.guid, f, await api.inputs(x.d.guid), plan)
-        else if (others[x.d.guid] && (await compileFollower(x.d.guid, f, x.v, m))) auto.push(x.d.name)
+        else if (others[x.d.guid]) await compileFollower(x.d.guid, f, x.v, m)
       }
+      for (const x of all) await repointSleep(x.d.guid, x.before, live.devices)   // outputs that used a Sleep signal
       // a keep-awake signal that is one of the master's digital inputs also wakes it
       const dis = plan.inputs.map((i) => mv.find((v) => v.index === i)).filter((v) => v?.kind === 'input' && v.prop === 'State')
       const mask = dis.reduce((a, v) => a | (1 << (v.number - 1)), m.wakeDigInputMask ?? 0)
       if (mask !== (m.wakeDigInputMask ?? 0)) await api.writeParam(m.guid, 0, SUB.wakeMask, mask)
-      toast(`Sleep staged: ${m.name} is the master.${auto.length ? ` ${auto.join(', ')} had no free timer: ${auto.length === 1 ? 'it goes' : 'they go'} quiet when ${m.name} does and sleep${auto.length === 1 ? 's' : ''} on ${auto.length === 1 ? 'its' : 'their'} own auto-sleep.` : ''} Apply to car, then Store on modules: a module wakes from what it has stored.`, 'info', 12000)
+      toast(`Sleep staged: ${m.name} is the master. Apply to car, then Store on modules: a module wakes from what it has stored.`, 'info', 9000)
       open = false
     } catch (e) { err = `${e.message}. Some modules may be half changed: open this again and stage once more.` }
     finally { busy = false }
   }
 </script>
 
-<Dialog bind:open title="Sleep" description="The master keeps the car awake while any of its signals is on and for a set time after, gives a pre-sleep signal before the end, then goes quiet: every module that follows it sleeps." width={640}>
+<Dialog bind:open title="Sleep" description="The master keeps the car awake while any of its signals is on and for a set time after, gives a pre-sleep signal before the end, then goes quiet. The others go quiet with it, and each module sleeps once the bus has been quiet for its sleep delay." width={640}>
   <div class="grid">
     <Select label="Master" items={mods.map((d) => ({ value: d.guid, label: d.name }))} bind:value={masterGuid} data-testid="sleep-master" />
     <span></span>
@@ -98,7 +102,7 @@
   </div>
   <p class="muted">Use <strong>Sleep · awake</strong> (on while the car is awake) and <strong>Sleep · pre-sleep</strong> (with the wake pulse in it) as the input of any output: the Pi and radio, the Pi's halt line. At the end the master goes quiet:</p>
   <fieldset class="fol" data-testid="sleep-followers">
-    <legend>These go quiet and sleep when it does</legend>
+    <legend>These go quiet with it, then sleep once the bus is quiet</legend>
     {#each followers as d (d.guid)}<Checkbox label={d.name} bind:checked={() => others[d.guid] ?? true, (v) => (others[d.guid] = v)} />{/each}
   </fieldset>
   {#if err}<Banner tone="fault" title="Not staged">{err}</Banner>{/if}
