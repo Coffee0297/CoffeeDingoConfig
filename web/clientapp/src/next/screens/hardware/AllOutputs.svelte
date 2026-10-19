@@ -59,7 +59,7 @@
   const groups = $derived.by(() => {
     if (groupBy === 'none') return [{ title: '', rows: [...shown].sort((a, b) => (a.name || '~').localeCompare(b.name || '~')) }]
     if (groupBy === 'state') {
-      const order = ['Fault', 'Overcurrent', 'Warning', 'OpenLoad', 'On', 'Off', '']
+      const order = ['Fault', 'Overcurrent', 'Warning', 'OpenLoad', 'Undercurrent', 'On', 'Off', '']
       const map = new Map(order.map((k) => [k, []]))
       for (const r of shown) (map.get(order.includes(r.state) ? r.state : '') ?? map.get('')).push(r)
       return order.filter((k) => map.get(k).length).map((k) => ({ title: (k || 'No live data') + ' · ' + map.get(k).length, rows: map.get(k) }))
@@ -76,7 +76,7 @@
     const a = r.amps != null ? ` · ${Number(r.amps).toFixed(1)} A` : ''
     if (r.state === 'On') return { t: 'On' + a, tone: 'on', shape: 'dot' }
     if (r.state === 'Off') return { t: 'Off', tone: 'off', shape: 'ring' }
-    return { t: r.state + a, tone: r.state === 'Fault' || r.state === 'Overcurrent' ? 'fault' : 'warn', shape: r.state === 'Warning' || r.state === 'OpenLoad' ? 'triangle' : 'square' }
+    return { t: r.state + a, tone: r.state === 'Fault' || r.state === 'Overcurrent' ? 'fault' : 'warn', shape: r.state === 'Warning' || r.state === 'OpenLoad' || r.state === 'Undercurrent' ? 'triangle' : 'square' }
   }
 
   const GROUPS = [{ value: 'module', label: 'Module' }, { value: 'state', label: 'State' }, { value: 'none', label: 'Load name (A to Z)' }]

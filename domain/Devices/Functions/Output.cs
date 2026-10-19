@@ -51,6 +51,11 @@ public class Output : IDeviceFunction
     [JsonPropertyName("warnLimit")] public double WarnLimit { get => field; set => field = Math.Clamp(value, 0.0, 100.0); } = 0.0;        //A, 0 = disabled
     [JsonPropertyName("openLoadLimit")] public double OpenLoadLimit { get => field; set => field = Math.Clamp(value, 0.0, 100.0); } = 0.0; //A, 0 = disabled
     [JsonPropertyName("openLoadTime")] public int OpenLoadTime { get => field; set => field = Math.Clamp(value, 0, 60000); } = 1000;     //ms below floor before flagging
+    // upstream feat/undercurrent-trip (subs 27-29): below UnderLimit A (0 = off) for UnderTime ms while on, past inrush:
+    // report Undercurrent, or with UnderTrip latch Fault and switch the output off
+    [JsonPropertyName("underLimit")] public double UnderLimit { get => field; set => field = Math.Clamp(value, 0.0, 100.0); } = 0.0;
+    [JsonPropertyName("underTime")] public int UnderTime { get => field; set => field = Math.Clamp(value, 0, 60000); } = 1000;
+    [JsonPropertyName("underTrip")] public bool UnderTrip { get; set; }
     
     [JsonIgnore][Plotable(displayName:"Current", unit:"A")] public double Current { get; set; }
     [JsonIgnore][Plotable(displayName:"State")] public OutState State { get; set; }
@@ -67,6 +72,8 @@ public class Output : IDeviceFunction
     [JsonIgnore][Plotable(displayName:"CalcCurrent", unit:"A")] public double CalculatedCurrent { get; private set; }
 
     [JsonIgnore] public List<DeviceParameter> Params { get; }
+    // Upstream-only subs (free in the fork, whose firmware lacks them): added on upstream modules only.
+    [JsonIgnore] public List<DeviceParameter> UpstreamParams { get; }
 
     [JsonConstructor]
     public Output(int number, string name)
@@ -75,6 +82,16 @@ public class Output : IDeviceFunction
         Name = name;
 
         Params = InitParams();
+        var idx = BaseIndex + (Number - 1);
+        UpstreamParams =
+        [
+            new DeviceParameter { ParentName = Name, Name = $"output[{Number}].underLimit", Index = idx, SubIndex = 27,
+                GetValue = () => UnderLimit, SetValue = val => UnderLimit = (double)val, ValueType = typeof(double), DefaultValue = 0.0 },
+            new DeviceParameter { ParentName = Name, Name = $"output[{Number}].underTime", Index = idx, SubIndex = 28,
+                GetValue = () => UnderTime, SetValue = val => UnderTime = (int)val, ValueType = typeof(int), DefaultValue = 1000 },
+            new DeviceParameter { ParentName = Name, Name = $"output[{Number}].underTrip", Index = idx, SubIndex = 29,
+                GetValue = () => UnderTrip, SetValue = val => UnderTrip = (bool)val, ValueType = typeof(bool), DefaultValue = false },
+        ];
     }
 
     private List<DeviceParameter> InitParams()

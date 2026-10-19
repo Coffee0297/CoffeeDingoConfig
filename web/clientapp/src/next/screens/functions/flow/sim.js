@@ -181,7 +181,7 @@ export function createSim(model, snapshot) {
       const r = n.row ?? {}
       if (n.kind === 'output' || n.kind === 'digitaloutput') {
         const onIdx = port(n, n.kind === 'output' ? 'On' : 'State'), curIdx = port(n, 'Current'), ocIdx = port(n, 'Overcurrent'), fIdx = port(n, 'Fault')
-        const wIdx = port(n, 'Warning'), olIdx = port(n, 'Open Load')   // upstream state signals, 1 only while reported
+        const wIdx = port(n, 'Warning'), olIdx = port(n, 'Open Load'), ucIdx = port(n, 'Undercurrent')   // upstream state signals, 1 only while reported
         const src = n.kind === 'output' ? r.inputVal : r.input
         const want = !!r.enabled && truthy(val(src))
         const f = faults[n.id]
@@ -192,6 +192,20 @@ export function createSim(model, snapshot) {
           status[n.id] = { text: 'TRIPPED', tone: 'fault', why: n.kind === 'output'
             ? `Over ${lim} A: the output trips. ${r.resetMode ? `It tries again after ${(r.resetTime ?? 0) / 1000} s, up to ${r.resetCountLimit} times, then stays off.` : 'It stays off until it is reset.'}`
             : 'Low-side output tripped (simulated).' }
+        } else if (n.kind === 'output' && (m(n.id).uTrip || (f === 'under' && want && r.underLimit > 0))) {
+          // too little current (upstream subs 27-29): after the time, report Undercurrent, or switch off and latch Fault
+          const s = m(n.id); s.underAt ??= t
+          const tripped = s.uTrip || (r.underTrip && t - s.underAt >= (r.underTime ?? 1000))
+          if (tripped) {
+            s.uTrip = true
+            if (onIdx) vals[onIdx] = false; if (ocIdx) vals[ocIdx] = false; if (fIdx) vals[fIdx] = true; if (curIdx) vals[curIdx] = 0
+            status[n.id] = { text: 'TRIPPED', tone: 'fault', why: `Below ${r.underLimit} A for ${r.underTime ?? 1000} ms: the output switched off and latched Fault. It stays off until the module is power-cycled.` }
+          } else {
+            if (onIdx) vals[onIdx] = true; if (ocIdx) vals[ocIdx] = false; if (fIdx) vals[fIdx] = false; if (curIdx) vals[curIdx] = r.underLimit / 2
+            status[n.id] = t - s.underAt < (r.underTime ?? 1000)
+              ? { text: 'ON', tone: 'on', why: `Less than ${r.underLimit} A: reported after ${r.underTime ?? 1000} ms.` }
+              : { text: 'UNDERCURRENT', tone: 'warn', why: `It draws less than its ${r.underLimit} A limit: a bulb out, a pump running dry? It keeps running; the module only reports it.` }
+          }
         } else if (f === 'open' && want) {
           if (onIdx) vals[onIdx] = true; if (ocIdx) vals[ocIdx] = false; if (fIdx) vals[fIdx] = false; if (curIdx) vals[curIdx] = 0
           // a PDM output reports Open load only with a "load missing below" limit, once the load has been missing that long
@@ -202,13 +216,14 @@ export function createSim(model, snapshot) {
         } else {
           if (onIdx) vals[onIdx] = want; if (ocIdx) vals[ocIdx] = false; if (fIdx) vals[fIdx] = false
           if (curIdx) vals[curIdx] = want ? (nominal ?? null) : 0
-          m(n.id).openAt = undefined
+          m(n.id).openAt = undefined; m(n.id).underAt = undefined
           status[n.id] = want && r.warnLimit > 0 && nominal > r.warnLimit
             ? { text: 'WARNING', tone: 'warn', why: `It draws ${nominal.toFixed(1)} A, above its ${r.warnLimit} A warning limit. It keeps running; the module only reports it.` }
             : { text: want ? 'ON' : 'OFF', tone: want ? 'on' : 'off', why: !r.enabled ? 'The output is disabled.' : !src ? 'It has no input, so it never switches.' : want ? 'Its input is on.' : f ? 'It is off, so the fault has nothing to act on yet.' : 'Its input is off.' }
         }
         if (wIdx) vals[wIdx] = status[n.id]?.text === 'WARNING'
         if (olIdx) vals[olIdx] = status[n.id]?.text === 'OPEN LOAD'
+        if (ucIdx) vals[ucIdx] = status[n.id]?.text === 'UNDERCURRENT'
       } else if (n.kind === 'canoutput' && n.enabled) {
         status[n.id] = r.input ? { text: 'SENDS ' + fmt(val(r.input)), tone: 'on', why: `Sends ${fmt(val(r.input))} on ${'0x' + Number(r.id ?? 0).toString(16).toUpperCase()} every ${r.interval} ms (simulated, nothing is sent).` }
           : { text: 'NOTHING', tone: 'warn', why: 'No value to send.' }

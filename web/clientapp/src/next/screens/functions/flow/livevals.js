@@ -31,6 +31,7 @@ export function liveOf(v, sig, dev, model) {
       if (v.prop === 'Fault') return /fault/i.test(o.state ?? '')
       if (v.prop === 'Warning') return o.state === 'Warning'
       if (v.prop === 'Open Load') return o.state === 'OpenLoad'
+      if (v.prop === 'Undercurrent') return o.state === 'Undercurrent'
       return null
     }
     case 'digitaloutput': {   // a CANBoard output

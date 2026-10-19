@@ -38,6 +38,7 @@ export const binBody = (o, input, enabled = true) => {
     VariableFreq: o.variableFreq ?? false, FreqInput: o.freqInput ?? 0, FreqInputDenom: o.freqInputDenom ?? 1,
     RampDutyChanges: o.rampDutyChanges ?? false, PrimaryOutput: o.primaryOutput ?? -1,
     WarnLimit: o.warnLimit ?? 0, OpenLoadLimit: o.openLoadLimit ?? 0, OpenLoadTime: o.openLoadTime ?? 1000,
+    UnderLimit: o.underLimit ?? 0, UnderTime: o.underTime ?? 1000, UnderTrip: !!o.underTrip,   // upstream subs 27-29: kept on a re-wire
   }
 }
 

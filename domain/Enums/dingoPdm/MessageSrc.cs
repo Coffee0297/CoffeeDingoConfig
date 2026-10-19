@@ -21,5 +21,6 @@ public enum MessageSrc
     USBConnection,
     Init,
     OutputWarning,   // output current above warn limit (below trip)
-    OpenLoad         // output on but current below open-load floor (broken bulb / no load)
+    OpenLoad,        // output on but current below open-load floor (broken bulb / no load)
+    Undercurrent     // upstream feat/undercurrent-trip: output below its undercurrent limit (report mode)
 }
