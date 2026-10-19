@@ -58,3 +58,10 @@ export function ioTagFromSignal(device, signalName) {
 
 // Text a search box can match: 'J3-8', 'J3.8', 'pin 8' (and the second pin of a doubled output).
 export const pinSearchText = (p) => (p ? [p.pin, p.pin2].filter(Boolean).map((n) => `${p.conn}-${n} ${p.conn}.${n} pin ${n}`).join(' ') : '')
+
+// Pass the device (or just its type): a PDM runs Lua on the fork; on upstream dingoFW only once it answered a Lua
+// command (dev.hasLua, feat/lua-scripting firmware).
+export const deviceHasLua = (d) => {
+  const type = typeof d === 'string' ? d : d?.type
+  return !/keypad|dbc|canboard|can.?board/i.test(type || '') && !(typeof d === 'object' && d?.family === 'upstream' && !d.hasLua)
+}

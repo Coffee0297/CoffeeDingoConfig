@@ -14,7 +14,7 @@
   let { guid } = $props()
 
   // Lua space per board (firmware LUA_SCRIPT_MAX, from the board facts in /api/definitions, G21)
-  const capOf = (d) => boardOf(d)?.luaBytes ?? 4096
+  const capOf = (d) => (d?.family === 'upstream' ? 4095 : boardOf(d)?.luaBytes ?? 4096)   // upstream clamps to 4095
   const fmt = (n) => Number(n).toLocaleString('en-US')
   // A textarea holds LF only. A script stored with CRLF keeps its CRLF on upload (the bytes on the module stay the same).
   const norm = (s) => (s ?? '').replace(/\r\n/g, '\n')
@@ -29,8 +29,8 @@
     return ((c ^ 0xffffffff) >>> 0).toString(16).toUpperCase().padStart(8, '0')
   }
 
-  const mods = $derived(live.devices.filter((d) => deviceHasLua(d.type)).sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true })))
-  const noLua = $derived(live.devices.filter((d) => !deviceHasLua(d.type)).sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true })))
+  const mods = $derived(live.devices.filter((d) => deviceHasLua(d)).sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true })))
+  const noLua = $derived(live.devices.filter((d) => !deviceHasLua(d)).sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true })))
   const cur = $derived(guid ? mods.find((m) => m.guid === guid) : mods[0])
   const g = $derived(cur?.guid)
 

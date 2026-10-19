@@ -163,4 +163,38 @@ public class UpstreamFamilyTests
         Assert.True(t.HasBlock(0x1800));
         Assert.False(t.HasBlock(0x1C00));
     }
+
+    [Fact]
+    public void UpstreamLua_ProbedOnVersion_SlotsAfterTheTimers()
+    {
+        // feat/lua-scripting: no param shows Lua, so a Version reply asks for the Lua error text (43); an answer adds
+        // the 32 Lua slots at the end of the var map (nm dingopdm_v7.elf: pVarMap 0x404 bytes = 257, Lua Out 1 = 225)
+        var d = new PdmDevice("PDM", 0x680);
+        d.SetLogger(NullLogger<PdmDevice>.Instance);
+        var q = Q();
+        var outgoing = new List<DeviceCanFrame>();
+        d.Read(0x680, UpstreamVersion, ref q, outgoing);
+        Assert.Contains(outgoing, f => f.Frame.Payload[0] == 43 && f.Frame.Id == 0x681);
+        Assert.False(d.RunsLua);
+        Assert.Equal(225, d.VarMap.Count);
+
+        d.Read(0x680, [43, 0, 0, 0, 0, 0, 0, 0], ref q, []);
+        Assert.True(d.RunsLua);
+        Assert.Equal(257, d.VarMap.Count);
+        Assert.Equal(("lua", 1, 225), (d.VarMap[225].OwnerKind, d.VarMap[225].OwnerNumber, d.VarMap[225].VariableIndex));
+        Assert.Equal(Enumerable.Range(0, 257), d.VarMap.Select(v => v.VariableIndex));
+
+        outgoing.Clear();
+        d.Read(0x680, UpstreamVersion, ref q, outgoing);
+        Assert.Empty(outgoing);   // answered once: not asked again
+
+        // the fork always runs Lua and is never probed
+        var f = new PdmDevice("PDM", 0x680);
+        f.SetLogger(NullLogger<PdmDevice>.Instance);
+        outgoing.Clear();
+        f.Read(0x680, [31, 0, 0, 0, 5, 6, 0, 6], ref q, outgoing);
+        Assert.True(f.RunsLua);
+        Assert.Empty(outgoing);
+        Assert.Null(f.HasLua);
+    }
 }

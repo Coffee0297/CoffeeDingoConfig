@@ -65,10 +65,10 @@
 
   // ---- blink clock ----
   const clockItems = $derived([{ value: 'trigger', label: 'The module with the trigger signal' }, ...mods.map((d) => ({ value: d.guid, label: d.name }))])
-  const backupItems = $derived([{ value: 'none', label: 'No backup' }, ...mods.filter((d) => deviceHasLua(d.type)).map((d) => ({ value: d.guid, label: d.name }))])
+  const backupItems = $derived([{ value: 'none', label: 'No backup' }, ...mods.filter((d) => deviceHasLua(d)).map((d) => ({ value: d.guid, label: d.name }))])
 
   // ---- own Lua (expert) ----
-  const luaMods = $derived(involvedOf(f).filter((g) => deviceHasLua(devs.find((d) => d.guid === g)?.type)))
+  const luaMods = $derived(involvedOf(f).filter((g) => deviceHasLua(devs.find((d) => d.guid === g))))
   let luaMod = $state('')
   $effect(() => { if (!luaMods.includes(luaMod)) luaMod = luaMods[0] ?? '' })
   $effect(() => { if (luaMod && f.luaByModule[luaMod] == null) f.luaByModule[luaMod] = '' })
@@ -87,7 +87,7 @@
     if (f.blink && !(Number(f.blinkRateMs) > 0)) p.push('Set how long the lamp stays on and off.')
     return p
   })
-  const noLuaMods = $derived(runsLua ? involvedOf(f).filter((g) => !deviceHasLua(devs.find((d) => d.guid === g)?.type)).map(dName) : [])
+  const noLuaMods = $derived(runsLua ? involvedOf(f).filter((g) => !deviceHasLua(devs.find((d) => d.guid === g))).map(dName) : [])
 
   let plan = $state(null)
   function preview() {

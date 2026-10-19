@@ -135,7 +135,7 @@ export function previewCrossModule(fns, devices) {
     const own = luaFns.map((f) => f.luaByModule?.[g]).filter((s) => s && s.trim())
     m.lua = own.length ? own.join('\n\n') : (c?.lua ?? '')
     m.outputs = (c?.bindings ?? []).map((b) => b.output)
-    if (!deviceHasLua(dev(g)?.type)) { m.errors.push(`${m.name} cannot run Lua (a CANBoard has no Lua engine). Make this a plain rule (no backup clock, no own Lua), or run it on a PDM.`); continue }
+    if (!deviceHasLua(dev(g))) { m.errors.push(`${m.name} cannot run Lua (a CANBoard, or upstream firmware without Lua). Make this a plain rule (no backup clock, no own Lua), or run it on a PDM.`); continue }
     m.steps.push(own.length ? 'gets your own Lua for these functions' : 'gets a generated Lua script for these functions')
     for (const n of m.outputs) m.steps.push(`${outNm(g, n)} is driven by the script (Lua Out ${n})`)
   }
