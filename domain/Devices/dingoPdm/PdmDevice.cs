@@ -175,6 +175,8 @@ public class PdmDevice : IDeviceConfigurable
     // Stored Lua program (the assembled source). Persists in the project JSON so cross-module /
     // authored Lua survives offline; pushed to the device over CAN only when it's live.
     [JsonPropertyName("lua")] public string LuaProgram { get; set; } = "";
+    // Upstream dingoFW feat/wake-on-frame (0x0100): sent only to a module whose Read lists it.
+    [JsonPropertyName("wakeFrame")] public WakeFrame WakeFrame { get; set; } = new();
     [JsonPropertyName("bitrate")] public CanBitRate BitRate { get; set; } = CanBitRate.BitRate500K;
     [JsonIgnore] public TimeSpan CyclicGap { get; } =  TimeSpan.FromSeconds(0);
     [JsonIgnore] public TimeSpan CyclicPause { get; } = TimeSpan.FromMilliseconds(0);
@@ -1008,7 +1010,7 @@ public class PdmDevice : IDeviceConfigurable
     {
         var allParams = new List<DeviceParameter>();
         var subIndex = 0;
-        if (Family == FwFamily.Upstream) allParams.AddRange(UpstreamDeviceParams());
+        if (Family == FwFamily.Upstream) allParams.AddRange([.. UpstreamDeviceParams(), .. WakeFrame.Params(Name)]);
         else allParams.AddRange(
         [
             new DeviceParameter

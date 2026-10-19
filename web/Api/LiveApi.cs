@@ -50,7 +50,9 @@ public record DeviceDto(string Guid, string Name, string Type, int BaseId, bool 
     DigitalOutDto[]? DigitalOut = null,
     // "fork" (dingoFW 5.x) or "upstream" (dingoFW 0.x). Upstream: ParamsRead = its param list came from a Read this
     // session (Apply needs it); ParamRuns = that list, [firstIndex, indexCount, sub…] (see util.js has/hasBlock).
-    string Family = "fork", bool ParamsRead = false, int[][]? ParamRuns = null);
+    string Family = "fork", bool ParamsRead = false, int[][]? ParamRuns = null,
+    // upstream feat/wake-on-frame: the wake frame, when the module's Read listed 0x0100 (null otherwise)
+    domain.Devices.Functions.WakeFrame? WakeFrame = null);
 public record DigitalOutDto(int Number, string Name, bool Enabled, bool On, int Input);
 public record WakeDto(string Reason, int Source, int Count);
 public record IgnitionDto(bool Enabled, string Role, string State, bool Dash, int MainStateId, int StateId, bool Live);
@@ -357,7 +359,8 @@ public static class DingoMap
                 p.CanFiltersEnabled, p.ConnectUsbToCan, StoredOnModule: ui?.StoredOnModule, InBootloader: !p.Connected && ui?.InBootloader == true, PendingEdits: p.ConfigMismatch ? ui?.PendingEdits ?? 0 : 0,
                 HasLed: ui?.HasLed, Asleep: ui?.Asleep == true && !p.Connected, LastWake: Wake(ui), SleepCountdownS: p.SleepCountdownS,
                 SleepBlockers: ui?.SleepBlockers, Ignition: Ign(p.Ignition, p.BaseId, p.Type),
-                Family: p.Family, ParamsRead: p.ParamSet.FromModule, ParamRuns: p.ParamRuns);
+                Family: p.Family, ParamsRead: p.ParamSet.FromModule, ParamRuns: p.ParamRuns,
+                WakeFrame: p.ParamSet.Contains(domain.Devices.Functions.WakeFrame.Index, 0) ? p.WakeFrame : null);
         }
         if (d is domain.Devices.Canboard.CanboardDevice cb)
             // CANBoard has no battery/total-current sensing (those are PDM smart-output features) — leave
