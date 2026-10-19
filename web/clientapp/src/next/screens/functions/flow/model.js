@@ -259,7 +259,7 @@ export function buildModel(dev, funcs, vmap) {
     })
   }
   for (const n of nodes.values()) if (n.disabledSource) n.incomplete = ['is switched off, so the blocks that use it read 0']
-  return { nodes, edges: edges.filter((e) => nodes.has(e.source) && nodes.has(e.target)), byIdx, consumers }
+  return { nodes, edges: edges.filter((e) => nodes.has(e.source) && nodes.has(e.target)), byIdx, consumers, upstream: isUpstream(dev) }
 }
 
 /** Source options for a target that accepts `accepts`, from the var map (configured functions only). */

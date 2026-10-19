@@ -800,7 +800,7 @@ public class CanboardDevice : IDeviceConfigurable
         WakeDigInputMask &= (1 << NumDigitalInputs) - 1;
 
         foreach (var input in DigitalInputs) allParams.AddRange(input.Params);
-        foreach (var canInput in CanInputs) allParams.AddRange(canInput.Params);
+        foreach (var canInput in CanInputs) allParams.AddRange(Family == FwFamily.Upstream ? canInput.UpstreamParams : canInput.Params);
         foreach (var virtualInput in VirtualInputs) allParams.AddRange(virtualInput.Params);
         foreach (var condition in Conditions) allParams.AddRange(condition.Params);
         foreach (var counter in Counters) allParams.AddRange(counter.Params);

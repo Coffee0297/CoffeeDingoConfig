@@ -50,7 +50,10 @@ export function createSim(model, snapshot) {
       if (n.kind === 'caninput') {
         const sIdx = port(n, 'State'), vIdx = port(n, 'Value')
         if (faults[n.id] === 'timeout') {
-          if (n.row?.timeoutEnabled) { if (vIdx) vals[vIdx] = 0; if (sIdx) vals[sIdx] = false; status[n.id] = { text: 'TIMEOUT', tone: 'warn', why: `No frame for ${n.row.timeout} ms: value 0, state off.` } }
+          // upstream dingoFW with timeoutUseValue: the timeout value, and its result by the input's own test
+          const tv = model.upstream && n.row?.timeoutUseValue ? +n.row.timeoutValue || 0 : null
+          if (n.row?.timeoutEnabled && tv != null) { const on = cmp(n.row.operator, tv, +n.row.operand || 0); if (vIdx) vals[vIdx] = tv; if (sIdx) vals[sIdx] = on; status[n.id] = { text: 'TIMEOUT', tone: 'warn', why: `No frame for ${n.row.timeout} ms: value ${tv}, state ${on ? 'on' : 'off'}.` } }
+          else if (n.row?.timeoutEnabled) { if (vIdx) vals[vIdx] = 0; if (sIdx) vals[sIdx] = false; status[n.id] = { text: 'TIMEOUT', tone: 'warn', why: `No frame for ${n.row.timeout} ms: value 0, state off.` } }
           else status[n.id] = { text: 'NO DATA', tone: 'warn', why: 'Timeout is off on this input, so it keeps its last value.' }
           continue
         }

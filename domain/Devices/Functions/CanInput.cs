@@ -30,6 +30,9 @@ public class CanInput : IDeviceFunction
     // Firmware 5.6 (G19): the value the input takes when the timeout expires — it acts as if this arrived, so the
     // rule above decides on/off. Before 5.6 the input read 0 and was off.
     [JsonPropertyName("timeoutValue")] public double TimeoutValue { get; set; }
+    // Upstream dingoFW (feat/can-input-timeout-value, sub 15): only with this set does a timed-out input take TimeoutValue
+    // (else 0 and off, upstream's behaviour). The fork has no flag: it always takes TimeoutValue.
+    [JsonPropertyName("timeoutUseValue")] public bool TimeoutUseValue { get; set; }
 
     [JsonPropertyName("id")]
     public int Id
@@ -52,6 +55,16 @@ public class CanInput : IDeviceFunction
     // and publishes in the var map. The broadcast frame carries the raw integer; the decoder scales it.
     [JsonIgnore][Plotable(displayName:"Value")] public double Value {get; set;}
     
+
+    [JsonIgnore] public List<DeviceParameter> UpstreamParams => field ??=
+    [
+        .. Params,
+        new DeviceParameter
+        {
+            ParentName = Name, Name = $"canInput[{Number}].timeoutUseValue", Index = BaseIndex + (Number - 1), SubIndex = 15,
+            GetValue = () => TimeoutUseValue, SetValue = val => TimeoutUseValue = (bool)val, ValueType = typeof(bool), DefaultValue = false
+        },
+    ];
 
     [JsonConstructor]
     public CanInput(int number, string name)
