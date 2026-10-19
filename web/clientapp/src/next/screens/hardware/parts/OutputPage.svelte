@@ -15,7 +15,7 @@
   import SaveBar from './SaveBar.svelte'
   import { createBench } from './bench.svelte.js'
   import { signalFeed, ring } from './feeds.svelte.js'
-  import { resample, olderThan, isUpstream } from './util.js'
+  import { resample, olderThan, isUpstream, pwmFreqError } from './util.js'
 
   let { guid, n } = $props()
 
@@ -69,7 +69,7 @@
     if (f.pwmEnabled) {
       const minD = Math.round(+f.minDuty || 0)
       if (minD < 0 || minD > 100) return 'Lowest duty must be 0 to 100 %.'
-      if (!f.variableFreq) { const fr = Math.round(+f.freq || 0); if (fr < 15 || fr > 400) return 'PWM frequency must be 15 to 400 Hz.' }
+      if (!f.variableFreq && pwmFreqError(dev, f.freq)) return pwmFreqError(dev, f.freq)
       if (!f.variableDutyCycle) {
         const d = Math.round(+f.fixedDuty || 0)
         if (d < 0 || d > 100) return 'Duty must be 0 to 100 %.'
@@ -207,7 +207,7 @@
         {:else}
           <Card title="Protection"><p class="muted">The CANBoard switches this load to ground and cannot measure or limit current. Put a fuse in the load wire.</p></Card>
         {/if}
-        <OutputDrive {guid} bind:f />
+        <OutputDrive {guid} bind:f upstream={isUpstream(dev)} />
       </div>
       <div class="col">
         <OutputBench {bench} {blocker} modName={dev.name} limit={isCb ? 0 : Number(f.currentLimit) || 0} inrush={Number(f.inrushLimit) || 0} inrushTime={Number(f.inrushTime) || 0} />
