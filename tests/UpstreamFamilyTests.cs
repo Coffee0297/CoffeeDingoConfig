@@ -661,4 +661,18 @@ public class UpstreamFamilyTests
         f.Read(0x680, [31, 0, 0, 0, 5, 6, 0, 6], ref q, []);
         Assert.DoesNotContain(f.Params, x => x.Name.EndsWith(".stayAlive"));
     }
+
+    [Fact]
+    public void UpstreamTripLogReplies_DecodeLikeTheFork()
+    {
+        // feat/overload-trip-log: [44, count, uptime u32 LE, notices 0, 0]; [45, idx, out, state, peak, limit] 0.1 A LE
+        var d = UpstreamPdm();
+        var q = Q();
+        d.Read(0x680, [44, 1, 0x10, 0x27, 0, 0, 0, 0], ref q, []);
+        Assert.Equal(1, d.OvlCountRx);
+        Assert.Equal(10000, d.OvlUptimeRx);
+        Assert.Equal(0, d.OvlNoticeCountRx);   // no OvlNotice (52) is asked for
+        d.Read(0x680, [45, 0, 0, 2, 0x76, 0x02, 0x78, 0], ref q, []);
+        Assert.Equal((0, 0, 2, 63.0, 12.0), (d.OvlHdrRxIdx, d.OvlHdrOut, d.OvlHdrState, d.OvlHdrPeak, d.OvlHdrLimit));
+    }
 }

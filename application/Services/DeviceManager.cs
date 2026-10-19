@@ -1521,7 +1521,8 @@ public class DeviceManager(ILogger<DeviceManager> logger, ILoggerFactory loggerF
     /// waveform, chunked over CAN. The device records these autonomously so a trip
     /// that happened while disconnected is still here for troubleshooting.
     /// </summary>
-    public async Task<List<OverloadLogEntry>> ReadOverloadLog(Guid deviceId)
+    /// <returns>null when the module never answered the count request (upstream firmware without the trip log).</returns>
+    public async Task<List<OverloadLogEntry>?> ReadOverloadLog(Guid deviceId)
     {
         var result = new List<OverloadLogEntry>();
         var p = GetDevice<PdmDevice>(deviceId);
@@ -1531,7 +1532,7 @@ public class DeviceManager(ILogger<DeviceManager> logger, ILoggerFactory loggerF
         QueueMessage(p.GetOvlCountMsg());
         int waited = 0;
         while (p.OvlCountRx < 0 && waited < 500) { await Task.Delay(10); waited += 10; }
-        if (p.OvlCountRx < 0) return result;
+        if (p.OvlCountRx < 0) return null;
         // 5.6: a time in the module's uptime becomes a clock time against the uptime it just reported
         var answeredAt = DateTime.UtcNow;
         long uptime = p.OvlUptimeRx;
