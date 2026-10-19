@@ -730,6 +730,11 @@ public class CanboardDevice : IDeviceConfigurable
                 VarMap.Add(new DeviceVariable { GetName = () => Maths[num].Name, OwnerKind = "math", OwnerNumber = num + 1,
                     PropertyName = "Value", DataType = "float", VariableIndex = index++, SingleVariable = false });
             }
+        // feat/comfort-blink: "indicator on" per side
+        if (FwFamily.HasBlock(this, Functions.ComfortBlink.BaseIndex, false))
+            foreach (var side in new[] { "Left", "Right" })
+                VarMap.Add(new DeviceVariable { GetName = () => ComfortBlink.Name, OwnerKind = "comfortblink", OwnerNumber = 1,
+                    PropertyName = side, DataType = "bool", VariableIndex = index++, SingleVariable = false });
     }
 
     private void InitParams()
