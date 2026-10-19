@@ -18,7 +18,8 @@ public class Ignition : IDeviceFunction
 {
     [JsonIgnore] public const int BaseIndex = 0x1E00;
     /// <summary>The state frame's offset from the base id: the first id after the board's own range. Upstream dingoFW
-    /// (feat/ignition-block) sends it as cyclic Msg 30 = base + 32 (PT-DPDM Msg 31 = base + 33); its CANBoard has none.</summary>
+    /// (feat/ignition-block alone) sends it as cyclic Msg 30 = base + 32 (PT-DPDM Msg 31 = base + 33); with other
+    /// appended frames it comes after them (PdmDevice.UpstreamFrames: + 36 on integration/all-features). Its CANBoard has none.</summary>
     public static int StateOffsetFor(string? deviceType, string family = FwFamily.Fork, int pdmType = 0) =>
         family == FwFamily.Upstream ? (pdmType == 2 ? 33 : 32)
         : deviceType?.Contains("canboard", StringComparison.OrdinalIgnoreCase) == true ? 14 : 30;

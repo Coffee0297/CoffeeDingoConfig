@@ -1,4 +1,4 @@
-import { has } from '../next/screens/hardware/parts/util.js'
+import { has, hasBlock } from '../next/screens/hardware/parts/util.js'
 // CAN-ID allocation helpers - the in-UI counterpart of tools/canfree.py, operating on the
 // live project fleet. Single source for the per-type ID footprint, used by BOTH the System
 // view overlap check and the "suggest a free base" action so they can never disagree.
@@ -20,11 +20,17 @@ export const ID_BEFORE = 1
 // (command/response), +14 the ignition state frame (firmware 5.6). dingoPDM owns base..base+30
 // (firmware ≥ 5.5.107 adds Msg 27 = table outputs at +29; +30 is the 5.6 ignition state frame; its
 // +12/+13 already fall inside that span). At the usual 0x10 / 0x20 spacing both still fit.
-// An upstream-dingoFW PDM with lookup tables (param block 0x1B00) also sends Msg 30 at +32 (tables 1-2) and, with
-// 3-4 tables (feat/more-tables), Msg 31 at +33: pass the device.
-// Upstream dingoFW (feat/ignition-block) sends a main module's ignition state at base + 32 (PT-DPDM + 33), past that
-// span: pass the device (`dev`) and an enabled main's state id counts too (its DTO ignition.stateId).
-export const spanAfter = (type, dev = null) => Math.max(/canboard/i.test(type || '') ? 14 : Math.max(dev?.family === 'upstream' && dev.paramRuns && has(dev, 0x1000, 33) ? 32 : 30, [30, 32, 32, 33, 33][upstreamTables(dev)]), ignSpan(dev))
+// An upstream-dingoFW PDM sends one more cyclic frame per feature it has (its param list), numbered as the firmware
+// integration does: wire load (output sub 33), tables 1-2 (0x1B00), tables 3-4, PID (0x2300) at +32, +33, … (PT-DPDM
+// one higher; integration/all-features: +32..+35), then an enabled main's ignition state (its DTO ignition.stateId,
+// + 36 there). Pass the device (`dev`).
+export const spanAfter = (type, dev = null) => {
+  if (/canboard/i.test(type || '')) return 14
+  const n = appendedFrames(dev)
+  return Math.max(n ? 31 + n + (/pt-?dpdm/i.test(type || '') ? 1 : 0) : 30, ignSpan(dev))
+}
+const appendedFrames = (dev) => dev?.family !== 'upstream' || !dev.paramRuns ? 0
+  : [has(dev, 0x1000, 33), upstreamTables(dev) >= 1, upstreamTables(dev) >= 3, hasBlock(dev, 0x2300)].filter(Boolean).length
 // number of 0x1B00 table blocks in the upstream module's param list (0 for the fork / unread)
 const upstreamTables = (dev) => dev?.family !== 'upstream' ? 0
   : Math.min(4, new Set((dev.paramRuns ?? []).flatMap((r) => Array.from({ length: r[1] }, (_, k) => r[0] + k)).filter((i) => i >= 0x1b00 && i < 0x1c00)).size)

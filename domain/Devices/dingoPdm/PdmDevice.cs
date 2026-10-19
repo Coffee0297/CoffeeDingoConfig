@@ -615,35 +615,31 @@ public class PdmDevice : IDeviceConfigurable
                     val => Timers[index].ElapsedMs = val));
             }
             MaxCyclicId = cyclicIndex + 2;
-            // feat/wire-load Msg 30 (+32): load % of outputs 1-8, one byte each (sent while any output has a time constant)
-            if (ParamSet.Contains(Output.BaseIndex, 33))
+            // The frames feature branches append, at the offsets UpstreamFrames() gives (absent features take none)
+            var fr = _upFrames = UpstreamFrames();
+            if (fr.Wire is { } w)
             {
-                StatusSigs[cyclicIndex + 3] = [];
+                // feat/wire-load: load % of outputs 1-8, one byte each (sent while any output has a time constant)
+                StatusSigs[w] = [];
                 for (var i = 0; i < NumOutputs && i < 8; i++)
                 {
                     var index = i;
-                    StatusSigs[cyclicIndex + 3].Add((new DbcSignal { Name = $"Output{index + 1}.WireLoad", StartBit = i * 8, Length = 8, Unit = "%" },
+                    StatusSigs[w].Add((new DbcSignal { Name = $"Output{index + 1}.WireLoad", StartBit = i * 8, Length = 8, Unit = "%" },
                         val => Outputs[index].WireLoad = val));
                 }
-                MaxCyclicId = cyclicIndex + 3;
             }
-            // feat/lookup-tables: Msg 30 (+32) table 1-2, feat/more-tables: Msg 31 (+33) table 3-4, float32 LE. Only
-            // the frames of tables the module has: a stock upstream PDM never sends +32, and at 0x20 spacing that id
-            // is the next module's base.
+            // feat/lookup-tables: table 1-2, feat/more-tables: table 3-4, float32 LE (sent while a table of the pair is enabled)
             for (var i = 0; i < TableCount; i++)
             {
                 var index = i;
-                var off = cyclicIndex + 3 + i / 2;
+                var off = (i < 2 ? fr.Tables12 : fr.Tables34)!.Value;
                 if (!StatusSigs.ContainsKey(off)) StatusSigs[off] = [];
                 StatusSigs[off].Add((new DbcSignal { Name = $"Table{index + 1}.Value", StartBit = i % 2 * 32, Length = 32, IsSigned = true, IsFloat = true },
                     val => Tables[index].Value = val));
-                MaxCyclicId = off;
             }
-            // feat/pid: Msg 30 (+32; PT-DPDM Msg 31, +33) = PID 1-4 outputs, int16 LE ×10. Only on a module that has
-            // the block: +32 is the base id of a module 0x20 above, which this one must not claim.
-            if (FwFamily.HasBlock(this, PidFunction.BaseIndex, false))
+            if (fr.Pid is { } pidOff)
             {
-                var pidOff = cyclicIndex + (PdmType == 2 ? 4 : 3);
+                // feat/pid: PID 1-4 outputs, int16 LE x10 (saturated)
                 StatusSigs[pidOff] = [];
                 for (var i = 0; i < NumPids && i < 4; i++)
                 {
@@ -651,8 +647,9 @@ public class PdmDevice : IDeviceConfigurable
                     StatusSigs[pidOff].Add((new DbcSignal { Name = $"Pid{index + 1}.Output", StartBit = i * 16, Length = 16, IsSigned = true, Factor = 0.1 },
                         val => Pids[index].Value = val));
                 }
-                MaxCyclicId = pidOff;
             }
+            // the ignition frame (fr.Ignition) is decoded in Read() and counted by InIdRange, like the fork's
+            MaxCyclicId = new[] { cyclicIndex + 2, fr.Wire ?? 0, fr.Tables12 ?? 0, fr.Tables34 ?? 0, fr.Pid ?? 0 }.Max();
             return;
         }
         // Msg 27 (offset +29): table 1-2 outputs as IEEE-754 float32 LE (firmware >= 5.5.107).
@@ -1091,35 +1088,9 @@ public class PdmDevice : IDeviceConfigurable
                 VarMap.Add(new DeviceVariable { GetName = () => Timers[num].Name, OwnerKind = "timer", OwnerNumber = num + 1,
                     PropertyName = "State", DataType = "bool", VariableIndex = index++, SingleVariable = false });
             }
-        // feat/output-state-signals: per output Warning, Open Load. No param of its own: it is stacked on
-        // feat/output-warn-openload, so the warning limit (0x1000 sub 18) stands for it.
-        // shortcut: a module with only feat/output-warn-openload gets 16 entries it lacks (it refuses them); add a
-        // marker param if such firmware is ever released.
-        if (ParamSet.Contains(Output.BaseIndex, 18))
-            for (var i = 0; i < NumOutputs; i++)
-            {
-                var num = i;
-                foreach (var prop in new[] { "Warning", "Open Load" })
-                    VarMap.Add(new DeviceVariable { GetName = () => Outputs[num].Name, OwnerKind = "output", OwnerNumber = num + 1,
-                        PropertyName = prop, DataType = "bool", VariableIndex = index++, SingleVariable = false });
-            }
-        // feat/undercurrent-trip (0x1000 sub 27): per output Undercurrent
-        if (ParamSet.Contains(Output.BaseIndex, 27))
-            for (var i = 0; i < NumOutputs; i++)
-            {
-                var num = i;
-                VarMap.Add(new DeviceVariable { GetName = () => Outputs[num].Name, OwnerKind = "output", OwnerNumber = num + 1,
-                    PropertyName = "Undercurrent", DataType = "bool", VariableIndex = index++, SingleVariable = false });
-            }
-        // feat/wire-load (0x1000 sub 33): per output the wire load % (fLoad). A sub, not a block: every PDM has outputs.
-        // Canonical order: after output-state-signals and undercurrent-trip (status/integration-order.txt).
-        if (ParamSet.Contains(Output.BaseIndex, 33))
-            for (var i = 0; i < NumOutputs; i++)
-            {
-                var num = i;
-                VarMap.Add(new DeviceVariable { GetName = () => Outputs[num].Name, OwnerKind = "output", OwnerNumber = num + 1,
-                    PropertyName = "Wire Load", DataType = "float", VariableIndex = index++, SingleVariable = false });
-            }
+        // Canonical order after the timers (the firmware integration's InitVarMap, status/integration-order.txt):
+        // DI PWM, analog scaling (CANBoard), math, CAN message (no entries), tables, ignition, comfort blink, PID, curve,
+        // latch / gate, output warning / open load, undercurrent, wire load, Lua. Each only where the module has it.
         // feat/digital-input-pwm (0x1200 sub 5): per DI duty %, Hz. A sub, not a block: every PDM has the DI block.
         if (ParamSet.Contains(DigitalInput.BaseIndex, 5))
             for (var i = 0; i < NumDigitalInputs; i++)
@@ -1145,24 +1116,17 @@ public class PdmDevice : IDeviceConfigurable
             VarMap.Add(new DeviceVariable { GetName = () => Tables[num].Name, OwnerKind = "table", OwnerNumber = num + 1,
                 PropertyName = "Value", DataType = "float", VariableIndex = index++, SingleVariable = false });
         }
-        // feat/curve-block (canonical place: after pid, before latch-gate): one value per curve
-        if (FwFamily.HasBlock(this, CurveFunction.BaseIndex, false))
-            for (var i = 0; i < NumCurves; i++)
-            {
-                var num = i;
-                VarMap.Add(new DeviceVariable { GetName = () => Curves[num].Name, OwnerKind = "curve", OwnerNumber = num + 1,
-                    PropertyName = "Value", DataType = "float", VariableIndex = index++, SingleVariable = false });
-            }
-        // feat/latch-gate-block (canonical place: after curve, before output-state-signals): one value per block
-        if (FwFamily.HasBlock(this, LatchGateFunction.BaseIndex, false))
-            for (var i = 0; i < NumLatchGates; i++)
-            {
-                var num = i;
-                VarMap.Add(new DeviceVariable { GetName = () => LatchGates[num].Name, OwnerKind = "latchgate", OwnerNumber = num + 1,
-                    PropertyName = "Value", DataType = "float", VariableIndex = index++, SingleVariable = false });
-            }
-        // feat/pid. Canonical upstream order after the timers: DI PWM, analog scaling, math, CAN message, tables,
-        // ignition, comfort blink, PID, curve, … — blocks before the PID go above this, each by its own branch.
+        // feat/ignition-block: the seven ignition roles
+        if (FwFamily.HasBlock(this, Functions.Ignition.BaseIndex, false))
+            foreach (var role in new[] { "Ignition", "Accessory", "Cranking", "Running", "Ready", "Dash", "Link OK" })
+                VarMap.Add(new DeviceVariable { GetName = () => "Ignition", OwnerKind = "ignition", OwnerNumber = 1,
+                    PropertyName = role, DataType = "bool", VariableIndex = index++, SingleVariable = false });
+        // feat/comfort-blink: "indicator on" per side
+        if (FwFamily.HasBlock(this, Functions.ComfortBlink.BaseIndex, false))
+            foreach (var side in new[] { "Left", "Right" })
+                VarMap.Add(new DeviceVariable { GetName = () => ComfortBlink.Name, OwnerKind = "comfortblink", OwnerNumber = 1,
+                    PropertyName = side, DataType = "bool", VariableIndex = index++, SingleVariable = false });
+        // feat/pid: per PID output, P, I, D
         if (FwFamily.HasBlock(this, PidFunction.BaseIndex, false))
             for (var i = 0; i < NumPids; i++)
             {
@@ -1171,17 +1135,50 @@ public class PdmDevice : IDeviceConfigurable
                     VarMap.Add(new DeviceVariable { GetName = () => Pids[num].Name, OwnerKind = "pid", OwnerNumber = num + 1,
                         PropertyName = prop, DataType = "float", VariableIndex = index++, SingleVariable = false });
             }
-        // feat/comfort-blink: "indicator on" per side
-        if (FwFamily.HasBlock(this, Functions.ComfortBlink.BaseIndex, false))
-            foreach (var side in new[] { "Left", "Right" })
-                VarMap.Add(new DeviceVariable { GetName = () => ComfortBlink.Name, OwnerKind = "comfortblink", OwnerNumber = 1,
-                    PropertyName = side, DataType = "bool", VariableIndex = index++, SingleVariable = false });
-        // feat/ignition-block: the seven ignition roles
-        if (FwFamily.HasBlock(this, Functions.Ignition.BaseIndex, false))
-            foreach (var role in new[] { "Ignition", "Accessory", "Cranking", "Running", "Ready", "Dash", "Link OK" })
-                VarMap.Add(new DeviceVariable { GetName = () => "Ignition", OwnerKind = "ignition", OwnerNumber = 1,
-                    PropertyName = role, DataType = "bool", VariableIndex = index++, SingleVariable = false });
-
+        // feat/curve-block: one value per curve
+        if (FwFamily.HasBlock(this, CurveFunction.BaseIndex, false))
+            for (var i = 0; i < NumCurves; i++)
+            {
+                var num = i;
+                VarMap.Add(new DeviceVariable { GetName = () => Curves[num].Name, OwnerKind = "curve", OwnerNumber = num + 1,
+                    PropertyName = "Value", DataType = "float", VariableIndex = index++, SingleVariable = false });
+            }
+        // feat/latch-gate-block: one value per block
+        if (FwFamily.HasBlock(this, LatchGateFunction.BaseIndex, false))
+            for (var i = 0; i < NumLatchGates; i++)
+            {
+                var num = i;
+                VarMap.Add(new DeviceVariable { GetName = () => LatchGates[num].Name, OwnerKind = "latchgate", OwnerNumber = num + 1,
+                    PropertyName = "Value", DataType = "float", VariableIndex = index++, SingleVariable = false });
+            }
+        // feat/output-state-signals: per output Warning, Open Load. No param of its own: it is stacked on
+        // feat/output-warn-openload, so the warning limit (0x1000 sub 18) stands for it.
+        // shortcut: a module with only feat/output-warn-openload gets 16 entries it lacks (it refuses them); add a
+        // marker param if such firmware is ever released.
+        if (ParamSet.Contains(Output.BaseIndex, 18))
+            for (var i = 0; i < NumOutputs; i++)
+            {
+                var num = i;
+                foreach (var prop in new[] { "Warning", "Open Load" })
+                    VarMap.Add(new DeviceVariable { GetName = () => Outputs[num].Name, OwnerKind = "output", OwnerNumber = num + 1,
+                        PropertyName = prop, DataType = "bool", VariableIndex = index++, SingleVariable = false });
+            }
+        // feat/undercurrent-trip (0x1000 sub 27): per output Undercurrent
+        if (ParamSet.Contains(Output.BaseIndex, 27))
+            for (var i = 0; i < NumOutputs; i++)
+            {
+                var num = i;
+                VarMap.Add(new DeviceVariable { GetName = () => Outputs[num].Name, OwnerKind = "output", OwnerNumber = num + 1,
+                    PropertyName = "Undercurrent", DataType = "bool", VariableIndex = index++, SingleVariable = false });
+            }
+        // feat/wire-load (0x1000 sub 33): per output the wire load % (fLoad). A sub, not a block: every PDM has outputs.
+        if (ParamSet.Contains(Output.BaseIndex, 33))
+            for (var i = 0; i < NumOutputs; i++)
+            {
+                var num = i;
+                VarMap.Add(new DeviceVariable { GetName = () => Outputs[num].Name, OwnerKind = "output", OwnerNumber = num + 1,
+                    PropertyName = "Wire Load", DataType = "float", VariableIndex = index++, SingleVariable = false });
+            }
         // Lua slots: always the last block of the canonical order (status/integration-order.txt); keep them last.
         if (HasLua == true)
             for (var i = 0; i < LuaOutputSlots; i++)
@@ -1385,10 +1382,24 @@ public class PdmDevice : IDeviceConfigurable
         return Connected & !lastConnected;
     }
     
-    // The ignition state frame's offset. Upstream: only a module with the block (feat/ignition-block) sends it, and
-    // +32 is otherwise the base id of a module 0x20 above, which this one must not claim.
-    [JsonIgnore] public int? IgnitionStateOffset => !Upstream ? Functions.Ignition.StateOffsetFor(Type)
-        : FwFamily.HasBlock(this, Functions.Ignition.BaseIndex, false) ? Functions.Ignition.StateOffsetFor(Type, Family, PdmType) : null;
+    // The ignition state frame's offset. Upstream: only a module with the block (feat/ignition-block) sends it, after
+    // the other appended frames it has (UpstreamFrames); a module without it claims no id past its range.
+    [JsonIgnore] public int? IgnitionStateOffset => !Upstream ? Functions.Ignition.StateOffsetFor(Type) : _upFrames.Ignition;
+
+    private (int? Wire, int? Tables12, int? Tables34, int? Pid, int? Ignition) _upFrames;
+
+    /// <summary>Upstream: the cyclic frames feature branches append after Msg 29, numbered as the firmware integration
+    /// does (merge order: wire load, tables 1-2, tables 3-4, PID, ignition), one index each, only for the features the
+    /// module has (its param list). A one-feature firmware sends its frame at the first one: Msg 30 = base + 32
+    /// (PT-DPDM Msg 31 = + 33); integration/all-features: wire load +32, tables +33 / +34, PID +35, ignition +36.</summary>
+    public (int? Wire, int? Tables12, int? Tables34, int? Pid, int? Ignition) UpstreamFrames()
+    {
+        var next = PdmType == 2 ? 33 : 32;
+        int? Take(bool has) => has ? next++ : null;
+        var tables = TableCount;
+        return (Take(ParamSet.Contains(Output.BaseIndex, 33)), Take(tables >= 1), Take(tables >= 3),
+            Take(FwFamily.HasBlock(this, PidFunction.BaseIndex, false)), Take(FwFamily.HasBlock(this, Functions.Ignition.BaseIndex, false)));
+    }
 
     public bool InIdRange(int id)
     {

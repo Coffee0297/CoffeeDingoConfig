@@ -49,7 +49,8 @@ public class UpstreamIgnitionTests
         d.Read(0x680 + 30, [(byte)'I', 3, 0, 0, 0, 0, 0, 0], ref q, []);   // +30 is a timer frame upstream, not the state
         Assert.Equal(IgnitionState.Cranking, d.Ignition.State);
 
-        d.PdmType = 2;   // PT-DPDM: one frame more, Msg 31
+        d.PdmType = 2;   // PT-DPDM: one frame more, Msg 31 (the layout is rebuilt when the list is learned)
+        LearnParams(d, 0x680, [.. Stock, .. Block(Ignition.BaseIndex, 1, 11)]);
         Assert.Equal(33, d.IgnitionStateOffset);
         Assert.Equal(30, Ignition.StateOffsetFor("dingoPDM"));   // fork unchanged
         Assert.Equal(14, Ignition.StateOffsetFor("CANBoard"));

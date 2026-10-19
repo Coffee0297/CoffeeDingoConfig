@@ -5,6 +5,7 @@
   import { Card, Banner, Button, Checkbox, Field, Select, StateDot } from '../../../ui/index.js'
   import { live, api, hex, project, toast } from '../../../lib/live.svelte.js'
   import { INDEX, parseByte, byteText, problem, writes, fromFrame, matches } from './wakeFrame.js'
+  import { spanAfter } from '../../../../lib/canids.js'
 
   const mods = $derived(live.devices.filter((d) => d.wakeFrame))
   const modKey = $derived(mods.map((d) => d.guid).join(','))
@@ -20,7 +21,7 @@
   $effect(() => { if (modKey && live.connected) untrack(refreshSeen) })
 
   const idText = (wf) => wf.id.toString(16).toUpperCase()
-  const frameItems = (d) => seen.filter((r) => r.id < d.baseId || r.id > d.baseId + 31)
+  const frameItems = (d) => seen.filter((r) => r.id < d.baseId || r.id > d.baseId + spanAfter(d.type, d))   // not its own frames
     .map((r) => ({ value: `${r.id}:${r.ext ? 1 : 0}`, label: `${r.ext ? r.id.toString(16).toUpperCase().padStart(8, '0') : hex(r.id)} · ${r.len} B · ${r.data}` }))
   function fill(d, v) {
     const [id, ext] = String(v).split(':').map(Number)

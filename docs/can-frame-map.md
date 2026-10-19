@@ -70,6 +70,12 @@ With `feat/ignition-block`, an enabled *main* module sends the ignition state as
 base + 33), `['I', state, flags]` as on the fork; at 0x20 spacing that is the next module's base id, so space an
 upstream main at least 0x30 below its neighbour (the Modules page flags the clash).
 
+Each of those branches puts its frame at Msg 30 (`base+32`) on its own. When a firmware has several of them, each
+takes the next index in this order: wire load, tables 1-2, tables 3-4, PID, ignition state; a feature the module
+lacks (its param list) takes none. integration/all-features (dingopdm_v7 / -Max): wire load +32, tables 1-2 +33,
+tables 3-4 +34, PID +35, ignition +36 (pt-dpdm4 one higher), so a follower's main state id there is the main's
+base + 36. The app derives the offsets the same way (PdmDevice.UpstreamFrames, canids.js spanAfter).
+
 ---
 
 ## dingoPDM (and -Max / PT-DPDM)
