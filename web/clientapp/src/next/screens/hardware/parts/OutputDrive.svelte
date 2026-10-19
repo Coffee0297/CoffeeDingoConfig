@@ -1,6 +1,6 @@
 <script>
   import { untrack } from 'svelte'
-  import { Card, Segmented, Switch, Stepper, Select, Field, Button } from '../../../ui/index.js'
+  import { Card, Segmented, Switch, Stepper, Select, Field, Button, FwBadge } from '../../../ui/index.js'
   import { api, toast } from '../../../lib/live.svelte.js'
   import { remoteItems, resolveRemote, isRemoteKey } from '../../../lib/remote.js'
   import { href } from '../../../router.svelte.js'
@@ -10,7 +10,8 @@
   // rampDuty: the firmware has "ramp every duty change" (output sub 24)
   // ssTimeout: the firmware has the current-limited soft start (upstream output sub 30)
   // softStop: the firmware has the soft stop (upstream output sub 31)
-  let { guid, f = $bindable(), upstream = false, varFreq = true, rampDuty = true, ssTimeout = false, softStop = false } = $props()
+  // caps: what this module's firmware has (util.js driveCaps); fork modules have it all
+  let { guid, f = $bindable(), upstream = false, varFreq = true, rampDuty = true, ssTimeout = false, softStop = false, caps = { pwm: true, varFreq: true, rampChanges: true } } = $props()
   const vf = $derived(varFreq && !!f.variableFreq)
 
   let nums = $state([])
@@ -79,8 +80,12 @@
 </script>
 
 <Card title="Drive" aria-label="Drive">
-  <Segmented label="How the output is driven" items={MODES} bind:value={modeVal} onchange={setMode} />
-  {#if f.pwmEnabled}
+  {#if caps.pwm}
+    <Segmented label="How the output is driven" items={MODES} bind:value={modeVal} onchange={setMode} />
+  {:else}
+    <p class="muted note" data-testid="no-pwm">This module's firmware switches the output on and off only (no PWM). <FwBadge upstream /></p>
+  {/if}
+  {#if caps.pwm && f.pwmEnabled}
     <div class="grid">
       {#if f.variableDutyCycle}
         <Select label="Duty comes from" items={items} bind:value={dutySrc} onchange={(v) => pickSrc('dutyCycleInput', v)} disabled={linking} data-testid="duty-source" />
@@ -105,12 +110,13 @@
         </div>
       {/if}
     </div>
-    {#if varFreq}<Switch bind:checked={f.variableFreq} label="Frequency follows a signal" hint={upstream ? 'Advanced. 16 to 400 Hz.' : 'Advanced. 15 to 400 Hz.'} />{/if}
+    {#if varFreq && caps.varFreq}<Switch bind:checked={f.variableFreq} label="Frequency follows a signal" hint={upstream ? 'Advanced. 16 to 400 Hz.' : 'Advanced. 15 to 400 Hz.'} />{/if}
     {#if softStop}
       <Stepper label="Soft stop" bind:value={f.softStopTime} min={0} max={10000} step={100} unit="ms" data-testid="soft-stop" />
       <span class="muted note">{Number(f.softStopTime) > 0 ? `When its input turns off, the duty ramps down to 0 over ${f.softStopTime} ms, then it switches off. A trip, starter disable, load shedding or sleep still cuts it at once.` : '0 = off: it switches off at once.'}</span>
     {/if}
   {/if}
+  {#if caps.pwm}
   <div class="soft">
     <Switch bind:checked={f.softStart} label="Soft start" hint="Ramps up when it turns on." />
     {#if f.softStart}
@@ -119,11 +125,12 @@
         <Stepper label="Must reach full duty within" bind:value={f.softStartTimeout} min={0} max={60000} step={500} unit="ms" data-testid="ss-timeout" />
         <span class="muted note" data-testid="ss-timeout-hint">{#if Number(f.softStartTimeout) > 0}Current-limited start: the ramp waits while the current is above the inrush limit ({f.inrushLimit} A) instead of tripping, and trips if it has not finished after {f.softStartTimeout} ms (a stalled motor).{#if Number(f.minDuty) === 0} Set a lowest duty the motor turns at: at 0 % a motor reads near stall current and the ramp never gets going.{/if}{#if Number(f.inrushTime) < Number(f.softStartTimeout)} The inrush time ({f.inrushTime} ms) is shorter: after it the normal trip current applies to the held ramp.{/if}{:else}0 = off: the inrush limit trips as usual during the ramp.{/if}</span>
       {/if}
-      {#if rampDuty && f.pwmEnabled && f.variableDutyCycle}
+      {#if rampDuty && caps.rampChanges && f.pwmEnabled && f.variableDutyCycle}
         <Switch bind:checked={f.rampDutyChanges} label="Ramp every duty change" hint={`Slews on each change too, at up to 100 % per ${Number(f.softStartRamp) || 0} ms (the ramp time), not only at turn-on.`} />
       {/if}
     {/if}
   </div>
+  {/if}
   <div class="crank">
     <strong>While the engine is cranking</strong>
     <span class="muted note">To switch it off while cranking (frees current and battery voltage for the starter), give it the Accessory role: it then follows the ignition and is off while the starter turns. Needs firmware 5.6. <a href={href('power', 'roles')}>Output roles</a></span>

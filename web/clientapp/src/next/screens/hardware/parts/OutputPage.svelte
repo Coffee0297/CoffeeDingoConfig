@@ -15,7 +15,7 @@
   import SaveBar from './SaveBar.svelte'
   import { createBench } from './bench.svelte.js'
   import { signalFeed, ring } from './feeds.svelte.js'
-  import { resample, olderThan, isUpstream, pwmFreqError, has } from './util.js'
+  import { resample, olderThan, isUpstream, pwmFreqError, has, driveCaps } from './util.js'
   import { wireLoad, wireLoadText, WARN_PCT } from './wireload.js'
 
   let { guid, n } = $props()
@@ -239,7 +239,7 @@
         {:else}
           <Card title="Protection"><p class="muted">The CANBoard switches this load to ground and cannot measure or limit current. Put a fuse in the load wire.</p></Card>
         {/if}
-        <OutputDrive {guid} bind:f upstream={isUpstream(dev)} {varFreq} {rampDuty} {ssTimeout} softStop={!isCb && isUpstream(dev) && has(dev, 0x1000 + n - 1, 31)} />
+        <OutputDrive {guid} bind:f upstream={isUpstream(dev)} {varFreq} {rampDuty} {ssTimeout} softStop={!isCb && isUpstream(dev) && has(dev, 0x1000 + n - 1, 31)} caps={driveCaps(dev, isCb, n)} />
       </div>
       <div class="col">
         <OutputBench {bench} {blocker} modName={dev.name} pwm={!(isCb && isUpstream(dev))} minFreq={isUpstream(dev) ? 16 : 15} limit={isCb ? 0 : Number(f.currentLimit) || 0} inrush={Number(f.inrushLimit) || 0} inrushTime={Number(f.inrushTime) || 0} />

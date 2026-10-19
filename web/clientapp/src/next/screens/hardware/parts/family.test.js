@@ -1,6 +1,6 @@
 // node src/next/screens/hardware/parts/family.test.js — upstream dingoFW gating helpers
 import assert from 'node:assert/strict'
-import { has, hasBlock, lacks, olderThan, isUpstream, pwmFreqError, upstreamHas } from './util.js'
+import { has, hasBlock, lacks, olderThan, isUpstream, pwmFreqError, upstreamHas, driveCaps } from './util.js'
 import { spanAfter } from '../../../../lib/canids.js'
 
 const fork = { family: 'fork', version: 'v5.5.112' }
@@ -43,5 +43,13 @@ assert.equal(spanAfter('dingoPDM', { ...up, paramRuns: [...up.paramRuns, [0x1b00
 assert.equal(spanAfter('dingoPDM', { ...up, paramRuns: [...up.paramRuns, [0x1b00, 4, 0, 1]] }), 33)   // more-tables: Msg 31
 assert.equal(spanAfter('dingoPDM', fork), 30)
 assert.equal(spanAfter('CANBoard'), 14)
+
+// drive card: CANBoard DO PWM only with feat/canboard-do-pwm (0x2100 subs 2-10), never the fork's freq/ramp subs
+const cbStock = { family: 'upstream', paramRuns: [[0x2100, 4, 0, 1]] }
+const cbPwm = { family: 'upstream', paramRuns: [[0x2100, 4, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]] }
+assert.deepEqual(driveCaps(cbStock, true, 1), { pwm: false, varFreq: false, rampChanges: false })
+assert.deepEqual(driveCaps(cbPwm, true, 4), { pwm: true, varFreq: false, rampChanges: false })
+assert.deepEqual(driveCaps(fork, true, 1), { pwm: true, varFreq: true, rampChanges: true })
+assert.deepEqual(driveCaps(up, false, 1), { pwm: false, varFreq: false, rampChanges: false })   // that list has subs 0-2 only
 
 console.log('family.test.js ok')

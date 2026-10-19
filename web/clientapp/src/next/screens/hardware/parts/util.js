@@ -55,6 +55,14 @@ export function lacks(dev, min, base, sub) {
   return olderThan(dev?.version, min)
 }
 
+/** What the output's drive card may offer, by the module's params: PWM (PDM 0x1000 sub 8 / CANBoard DO 0x2100 sub 2),
+ *  frequency from a signal (sub 21 / 11), ramp every duty change (sub 24 / 14). Upstream CANBoards get DO PWM only
+ *  with feat/canboard-do-pwm (subs 2-10), never the fork's variable frequency or ramp. */
+export function driveCaps(dev, cb, n) {
+  const i = (cb ? 0x2100 : 0x1000) + n - 1, [pwm, freq, ramp] = cb ? [2, 11, 14] : [8, 21, 24]
+  return { pwm: has(dev, i, pwm), varFreq: has(dev, i, freq), rampChanges: has(dev, i, ramp) }
+}
+
 /** The /functions array that holds a given function kind (PDM calls digital inputs `inputs`, CANBoard `digitalIn`). */
 export function funcArray(funcs, kind) {
   const m = { input: funcs?.inputs ?? funcs?.digitalIn, analoginput: funcs?.analogIn, caninput: funcs?.canInputs, virtualinput: funcs?.virtualInputs,
