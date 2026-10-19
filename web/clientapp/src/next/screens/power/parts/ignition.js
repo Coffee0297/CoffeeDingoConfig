@@ -1,8 +1,9 @@
 // Ignition (firmware 5.6) helpers shared by Power home, the dashboard, Car home and the output screens.
-import { parseVersion, olderThan } from '../../hardware/parts/util.js'
+import { parseVersion, lacks, isUpstream } from '../../hardware/parts/util.js'
 
-/** The module reported firmware 5.6 or newer (an unknown version is not counted). */
-export const has56 = (d) => !!parseVersion(d?.version) && !olderThan(d.version, [5, 6, 0])
+/** The module has the ignition block: fork firmware 5.6 or newer (an unknown version is not counted), or an upstream
+ *  module whose param list has 0x1E00. */
+export const has56 = (d) => (isUpstream(d) || !!parseVersion(d?.version)) && !lacks(d, [5, 6, 0], 0x1E00)
 
 /** The module that runs the ignition (its Ignition block is on, role main), or null. */
 export const ignitionMain = (devices) => devices.find((d) => d.ignition?.enabled && d.ignition.role === 'main') ?? null

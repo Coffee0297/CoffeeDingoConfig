@@ -15,7 +15,7 @@
   import SaveBar from './SaveBar.svelte'
   import { createBench } from './bench.svelte.js'
   import { signalFeed, ring } from './feeds.svelte.js'
-  import { resample, olderThan } from './util.js'
+  import { resample, olderThan, isUpstream } from './util.js'
 
   let { guid, n } = $props()
 
@@ -150,6 +150,7 @@
     if (!live.connected) return 'Connect to the car first. Tests run only while connected.'
     if (!live.programmingAllowed) return 'Sim adapter: programming is turned off.'
     if (!dev?.connected) return `${dev?.name ?? 'The module'} is not answering on the bus.`
+    if (isUpstream(dev)) return 'Upstream dingoFW has no output test command.'
     if (olderThan(dev?.version, [5, 5, 107])) return 'Needs firmware 5.5.107 or newer.'
     if (!src?.enabled) return 'Turn the output on and save first. The test only runs on an enabled output.'
     if (dirty) return 'Save your changes first. The test uses what is on the module.'

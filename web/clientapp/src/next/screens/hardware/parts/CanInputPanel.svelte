@@ -9,7 +9,7 @@
   import { inputModel } from './input.svelte.js'
   import { linkRemote } from '../../functions/flow/net.js'
   import { signalFeed, ring } from './feeds.svelte.js'
-  import { resample, olderThan } from './util.js'
+  import { resample, lacks } from './util.js'
   import SaveBar from './SaveBar.svelte'
   import UsedBy from './UsedBy.svelte'
   import LearnSwitch from './LearnSwitch.svelte'
@@ -198,7 +198,7 @@
   $effect(() => { if (f) { opVal = String(f.operator); orderVal = String(f.byteOrder); idtVal = f.ide ? 'ext' : 'std' } })
   $effect(() => { modSel = modGuid; dbcSel = dbcGuid })
   const title = $derived(f?.name?.trim() || `CAN input ${n}`)
-  const firmwareOld = $derived(olderThan(dev?.version, [5, 6, 0]))   // value-on-timeout: firmware 5.6 (0x1300 sub 14)
+  const firmwareOld = $derived(lacks(dev, [5, 6, 0], 0x1300, 14))   // value-on-timeout: firmware 5.6 (0x1300 sub 14)
 </script>
 
 <Page>

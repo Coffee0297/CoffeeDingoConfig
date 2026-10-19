@@ -16,9 +16,11 @@ public enum MessageCommand
     WriteAllVal = 21,
     WriteAllComplete = 22,
     WriteAllModified = 23,
+    WriteAllMissing = 24,       // upstream: one per param a failed full WriteAll did not get
     WriteAllParamNotFound = 25,
     WriteAllOutOfRange = 26,
-    
+    WriteAllMissingDone = 27,   // upstream: ends the WriteAllMissing list; [27, countLo, countHi] (0xFFFF = too many)
+
     BurnParams = 30,
     Version = 31,
     Sleep = 32,

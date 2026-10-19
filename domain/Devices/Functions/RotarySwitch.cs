@@ -26,7 +26,31 @@ public class RotarySwitch(int number, string name) : IDeviceFunction
     // Position labels — project-side only (the firmware doesn't store names); not a device param.
     [JsonPropertyName("positionNames")] public string[] PositionNames { get; set; } = new string[MaxPositions];
 
+    // Upstream dingoFW's uniform decode (0x2200 sub 7-9): position = (mV - offset) / step, at most maxPos.
+    [JsonPropertyName("offsetMv")] public double OffsetMv { get; set; }
+    [JsonPropertyName("stepMv")] public double StepMv { get => field; set => field = Math.Max(value, 1e-6); } = 100;
+    [JsonPropertyName("maxPos")] public double MaxPos { get => field; set => field = Math.Max(value, 0); } = 10;
+
     [JsonIgnore][Plotable(displayName:"Pos")] public int Pos { get; set; }
+
+    /// <summary>Upstream layout: enabled, invert, then offset / step / max position (floats).</summary>
+    public List<DeviceParameter> UpstreamParams(ref int subIndex)
+    {
+        var idx = BaseIndex + (Number - 1);
+        return
+        [
+            new DeviceParameter { ParentName = Name, Name = $"rotarySwitch[{Number}].enabled", Index = idx, SubIndex = subIndex++,
+                GetValue = () => Enabled, SetValue = val => Enabled = (bool)val, ValueType = typeof(bool), DefaultValue = false },
+            new DeviceParameter { ParentName = Name, Name = $"rotarySwitch[{Number}].invert", Index = idx, SubIndex = subIndex++,
+                GetValue = () => Invert, SetValue = val => Invert = (bool)val, ValueType = typeof(bool), DefaultValue = false },
+            new DeviceParameter { ParentName = Name, Name = $"rotarySwitch[{Number}].offsetMv", Index = idx, SubIndex = subIndex++,
+                GetValue = () => OffsetMv, SetValue = val => OffsetMv = Convert.ToDouble(val), ValueType = typeof(double), DefaultValue = 0.0 },
+            new DeviceParameter { ParentName = Name, Name = $"rotarySwitch[{Number}].stepMv", Index = idx, SubIndex = subIndex++,
+                GetValue = () => StepMv, SetValue = val => StepMv = Convert.ToDouble(val), ValueType = typeof(double), DefaultValue = 100.0 },
+            new DeviceParameter { ParentName = Name, Name = $"rotarySwitch[{Number}].maxPos", Index = idx, SubIndex = subIndex++,
+                GetValue = () => MaxPos, SetValue = val => MaxPos = Convert.ToDouble(val), ValueType = typeof(double), DefaultValue = 10.0 },
+        ];
+    }
 
     [JsonIgnore] public List<DeviceParameter> Params { get; } = null!;
 

@@ -5,7 +5,7 @@
 // `v<index>` and a wire is simply "target field = that index". The var map's own type (bool | int | float)
 // decides the port: round = on/off, square = number.
 
-import { olderThan } from '../../hardware/parts/util.js'
+import { olderThan, isUpstream } from '../../hardware/parts/util.js'
 
 export const isCb = (dev) => /can.?board/i.test(dev?.type ?? '')
 
@@ -46,7 +46,8 @@ export const arrOf = (kind, dev) => (kind === 'input' ? (isCb(dev) ? 'digitalIn'
 export const OPS = ['=', '≠', '>', '<', '≥', '≤', '&', '!&']
 export const OP_WORDS = ['equals', 'is not', 'is above', 'is below', 'is at least', 'is at most', 'has bits', 'has not bits']
 export const JOIN = ['AND', 'OR', 'NOR']
-export const TIMER_MODES = ['On-delay', 'Off-delay', 'Pulse']
+// mode 3 (one pulse, edges ignored while it runs) and the reset input exist on upstream dingoFW only
+export const TIMER_MODES = ['On-delay', 'Off-delay', 'Pulse', 'One pulse']
 export const EDGES = ['Rising', 'Falling', 'Both']
 export const isRelational = (op) => [2, 3, 4, 5].includes(Number(op))
 // Math block operations (firmware MathOp order); `fn` shows it with A and B
@@ -212,6 +213,7 @@ export function buildModel(dev, funcs, vmap) {
     if (!c.enabled && c.kind !== 'output') return []   // a switched-off PDM output still shows (and keeps) its input
     let ins = KINDS[c.kind]?.ins ?? []
     if (c.kind === 'table' && (c.row?.ySize ?? 1) <= 1) ins = ins.filter(([f]) => f !== 'yInput')
+    if (c.kind === 'timer' && isUpstream(dev)) ins = [...ins, ['resetInput', 'Reset', 'bool']]
     if (c.kind === 'ignition' && c.row?.role === 1) ins = []   // a follower copies the main module's state
     if (c.kind === 'output' || c.kind === 'digitaloutput') ins = ins.filter(([f]) => f === 'input' || (f === 'dutyCycleInput' && c.row?.variableDutyCycle) || (f === 'freqInput' && c.row?.variableFreq))
     return ins
@@ -243,7 +245,7 @@ export function buildModel(dev, funcs, vmap) {
     const ins = targetsOf(c).map(([field, label, accepts], i) => ({
       id: field, label, accepts, src: Number(fieldOf(c.kind, c.row, field)) || 0,
       not: c.kind === 'virtualinput' ? !!c.row?.['not' + i] : false,
-      optional: (c.kind === 'virtualinput' && field === 'var2') || (c.kind === 'counter' && field !== 'incInput') || c.kind === 'sys' || (c.kind === 'math' && field === 'inputB') || c.kind === 'ignition',
+      optional: (c.kind === 'virtualinput' && field === 'var2') || (c.kind === 'timer' && field === 'resetInput') || (c.kind === 'counter' && field !== 'incInput') || c.kind === 'sys' || (c.kind === 'math' && field === 'inputB') || c.kind === 'ignition',
     }))
     const outs = outPortsFor(c.kind, c.row, varsOf.get(c.id) ?? [], consumed)
     const physical = c.kind === 'input' || c.kind === 'analoginput' || c.kind === 'output' || c.kind === 'digitaloutput' || c.kind === 'sys' || c.kind === 'lua' || c.kind === 'keypad'

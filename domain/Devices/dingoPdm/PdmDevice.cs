@@ -148,6 +148,14 @@ public class PdmDevice : IDeviceConfigurable
     [JsonIgnore][Plotable(displayName:"BatteryVoltage", unit:"V")] public double BatteryVoltage { get; private set; }
     [JsonIgnore][Plotable(displayName:"Temperature", unit:"degC")] public double BoardTempC { get; private set; }
     [JsonIgnore] public string Version { get; private set; } = "v0.0.0";
+    [JsonIgnore] public bool VersionReceived { get; private set; }
+    // Fork (dingoFW 5.x) or upstream (dingoFW 0.x): picks the param numbering, var map and status frames.
+    [JsonPropertyName("family")] public string Family { get; set; } = FwFamily.Fork;
+    [JsonIgnore] public DeviceParamSet ParamSet { get; } = new();
+    // Upstream: the module's param list, saved so the project reloads with its layout (Apply still needs a Read).
+    [JsonPropertyName("paramRuns"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int[][]? ParamRuns { get => Family == FwFamily.Upstream ? ParamSet.Runs : null; set => ParamSet.Runs = value; }
+    private bool Upstream => Family == FwFamily.Upstream;
     public event Action<string>? SuccessNotification;
     public event Action<string>? ErrorNotification;
     public event Action? WriteAllIncomplete;
@@ -347,6 +355,8 @@ public class PdmDevice : IDeviceConfigurable
         StatusSigs = new Dictionary<int, List<(DbcSignal Signal, Action<double> SetValue)>>();
 
         var cyclicIndex = CyclicRxOffset;
+        // upstream dingoFW sends currents in whole amps, the fork in 0.1 A
+        var amps = Upstream ? 1.0 : 0.1;
 
         // Message 0: System status
         StatusSigs[cyclicIndex] = new List<(DbcSignal, Action<double>)>();
@@ -367,7 +377,7 @@ public class PdmDevice : IDeviceConfigurable
                 val => DeviceState = (DeviceState)val),
             (new DbcSignal { Name = "PdmType", StartBit = 12, Length = 4 },
                 val => PdmTypeOk = PdmType == (int)val),
-            (new DbcSignal { Name = "TotalCurrent", StartBit = 16, Length = 16, Factor = 0.1, Unit = "A" },
+            (new DbcSignal { Name = "TotalCurrent", StartBit = 16, Length = 16, Factor = amps, Unit = "A" },
                 val => TotalCurrent = val),
             (new DbcSignal { Name = "BatteryVoltage", StartBit = 32, Length = 16, Factor = 0.1, Unit = "V" },
                 val => BatteryVoltage = val),
@@ -382,7 +392,7 @@ public class PdmDevice : IDeviceConfigurable
         {
             var index = i;
             StatusSigs[cyclicIndex].Add((
-                new DbcSignal { Name = $"Output{index + 1}.Current", StartBit = i * 16, Length = 16, Factor = 0.1, Unit = "A" },
+                new DbcSignal { Name = $"Output{index + 1}.Current", StartBit = i * 16, Length = 16, Factor = amps, Unit = "A" },
                 val => Outputs[index].Current = val
             ));
         }
@@ -395,7 +405,7 @@ public class PdmDevice : IDeviceConfigurable
         {
             var index = i;
             StatusSigs[cyclicIndex].Add((
-                new DbcSignal { Name = $"Output{index + 1}.Current", StartBit = (i - 4) * 16, Length = 16, Factor = 0.1, Unit = "A" },
+                new DbcSignal { Name = $"Output{index + 1}.Current", StartBit = (i - 4) * 16, Length = 16, Factor = amps, Unit = "A" },
                 val => Outputs[index].Current = val
             ));
         }
@@ -431,8 +441,8 @@ public class PdmDevice : IDeviceConfigurable
                 val => Flashers[index].Value = val != 0 && Flashers[index].Enabled
             ));
         }
-        // Timer 1-8 outputs in byte 7 (bits 56-63), firmware >= 5.5.107.
-        for (var i = 0; i < NumTimers && i < 8; i++)
+        // Timer 1-8 outputs in byte 7 (bits 56-63), firmware >= 5.5.107 (upstream: Msg 27, below).
+        for (var i = 0; i < (Upstream ? 0 : NumTimers) && i < 8; i++)
         {
             var index = i;
             StatusSigs[cyclicIndex].Add((
@@ -536,8 +546,27 @@ public class PdmDevice : IDeviceConfigurable
         // state from the keypad node directly. They still belong to the device's CAN ID range.
         // ponytail: skip keypad-rebroadcast decode; add Button/Dial live-value fields if ever needed.
 
-        // Msg 27 (offset +29): table 1-2 outputs as IEEE-754 float32 LE (firmware >= 5.5.107).
         cyclicIndex += 4;
+        if (Upstream)
+        {
+            // upstream Msg 27 (+29): timer outputs byte 0, running byte 1; Msg 28-29 (+30, +31): elapsed, 10 ms units
+            StatusSigs[cyclicIndex] = [];
+            StatusSigs[cyclicIndex + 1] = [];
+            StatusSigs[cyclicIndex + 2] = [];
+            for (var i = 0; i < NumTimers && i < 8; i++)
+            {
+                var index = i;
+                StatusSigs[cyclicIndex].Add((new DbcSignal { Name = $"Timer{index + 1}", StartBit = i, Length = 1 },
+                    val => Timers[index].Value = val != 0 && Timers[index].Enabled));
+                StatusSigs[cyclicIndex].Add((new DbcSignal { Name = $"Timer{index + 1}.Running", StartBit = 8 + i, Length = 1 },
+                    val => Timers[index].Running = val != 0));
+                StatusSigs[cyclicIndex + 1 + i / 4].Add((new DbcSignal { Name = $"Timer{index + 1}.Elapsed", StartBit = i % 4 * 16, Length = 16, Factor = 10, Unit = "ms" },
+                    val => Timers[index].ElapsedMs = val));
+            }
+            MaxCyclicId = cyclicIndex + 2;
+            return;
+        }
+        // Msg 27 (offset +29): table 1-2 outputs as IEEE-754 float32 LE (firmware >= 5.5.107).
         StatusSigs[cyclicIndex] = [];
         for (var i = 0; i < NumTables && i < 2; i++)
         {
@@ -870,6 +899,8 @@ public class PdmDevice : IDeviceConfigurable
             }
         }
 
+        if (Upstream) { AddUpstreamTail(ref index); return; }
+
         // Lua output slots — written by setLuaOut(n, v) in the device's Lua program.
         // Must match the firmware's VAR_MAP layout (NUM_LUA_OUTPUTS). Adding them here is what
         // lets an output/virtual-input/CAN-output pick "Lua Out N" as its driving input — i.e.
@@ -958,11 +989,27 @@ public class PdmDevice : IDeviceConfigurable
                 PropertyName = side, DataType = "bool", VariableIndex = index++, SingleVariable = false, MinFirmware = Functions.ComfortBlink.Since });
     }
 
+    // Upstream dingoFW var map: same order as the fork's up to here (InitVarMap in core/device.cpp), then the timers
+    // LAST (if the module has the 0x1A00 timer block), no Lua slots.
+    // FEATURE BRANCHES: append your block's entries below the timers, in the canonical upstream order, each guarded
+    // by FwFamily.HasBlock(this, <your param base>, false) so a module without the block keeps its indices.
+    private void AddUpstreamTail(ref int index)
+    {
+        if (FwFamily.HasBlock(this, TimerFunction.UpstreamBaseIndex, true  /* stock upstream PDMs have timers */))
+            for (var i = 0; i < NumTimers; i++)
+            {
+                var num = i;
+                VarMap.Add(new DeviceVariable { GetName = () => Timers[num].Name, OwnerKind = "timer", OwnerNumber = num + 1,
+                    PropertyName = "State", DataType = "bool", VariableIndex = index++, SingleVariable = false });
+            }
+    }
+
     private void InitParams()
     {
         var allParams = new List<DeviceParameter>();
         var subIndex = 0;
-        allParams.AddRange(
+        if (Family == FwFamily.Upstream) allParams.AddRange(UpstreamDeviceParams());
+        else allParams.AddRange(
         [
             new DeviceParameter
             {
@@ -1048,8 +1095,8 @@ public class PdmDevice : IDeviceConfigurable
         foreach (var condition in Conditions) allParams.AddRange(condition.Params);
         foreach (var counter in Counters) allParams.AddRange(counter.Params);
         foreach (var flasher in Flashers) allParams.AddRange(flasher.Params);
-        foreach (var table in Tables) allParams.AddRange(table.Params);
-        foreach (var timer in Timers) allParams.AddRange(timer.Params);
+        if (Family == FwFamily.Fork) foreach (var table in Tables) allParams.AddRange(table.Params);   // upstream 0x1A00 is the timer
+        foreach (var timer in Timers) allParams.AddRange(Family == FwFamily.Upstream ? timer.UpstreamParams : timer.Params);
         foreach (var m in Maths) allParams.AddRange(m.Params);
         foreach (var m in CanMessages) allParams.AddRange(m.Params);
         allParams.AddRange(Ignition.Params);
@@ -1066,9 +1113,34 @@ public class PdmDevice : IDeviceConfigurable
         {
             NotifySuccess = msg => SuccessNotification?.Invoke(msg),
             NotifyError = msg => ErrorNotification?.Invoke(msg),
-            WriteAllFailed = () => { var h = WriteAllIncomplete; h?.Invoke(); return h != null; }
+            WriteAllFailed = () => { var h = WriteAllIncomplete; h?.Invoke(); return h != null; },
+            ParamSetLearned = InitVarMap   // upstream: which blocks the module has decides the var map tail
         };
     }
+
+    // Upstream dingoFW device params (0x0000 sub 0-8). The wake bools map onto the fork's wake mask / wake-on-CAN
+    // and the mute / force-sleep inputs keep their names, so the same UI drives both families.
+    private List<DeviceParameter> UpstreamDeviceParams() =>
+    [
+        new() { ParentName = Name, Name = "device.baseId", Index = BaseIndex, SubIndex = 0,
+            GetValue = () => BaseId, SetValue = val => BaseId = (int)val, ValueType = typeof(int), DefaultValue = DefaultId },
+        new() { ParentName = Name, Name = "device.canSpeed", Index = BaseIndex, SubIndex = 1,
+            GetValue = () => BitRate, SetValue = val => BitRate = (CanBitRate)val, ValueType = typeof(CanBitRate), DefaultValue = CanBitRate.BitRate500K },
+        new() { ParentName = Name, Name = "device.sleepEnabled", Index = BaseIndex, SubIndex = 2,
+            GetValue = () => SleepEnabled, SetValue = val => SleepEnabled = (bool)val, ValueType = typeof(bool), DefaultValue = false },
+        new() { ParentName = Name, Name = "device.canFiltersEnabled", Index = BaseIndex, SubIndex = 3,
+            GetValue = () => CanFiltersEnabled, SetValue = val => CanFiltersEnabled = (bool)val, ValueType = typeof(bool), DefaultValue = false },
+        new() { ParentName = Name, Name = "device.disableDigInWake", Index = BaseIndex, SubIndex = 4,
+            GetValue = () => WakeDigInputMask == 0, SetValue = val => WakeDigInputMask = (bool)val ? 0 : (1 << NumDigitalInputs) - 1, ValueType = typeof(bool), DefaultValue = false },
+        new() { ParentName = Name, Name = "device.disableCanWake", Index = BaseIndex, SubIndex = 5,
+            GetValue = () => !WakeOnCan, SetValue = val => WakeOnCan = !(bool)val, ValueType = typeof(bool), DefaultValue = false },
+        new() { ParentName = Name, Name = "device.connectUsbToCan", Index = BaseIndex, SubIndex = 6,
+            GetValue = () => ConnectUsbToCan, SetValue = val => ConnectUsbToCan = (bool)val, ValueType = typeof(bool), DefaultValue = true },
+        new() { ParentName = Name, Name = "device.muteTxInput", Index = BaseIndex, SubIndex = 7,
+            GetValue = () => MuteTxInput, SetValue = val => MuteTxInput = (int)val, ValueType = typeof(int), DefaultValue = 0 },
+        new() { ParentName = Name, Name = "device.forceSleepInput", Index = BaseIndex, SubIndex = 8,
+            GetValue = () => ForceSleepInput, SetValue = val => ForceSleepInput = (int)val, ValueType = typeof(int), DefaultValue = 0 },
+    ];
 
     private void Clear()
     {
@@ -1120,7 +1192,7 @@ public class PdmDevice : IDeviceConfigurable
         var offset = id - BaseId;
 
         // Ignition state frame (firmware 5.6), sent by a main module: ['I', state, flags]
-        if (offset == Functions.Ignition.StateOffsetFor(Type) && data.Length >= 3 && data[0] == 'I')
+        if (!Upstream && offset == Functions.Ignition.StateOffsetFor(Type) && data.Length >= 3 && data[0] == 'I')
         {
             Ignition.State = (Functions.IgnitionState)data[1];
             Ignition.Dash = (data[2] & 0x10) != 0;
@@ -1262,6 +1334,8 @@ public class PdmDevice : IDeviceConfigurable
     {
         var id = BaseId;
 
+        // Upstream: a full ReadAll is how the app learns the module's param list (a modified-only read can't tell it)
+        if (Family == FwFamily.Upstream && !ParamSet.FromModule) allParams = true;
         var cmd = allParams ? MessageCommand.ReadAll : MessageCommand.ReadAllModified;
         var name = allParams ? "ReadAll" : "ReadAllModified";
         
@@ -1285,6 +1359,9 @@ public class PdmDevice : IDeviceConfigurable
 
     public List<DeviceCanFrame> GetWriteMsgs(bool allParams)
     {
+        // Upstream: always the full WriteAll. A modified-only one resets every param not sent to the FIRMWARE's
+        // default, and the full one is checked by count + CRC and answered with the list of params it missed.
+        if (Family == FwFamily.Upstream) allParams = true;
         var cmd = allParams ? MessageCommand.WriteAll : MessageCommand.WriteAllModified;
         var name = allParams ? "WriteAll" : "WriteAllModified";
         
@@ -1463,7 +1540,7 @@ public class PdmDevice : IDeviceConfigurable
 
         var version = $"v{data[4]}.{data[5]}.{(data[6] << 8) + (data[7])}";
 
-        if (!CheckVersion(data[4], data[5], (data[6] << 8) + (data[7])))
+        if (data[4] != 0 && !CheckVersion(data[4], data[5], (data[6] << 8) + (data[7])))
         {
             Logger.LogError("{Name} ID: {BaseId}, Firmware needs to be updated. V{MinMajorVersion}.{MinMinorVersion}.{MinBuildVersion} or greater",
                 name, baseId, MinMajorVersion, MinMinorVersion, MinBuildVersion);
@@ -1478,7 +1555,20 @@ public class PdmDevice : IDeviceConfigurable
 
         Logger.LogInformation("{Name} FW version received: {Version}", name, version);
 
+        var family = FwFamily.Of(data[4]);
+        if (family != Family) { Family = family; ParamSet.Forget(); Rebuild(); }
+        else if (VersionReceived && version != Version) ParamSet.Stale();   // reflashed: read its param list again
         Version = version;
+        VersionReceived = true;
+    }
+
+    // The family changed: rebuild everything that has a per-family layout (values stay on the function objects).
+    private void Rebuild()
+    {
+        InitStatusSigs();
+        InitVarMap();
+        InitParams();
+        if (Logger is not null) _paramProtocol.SetLogger(Logger);
     }
     
     private bool CheckVersion(int major, int minor, int build)

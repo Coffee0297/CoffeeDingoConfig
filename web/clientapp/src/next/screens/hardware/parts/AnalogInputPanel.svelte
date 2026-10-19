@@ -8,7 +8,7 @@
   import { autoTolerance, decodePoints, NO_POS, nodeVoltageMv, recommendPullup, resistorForMv, nearestStandard } from '../../../../lib/ladder.js'
   import { inputModel } from './input.svelte.js'
   import { signalFeed, ring } from './feeds.svelte.js'
-  import { resample } from './util.js'
+  import { resample, isUpstream } from './util.js'
   import SaveBar from './SaveBar.svelte'
   import UsedBy from './UsedBy.svelte'
   import LadderDesigner from './LadderDesigner.svelte'
@@ -18,12 +18,14 @@
   const dev = $derived(M.dev)
   const row = $derived(M.row)
   const feed = signalFeed(() => guid, 200)
+  // upstream dingoFW: no sensor scaling and a uniform rotary (position = (mV - offset) / step, at most max)
+  const up = $derived(isUpstream(dev))
 
   // ---- form ----
   const VSUP = 5000, OPTS = { vsupMv: VSUP, rpu: recommendPullup({ vsupMv: VSUP }) }
   let f = $state(null), snap = $state('')
   function seed(r) {
-    const mode = r.rotary?.enabled ? 'ladder' : r.scale?.enabled ? 'linear' : 'threshold'
+    const mode = r.rotary?.enabled ? (isUpstream(M.dev) ? 'uniform' : 'ladder') : r.scale?.enabled ? 'linear' : 'threshold'
     const sc = r.scale ?? {}, sw = r.switch ?? {}, ro = r.rotary ?? {}
     const np = ro.enabled && ro.numPos >= 2 ? ro.numPos : 5
     const names = ro.positionNames ?? []
@@ -38,6 +40,7 @@
       name: r.name ?? '', enabled: !!r.enabled, mode,
       thr: (sw.threshold ?? 2000) / 1000, swMode: sw.mode ?? 0, swInvert: !!sw.invert,
       sp: 'custom', unit: sc.units ?? '', lowV: (sc.inLowMv ?? 500) / 1000, lowX: sc.outLow ?? 0, highV: (sc.inHighMv ?? 4500) / 1000, highX: sc.outHigh ?? 100,
+      uni: { offsetMv: ro.offsetMv ?? 0, stepMv: ro.stepMv ?? 100, maxPos: ro.maxPos ?? 10, invert: !!ro.invert },
       rot: { n: np, tolAuto: !ro.enabled, tol: ro.tolerance > 0 ? ro.tolerance : 200, invert: !!ro.invert, rows },
     }
   }
@@ -55,6 +58,7 @@
     if (!String(f.name).trim()) return 'Give the input a name.'
     if (f.mode === 'linear' && Number(f.highV) === Number(f.lowV)) return 'The two voltages must be different.'
     if (f.mode === 'ladder' && !ascending) return 'The position voltages must go up with the position number.'
+    if (f.mode === 'uniform' && !(Number(f.uni.stepMv) > 0)) return 'The step must be above 0 mV.'
     return ''
   })
   async function save() {
@@ -65,6 +69,10 @@
       switch: { enabled: f.mode === 'threshold', mode: Number(f.swMode), invert: f.swInvert, threshold: Math.round(Number(f.thr) * 1000) },
       scale: { enabled: f.mode === 'linear', units: f.unit, gain, offset: offs, inLowMv: Math.round(Number(f.lowV) * 1000), outLow: Number(f.lowX), inHighMv: Math.round(Number(f.highV) * 1000), outHigh: Number(f.highX) },
       rotary: { enabled: f.mode === 'ladder', invert: f.rot.invert, numPos: f.rot.rows.length, tolerance: Math.round(tol), points: pts, positionNames: names },
+    }
+    if (up) {
+      delete body.scale
+      body.rotary = { enabled: f.mode === 'uniform', invert: f.uni.invert, offsetMv: Number(f.uni.offsetMv), stepMv: Number(f.uni.stepMv), maxPos: Number(f.uni.maxPos) }
     }
     if (await M.save(body)) snap = JSON.stringify(f)
   }
@@ -102,6 +110,7 @@
       const dp = Math.abs(f.highX - f.lowX) >= 20 ? 0 : 1
       return out ? { kind: 'fault', text: 'Out of range · ' + V.toFixed(2) + ' V', v: V, out: true } : { kind: 'on', text: x.toFixed(dp) + ' ' + f.unit + ' · ' + V.toFixed(2) + ' V', v: V, val: x.toFixed(dp) }
     }
+    if (f.mode === 'uniform') return { kind: 'on', text: V.toFixed(2) + ' V', v: V }   // the module works the position out
     const pts = f.rot.rows.map((r) => r.mv)
     const p = ascending ? decodePoints(mv, pts, tol) : NO_POS
     const pos = p === NO_POS ? null : (f.rot.invert ? pts.length - 1 - p : p)
@@ -150,12 +159,20 @@
       <Banner tone="fault" title="The reading is outside the sensor range">An open sender wire usually reads close to 5 V; a short to ground reads close to 0 V. Check the wire before you trust the value.</Banner>
     {/if}
 
-    <Segmented label="Use this input as" items={[{ value: 'threshold', label: 'On / off threshold' }, { value: 'linear', label: 'Linear sensor' }, { value: 'ladder', label: 'Multi-position switch' }]} bind:value={useVal}
+    <Segmented label="Use this input as" items={up ? [{ value: 'threshold', label: 'On / off threshold' }, { value: 'uniform', label: 'Multi-position switch' }]
+      : [{ value: 'threshold', label: 'On / off threshold' }, { value: 'linear', label: 'Linear sensor' }, { value: 'ladder', label: 'Multi-position switch' }]} bind:value={useVal}
       onchange={(v) => { f.mode = v; if (!f.enabled) f.enabled = true }} data-testid="use-as" />
 
     <Field label="Name" bind:value={f.name} data-testid="name" />
 
-    {#if f.mode === 'ladder'}
+    {#if f.mode === 'uniform'}
+      <Card title="Evenly spaced positions" subtitle="upstream dingoFW: position = (voltage − offset) ÷ step" aria-label="Rotary switch">
+        <Field label="Offset" type="number" step="1" unit="mV" bind:value={f.uni.offsetMv} data-testid="uni-offset" />
+        <Field label="Step per position" type="number" step="1" min={1} unit="mV" bind:value={f.uni.stepMv} data-testid="uni-step" />
+        <Field label="Highest position" type="number" step="1" min={0} bind:value={f.uni.maxPos} data-testid="uni-max" />
+        <Checkbox bind:checked={f.uni.invert} label="Invert" hint="Count the positions the other way." />
+      </Card>
+    {:else if f.mode === 'ladder'}
       <div class="cols one">
         <div class="col">
           <LadderDesigner bind:rot={f.rot} liveMv={mv} {online} {steady} />

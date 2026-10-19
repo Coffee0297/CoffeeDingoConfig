@@ -36,7 +36,8 @@ public class CanboardDevice : IDeviceConfigurable
     // Firmware 5.5.111 put the CANBoard to sleep (STOP) like the PDM; older firmware only goes quiet (mute TX).
     // Version not read yet: assumed able, like a PDM, so the sleep settings do not vanish until it answers.
     [JsonIgnore] public static readonly Version SleepSince = new(5, 5, 111);
-    [JsonIgnore] public bool CanSleep => domain.Common.Firmware.Of(Version).Major == 0 || domain.Common.Firmware.Has(Version, SleepSince);
+    // Upstream dingoFW: the CANBoard build has no CAN_SLEEP.
+    [JsonIgnore] public bool CanSleep => !VersionReceived || (Family == FwFamily.Fork && domain.Common.Firmware.Has(Version, SleepSince));
     [JsonPropertyName("canBootloader")] public bool CanBootloader { get; } = true;   // OpenBLT XCP-over-CAN bootloader
 
     [JsonIgnore] public const int BaseIndex = 0x0000;
@@ -69,6 +70,13 @@ public class CanboardDevice : IDeviceConfigurable
     [JsonIgnore][Plotable(displayName:"Heartbeat", unit:" ")] public int Heartbeat { get; private set; }
     
     [JsonIgnore] public string Version { get; private set; } = "v0.0.0";
+    [JsonIgnore] public bool VersionReceived { get; private set; }
+    // Fork (dingoFW 5.x) or upstream (dingoFW 0.x): picks the param numbering, var map and status frames.
+    [JsonPropertyName("family")] public string Family { get; set; } = FwFamily.Fork;
+    [JsonIgnore] public DeviceParamSet ParamSet { get; } = new();
+    // Upstream: the module's param list, saved so the project reloads with its layout (Apply still needs a Read).
+    [JsonPropertyName("paramRuns"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int[][]? ParamRuns { get => Family == FwFamily.Upstream ? ParamSet.Runs : null; set => ParamSet.Runs = value; }
     public event Action<string>? SuccessNotification;
     public event Action<string>? ErrorNotification;
     public event Action? WriteAllIncomplete;
@@ -298,7 +306,7 @@ public class CanboardDevice : IDeviceConfigurable
         }
 
         // Timers 1-4 (1-bit each, upper nibble of byte 3: bits 28-31), firmware >= 5.5.107
-        for (var i = 0; i < NumTimers && i < 4; i++)
+        for (var i = 0; i < (Family == FwFamily.Upstream ? 0 : NumTimers) && i < 4; i++)
         {
             var index = i;
             StatusSigs[cyclicIndex].Add((
@@ -531,7 +539,7 @@ public class CanboardDevice : IDeviceConfigurable
                     VariableIndex = index++,
                     SingleVariable = false
                 });
-                VarMap.Add(new DeviceVariable
+                if (Family == FwFamily.Fork) VarMap.Add(new DeviceVariable   // upstream has 4 per analog input
                 {
                     GetName  = () => AnalogInputs[num].Name,
                     OwnerKind = "analoginput", OwnerNumber = num + 1,
@@ -637,6 +645,8 @@ public class CanboardDevice : IDeviceConfigurable
             }
         }
 
+        if (Family == FwFamily.Upstream) { AddUpstreamTail(ref index); return; }
+
         // Timers are appended last, mirroring the firmware var map (no Lua / tables on a CANBoard).
         for (var i = 0; i < NumTimers; i++)
         {
@@ -691,11 +701,27 @@ public class CanboardDevice : IDeviceConfigurable
                 PropertyName = side, DataType = "bool", VariableIndex = index++, SingleVariable = false, MinFirmware = Functions.ComfortBlink.Since });
     }
 
+    // Upstream dingoFW var map: same order as the fork's up to here (InitVarMap in core/device.cpp), then the timers
+    // LAST (if the module has the 0x1A00 timer block), no Lua slots.
+    // FEATURE BRANCHES: append your block's entries below the timers, in the canonical upstream order, each guarded
+    // by FwFamily.HasBlock(this, <your param base>, false) so a module without the block keeps its indices.
+    private void AddUpstreamTail(ref int index)
+    {
+        if (FwFamily.HasBlock(this, TimerFunction.UpstreamBaseIndex, false /* stock upstream CANBoard: NUM_TIMERS 0 */))
+            for (var i = 0; i < NumTimers; i++)
+            {
+                var num = i;
+                VarMap.Add(new DeviceVariable { GetName = () => Timers[num].Name, OwnerKind = "timer", OwnerNumber = num + 1,
+                    PropertyName = "State", DataType = "bool", VariableIndex = index++, SingleVariable = false });
+            }
+    }
+
     private void InitParams()
     {
         var allParams = new List<DeviceParameter>();
         var subIndex = 0;
-        allParams.AddRange(
+        if (Family == FwFamily.Upstream) allParams.AddRange(UpstreamDeviceParams());
+        else allParams.AddRange(
         [
             new DeviceParameter
             {
@@ -779,14 +805,14 @@ public class CanboardDevice : IDeviceConfigurable
         foreach (var condition in Conditions) allParams.AddRange(condition.Params);
         foreach (var counter in Counters) allParams.AddRange(counter.Params);
         foreach (var flasher in Flashers) allParams.AddRange(flasher.Params);
-        foreach (var timer in Timers) allParams.AddRange(timer.Params);
+        foreach (var timer in Timers) allParams.AddRange(Family == FwFamily.Upstream ? timer.UpstreamParams : timer.Params);
         foreach (var m in Maths) allParams.AddRange(m.Params);
         foreach (var m in CanMessages) allParams.AddRange(m.Params);
         allParams.AddRange(Ignition.Params);
         allParams.AddRange(ComfortBlink.Params);
         foreach (var canOutput in CanOutputs) allParams.AddRange(canOutput.Params);
         foreach (var digitalOutput in DigitalOutputs) allParams.AddRange(digitalOutput.Params);
-        foreach (var analogInput in AnalogInputs) allParams.AddRange(analogInput.Params);
+        foreach (var analogInput in AnalogInputs) allParams.AddRange(Family == FwFamily.Upstream ? analogInput.UpstreamParams : analogInput.Params);
         
         Params = allParams;
 
@@ -794,9 +820,34 @@ public class CanboardDevice : IDeviceConfigurable
         {
             NotifySuccess = msg => SuccessNotification?.Invoke(msg),
             NotifyError = msg => ErrorNotification?.Invoke(msg),
-            WriteAllFailed = () => { var h = WriteAllIncomplete; h?.Invoke(); return h != null; }
+            WriteAllFailed = () => { var h = WriteAllIncomplete; h?.Invoke(); return h != null; },
+            ParamSetLearned = InitVarMap   // upstream: which blocks the module has decides the var map tail
         };
     }
+
+    // Upstream dingoFW device params (0x0000 sub 0-8). The wake bools map onto the fork's wake mask / wake-on-CAN
+    // and the mute / force-sleep inputs keep their names, so the same UI drives both families.
+    private List<DeviceParameter> UpstreamDeviceParams() =>
+    [
+        new() { ParentName = Name, Name = "device.baseId", Index = BaseIndex, SubIndex = 0,
+            GetValue = () => BaseId, SetValue = val => BaseId = (int)val, ValueType = typeof(int), DefaultValue = DefaultId },
+        new() { ParentName = Name, Name = "device.canSpeed", Index = BaseIndex, SubIndex = 1,
+            GetValue = () => BitRate, SetValue = val => BitRate = (CanBitRate)val, ValueType = typeof(CanBitRate), DefaultValue = CanBitRate.BitRate500K },
+        new() { ParentName = Name, Name = "device.sleepEnabled", Index = BaseIndex, SubIndex = 2,
+            GetValue = () => SleepEnabled, SetValue = val => SleepEnabled = (bool)val, ValueType = typeof(bool), DefaultValue = false },
+        new() { ParentName = Name, Name = "device.canFiltersEnabled", Index = BaseIndex, SubIndex = 3,
+            GetValue = () => CanFiltersEnabled, SetValue = val => CanFiltersEnabled = (bool)val, ValueType = typeof(bool), DefaultValue = false },
+        new() { ParentName = Name, Name = "device.disableDigInWake", Index = BaseIndex, SubIndex = 4,
+            GetValue = () => WakeDigInputMask == 0, SetValue = val => WakeDigInputMask = (bool)val ? 0 : (1 << NumDigitalInputs) - 1, ValueType = typeof(bool), DefaultValue = false },
+        new() { ParentName = Name, Name = "device.disableCanWake", Index = BaseIndex, SubIndex = 5,
+            GetValue = () => !WakeOnCan, SetValue = val => WakeOnCan = !(bool)val, ValueType = typeof(bool), DefaultValue = false },
+        new() { ParentName = Name, Name = "device.connectUsbToCan", Index = BaseIndex, SubIndex = 6,
+            GetValue = () => ConnectUsbToCan, SetValue = val => ConnectUsbToCan = (bool)val, ValueType = typeof(bool), DefaultValue = true },
+        new() { ParentName = Name, Name = "device.muteTxInput", Index = BaseIndex, SubIndex = 7,
+            GetValue = () => MuteTxInput, SetValue = val => MuteTxInput = (int)val, ValueType = typeof(int), DefaultValue = 0 },
+        new() { ParentName = Name, Name = "device.forceSleepInput", Index = BaseIndex, SubIndex = 8,
+            GetValue = () => ForceSleepInput, SetValue = val => ForceSleepInput = (int)val, ValueType = typeof(int), DefaultValue = 0 },
+    ];
 
     private void Clear()
     {
@@ -843,7 +894,7 @@ public class CanboardDevice : IDeviceConfigurable
         var offset = id - BaseId;
 
         // Ignition state frame (firmware 5.6), sent by a main module: ['I', state, flags]
-        if (offset == Functions.Ignition.StateOffsetFor(Type) && data.Length >= 3 && data[0] == 'I')
+        if (Family == FwFamily.Fork && offset == Functions.Ignition.StateOffsetFor(Type) && data.Length >= 3 && data[0] == 'I')
         {
             Ignition.State = (Functions.IgnitionState)data[1];
             Ignition.Dash = (data[2] & 0x10) != 0;
@@ -935,6 +986,8 @@ public class CanboardDevice : IDeviceConfigurable
 
     public List<DeviceCanFrame> GetReadMsgs(bool allParams)
     {
+        // Upstream: a full ReadAll is how the app learns the module's param list (a modified-only read can't tell it)
+        if (Family == FwFamily.Upstream && !ParamSet.FromModule) allParams = true;
         var cmd = allParams ? MessageCommand.ReadAll : MessageCommand.ReadAllModified;
         var name = allParams ? "ReadAll" : "ReadAllModified";
         
@@ -958,6 +1011,9 @@ public class CanboardDevice : IDeviceConfigurable
 
     public List<DeviceCanFrame> GetWriteMsgs(bool allParams)
     {
+        // Upstream: always the full WriteAll. A modified-only one resets every param not sent to the FIRMWARE's
+        // default, and the full one is checked by count + CRC and answered with the list of params it missed.
+        if (Family == FwFamily.Upstream) allParams = true;
         var cmd = allParams ? MessageCommand.WriteAll : MessageCommand.WriteAllModified;
         var name = allParams ? "WriteAll" : "WriteAllModified";
         
@@ -1096,7 +1152,7 @@ public class CanboardDevice : IDeviceConfigurable
 
         var version = $"v{data[4]}.{data[5]}.{(data[6] << 8) + (data[7])}";
 
-        if (!CheckVersion(data[4], data[5], (data[6] << 8) + (data[7])))
+        if (data[4] != 0 && !CheckVersion(data[4], data[5], (data[6] << 8) + (data[7])))
         {
             Logger.LogError("{Name} ID: {BaseId}, Firmware needs to be updated. V{MinMajorVersion}.{MinMinorVersion}.{MinBuildVersion} or greater",
                 name, baseId, MinMajorVersion, MinMinorVersion, MinBuildVersion);
@@ -1111,7 +1167,20 @@ public class CanboardDevice : IDeviceConfigurable
 
         Logger.LogInformation("{Name} FW version received: {Version}", name, version);
 
+        var family = FwFamily.Of(data[4]);
+        if (family != Family) { Family = family; ParamSet.Forget(); Rebuild(); }
+        else if (VersionReceived && version != Version) ParamSet.Stale();   // reflashed: read its param list again
         Version = version;
+        VersionReceived = true;
+    }
+
+    // The family changed: rebuild everything that has a per-family layout (values stay on the function objects).
+    private void Rebuild()
+    {
+        InitStatusSigs();
+        InitVarMap();
+        InitParams();
+        if (Logger is not null) _paramProtocol.SetLogger(Logger);
     }
     
     private bool CheckVersion(int major, int minor, int build)

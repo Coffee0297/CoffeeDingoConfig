@@ -9,6 +9,12 @@ public interface IDeviceConfigurable : IDevice
     bool ConfigMismatch { get; set; }
     /// <summary>Firmware version as reported ("v5.6.0"; "v0.0.0" until the module answered).</summary>
     string Version { get; }
+    /// <summary>A Version reply arrived (upstream firmware reports major 0, so "v0.x" is a real answer).</summary>
+    bool VersionReceived { get; }
+    /// <summary><see cref="domain.Common.FwFamily"/>.Fork or .Upstream; from the Version reply, saved with the project.</summary>
+    string Family { get; }
+    /// <summary>Upstream family: the params the module has (from its ReadAll). Unused on fork modules.</summary>
+    domain.Common.DeviceParamSet ParamSet { get; }
     /// <summary>Per-param differences captured on the last Read — explains *why* the config didn't match.</summary>
     List<ConfigDiffEntry> LastConfigDiff { get; set; }
     DeviceCanFrame GetCheckMsg();

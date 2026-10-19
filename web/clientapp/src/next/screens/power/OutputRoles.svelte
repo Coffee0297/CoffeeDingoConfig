@@ -8,7 +8,7 @@
   import { live, hex, api, mutate, toast, project } from '../../lib/live.svelte.js'
   import Confirm from './parts/Confirm.svelte'
   import { pinFor } from '../../../lib/pinmap.js'
-  import { olderThan } from '../hardware/parts/util.js'
+  import { lacks, isUpstream } from '../hardware/parts/util.js'
 
   // role -> the var-map property it follows ('always' = sys Always On, index 1)
   const ROLES = [
@@ -20,7 +20,7 @@
     { r: 'Always on', prop: 'always', what: 'Never switched by the ignition.' },
   ]
   const pdms = $derived(live.devices.filter((d) => /pdm/i.test(d.type ?? '')))
-  const newFw = $derived(pdms.filter((d) => !olderThan(d.version, [5, 6, 0])))
+  const newFw = $derived(pdms.filter((d) => !lacks(d, [5, 6, 0], 0x1E00)))
   const total = $derived(pdms.reduce((n, d) => n + (d.outputs?.length ?? 0), 0))
   const versions = $derived([...new Set(pdms.map((d) => d.version).filter(Boolean))].join(', ') || 'unknown')
   const spec = (d, o) => {
@@ -93,9 +93,9 @@
   <div class="cols">
     <div class="mods">
       {#each pdms as d (d.guid)}
-        {@const old = olderThan(d.version, [5, 6, 0])}
+        {@const old = lacks(d, [5, 6, 0], 0x1E00)}
         <Card title={d.name} subtitle={hex(d.baseId)} aria-label={`${d.name} outputs`}>
-          {#snippet actions()}{#if old}<FwBadge version="5.6" />{/if}{/snippet}
+          {#snippet actions()}{#if old}<FwBadge version="5.6" upstream={isUpstream(d)} />{/if}{/snippet}
           {#if !d.outputs?.length}<p class="muted">No outputs read from this module yet.</p>{/if}
           <ul class="rows" data-testid={`roles-${d.name}`}>
             {#each d.outputs ?? [] as o (o.number)}

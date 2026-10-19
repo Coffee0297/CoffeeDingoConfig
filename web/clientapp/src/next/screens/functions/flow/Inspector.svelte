@@ -10,7 +10,7 @@
   import { FAM_COLOR, FAM_NAME, OPS, OP_WORDS, JOIN, TIMER_MODES, EDGES, MATH_OPS, isRelational, sourceOptions, canWire, hexId, parseId } from './model.js'
   import { sentenceFor } from './sentence.js'
   import { fmt } from './livevals.js'
-  import { olderThan } from '../../hardware/parts/util.js'
+  import { lacks, isUpstream } from '../../hardware/parts/util.js'
   import { remoteItems, isRemoteKey } from '../../../lib/remote.js'
 
   let { model, node, dev, lv, links = [], idMap = null, busy = false, onsave, onremove, onselect, onungroup, onopenlink, unsaved = $bindable(false) } = $props()
@@ -24,7 +24,7 @@
   const EDIT = {
     virtualinput: ['name', 'var0', 'var1', 'var2', 'not0', 'not1', 'not2', 'cond0', 'cond1', 'mode'],
     condition: ['name', 'input', 'operator', 'arg', 'argOff'],
-    timer: ['name', 'input', 'mode', 'preset', 'edge'],
+    timer: ['name', 'input', 'mode', 'preset', 'edge', 'resetInput'],
     flasher: ['name', 'input', 'onTime', 'offTime', 'single'],
     counter: ['name', 'incInput', 'decInput', 'resetInput', 'incEdge', 'decEdge', 'resetEdge', 'minCount', 'maxCount', 'wrapAround', 'holdToReset', 'resetTime'],
     table: ['name', 'xInput', 'yInput', 'xSize', 'ySize', 'xAxis', 'yAxis', 'cells'],
@@ -96,6 +96,7 @@
     const k = node.kind
     if (idError) return idError
     if (k === 'flasher' && (draft.onTime < 0 || draft.onTime > 5000 || draft.offTime < 0 || draft.offTime > 5000)) return 'On and off times must be 0 to 5000 ms.'
+    if (k === 'timer' && isUpstream(dev) && (draft.preset < 0 || draft.preset > 600000)) return 'Time must be 0 to 10 minutes.'
     if (k === 'timer' && (draft.preset < 0 || draft.preset > 3600000)) return 'Time must be 0 to 1 hour.'
     if ((k === 'canoutput' || k === 'caninput') && (draft.startBit < 0 || draft.startBit > 63 || draft.bitLength < 1 || draft.bitLength > 64 - draft.startBit)) return `Start bit 0–63 and length 1–${64 - (draft.startBit | 0)}.`
     if (k === 'sys' && (draft.forceSleepInput === 1 || draft.muteTxInput === 1)) return '"Always on" would keep the module asleep or muted for good. Pick a real signal.'
@@ -248,10 +249,12 @@
       {/if}
     {:else if node.kind === 'timer'}
       <span class="sec">Settings</span>
-      {@render seg('Kind', [{ value: '0', label: 'On-delay' }, { value: '1', label: 'Keep on after' }, { value: '2', label: 'Pulse' }], String(draft.mode ?? 0), (v) => (draft.mode = Number(v)), false)}
+      {@const up = isUpstream(dev)}
+      {@render seg('Kind', [{ value: '0', label: 'On-delay' }, { value: '1', label: 'Keep on after' }, { value: '2', label: up ? 'Pulse, restarts' : 'Pulse' }, ...(up ? [{ value: '3', label: 'One pulse' }] : [])], String(draft.mode ?? 0), (v) => (draft.mode = Number(v)), false)}
       <div class="two">
-        <Field label="Time" type="number" step="0.1" min="0" unit="s" bind:value={() => (draft.preset ?? 0) / 1000, (v) => (draft.preset = Math.round(toNum(v) * 1000))} />
-        {@render seg('Active when input is', [{ value: '0', label: 'On' }, { value: '1', label: 'Off' }], String(draft.edge ?? 0), (v) => (draft.edge = Number(v)), false)}
+        <Field label="Time" type="number" step="0.1" min="0" max={up ? 600 : 3600} unit="s" bind:value={() => (draft.preset ?? 0) / 1000, (v) => (draft.preset = Math.round(toNum(v) * 1000))} />
+        <!-- upstream dingoFW: no input level choice; a Reset input instead (a port above) -->
+        {#if !up}{@render seg('Active when input is', [{ value: '0', label: 'On' }, { value: '1', label: 'Off' }], String(draft.edge ?? 0), (v) => (draft.edge = Number(v)), false)}{/if}
       </div>
       {#if lv.sim}<p class="hint" role="status">Simulated time left: {Math.round((lv.left?.[node.id] ?? 0) / 100) / 10} s</p>{/if}
     {:else if node.kind === 'math'}
@@ -358,11 +361,11 @@
         </div>
         <Checkbox label="Off when no frame arrives (timeout)" bind:checked={() => !!draft.timeoutEnabled, (v) => (draft.timeoutEnabled = v)} />
         {#if draft.timeoutEnabled}
-          {@const oldFw = olderThan(dev?.version, [5, 6, 0])}
+          {@const oldFw = lacks(dev, [5, 6, 0], 0x1300, 14)}
           <div class="two">
             <Field label="Timeout" type="number" unit="ms" bind:value={() => draft.timeout ?? 0, (v) => (draft.timeout = toNum(v))} />
             <Field label="Then the value is" type="number" step="any" disabled={oldFw} bind:value={() => draft.timeoutValue ?? 0, (v) => (draft.timeoutValue = toNum(v))}
-              hint={oldFw ? `Reads 0: ${dev?.name} needs firmware 5.6 for another value.` : 'Used while the frame is missing.'} />
+              hint={oldFw ? `Reads 0: ${dev?.name} 's firmware has no other value.` : 'Used while the frame is missing.'} />
           </div>
         {/if}
       {/if}

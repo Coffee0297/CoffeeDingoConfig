@@ -6,7 +6,7 @@
   import { Page, PageHeader, Banner, Button, Card, FwBadge, Select, Checkbox, Stepper, Chip } from '../../ui/index.js'
   import { href } from '../../router.svelte.js'
   import { live, api, toast, project, isCanboard } from '../../lib/live.svelte.js'
-  import { olderThan, parseVersion } from '../hardware/parts/util.js'
+  import { olderThan, parseVersion, lacks } from '../hardware/parts/util.js'
   import { remoteItems } from '../../lib/remote.js'
   import SignalRule from './parts/SignalRule.svelte'
   import { decodeRule, compileRule, ruleSet } from './parts/signalRule.js'
@@ -39,7 +39,7 @@
 
   const mods = $derived(live.devices.filter((d) => /pdm|canboard/i.test(d.type ?? '')))
   const known = $derived(mods.filter((d) => parseVersion(d.version)))
-  const capable = $derived(mods.filter((d) => !olderThan(d.version, [5, 6, 0])))
+  const capable = $derived(mods.filter((d) => !lacks(d, [5, 6, 0], 0x1E00)))
   const ready = $derived(capable.length > 0)
   const oldText = $derived([...new Set(known.filter((d) => olderThan(d.version, [5, 6, 0])).map((d) => d.version.replace(/^v/, '')))].join(', '))
   const stateIdOf = (d) => d.baseId + (isCanboard(d) ? 14 : 30)

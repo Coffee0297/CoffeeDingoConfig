@@ -10,7 +10,7 @@
   import CarMap from '../car/parts/CarMap.svelte'
   import { layout } from '../car/parts/layout.svelte.js'
   import { fwText } from '../hardware/parts/ids.js'
-  import { olderThan } from '../hardware/parts/util.js'
+  import { lacks, isUpstream } from '../hardware/parts/util.js'
 
   let { query } = $props()
 
@@ -94,7 +94,7 @@
           <div class="list" role="list" aria-label="Modules">
             <div class="lh muted" aria-hidden="true"><span></span><span>Module</span><span>Name</span><span>Where</span><span>Identify</span></div>
             {#each mods as d (d.guid)}
-              {@const st = moduleState(d)} {@const oldFw = olderThan(d.version, [5, 6, 0])}
+              {@const st = moduleState(d)} {@const oldFw = lacks(d, [5, 6, 0])}
               <div class="mrow" role="listitem" data-testid={'first-' + d.name}>
                 <StateDot tone={st.key} shape={st.shape} label={st.word} />
                 <span class="ty"><strong>{d.type}</strong><span class="mono muted">{hex(d.baseId)} · {fwText(d)}</span></span>
@@ -105,7 +105,7 @@
                   {#if nameErr[d.guid]}<span class="err" role="alert">■ {nameErr[d.guid]}</span>{/if}
                 </label>
                 <span class={placed[d.guid] ? '' : 'muted'}>{placed[d.guid] ? 'placed ✓' : 'not placed'}</span>
-                <Button size="sm" disabled={oldFw || !d.connected || !live.connected} title={oldFw ? `Needs firmware 5.6: ${d.name} runs ${fwText(d)}` : 'Blink its LEDs for 10 s'} onclick={() => blinkModule(d)} aria-label={`Blink the LED of ${d.name}`}>Blink LED</Button>
+                <Button size="sm" disabled={oldFw || !d.connected || !live.connected} title={oldFw ? (isUpstream(d) ? `${d.name} runs upstream dingoFW, which has no identify command` : `Needs firmware 5.6: ${d.name} runs ${fwText(d)}`) : 'Blink its LEDs for 10 s'} onclick={() => blinkModule(d)} aria-label={`Blink the LED of ${d.name}`}>Blink LED</Button>
               </div>
             {/each}
           </div>

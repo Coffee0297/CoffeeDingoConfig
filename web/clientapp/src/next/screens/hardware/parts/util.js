@@ -7,12 +7,40 @@ export function parseVersion(v) {
   const t = [+m[1], +m[2], +m[3]]
   return t[0] === 0 && t[1] === 0 && t[2] === 0 ? null : t
 }
-/** true when version v is known and older than [a,b,c]. */
+/** true when version v is known and older than [a,b,c]. Upstream dingoFW (v0.x) is another line, never "older":
+ *  gate its features with lacks() / has() instead. */
 export function olderThan(v, min) {
   const p = parseVersion(v)
-  if (!p) return false
+  if (!p || p[0] === 0) return false
   for (let i = 0; i < 3; i++) { if (p[i] !== min[i]) return p[i] < min[i] }
   return false
+}
+
+/** The module runs upstream dingoFW (version 0.x) rather than the fork (5.x). */
+export const isUpstream = (dev) => dev?.family === 'upstream'
+
+// dev.paramRuns: the upstream module's params as runs [firstIndex, indexCount, sub, sub, …] (null until a Read).
+function* paramsOf(dev) {
+  for (const r of dev?.paramRuns ?? []) for (let k = 0; k < r[1]; k++) for (const s of r.slice(2)) yield [r[0] + k, s]
+}
+/** Does the module have param (index, sub)? Fork: true (gate fork features by version). Upstream: by the list it
+ *  returned on Read; true while that is unknown (Apply waits for a Read anyway). */
+export function has(dev, index, sub = 0) {
+  if (!isUpstream(dev) || !dev.paramRuns) return true
+  for (const [i, s] of paramsOf(dev)) if (i === index && s === sub) return true
+  return false
+}
+/** Does the module have any param of the block at base..base+0xFF (e.g. 0x1C00 math)? Same rules as has(). */
+export function hasBlock(dev, base) {
+  if (!isUpstream(dev) || !dev.paramRuns) return true
+  return dev.paramRuns.some((r) => r[0] + r[1] > base && r[0] < base + 0x100)
+}
+/** A fork feature from firmware `min`, at param block `base` (or the single param base:sub): is it missing on this
+ *  module? Fork: by version. Upstream: by its param list, missing until a Read shows it (no base = a fork-only
+ *  command such as Lua or identify: always missing). */
+export function lacks(dev, min, base, sub) {
+  if (isUpstream(dev)) return base == null || !dev.paramRuns || !(sub == null ? hasBlock(dev, base) : has(dev, base, sub))
+  return olderThan(dev?.version, min)
 }
 
 /** The /functions array that holds a given function kind (PDM calls digital inputs `inputs`, CANBoard `digitalIn`). */

@@ -112,6 +112,9 @@ export function createSim(model, snapshot) {
         const rise = active && !s.la, fall = !active && s.la
         s.la = active
         const pre = +r.preset || 0
+        // upstream dingoFW: a reset input stops the timer; mode 3 = one pulse, further edges ignored while it runs
+        if (truthy(val(r.resetInput))) { s.timing = false; vals[out] = false; s.left = 0; continue }
+        if (Number(r.mode) === 3) { if (rise && !s.timing) { s.timing = true; s.t0 = t } if (s.timing && t - s.t0 >= pre) s.timing = false; vals[out] = !!s.timing; s.left = s.timing ? Math.max(0, pre - (t - s.t0)) : 0; continue }
         if (Number(r.mode) === 0) { if (rise) { s.timing = true; s.t0 = t } if (!active) s.timing = false; vals[out] = !!s.timing && t - s.t0 >= pre }
         else if (Number(r.mode) === 1) { if (fall) { s.timing = true; s.t0 = t } if (active) s.timing = false; if (s.timing && t - s.t0 >= pre) s.timing = false; vals[out] = active || !!s.timing }
         else { if (rise) { s.timing = true; s.t0 = t } if (s.timing && t - s.t0 >= pre) s.timing = false; vals[out] = !!s.timing }

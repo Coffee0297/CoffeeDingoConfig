@@ -5,5 +5,6 @@ public enum TimerMode
 {
     OnDelay,    // TON: output on after the input has been active for the preset
     OffDelay,   // TOF: output follows the input on, stays on for the preset after it drops
-    Pulse       // TP : one output pulse of the preset length per activation
+    Pulse,      // TP : one output pulse of the preset length per activation (upstream: PulseRetrig, an edge restarts it)
+    PulseOneShot // upstream dingoFW only: one pulse, further edges ignored until it ends
 }

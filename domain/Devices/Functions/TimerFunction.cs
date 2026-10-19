@@ -24,9 +24,20 @@ public class TimerFunction : IDeviceFunction
     // silently NAKed by the device after the UI has already reported "saved".
     [JsonPropertyName("preset")] public int Preset { get => field; set => field = Math.Clamp(value, 0, 3600000); } = 1000;
 
+    // Upstream dingoFW's timer (0x1A00): a reset input instead of the edge, modes 0..3, time 0 … 600 s in Preset.
+    [JsonIgnore] public const int UpstreamBaseIndex = 0x1A00;
+    [JsonIgnore] public const int UpstreamMaxMs = 600000;
+    [JsonPropertyName("resetInput")] public int ResetInput { get; set; }
+
     [JsonIgnore][Plotable(displayName:"State")] public bool Value {get; set;}
+    // upstream status Msg 27-29: running, elapsed (ms, 10 ms steps)
+    [JsonIgnore] public bool Running { get; set; }
+    [JsonIgnore][Plotable(displayName:"Elapsed", unit:"ms")] public double ElapsedMs { get; set; }
 
     [JsonIgnore] public List<DeviceParameter> Params { get; }
+    [JsonIgnore] public List<DeviceParameter> UpstreamParams { get; }
+
+    public static int BaseFor(string family) => family == FwFamily.Upstream ? UpstreamBaseIndex : BaseIndex;
 
     [JsonConstructor]
     public TimerFunction(int number, string name)
@@ -34,6 +45,20 @@ public class TimerFunction : IDeviceFunction
         Number = number;
         Name = name;
         Params = InitParams();
+        var idx = UpstreamBaseIndex + (number - 1);
+        UpstreamParams =
+        [
+            new DeviceParameter { ParentName = Name, Name = $"timer[{Number}].enabled", Index = idx, SubIndex = 0,
+                GetValue = () => Enabled, SetValue = val => Enabled = (bool)val, ValueType = typeof(bool), DefaultValue = false },
+            new DeviceParameter { ParentName = Name, Name = $"timer[{Number}].input", Index = idx, SubIndex = 1,
+                GetValue = () => Input, SetValue = val => Input = (int)val, ValueType = typeof(int), DefaultValue = 0 },
+            new DeviceParameter { ParentName = Name, Name = $"timer[{Number}].resetInput", Index = idx, SubIndex = 2,
+                GetValue = () => ResetInput, SetValue = val => ResetInput = (int)val, ValueType = typeof(int), DefaultValue = 0 },
+            new DeviceParameter { ParentName = Name, Name = $"timer[{Number}].mode", Index = idx, SubIndex = 3,
+                GetValue = () => Mode, SetValue = val => Mode = (TimerMode)val, ValueType = typeof(TimerMode), DefaultValue = TimerMode.OnDelay },
+            new DeviceParameter { ParentName = Name, Name = $"timer[{Number}].preset", Index = idx, SubIndex = 4,
+                GetValue = () => Preset, SetValue = val => Preset = (int)val, ValueType = typeof(int), DefaultValue = 1000 },
+        ];
     }
 
     private List<DeviceParameter> InitParams()

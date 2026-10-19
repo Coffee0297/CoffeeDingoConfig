@@ -451,10 +451,15 @@ public class DeviceManager(ILogger<DeviceManager> logger, ILoggerFactory loggerF
         // firmware the app sends only the oldest firmware's params: a write then wiped the newer settings (math
         // blocks, CAN messages, ignition…). Learn the version first; without it, do not write.
         if (!await EnsureVersionAsync(d)) { logger.LogWarning("{Name}: firmware version unknown, not writing (it would reset its newer settings)", d.Name); return false; }
+        // Upstream: the WriteAll must hold exactly the module's params, so learn them (Read) first.
+        if (!ParamsKnown(d)) { logger.LogWarning("{Name}: upstream firmware, its param list is not read yet: not writing", d.Name); return false; }
         return await Confirmed(d, domain.Enums.MessageCommand.WriteAllComplete, () => all ? WriteAllDeviceConfig(deviceId) : WriteDeviceConfig(deviceId), 30000);
     }
 
-    public static bool VersionKnown(IDevice d) => d is IDeviceConfigurable c && domain.Common.Firmware.Of(c.Version).Major > 0;
+    public static bool VersionKnown(IDevice d) => d is IDeviceConfigurable { VersionReceived: true };
+
+    /// <summary>Upstream firmware: Apply needs the module's own param list (from a Read this session). Fork: always.</summary>
+    public static bool ParamsKnown(IDevice d) => d is not IDeviceConfigurable c || c.Family != domain.Common.FwFamily.Upstream || c.ParamSet.FromModule;
 
     /// <summary>Ask for the firmware version unless it is known, and wait up to <paramref name="ms"/> for it.</summary>
     public async Task<bool> EnsureVersionAsync(IDevice d, int ms = 4000)
@@ -515,7 +520,7 @@ public class DeviceManager(ILogger<DeviceManager> logger, ILoggerFactory loggerF
         if (ui.CheckAfterWake) { ui.CheckAfterWake = false; CheckConfig(device.Guid); }
         if (device is not IDeviceConfigurable c) return;
         // version unknown (no Read since the project opened): ask once, so firmware 5.6 features show up
-        if (domain.Common.Firmware.Of(c.Version).Major == 0)
+        if (!c.VersionReceived)
         {
             if (DateTime.UtcNow - ui.VersionAskedAt > TimeSpan.FromSeconds(30)) { ui.VersionAskedAt = DateTime.UtcNow; RequestVersion(device.Guid); }
             return;
@@ -712,8 +717,8 @@ public class DeviceManager(ILogger<DeviceManager> logger, ILoggerFactory loggerF
 
     /// <summary>The (index, sub) of every device param of one function slot, as WriteFunctionParams writes them.</summary>
     public IReadOnlyList<(int Index, int SubIndex)> FunctionParamKeys(Guid deviceId, int index) =>
-        (GetDevice(deviceId) as IDeviceConfigurable)?.Params.Where(p => p.Index == index && !p.LocalOnly)
-            .Select(p => (p.Index, p.SubIndex)).ToList() ?? [];
+        (GetDevice(deviceId) as IDeviceConfigurable) is { } c ? c.Params.Where(p => p.Index == index && !p.LocalOnly && domain.Common.FwFamily.Sends(c, p))
+            .Select(p => (p.Index, p.SubIndex)).ToList() : [];
 
     private void StartMessageTimer((int, int, int) key, DeviceCanFrame frame)
     {
@@ -846,6 +851,7 @@ public class DeviceManager(ILogger<DeviceManager> logger, ILoggerFactory loggerF
         foreach (var p in ps)
         {
             if (p.LocalOnly) continue;   // label-only setting, nothing to send over CAN
+            if (device is IDeviceConfigurable dc && !domain.Common.FwFamily.Sends(dc, p)) continue;   // upstream: not on this module
             if (GetDevice(deviceId) == null) return n;   // device removed mid-write
             var waits = 0;
             while (_requestQueue.Count >= window && waits++ < 400)
@@ -893,7 +899,7 @@ public class DeviceManager(ILogger<DeviceManager> logger, ILoggerFactory loggerF
         var device = GetDevice(deviceId);
         if (device is not IDeviceConfigurable cfg) return;
 
-        var paramList = cfg.Params.Where(p => !p.LocalOnly).ToList();
+        var paramList = cfg.Params.Where(p => !p.LocalOnly && domain.Common.FwFamily.Sends(cfg, p)).ToList();
         var ui = GetDeviceUiState(deviceId);
         ui.NeedsRead = false;
         ui.Reading = true;
@@ -941,7 +947,7 @@ public class DeviceManager(ILogger<DeviceManager> logger, ILoggerFactory loggerF
         var device = GetDevice(deviceId);
         if (device is not IDeviceConfigurable cfg) return;
 
-        var ps = cfg.Params.Where(p => p.Index == index && !p.LocalOnly).ToList();
+        var ps = cfg.Params.Where(p => p.Index == index && !p.LocalOnly && domain.Common.FwFamily.Sends(cfg, p)).ToList();
         if (ps.Count == 0) return;
 
         Task.Run(() =>
@@ -984,7 +990,7 @@ public class DeviceManager(ILogger<DeviceManager> logger, ILoggerFactory loggerF
         if (device is not IDeviceConfigurable cfg) return;
 
         var paramList = cfg.Params
-            .Where(p => !p.LocalOnly && (!modifiedOnly || p.IsModified))
+            .Where(p => !p.LocalOnly && (!modifiedOnly || p.IsModified) && domain.Common.FwFamily.Sends(cfg, p))
             .ToList();
 
         Task.Run(() =>

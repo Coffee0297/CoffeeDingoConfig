@@ -41,7 +41,9 @@ export function sentenceFor(model, n) {
       const s = srcTok(model, r.input, 'input')
       const on = r.edge === 1 ? 'turns off' : 'turns on', off = r.edge === 1 ? 'turns on' : 'turns off'
       if (r.mode === 1) return [self(n), T(`follows`), s, T(`and stays on for`), val(secs(r.preset), 'preset'), T(`after it ${off}.`)]
-      if (r.mode === 2) return [self(n), T('gives one'), val(secs(r.preset), 'preset'), T('pulse each time'), s, T(on + '.')]
+      const reset = r.resetInput ? [T(', and stops when'), srcTok(model, r.resetInput, 'resetInput'), T('turns on.')] : [T('.')]
+      if (r.mode === 3) return [self(n), T('gives one'), val(secs(r.preset), 'preset'), T('pulse when'), s, T(on + ', ignoring it until the pulse ends'), ...reset]
+      if (r.mode === 2) return [self(n), T('gives one'), val(secs(r.preset), 'preset'), T('pulse each time'), s, T(on), ...reset]
       return [self(n), T('turns on'), val(secs(r.preset), 'preset'), T(`after`), s, T(on + ', and off with it.')]
     }
     case 'flasher':
