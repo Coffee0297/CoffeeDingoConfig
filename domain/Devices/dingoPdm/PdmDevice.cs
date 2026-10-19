@@ -1051,6 +1051,16 @@ public class PdmDevice : IDeviceConfigurable
                 VarMap.Add(new DeviceVariable { GetName = () => Outputs[num].Name, OwnerKind = "output", OwnerNumber = num + 1,
                     PropertyName = "Wire Load", DataType = "float", VariableIndex = index++, SingleVariable = false });
             }
+        // feat/digital-input-pwm (0x1200 sub 5): per DI duty %, Hz. A sub, not a block: every PDM has the DI block.
+        if (ParamSet.Contains(DigitalInput.BaseIndex, 5))
+            for (var i = 0; i < NumDigitalInputs; i++)
+            {
+                var num = i;
+                VarMap.Add(new DeviceVariable { GetName = () => Inputs[num].Name, OwnerKind = "input", OwnerNumber = num + 1,
+                    PropertyName = "PWM Duty", DataType = "float", VariableIndex = index++, SingleVariable = false });
+                VarMap.Add(new DeviceVariable { GetName = () => Inputs[num].Name, OwnerKind = "input", OwnerNumber = num + 1,
+                    PropertyName = "PWM Frequency", DataType = "float", VariableIndex = index++, SingleVariable = false });
+            }
     }
 
     private void InitParams()

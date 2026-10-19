@@ -427,4 +427,33 @@ public class UpstreamFamilyTests
         Assert.DoesNotContain(f.Params, p => p.Name == "device.retryAllInput");   // fork 0x0000:12 is the wake mask
         Assert.False(f.HasRetryAll);
     }
+    // A full ReadAll of these (index, sub) keys (values 0) from an upstream module: the app learns them as its list.
+    internal static void LearnParams(PdmDevice d, IEnumerable<(int Index, int Sub)> keys)
+    {
+        var q = Q(); var crc = new CumulativeCrc32(); var n = 0;
+        d.Read(0x680, [10, 0, 0, 0, 0, 0, 0, 0], ref q, []);
+        foreach (var (i, s) in keys) { crc.Update([0, 0, 0, 0]); n++; d.Read(0x680, [11, (byte)i, (byte)(i >> 8), (byte)s, 0, 0, 0, 0], ref q, []); }
+        d.Read(0x680, [12, (byte)n, (byte)(n >> 8), 0, .. BitConverter.GetBytes(crc.Final)], ref q, []);
+    }
+
+    // feat/digital-input-pwm: DI subs 5-7, then per DI "PWM Duty" / "PWM Frequency" after the timers
+    // (nm digital-input-pwm dingopdm_v7.elf: pVarMap 0x394 bytes = 229). Without sub 5 the stock 225 stay.
+    [Fact]
+    public void Pdm_WithDiPwm_AppendsDutyAndFreqAfterTimers()
+    {
+        var d = UpstreamPdm();
+        LearnParams(d, [.. Block(0x0000, 1, 9), .. Block(0x1200, 2, 8), .. Block(0x1A00, 8, 5)]);
+        Assert.Equal(229, d.VarMap.Count);
+        Assert.All(d.VarMap.Skip(217).Take(8), v => Assert.Equal("timer", v.OwnerKind));
+        Assert.Equal([("input", 1, "PWM Duty"), ("input", 1, "PWM Frequency"), ("input", 2, "PWM Duty"), ("input", 2, "PWM Frequency")],
+            d.VarMap.Skip(225).Select(v => (v.OwnerKind, v.OwnerNumber, v.PropertyName)));
+        Assert.Equal(Enumerable.Range(0, 229), d.VarMap.Select(v => v.VariableIndex));
+        Assert.Equal(["input[1].pwm", "input[1].pwmFreq", "input[1].pwmMinPulseUs"],
+            d.Params.Where(p => p.Index == 0x1200 && p.SubIndex >= 5 && FwFamily.Has(d, p)).OrderBy(p => p.SubIndex).Select(p => p.Name));
+
+        var s = UpstreamPdm();
+        LearnParams(s, [.. Block(0x0000, 1, 9), .. Block(0x1200, 2, 5), .. Block(0x1A00, 8, 5)]);
+        Assert.Equal(225, s.VarMap.Count);
+        Assert.DoesNotContain(s.Params, p => p.Index == 0x1200 && p.SubIndex == 5 && FwFamily.Has(s, p));
+    }
 }
