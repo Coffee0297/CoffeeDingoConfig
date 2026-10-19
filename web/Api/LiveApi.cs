@@ -2108,6 +2108,9 @@ public static class LiveApi
     {
         if (!adapters.GetStatus().isConnected)
             return Results.Text("Not connected to a CAN adapter — connect first.", "text/plain", null, 400);
+        // a replayed log has frames but no module listening: nothing sent can be answered
+        if (IsSim(adapters))
+            return Results.Text($"Sim adapter: a log is playing back, there is no module to {verb}. Connect to the car first.", "text/plain", null, 400);
         var dev = dm.GetDevice(g);
         if (dev == null) return Results.NotFound();
         if (!await SeenAsync(dev, waitAlways: true))
@@ -2271,7 +2274,8 @@ public static class LiveApi
 
     private static async Task<bool> IsLiveModuleAsync(Guid g, DeviceManager dm, ICommsAdapterManager adapters)
     {
-        if (!adapters.GetStatus().isConnected) return false;
+        // under the Sim adapter a module "seen" in a replayed log cannot receive: edits stay in the project
+        if (!adapters.GetStatus().isConnected || IsSim(adapters)) return false;
         var dev = dm.GetDevice(g);
         return dev != null && await SeenAsync(dev, waitAlways: false);
     }

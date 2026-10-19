@@ -7,6 +7,7 @@
   import { useEcu } from './parts/ecu.svelte.js'
   import { isTripped, isOn, num, worstCaseA } from '../car/parts/summary.js'
   import LiveTabs from './parts/LiveTabs.svelte'
+  import RecordPlay from './parts/RecordPlay.svelte'
   import Tile from './parts/Tile.svelte'
   import { wireLoad, wireLoadText } from '../hardware/parts/wireload.js'
   import ForceCan from './parts/ForceCan.svelte'
@@ -144,6 +145,7 @@
       <div class="sel"><Select items={moduleItems} bind:value={moduleKey} label="Module" hideLabel placeholder="All modules" /></div>
     {/snippet}
   </PageHeader>
+  <RecordPlay />
 
   {#if !all.length}
     <Empty title="No modules in this project" text="Add or find your modules first, then their live values show up here.">
