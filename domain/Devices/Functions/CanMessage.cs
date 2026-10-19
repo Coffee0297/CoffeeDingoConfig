@@ -29,8 +29,17 @@ public class CanMessage : IDeviceFunction
     [JsonPropertyName("mode")] public CanMessageMode Mode { get; set; } = CanMessageMode.Repeat;
     [JsonPropertyName("intervalMs")] public int IntervalMs { get => field; set => field = Math.Clamp(value, 10, 60000); } = 100;
 
+    // Upstream dingoFW feat/can-msg-counter-checksum (subs 15-17): 0 none, 2 XOR, 3 sum, 4 CRC8 SAE J1850, 5 CRC8 AUTOSAR
+    // (1 acts as none) in byte ChecksumByte; a 4-bit rolling counter in the low nibble of CounterByte (0xFF = none).
+    // A byte at or past the length is ignored by the firmware; the same byte for both: the checksum wins.
+    [JsonPropertyName("checksum")] public int Checksum { get => field; set => field = Math.Clamp(value, 0, 5); }
+    [JsonPropertyName("checksumByte")] public int ChecksumByte { get => field; set => field = Math.Clamp(value, 0, 7); } = 7;
+    [JsonPropertyName("counterByte")] public int CounterByte { get => field; set => field = Math.Clamp(value, 0, 255); } = 0xFF;
+
     [JsonIgnore][Plotable(displayName: "Sending")] public bool Value { get; set; }
     [JsonIgnore] public List<DeviceParameter> Params { get; }
+    /// <summary>Upstream: subs 0-14, then checksum / checksum byte / counter byte; a module without them drops them by its list.</summary>
+    [JsonIgnore] public List<DeviceParameter> UpstreamParams { get; }
 
     [JsonConstructor]
     public CanMessage(int number, string name)
@@ -38,6 +47,15 @@ public class CanMessage : IDeviceFunction
         Number = number;
         Name = name;
         Params = InitParams();
+        var i = BaseIndex + (Number - 1);
+        var n = $"canMsg[{Number}]";
+        UpstreamParams =
+        [
+            .. Params,
+            new() { ParentName = Name, Name = $"{n}.checksum", Index = i, SubIndex = 15, GetValue = () => Checksum, SetValue = x => Checksum = (int)x, ValueType = typeof(int), DefaultValue = 0 },
+            new() { ParentName = Name, Name = $"{n}.checksumByte", Index = i, SubIndex = 16, GetValue = () => ChecksumByte, SetValue = x => ChecksumByte = (int)x, ValueType = typeof(int), DefaultValue = 7 },
+            new() { ParentName = Name, Name = $"{n}.counterByte", Index = i, SubIndex = 17, GetValue = () => CounterByte, SetValue = x => CounterByte = (int)x, ValueType = typeof(int), DefaultValue = 0xFF },
+        ];
     }
 
     private List<DeviceParameter> InitParams()

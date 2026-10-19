@@ -823,7 +823,7 @@ public class CanboardDevice : IDeviceConfigurable
         foreach (var flasher in Flashers) allParams.AddRange(flasher.Params);
         foreach (var timer in Timers) allParams.AddRange(Family == FwFamily.Upstream ? timer.UpstreamParams : timer.Params);
         foreach (var m in Maths) allParams.AddRange(m.Params);
-        foreach (var m in CanMessages) allParams.AddRange(m.Params);
+        foreach (var m in CanMessages) allParams.AddRange(Family == FwFamily.Upstream ? m.UpstreamParams : m.Params);
         allParams.AddRange(Ignition.Params);
         allParams.AddRange(ComfortBlink.Params);
         foreach (var canOutput in CanOutputs) allParams.AddRange(Family == FwFamily.Upstream ? canOutput.UpstreamParams : canOutput.Params);

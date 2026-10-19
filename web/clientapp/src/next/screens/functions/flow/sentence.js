@@ -1,6 +1,7 @@
 // Plain-language rendering of the same blocks the canvas shows. Each sentence is a list of segments:
 // { t: 'text' } or a token { tok: 'src' | 'val' | 'self' | 'missing', label, node?, field? }.
 // Tokens are buttons in the view; a click opens that block in the inspector.
+import { msgChecksumWords } from './canmsgcheck.js'
 import { OP_WORDS, isRelational, secs, hexId, TIMER_MODES } from './model.js'
 import { COUT_KINDS } from './canoutkind.js'
 
@@ -87,9 +88,10 @@ export function sentenceFor(model, n) {
     case 'canmsg': {
       const bytes = (r.data ?? []).slice(0, r.dlc ?? 8).map((x) => Number(x).toString(16).toUpperCase().padStart(2, '0')).join(' ')
       const id = val(hexId(r.id) + (r.ide ? ' ext' : ''), 'id')
+      const cs = msgChecksumWords(r), tail = cs ? [T(','), val(cs, 'checksum')] : []
       return r.mode === 1
-        ? [T('Each time'), srcTok(model, r.input, 'input'), T('turns on, send'), val(bytes || '(no data)', 'data'), T('on CAN ID'), id, T('once.')]
-        : [T('While'), srcTok(model, r.input, 'input'), T('is on, send'), val(bytes || '(no data)', 'data'), T('on CAN ID'), id, T('every'), val((r.intervalMs ?? 0) + ' ms', 'intervalMs'), T('.')]
+        ? [T('Each time'), srcTok(model, r.input, 'input'), T('turns on, send'), val(bytes || '(no data)', 'data'), T('on CAN ID'), id, T('once'), ...tail, T('.')]
+        : [T('While'), srcTok(model, r.input, 'input'), T('is on, send'), val(bytes || '(no data)', 'data'), T('on CAN ID'), id, T('every'), val((r.intervalMs ?? 0) + ' ms', 'intervalMs'), ...tail, T('.')]
     }
     case 'output': case 'digitaloutput': {
       const src = n.kind === 'output' ? r.inputVal : r.input

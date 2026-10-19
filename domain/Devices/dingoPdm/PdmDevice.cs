@@ -1165,7 +1165,7 @@ public class PdmDevice : IDeviceConfigurable
         if (Family == FwFamily.Fork) foreach (var table in Tables) allParams.AddRange(table.Params);   // upstream 0x1A00 is the timer
         foreach (var timer in Timers) allParams.AddRange(Family == FwFamily.Upstream ? timer.UpstreamParams : timer.Params);
         foreach (var m in Maths) allParams.AddRange(m.Params);
-        foreach (var m in CanMessages) allParams.AddRange(m.Params);
+        foreach (var m in CanMessages) allParams.AddRange(Family == FwFamily.Upstream ? m.UpstreamParams : m.Params);
         allParams.AddRange(Ignition.Params);
         allParams.AddRange(ComfortBlink.Params);
         allParams.AddRange(StarterDisable.Params);

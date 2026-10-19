@@ -9,6 +9,7 @@
   import { href } from '../../../router.svelte.js'
   import { FAM_COLOR, FAM_NAME, OPS, OP_WORDS, JOIN, TIMER_MODES, EDGES, MATH_OPS, isRelational, hystBand, sourceOptions, canWire, hexId, parseId } from './model.js'
   import { sentenceFor } from './sentence.js'
+  import { MSG_CHECKSUMS, NO_COUNTER, hasMsgChecksum, msgChecksumWarnings } from './canmsgcheck.js'
   import { fmt } from './livevals.js'
   import { lacks, isUpstream, has } from '../../hardware/parts/util.js'
   import { remoteItems, isRemoteKey } from '../../../lib/remote.js'
@@ -32,7 +33,7 @@
     canoutput: ['name', 'input', 'id', 'ide', 'startBit', 'bitLength', 'byteOrder', 'factor', 'offset', 'signed', 'interval', 'kind'],
     caninput: ['name', 'id', 'ide', 'startBit', 'bitLength', 'factor', 'offset', 'operator', 'operand', 'mode', 'timeoutEnabled', 'timeout', 'timeoutValue', 'timeoutUseValue'],
     math: ['name', 'inputA', 'inputB', 'op', 'constB', 'factor', 'offset'],
-    canmsg: ['name', 'input', 'id', 'ide', 'dlc', 'data', 'mode', 'intervalMs'],
+    canmsg: ['name', 'input', 'id', 'ide', 'dlc', 'data', 'mode', 'intervalMs', 'checksum', 'checksumByte', 'counterByte'],
     comfortblink: ['name', 'leftInput', 'rightInput', 'clockInput', 'tapMs', 'blinks'],
     input: ['name', 'invert', 'mode', 'debounceTime'],
     digitaloutput: ['name', 'input'],
@@ -299,6 +300,16 @@
       {@render seg('Send', [{ value: '0', label: 'Repeat while on' }, { value: '1', label: 'Once each time' }], String(draft.mode ?? 0), (v) => (draft.mode = Number(v)), false)}
       {#if (draft.mode ?? 0) === 0}<Field label="Every" type="number" min="10" max="60000" unit="ms" bind:value={() => draft.intervalMs ?? 100, (v) => (draft.intervalMs = toNum(v))} />{/if}
       <p class="hint">Bytes in hex. The frame goes out on the module's bus exactly as typed, for example a command another ECU listens for.</p>
+      {#if hasMsgChecksum(dev, node.n)}
+        <span class="sec">Counter and checksum</span>
+        <div class="two">
+          <Select label="Rolling counter in byte" items={[{ value: String(NO_COUNTER), label: 'None' }, ...Array.from({ length: 8 }, (_, i) => ({ value: String(i), label: 'Byte ' + i }))]} bind:value={() => String(draft.counterByte ?? NO_COUNTER), (v) => (draft.counterByte = Number(v))} />
+          <Select label="Checksum" items={MSG_CHECKSUMS.map(([v, l]) => ({ value: String(v), label: l }))} bind:value={() => String(draft.checksum === 1 ? 0 : draft.checksum ?? 0), (v) => (draft.checksum = Number(v))} />
+        </div>
+        {#if (draft.checksum ?? 0) >= 2}<Select label="Checksum in byte" items={Array.from({ length: 8 }, (_, i) => ({ value: String(i), label: 'Byte ' + i }))} bind:value={() => String(draft.checksumByte ?? 7), (v) => (draft.checksumByte = Number(v))} />{/if}
+        {#each msgChecksumWarnings(draft) as w (w)}<p class="hint bad" role="status">▲ {w}</p>{/each}
+        <p class="hint">The counter counts 0–15 in the low half of its byte, one step per frame sent (the high half keeps the byte you typed). The checksum covers every other byte of the frame, the counter included.</p>
+      {/if}
     {:else if node.kind === 'comfortblink'}
       <span class="sec">Settings</span>
       <div class="two">
