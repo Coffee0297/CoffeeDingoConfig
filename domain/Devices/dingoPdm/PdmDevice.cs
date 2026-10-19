@@ -1061,6 +1061,14 @@ public class PdmDevice : IDeviceConfigurable
                 VarMap.Add(new DeviceVariable { GetName = () => Inputs[num].Name, OwnerKind = "input", OwnerNumber = num + 1,
                     PropertyName = "PWM Frequency", DataType = "float", VariableIndex = index++, SingleVariable = false });
             }
+        // feat/math-block: one value per math block
+        if (FwFamily.HasBlock(this, MathFunction.BaseIndex, false))
+            for (var i = 0; i < NumMath; i++)
+            {
+                var num = i;
+                VarMap.Add(new DeviceVariable { GetName = () => Maths[num].Name, OwnerKind = "math", OwnerNumber = num + 1,
+                    PropertyName = "Value", DataType = "float", VariableIndex = index++, SingleVariable = false });
+            }
     }
 
     private void InitParams()
