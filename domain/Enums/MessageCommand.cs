@@ -49,4 +49,7 @@ public enum MessageCommand
     SleepInfo = 50,         // [cmd] -> [cmd, wakeReason, wakeSource, wakesLo, wakesHi, countdown s (0xFF none), blockers, 0]
     OvlTime = 51,           // [cmd, idx] -> [cmd, idx, t0..t3] trip time, ms since power-on
     OvlNotice = 52,         // [cmd, idx] -> [cmd, idx, out (0-based), kind 1 warning / 2 open load, t0..t3]
+
+    // Upstream dingoFW feature branches
+    ResetCause = 55,        // [cmd] -> [cmd, RCC CSR >> 24 flags, 0...] why the module last reset (feat/reset-cause)
 }

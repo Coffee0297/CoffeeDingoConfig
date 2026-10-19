@@ -8,6 +8,7 @@
   import { href, go } from '../../router.svelte.js'
   import ModuleSettings from './parts/ModuleSettings.svelte'
   import { hexId, fwText } from './parts/ids.js'
+  import { isUpstream } from './parts/util.js'
   import { isTripped, isOn, fmt1, num, worstCaseA } from '../car/parts/summary.js'
 
   let { guid, tab } = $props()
@@ -27,6 +28,12 @@
     try { signals = await api.signals(guid); sigErr = '' } catch (e) { sigErr = e.message }
   }
   onMount(() => { pull(); const t = setInterval(pull, 1500); return () => clearInterval(t) })
+
+  // Why it last reset (upstream feat/reset-cause): asked each time the module comes on line while this page is open.
+  // Firmware without it does not answer, and the tile stays hidden.
+  let reset = $state(null)
+  const askReset = $derived(!!d?.connected && isUpstream(d))
+  $effect(() => { reset = null; if (askReset) api.resetCause(guid).then((r) => (reset = r)).catch(() => {}) })
 
   const byKind = (kind) => (signals ?? []).filter((s) => s.kind === kind).map((s, i) => ({ ...s, n: i + 1 }))
 
@@ -72,6 +79,10 @@
           <span class="nx-label">Max current</span><span class="v mono">{fmt1(worstCaseA([d]))} A</span><span class="sub muted">if every limit tripped at once</span></div>
       {/if}
       <div class="stat"><span class="nx-label">Temperature</span><span class="v mono">{d.connected && Number.isFinite(d.temp) ? Math.round(d.temp) + ' °C' : '–'}</span></div>
+      {#if reset}
+        <div class="stat" title={`Reset flags ${reset.names.join(' ') || 'none'} (0x${reset.flags.toString(16).toUpperCase().padStart(2, '0')})`} data-testid="last-reset">
+          <span class="nx-label">Last reset</span><span class="v">{reset.cause}</span><span class="sub muted">{reset.names.join(' · ') || 'no flags'}</span></div>
+      {/if}
       <div class="stat"><span class="nx-label">Reported state</span><span class="v">{d.state || (d.connected ? 'Running' : '–')}</span></div>
     </div>
 
