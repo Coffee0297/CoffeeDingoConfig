@@ -107,7 +107,7 @@ public class UpstreamFamilyTests
         Assert.Equal("device.muteTxInput", dev[7]);
         Assert.Equal("device.forceSleepInput", dev[8]);
         Assert.Equal(5, d.Params.Count(p => p.Index == 0x1A00));   // timer 1, not a table
-        Assert.DoesNotContain(d.Params, p => p.Index == 0x1B00);
+        Assert.DoesNotContain(d.Params, p => p.Index == 0x1B00 && p.Name.StartsWith("timer"));   // 0x1B00 = tables upstream
     }
 
     // A ReadAll from an upstream module: the app learns exactly its params, in order; a WriteAll then sends those (an

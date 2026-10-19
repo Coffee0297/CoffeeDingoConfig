@@ -62,6 +62,8 @@ timer, u16 in 10 ms) instead of the table outputs; CAN-input value frames use th
 With upstream feat/wire-load (output param sub 33) a PDM also sends Msg 30 at `base+32` while any output has a wire
 time constant: bytes 0-7 = wire load % of outputs 1-8 (u8, saturates at 255). That is the next module's `base+0` at
 0x20 spacing, so the app counts it in such a module's ID span.
+Upstream with lookup tables (params 0x1B00, feat/lookup-tables) adds Msg 30 (`base+32`): table 1-2 as float32 LE,
+sent while a table is enabled, so such a PDM spans `base+32` and no longer fits a 0x20 spacing.
 The upstream CANBoard has no DO duty frame and no timers; its other frames match the fork's.
 
 ---

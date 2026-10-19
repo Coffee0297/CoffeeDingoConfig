@@ -125,7 +125,7 @@ public static class FunctionMap
                 "counter" or "cnt"    => (p.Counters.FirstOrDefault(x => x.Number == number), Counter.BaseIndex + n),
                 "flasher" or "fl"     => (p.Flashers.FirstOrDefault(x => x.Number == number), Flasher.BaseIndex + n),
                 "timer" or "tmr"      => (p.Timers.FirstOrDefault(x => x.Number == number), TimerFunction.BaseFor(p.Family) + n),
-                "table" or "tbl"      => (p.Tables.FirstOrDefault(x => x.Number == number), LookupTable.BaseIndex + n),
+                "table" or "tbl"      => (p.Tables.FirstOrDefault(x => x.Number == number), LookupTable.BaseFor(p.Family) + n),
                 "math"                => (p.Maths.FirstOrDefault(x => x.Number == number), MathFunction.BaseIndex + n),
                 "canmsg"              => (p.CanMessages.FirstOrDefault(x => x.Number == number), CanMessage.BaseIndex + n),
                 "ignition"            => (p.Ignition, Ignition.BaseIndex),
@@ -950,7 +950,7 @@ public static class LiveApi
                     inputs = p.Inputs, canInputs = p.CanInputs, virtualInputs = p.VirtualInputs,
                     conditions = p.Conditions, counters = p.Counters, flashers = p.Flashers,
                     timers = Has(p, TimerFunction.BaseFor(p.Family), true) ? p.Timers : null,
-                    tables = p.Family == domain.Common.FwFamily.Fork ? p.Tables : null,
+                    tables = Has(p, LookupTable.BaseFor(p.Family)) ? p.Tables : null,
                     maths = Has(p, MathFunction.BaseIndex) ? p.Maths : null, canMessages = Has(p, CanMessage.BaseIndex) ? p.CanMessages : null,
                     ignition = p.Ignition,   // firmware 5.6
                     comfortBlinks = Has(p, ComfortBlink.BaseIndex) ? new[] { p.ComfortBlink } : null,   // 5.6.1 (one; an array for the flow builder)
