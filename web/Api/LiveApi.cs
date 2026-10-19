@@ -801,7 +801,6 @@ public static class LiveApi
             if (!Guid.TryParse(guid, out var g)) return Results.BadRequest();
             // PDM Profet outputs or CANBoard digital outputs — same command, same (1-based) index space.
             var dev = dm.GetDevice(g);
-            if (ForkOnly(dev, "output test") is { } fo) return fo;
             bool? enabled = dev switch
             {
                 PdmDevice p => p.Outputs.FirstOrDefault(x => x.Number == n)?.Enabled,
@@ -817,7 +816,18 @@ public static class LiveApi
                     ? $"output {n} is disabled — enable it and set its current limit first; the test runs under that protection"
                     : $"output {n} is disabled — enable it and Save first" });
             var hold = Math.Clamp(r.Hold, 1, 30);
-            dm.TestOutput(g, n, mode, Math.Clamp(r.Duty, 0, 100), Math.Clamp(r.Freq, 0, 400), hold);
+            if (dev is IDeviceConfigurable { Family: domain.Common.FwFamily.Upstream })
+            {
+                // Upstream: only feat/output-bench-test firmware has the command, so wait for its echo (none = no
+                // test); it needs a real frequency for PWM (0 = the output's own) and refuses what OutputTestRules lists.
+                var freq = r.Freq > 0 ? r.Freq : (dev as PdmDevice)?.Outputs.First(x => x.Number == n).Frequency ?? 0;
+                if (domain.Common.OutputTestRules.Refusals(dev, n, mode, freq) is { Count: > 0 } why)
+                    return Results.Json(new { ok = false, error = $"The module would refuse this test: {string.Join("; ", why)}." }, statusCode: 409);
+                var ok = await dm.TestOutputConfirmed(g, n, mode, Math.Clamp(r.Duty, 0, 100), Math.Clamp(freq, 0, 400), hold);
+                if (ok == null) return Results.Json(new { ok = false, error = "No answer from the module: its firmware has no output test command (upstream dingoFW without the bench test)." }, statusCode: 409);
+                if (ok == false) return Results.Json(new { ok = false, error = $"The module refused the test. It runs only on an output that is enabled on the module (Apply first), not tripped, not paired, while the module runs normally{(mode == 2 ? $", at {domain.Common.OutputTestRules.MinPwmHz}-{domain.Common.OutputTestRules.MaxPwmHz} Hz and up to 100 %" : "")}." }, statusCode: 409);
+            }
+            else dm.TestOutput(g, n, mode, Math.Clamp(r.Duty, 0, 100), Math.Clamp(r.Freq, 0, 400), hold);
             return Results.Ok(new { ok = true, output = n, mode = mode == 1 ? "on" : mode == 2 ? "pwm" : "off", holdSec = hold });
         });
 
@@ -1902,7 +1912,7 @@ public static class LiveApi
     // short-circuit with, or null when it's safe to proceed. Mirrors the /{action} guard so every
     // CAN-commit path fails loud and consistent instead of "succeeding" against an empty bus.
     // (Base-ID/rename are offline-safe and firmware/DFU runs over USB — neither uses this.)
-    // Fork-only commands (Lua, overload log, output test, identify): upstream dingoFW has none of them. A feature branch
+    // Fork-only commands (Lua, overload log, identify): upstream dingoFW has none of them. A feature branch
     // that ports one to upstream swaps this guard for a detection (FwFamily.HasBlock, or a probe of the command).
     private static IResult? ForkOnly(IDevice? d, string what) => d is IDeviceConfigurable { Family: domain.Common.FwFamily.Upstream }
         ? Results.Json(new { ok = false, error = $"This module runs upstream dingoFW, which has no {what}." }, statusCode: 409) : null;

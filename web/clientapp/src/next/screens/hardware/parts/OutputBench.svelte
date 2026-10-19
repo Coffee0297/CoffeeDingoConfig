@@ -1,7 +1,8 @@
 <script>
   // Bench test card: options while idle, live current while it runs, what happens if the link drops.
   import { Card, Button, Segmented, Stepper, LineChart, Banner, Chip } from '../../../ui/index.js'
-  let { bench, blocker = '', modName = 'the module', limit = 0, inrush = 0, inrushTime = 0 } = $props()
+  // pwm: the module can PWM-test this output (upstream CANBoard: on only); minFreq: its lowest test frequency
+  let { bench, blocker = '', modName = 'the module', limit = 0, inrush = 0, inrushTime = 0, pwm = true, minFreq = 15 } = $props()
   const b = $derived(bench.state)
   const active = $derived(b.phase === 'running' || b.phase === 'lost')
   let modeVal = $state('on')
@@ -35,11 +36,11 @@
     <Button size="lg" disabled>Stop now unavailable<span class="sub"> no link to {modName}</span></Button>
   {:else}
     <div class="opts" class:locked={active}>
-      <Segmented label="Test mode" items={[{ value: 'on', label: 'On, full power' }, { value: 'pwm', label: 'PWM, set duty' }]} bind:value={modeVal} onchange={(v) => (bench.state.mode = v)} />
+      <Segmented label="Test mode" items={[{ value: 'on', label: 'On, full power' }, ...(pwm ? [{ value: 'pwm', label: 'PWM, set duty' }] : [])]} bind:value={modeVal} onchange={(v) => (bench.state.mode = v)} />
       <Stepper label="Hold" bind:value={bench.state.hold} min={1} max={30} step={1} unit="s" data-testid="bench-hold" />
       {#if b.mode === 'pwm'}
         <Stepper label="Duty" bind:value={bench.state.duty} min={0} max={100} step={5} unit="%" data-testid="bench-duty" />
-        <Stepper label="Frequency" bind:value={bench.state.freq} min={15} max={400} step={5} unit="Hz" data-testid="bench-freq" />
+        <Stepper label="Frequency" bind:value={bench.state.freq} min={minFreq} max={400} step={5} unit="Hz" data-testid="bench-freq" />
       {/if}
     </div>
     <div class="go" data-testid="bench-ready">
@@ -55,7 +56,7 @@
       <li><strong>Link drops</strong> No more current readings. Stop now cannot reach the module.</li>
       <li><strong>{bench.holdS()}.0 s</strong> The module turns the output off by itself. Reconnect to confirm.</li>
     </ol>
-    <p class="muted small">The time limit lives in the module, so the output goes off even if the laptop, the cable or dingoConfig fails. A test runs only while connected to {modName}, needs firmware 5.5.107 or newer and an output that is turned on and saved.</p>
+    <p class="muted small">The time limit lives in the module, so the output goes off even if the laptop, the cable or dingoConfig fails. A test runs only while connected to {modName}, needs firmware with the output test (fork 5.5.107 or newer, or upstream dingoFW with the bench test) and an output that is turned on and saved.</p>
   </details>
 </Card>
 

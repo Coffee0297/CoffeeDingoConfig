@@ -394,6 +394,7 @@ public class DeviceManager(ILogger<DeviceManager> logger, ILoggerFactory loggerF
         }
         else if (cmd == domain.Enums.MessageCommand.BurnParams) ok = frame.Payload[4] == 1;
         else if (cmd == domain.Enums.MessageCommand.Identify) { GetDeviceUiState(device.Guid).HasLed = frame.Payload[2] != 0; ok = true; }
+        else if (cmd == domain.Enums.MessageCommand.OutputTest) { GetDeviceUiState(device.Guid).TestReplied = true; ok = frame.Payload[7] == 1; }
         else if (cmd == domain.Enums.MessageCommand.SleepInfo)
         {
             var ui = GetDeviceUiState(device.Guid);
@@ -428,7 +429,7 @@ public class DeviceManager(ILogger<DeviceManager> logger, ILoggerFactory loggerF
             return;
         }
         else { if (cmd == domain.Enums.MessageCommand.Write) GetDeviceUiState(device.Guid).StoredOnModule = false; return; }
-        if (ok && cmd != domain.Enums.MessageCommand.Identify) GetDeviceUiState(device.Guid).StoredOnModule = cmd == domain.Enums.MessageCommand.BurnParams;
+        if (ok && cmd != domain.Enums.MessageCommand.Identify && cmd != domain.Enums.MessageCommand.OutputTest) GetDeviceUiState(device.Guid).StoredOnModule = cmd == domain.Enums.MessageCommand.BurnParams;
         if (_confirms.TryRemove((device.BaseId, cmd), out var tcs)) tcs.TrySetResult(ok);
     }
 
@@ -1221,6 +1222,17 @@ public class DeviceManager(ILogger<DeviceManager> logger, ILoggerFactory loggerF
             Name = $"Test output {number}"
         });
         return true;
+    }
+
+    /// <summary>Bench test and wait for the module's echo (byte 7 = accepted). true accepted, false refused, null no
+    /// reply: the firmware has no output test (upstream dingoFW without feat/output-bench-test).</summary>
+    public async Task<bool?> TestOutputConfirmed(Guid deviceId, int number, int mode, int duty, int freq, int holdSec, int timeoutMs = 1000)
+    {
+        if (GetDevice(deviceId) is not { } d) return null;
+        var ui = GetDeviceUiState(deviceId);
+        ui.TestReplied = false;
+        var ok = await Confirmed(d, domain.Enums.MessageCommand.OutputTest, () => TestOutput(deviceId, number, mode, duty, freq, holdSec), timeoutMs);
+        return ok ? true : ui.TestReplied ? false : null;
     }
 
     /// <summary>
