@@ -162,7 +162,7 @@ export function pidProblem(r) {
   if (!Number.isInteger(per) || per < 2 || per > 1000) return 'the update period must be 2 to 1000 ms'
   if (bad(n('kp', 1), 0) || bad(n('ki'), 0) || bad(n('kd'), 0)) return 'Kp, Ki and Kd must be 0 or more (the direction is set by "cooling")'
   if (bad(n('spRate'), 0) || bad(n('deadband'), 0)) return 'the setpoint rate and deadband must be 0 or more'
-  if (['feedForward', 'iMin', 'iMax', 'outMin', 'outMax', 'pvMin', 'pvMax', 'fallback'].some((k) => bad(n(k, { iMin: -100, iMax: 100, outMax: 100 }[k] ?? 0)))) return 'limits, feed-forward and fallback must be within ±1000000'
+  if (['feedForward', 'iMin', 'iMax', 'outMin', 'outMax', 'pvMin', 'pvMax', 'fallback', 'setpoint'].some((k) => bad(n(k, { iMin: -100, iMax: 100, outMax: 100 }[k] ?? 0)))) return 'limits, setpoint, feed-forward and fallback must be within ±1000000'
   if (n('outMin') > n('outMax', 100)) return 'output min is above output max'
   if (n('iMin', -100) > n('iMax', 100)) return 'I min is above I max'
   if (n('pvMin') > n('pvMax')) return "the sensor window's low end is above its high end"

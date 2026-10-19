@@ -70,7 +70,7 @@ export function sentenceFor(model, n) {
         T('blinks'), val(r.blinks ?? 3, 'blinks'), T('times on'), srcTok(model, r.clockInput, 'clockInput'), T('; held longer it blinks until released, and a tap the other way cancels it.')]
     case 'pid': {
       const segs = [self(n), T('drives its output'), val(`${r.outMin ?? 0} to ${r.outMax ?? 100}`, 'outMin'), T('up while'), srcTok(model, r.processInput, 'processInput'),
-        T(r.invert ? 'is above' : 'is below'), r.setpointInput ? srcTok(model, r.setpointInput, 'setpointInput') : val(0, 'setpointInput'),
+        T(r.invert ? 'is above' : 'is below'), r.setpointInput ? srcTok(model, r.setpointInput, 'setpointInput') : val(r.setpoint ?? 0, 'setpoint'),
         T(': Kp'), val(r.kp ?? 1, 'kp'), T(', Ki'), val((r.ki ?? 0) + ' /s', 'ki'), T(', Kd'), val((r.kd ?? 0) + ' s', 'kd')]
       if (r.feedForward) segs.push(T(', plus'), val(r.feedForward, 'feedForward'))
       if (r.feedFwdInput) segs.push(T(', plus'), srcTok(model, r.feedFwdInput, 'feedFwdInput'))

@@ -174,7 +174,7 @@ export function createSim(model, snapshot) {
         vals[outL] = on(s.L); vals[outR] = on(s.R)
       } else if (n.kind === 'pid') {
         // the firmware runs it every main-loop pass and gates on its own period; here once per sim step
-        pidStep(s, { ...r, enabled: true }, t, asNum(val(r.setpointInput)), asNum(val(r.processInput)), asNum(val(r.activateInput)), asNum(val(r.feedFwdInput)))
+        pidStep(s, { ...r, enabled: true }, t, r.setpointInput ? asNum(val(r.setpointInput)) : +(r.setpoint ?? 0), asNum(val(r.processInput)), asNum(val(r.activateInput)), asNum(val(r.feedFwdInput)))
         for (const [prop, k] of [['Output', 'val'], ['P', 'p'], ['I', 'i'], ['D', 'd']]) { const o = port(n, prop); if (o) vals[o] = s[k] }
         if (s.fault) status[n.id] = { text: 'FALLBACK', tone: 'warn', why: `The measured value is outside ${r.pvMin} to ${r.pvMax}: the output holds the fallback ${r.fallback}.` }
         else delete status[n.id]

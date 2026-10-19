@@ -254,20 +254,20 @@ TEMPLATES.push(
       const warn = await ctx.allOf([+s.lights, { v: +s.ign, not: true }, +s.door || 0], 'TP LightsOn')
       await ctx.wireOutput(s.output, await ctx.flasher(warn, 300, 300, 'TP Chime'))
     } },
-  // The PID block takes its setpoint from a signal only, so the fan ramp uses setpoint 0 + a negative feed-forward:
-  // duty = Kp·(temp − start) with Kp = 100 / (full − start), clamped 0..100 %. Ki stays 0 (it would integrate temp).
+  // A PI loop on a fixed setpoint (the target): Kp = 100 / (full − target), so P alone gives 100 % at "full";
+  // Ki = Kp / 20 (a slow 20 s integral time, coolant lags) removes the steady error. I is 0..100, no windup at 0 / 100 %.
   { key: 'pidfan', group: 'cooling', name: 'Fan by coolant temperature (PID)', icon: '🌀', logicOn: 'output',
-    desc: 'The fan speed (PWM duty) follows the coolant temperature: 0 % at the start temperature, rising to 100 % at the full-speed temperature. If the temperature signal is lost (a CAN frame that stops reads 0) or out of range, the fan runs at 100 %. Needs a dingoPDM whose firmware has the PID block, and a fan output on that module.',
+    desc: 'The fan speed (PWM duty) holds the coolant at the target temperature: it speeds up as the coolant goes above the target and is at 100 % by the full-speed temperature. If the temperature signal is lost (a CAN frame that stops reads 0) or out of range, the fan runs at 100 %. Needs a dingoPDM whose firmware has the PID block, and a fan output on that module.',
     fields: [{ k: 'temp', t: 'num', label: 'Coolant temperature signal' },
-      { k: 'start', t: 'number', label: 'Fan starts at', def: 85 }, { k: 'full', t: 'number', label: 'Full speed at', def: 100 },
+      { k: 'target', t: 'number', label: 'Hold the coolant at', def: 90 }, { k: 'full', t: 'number', label: 'Full speed at', def: 100 },
       { k: 'ign', t: 'bool', label: 'Ignition (fan only with it on)', opt: true },
       { k: 'output', t: 'out', load: 'fan', label: 'Fan output (PWM)' }],
     build: async (ctx, s) => {
-      if (+s.full <= +s.start) throw new Error('“Full speed at” must be above “Fan starts at”')
-      const kp = 100 / (+s.full - +s.start)
-      const pid = await ctx.pid({ setpointInput: 0, processInput: +s.temp, activateInput: ctx.alwaysOn(), feedForward: -kp * +s.start, feedFwdInput: 0,
-        kp, ki: 0, kd: 0, iMin: -100, iMax: 100, outMin: 0, outMax: 100, invert: true, spRate: 0, deadband: 0,
-        pvMin: 1, pvMax: 200, fallback: 100, periodMs: 100 }, 'TP Fan PID', `${s.start}–${s.full} → 0–100 %`)
+      if (+s.full <= +s.target) throw new Error('“Full speed at” must be above “Hold the coolant at”')
+      const kp = 100 / (+s.full - +s.target)
+      const pid = await ctx.pid({ setpointInput: 0, setpoint: +s.target, processInput: +s.temp, activateInput: ctx.alwaysOn(), feedForward: 0, feedFwdInput: 0,
+        kp, ki: kp / 20, kd: 0, iMin: 0, iMax: 100, outMin: 0, outMax: 100, invert: true, spRate: 0, deadband: 0,
+        pvMin: 1, pvMax: 200, fallback: 100, periodMs: 100 }, 'TP Fan PID', `hold ${s.target}, 100 % by ${s.full}`)
       await ctx.outputDuty(s.output, pid, +s.ign || ctx.alwaysOn())
     } },
 )

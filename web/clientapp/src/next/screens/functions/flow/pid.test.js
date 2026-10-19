@@ -69,12 +69,13 @@ assert.match(pidProblem({ ...base, outMin: 60, outMax: 50 }), /output min/)
 assert.match(pidProblem({ ...base, iMin: 1, iMax: 0 }), /I min/)
 assert.match(pidProblem({ ...base, pvMin: 200, pvMax: 1 }), /window/)
 assert.match(pidProblem({ ...base, fallback: 2e6 }), /±1000000/)
+assert.match(pidProblem({ ...base, setpoint: 2e6 }), /±1000000/)
 
-// model + simulator + sentence: CAN in 1 = coolant (pv), PID 1 = the template's ramp (Kp 5, ff −425)
+// model + simulator + sentence: CAN in 1 = coolant (pv), PID 1 = cooling on a fixed setpoint 85 (Kp 5, Ki 0)
 const vmap = [{ index: 1, name: 'Always On', kind: 'sys', number: 0, prop: 'Always On', type: 'bool' },
   { index: 40, name: 'coolant', kind: 'caninput', number: 1, prop: 'State', type: 'bool' }, { index: 41, name: 'coolant Value', kind: 'caninput', number: 1, prop: 'Value', type: 'float' },
   ...['Output', 'P', 'I', 'D'].map((prop, k) => ({ index: 225 + k, name: 'fan pid ' + prop, kind: 'pid', number: 1, prop, type: 'float' }))]
-const row = { ...base, number: 1, name: 'fan pid', invert: true, kp: 5, processInput: 41, setpointInput: 0, activateInput: 1, feedFwdInput: 0, feedForward: -425, pvMin: 1, pvMax: 200, fallback: 100 }
+const row = { ...base, number: 1, name: 'fan pid', invert: true, kp: 5, processInput: 41, setpointInput: 0, setpoint: 85, activateInput: 1, feedFwdInput: 0, feedForward: 0, pvMin: 1, pvMax: 200, fallback: 100 }
 const funcs = { canInputs: [{ number: 1, name: 'coolant', enabled: true, id: 0x100, bitLength: 8, operator: 2, operand: 0 }], pids: [row] }
 const model = buildModel({ type: 'dingoPDM', outputs: [] }, funcs, vmap)
 const node = model.nodes.get('pid:1')
@@ -84,10 +85,14 @@ assert.deepEqual(incompleteReasons('pid', { ...row, processInput: 0 }, true), ['
 assert.deepEqual(incompleteReasons('pid', { ...row, outMin: 101 }, true), ['output min is above output max'])
 const sim = createSim(model, { 1: true })
 sim.setCan('caninput:1', 95); for (let i = 0; i < 4; i++) sim.step(50)
-assert.equal(sim.vals[225], 50)   // 5·95 − 425
+assert.equal(sim.vals[225], 50)   // 5·(95 − 85)
 sim.setCan('caninput:1', 0); sim.step(50)
 assert.equal(sim.vals[225], 100); assert.equal(sim.status['pid:1'].text, 'FALLBACK')
 const text = sentenceFor(model, node).map((x) => x.t ?? x.label).join(' ')
-assert.match(text, /fan pid drives its output 0 to 100 up while coolant value is above 0 : Kp 5/)
+assert.match(text, /fan pid drives its output 0 to 100 up while coolant value is above 85 : Kp 5/)
+// a setpoint signal wins over the fixed value: setpoint = coolant itself → error 0
+const sig = createSim(buildModel({ type: 'dingoPDM', outputs: [] }, { ...funcs, pids: [{ ...row, setpointInput: 41 }] }, vmap), { 1: true })
+sig.setCan('caninput:1', 95); for (let i = 0; i < 4; i++) sig.step(50)
+assert.equal(sig.vals[225], 0)
 assert.match(text, /Outside 1 to 200 it holds 100/)
 console.log('pid ok')

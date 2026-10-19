@@ -9,7 +9,7 @@ namespace domain.Devices.Functions;
 // Every PeriodMs: error = setpoint − pv (inverted: pv − setpoint) with a deadband; P = Kp·e; I += Ki·e·dt, clamped
 // to IMin..IMax and not pushed further into a saturated output; D on the measurement; output = feed-forward
 // (constant + var) + P + I + D, clamped to OutMin..OutMax. pv outside PvMin..PvMax (both 0 = no window) → Fallback.
-// Activate input off → feed-forward only. Crossed limits make the firmware treat it as disabled (output 0).
+// SetpointInput 0 → the fixed Setpoint (sub 20). Activate input off → feed-forward only. Crossed limits make the firmware treat it as disabled (output 0).
 public class PidFunction : IDeviceFunction
 {
     [JsonIgnore] public const int BaseIndex = 0x2300;
@@ -35,6 +35,7 @@ public class PidFunction : IDeviceFunction
     [JsonPropertyName("pvMax")] public double PvMax { get; set; }
     [JsonPropertyName("fallback")] public double Fallback { get; set; }
     [JsonPropertyName("periodMs")] public int PeriodMs { get; set; } = 20;
+    [JsonPropertyName("setpoint")] public double Setpoint { get; set; }   // used while SetpointInput is 0
 
     // live output from the PID status frame (×10 int16)
     [JsonIgnore][Plotable(displayName: "Output")] public double Value { get; set; }
@@ -56,8 +57,8 @@ public class PidFunction : IDeviceFunction
         if (PeriodMs is < 2 or > 1000) return "the update period must be 2 to 1000 ms";
         if (Bad(Kp, 0) || Bad(Ki, 0) || Bad(Kd, 0)) return "Kp, Ki and Kd must be 0 to 1000000 (use invert for the direction)";
         if (Bad(SpRate, 0) || Bad(Deadband, 0)) return "the setpoint rate and deadband must be 0 or more";
-        if (Bad(FeedForward) || Bad(IMin) || Bad(IMax) || Bad(OutMin) || Bad(OutMax) || Bad(PvMin) || Bad(PvMax) || Bad(Fallback))
-            return "limits, feed-forward and fallback must be within ±1000000";
+        if (Bad(FeedForward) || Bad(IMin) || Bad(IMax) || Bad(OutMin) || Bad(OutMax) || Bad(PvMin) || Bad(PvMax) || Bad(Fallback) || Bad(Setpoint))
+            return "limits, setpoint, feed-forward and fallback must be within ±1000000";
         if (OutMin > OutMax) return "output min must not be above output max";
         if (IMin > IMax) return "I min must not be above I max";
         if (PvMin > PvMax) return "the sensor window's low end must not be above its high end";
@@ -96,6 +97,7 @@ public class PidFunction : IDeviceFunction
             F(17, "pvMax", () => PvMax, v => PvMax = v, 0.0),
             F(18, "fallback", () => Fallback, v => Fallback = v, 0.0),
             V(19, "periodMs", () => PeriodMs, v => PeriodMs = v, 20),
+            F(20, "setpoint", () => Setpoint, v => Setpoint = v, 0.0),
         ];
     }
 }

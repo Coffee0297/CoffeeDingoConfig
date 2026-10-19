@@ -10,7 +10,7 @@
   import { FAM_COLOR, FAM_NAME, OPS, OP_WORDS, JOIN, TIMER_MODES, EDGES, MATH_OPS, isRelational, sourceOptions, canWire, hexId, parseId, pidProblem } from './model.js'
   import { sentenceFor } from './sentence.js'
   import { fmt } from './livevals.js'
-  import { lacks, isUpstream } from '../../hardware/parts/util.js'
+  import { lacks, has, isUpstream } from '../../hardware/parts/util.js'
   import { remoteItems, isRemoteKey } from '../../../lib/remote.js'
 
   let { model, node, dev, lv, links = [], idMap = null, busy = false, onsave, onremove, onselect, onungroup, onopenlink, unsaved = $bindable(false) } = $props()
@@ -21,6 +21,7 @@
   let base = $state({})
   let idText = $state('')
   let seededFor = ''
+  let spSignal = $state(false)   // PID: "from a signal" picked, signal not chosen yet
   const EDIT = {
     virtualinput: ['name', 'var0', 'var1', 'var2', 'not0', 'not1', 'not2', 'cond0', 'cond1', 'mode'],
     condition: ['name', 'input', 'operator', 'arg', 'argOff'],
@@ -33,7 +34,7 @@
     math: ['name', 'inputA', 'inputB', 'op', 'constB', 'factor', 'offset'],
     canmsg: ['name', 'input', 'id', 'ide', 'dlc', 'data', 'mode', 'intervalMs'],
     comfortblink: ['name', 'leftInput', 'rightInput', 'clockInput', 'tapMs', 'blinks'],
-    pid: ['name', 'setpointInput', 'processInput', 'activateInput', 'feedFwdInput', 'invert', 'kp', 'ki', 'kd', 'feedForward', 'outMin', 'outMax', 'iMin', 'iMax', 'spRate', 'deadband', 'pvMin', 'pvMax', 'fallback', 'periodMs'],
+    pid: ['name', 'setpointInput', 'processInput', 'activateInput', 'feedFwdInput', 'invert', 'kp', 'ki', 'kd', 'feedForward', 'outMin', 'outMax', 'iMin', 'iMax', 'spRate', 'deadband', 'pvMin', 'pvMax', 'fallback', 'periodMs', 'setpoint'],
     input: ['name', 'invert', 'mode', 'debounceTime'],
     digitaloutput: ['name', 'input'],
     output: ['name', 'input', 'dutyCycleInput'],
@@ -41,6 +42,7 @@
   }
   const fields = $derived(EDIT[node?.kind] ?? [])
   function seed() {
+    spSignal = false
     const r = node?.row ?? {}
     const b = {}
     for (const f of EDIT[node?.kind] ?? []) b[f] = node.kind === 'output' && f === 'input' ? r.inputVal ?? 0 : r[f] ?? (f === 'argOff' ? r.arg : f.startsWith('not') || ['ide', 'single', 'wrapAround', 'holdToReset', 'signed', 'invert', 'timeoutEnabled'].includes(f) ? false : 0)
@@ -296,6 +298,15 @@
       </div>
       <p class="hint">A tap of the lever blinks that many times, then stops. Held longer than the tap time it blinks until released. A tap the other way during a comfort blink cancels it. Use Left / Right as "indicator on" in place of the lever; blinks are counted on the indicator clock, so every module stops on the same blink.</p>
     {:else if node.kind === 'pid'}
+      {#if has(dev, 0x2300 + (node.row?.number ?? 1) - 1, 20)}<!-- a fixed setpoint needs param 0x2300+n:20 -->
+      <span class="sec">Setpoint</span>
+      {@render seg('Setpoint: signal or fixed value', [{ value: 'fixed', label: 'Fixed value' }, { value: 'signal', label: 'From a signal' }], spSignal || draft.setpointInput ? 'signal' : 'fixed', (v) => { spSignal = v === 'signal'; if (!spSignal) draft.setpointInput = 0 }, false)}
+      {#if !(spSignal || draft.setpointInput)}
+        <Field label="Fixed setpoint" type="number" step="any" bind:value={() => draft.setpoint ?? 0, (v) => (draft.setpoint = toNum(v))} hint="The target, e.g. 90 for 90 °C" />
+      {:else if !draft.setpointInput}
+        <p class="hint" role="status">Pick the setpoint signal under Inputs.</p>
+      {/if}
+      {/if}
       <span class="sec">Direction</span>
       {@render seg('The output rises while the measured value is', [{ value: 'false', label: 'below the setpoint (heater)' }, { value: 'true', label: 'above it (fan, pump)' }], String(!!draft.invert), (v) => (draft.invert = v === 'true'), false)}
       <span class="sec">Gains</span>

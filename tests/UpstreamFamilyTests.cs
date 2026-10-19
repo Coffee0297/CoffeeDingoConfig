@@ -168,7 +168,7 @@ public class UpstreamFamilyTests
         Enumerable.Range(0, count).SelectMany(n => Enumerable.Range(0, subs).Select(s => (baseIndex + n, s))).ToList();
 
     // feat/pid firmware (dingopdm_v7.elf of that branch): pVarMap 0x3c4 bytes = 241 entries = 225 + 4 PIDs x
-    // (Output, P, I, D) right after the timers; params 0x2300+n subs 0-19 (core/param_defs.h PID_PARAMS);
+    // (Output, P, I, D) right after the timers; params 0x2300+n subs 0-20 (core/param_defs.h PID_PARAMS);
     // Msg 30 (+32) = 4 x int16 x10 outputs.
     [Fact]
     public void Pid_OnlyWhenTheModuleHasIt_VarMapParamsAndFrame()
@@ -186,14 +186,14 @@ public class UpstreamFamilyTests
         Assert.Equal(["Output", "P", "I", "D"], d.VarMap.Skip(229).Take(4).Select(v => v.PropertyName));
         Assert.All(d.VarMap.Skip(225), v => Assert.Equal("float", v.DataType));
 
-        // params vs PID_PARAMS: subs 0-19, Float / Var / Bool, firmware defaults
+        // params vs PID_PARAMS: subs 0-20, Float / Var / Bool, firmware defaults
         var pid = d.Params.Where(p => p.Index == 0x2301).OrderBy(p => p.SubIndex).ToList();
-        Assert.Equal(Enumerable.Range(0, 20), pid.Select(p => p.SubIndex));
-        Assert.Equal(80, d.Params.Count(p => p.Index is >= 0x2300 and <= 0x2303));
-        int[] floats = [4, 6, 7, 8, 9, 10, 11, 12, 14, 15, 16, 17, 18], bools = [0, 13];
+        Assert.Equal(Enumerable.Range(0, 21), pid.Select(p => p.SubIndex));
+        Assert.Equal(84, d.Params.Count(p => p.Index is >= 0x2300 and <= 0x2303));
+        int[] floats = [4, 6, 7, 8, 9, 10, 11, 12, 14, 15, 16, 17, 18, 20], bools = [0, 13];
         Assert.All(pid, p => Assert.Equal(floats.Contains(p.SubIndex) ? typeof(double) : bools.Contains(p.SubIndex) ? typeof(bool) : typeof(int), p.ValueType));
-        Assert.Equal([false, 0, 0, 1, 0.0, 0, 1.0, 0.0, 0.0, -100.0, 100.0, 0.0, 100.0, false, 0.0, 0.0, 0.0, 0.0, 0.0, 20], pid.Select(p => p.DefaultValue));
-        Assert.Equal([false, 0, 0, 1, 0.0, 0, 1.0, 0.0, 0.0, -100.0, 100.0, 0.0, 100.0, false, 0.0, 0.0, 0.0, 0.0, 0.0, 20], pid.Select(p => p.GetValue()));
+        Assert.Equal([false, 0, 0, 1, 0.0, 0, 1.0, 0.0, 0.0, -100.0, 100.0, 0.0, 100.0, false, 0.0, 0.0, 0.0, 0.0, 0.0, 20, 0.0], pid.Select(p => p.DefaultValue));
+        Assert.Equal([false, 0, 0, 1, 0.0, 0, 1.0, 0.0, 0.0, -100.0, 100.0, 0.0, 100.0, false, 0.0, 0.0, 0.0, 0.0, 0.0, 20, 0.0], pid.Select(p => p.GetValue()));
         // a float param goes out as IEEE float32
         d.Pids[1].Kp = 2.5;
         Assert.Equal(2.5f, BitConverter.ToSingle(ParamCodec.ToFrame(domain.Enums.MessageCommand.WriteAllVal, pid[6], 0).Payload, 4));
@@ -221,7 +221,8 @@ public class UpstreamFamilyTests
         pid.OutMin = 101; Assert.Contains("output min", pid.Problem()); pid.OutMin = 0;
         pid.IMin = 200; Assert.NotNull(pid.Problem()); pid.IMin = -100;
         pid.PvMin = 5; Assert.NotNull(pid.Problem()); pid.PvMax = 200; Assert.Null(pid.Problem());
-        pid.Ki = -1; Assert.NotNull(pid.Problem()); pid.Ki = double.NaN; Assert.NotNull(pid.Problem());
+        pid.Ki = -1; Assert.NotNull(pid.Problem()); pid.Ki = double.NaN; Assert.NotNull(pid.Problem()); pid.Ki = 0;
+        pid.Setpoint = 2e6; Assert.Contains("setpoint", pid.Problem()); pid.Setpoint = -85; Assert.Null(pid.Problem());
     }
 
     [Fact]

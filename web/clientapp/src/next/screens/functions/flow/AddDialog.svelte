@@ -25,7 +25,7 @@
       // only on a module whose firmware has the PID block (upstream dingoFW, param 0x2300): hidden elsewhere.
       // Every field set: a free slot keeps what it held before.
       { label: 'PID', sub: 'holds a value at a target: fan or pump speed from a temperature', kind: 'pid', arr: 'pids', onlyIfPresent: true,
-        body: { setpointInput: 0, processInput: 0, activateInput: 1, feedForward: 0, feedFwdInput: 0, kp: 1, ki: 0, kd: 0, iMin: -100, iMax: 100, outMin: 0, outMax: 100, invert: false, spRate: 0, deadband: 0, pvMin: 0, pvMax: 0, fallback: 0, periodMs: 20 } },
+        body: { setpointInput: 0, processInput: 0, activateInput: 1, feedForward: 0, feedFwdInput: 0, kp: 1, ki: 0, kd: 0, iMin: -100, iMax: 100, outMin: 0, outMax: 100, invert: false, spRate: 0, deadband: 0, pvMin: 0, pvMax: 0, fallback: 0, periodMs: 20, setpoint: 0 } },
     ] },
     { name: 'TIME & STATE', fam: 'time', items: [
       { label: 'On-delay', sub: 'on after a time', kind: 'timer', arr: 'timers', body: { mode: 0, preset: 2000 } },
