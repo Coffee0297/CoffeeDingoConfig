@@ -34,6 +34,10 @@ assert.equal(w[0][2].Enabled, false)                                           /
 assert.deepEqual(w[2][2], { number: 1, enabled: false, argOff: 2 })
 assert.deepEqual(Object.keys(w[1][2]), ['name', 'id', 'ide'])                   // id before ide
 assert.deepEqual(w[3][2], { enabled: false, name: 'digitalInput4' })
+// a template that set a module setting (dash reset button) puts its old value back on remove
+const dv = []
+await undoTemplate({ deviceInputs: async (g, b) => dv.push([g, b]) }, [{ guid: 'p', type: 'dingoPDM' }], { guid: 'p', device: { retryAllInput: 7 } })
+assert.deepEqual(dv, [['p', { retryAllInput: 7 }]])
 // an output on another module follows the logic module's broadcast through a CAN input there
 const made = []
 const fapi = {

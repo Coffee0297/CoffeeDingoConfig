@@ -36,7 +36,7 @@
     input: ['name', 'invert', 'mode', 'debounceTime'],
     digitaloutput: ['name', 'input'],
     output: ['name', 'input', 'dutyCycleInput'],
-    sys: ['forceSleepInput', 'muteTxInput'],
+    sys: ['forceSleepInput', 'muteTxInput', 'retryAllInput'],
   }
   const fields = $derived(EDIT[node?.kind] ?? [])
   function seed() {
@@ -148,7 +148,7 @@
   const remoteOut = $derived(links.filter((l) => l.from.node === node?.id))
   const sentence = $derived(node ? sentenceFor(model, node) : null)
   const sentenceText = $derived(sentence ? sentence.map((s) => s.t ?? s.label).join(' ').replace(/ ([.,)])/g, '$1').replace(/\( /g, '(') : '')
-  const reads = $derived(sentenceText || ({ sys: "This module's own signals: always on, state, board temperature and battery voltage. Its force-sleep and mute-CAN inputs are set here.", input: 'A switch wired to this module. Settings for the pin are below.', analoginput: 'An analog input (sensor, switch ladder or rotary). Calibrate it on its Hardware screen.', lua: 'Values set by the Lua program on this module (Expert › Lua).', keypad: 'Buttons of a CAN keypad.' }[node?.kind] ?? 'A block on this module.'))
+  const reads = $derived(sentenceText || ({ sys: "This module's own signals: always on, state, board temperature and battery voltage. Its force-sleep and mute-CAN inputs (and, where the firmware has it, the retry-all-faults signal) are set here.", input: 'A switch wired to this module. Settings for the pin are below.', analoginput: 'An analog input (sensor, switch ladder or rotary). Calibrate it on its Hardware screen.', lua: 'Values set by the Lua program on this module (Expert › Lua).', keypad: 'Buttons of a CAN keypad.' }[node?.kind] ?? 'A block on this module.'))
   const graphHref = $derived(node && dev ? href('live', 'plot', { signal: node.kind === 'output' ? `out:${dev.guid}:${node.n}` : `${dev.guid}|${node.title}` }) : '#')
   const hwHref = $derived.by(() => {
     if (!node || !dev) return null

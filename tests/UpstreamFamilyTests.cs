@@ -84,7 +84,7 @@ public class UpstreamFamilyTests
     {
         var d = UpstreamPdm();
         var dev = d.Params.Where(p => p.Index == 0).ToDictionary(p => p.SubIndex, p => p.Name);
-        Assert.Equal(Enumerable.Range(0, 9), dev.Keys.Order());
+        Assert.Equal(Enumerable.Range(0, 9).Append(12), dev.Keys.Order());   // 12: feat/fault-clear retry-all
         Assert.Equal("device.muteTxInput", dev[7]);
         Assert.Equal("device.forceSleepInput", dev[8]);
         Assert.Equal(5, d.Params.Count(p => p.Index == 0x1A00));   // timer 1, not a table
@@ -162,5 +162,26 @@ public class UpstreamFamilyTests
         Assert.False(t.FromModule);   // a saved list still needs a Read before Apply
         Assert.True(t.HasBlock(0x1800));
         Assert.False(t.HasBlock(0x1C00));
+    }
+
+    // feat/fault-clear (core/param_defs.h): output 0x1000+i sub 25 bClearOnReassert, device 0x0000 sub 12 nRetryAllInput
+    [Fact]
+    public void FaultClear_Params_UpstreamOnly()
+    {
+        var d = UpstreamPdm();
+        Assert.Equal(8, d.Params.Count(p => p.SubIndex == 25 && p.Index >= 0x1000 && p.Index < 0x1008));
+        var ra = Assert.Single(d.Params, p => p.Name == "device.retryAllInput");
+        Assert.Equal((0x0000, 12), (ra.Index, ra.SubIndex));
+        Assert.True(d.HasRetryAll);   // list not read yet
+        d.Outputs[2].ClearOnReassert = true;
+        Assert.Equal(true, d.Params.Single(p => p.Index == 0x1002 && p.SubIndex == 25).GetValue());
+
+        var f = new PdmDevice("PDM", 0x680);
+        f.SetLogger(NullLogger<PdmDevice>.Instance);
+        var q = Q();
+        f.Read(0x680, [31, 0, 0, 0, 5, 6, 0, 6], ref q, []);
+        Assert.DoesNotContain(f.Params, p => p.Index >= 0x1000 && p.Index < 0x1008 && p.SubIndex == 25);
+        Assert.DoesNotContain(f.Params, p => p.Name == "device.retryAllInput");   // fork 0x0000:12 is the wake mask
+        Assert.False(f.HasRetryAll);
     }
 }

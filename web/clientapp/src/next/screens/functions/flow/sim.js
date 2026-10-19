@@ -1,8 +1,10 @@
 // Client-side simulator of one module's blocks. Nothing is sent to the car.
 // Mirrors the firmware (functions/*.cpp): Condition hysteresis, VirtualInput AND/OR/NOR (a real NOR from
 // firmware 5.6.6; before it was NAND) with NOT per input and momentary/latching, Timer on-delay/off-delay/pulse, Flasher,
-// Counter edges, Table interpolation, CAN input operator + timeout, outputs with injected faults.
+// Counter edges, Table interpolation, CAN input operator + timeout, outputs with injected faults (a trip that runs out
+// of retries latches; upstream fault clear: cleared by the input going off, or by the module's retry-all edge).
 import { interpolate } from '../../../../lib/table.js'
+import { latchClears } from '../../../../lib/trip.js'
 import { fmt } from './livevals.js'
 
 const truthy = (v) => v === true || (typeof v === 'number' && v !== 0)
@@ -162,7 +164,17 @@ export function createSim(model, snapshot) {
     }
   }
 
+  // firmware CyclicUpdate: a rising edge of the retry-all signal, at most every 2 s (its clock starts at 0)
+  function retryEdge() {
+    const idx = model.nodes.get('sys')?.row?.retryAllInput, s = m('sys|retry')
+    const on = !!idx && truthy(val(idx)), edge = on && !s.last && t - (s.at ?? 0) >= 2000
+    s.last = on
+    if (edge) s.at = t
+    return edge
+  }
+
   function evalOutputs() {
+    const retry = retryEdge(), retryWired = !!model.nodes.get('sys')?.row?.retryAllInput
     for (const n of model.nodes.values()) {
       const r = n.row ?? {}
       if (n.kind === 'output' || n.kind === 'digitaloutput') {
@@ -171,16 +183,26 @@ export function createSim(model, snapshot) {
         const want = !!r.enabled && truthy(val(src))
         const f = faults[n.id]
         const nominal = mem[n.id]?.amps
+        const s = m(n.id), until = latchClears(r, retryWired)
+        // Profet::ClearFault: a retry-all edge, or (clear on re-assert) the input going off
+        if (retry || (s.latched && r.clearOnReassert && !want)) { s.latched = false; s.trip = undefined }
         if (f === 'oc' && want) {
           if (onIdx) vals[onIdx] = false; if (ocIdx) vals[ocIdx] = true; if (fIdx) vals[fIdx] = true; if (curIdx) vals[curIdx] = 0
           const lim = r.currentLimit ?? '?'
-          status[n.id] = { text: 'TRIPPED', tone: 'fault', why: n.kind === 'output'
-            ? `Over ${lim} A: the output trips. ${r.resetMode ? `It tries again after ${(r.resetTime ?? 0) / 1000} s, up to ${r.resetCountLimit} times, then stays off.` : 'It stays off until it is reset.'}`
+          s.trip ??= t
+          // reset mode None latches at once, Count once its retries have run out, Endless never
+          if (n.kind === 'output' && (!r.resetMode || (r.resetMode === 1 && t - s.trip >= (r.resetCountLimit ?? 0) * (r.resetTime ?? 0)))) s.latched = true
+          status[n.id] = { text: s.latched ? 'FAULT' : 'TRIPPED', tone: 'fault', why: n.kind === 'output'
+            ? `Over ${lim} A: the output trips. ${s.latched ? `It stays off until ${until}.` : r.resetMode ? `It tries again after ${(r.resetTime ?? 0) / 1000} s${r.resetMode === 1 ? `, up to ${r.resetCountLimit} times, then stays off` : ''}.` : ''}`
             : 'Low-side output tripped (simulated).' }
+        } else if (s.latched) {
+          if (onIdx) vals[onIdx] = false; if (ocIdx) vals[ocIdx] = false; if (fIdx) vals[fIdx] = true; if (curIdx) vals[curIdx] = 0
+          status[n.id] = { text: 'FAULT', tone: 'fault', why: `Latched off after a trip. It stays off until ${until}.` }
         } else if (f === 'open' && want) {
           if (onIdx) vals[onIdx] = true; if (ocIdx) vals[ocIdx] = false; if (fIdx) vals[fIdx] = false; if (curIdx) vals[curIdx] = 0
           status[n.id] = { text: 'OPEN LOAD', tone: 'warn', why: 'The module drives the output but reads almost no current. Check the plug and the fuse.' }
         } else {
+          s.trip = undefined
           if (onIdx) vals[onIdx] = want; if (ocIdx) vals[ocIdx] = false; if (fIdx) vals[fIdx] = false
           if (curIdx) vals[curIdx] = want ? (nominal ?? null) : 0
           status[n.id] = { text: want ? 'ON' : 'OFF', tone: want ? 'on' : 'off', why: !r.enabled ? 'The output is disabled.' : !src ? 'It has no input, so it never switches.' : want ? 'Its input is on.' : f ? 'It is off, so the fault has nothing to act on yet.' : 'Its input is off.' }

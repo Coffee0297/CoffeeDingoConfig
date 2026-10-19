@@ -92,8 +92,12 @@ export function sentenceFor(model, n) {
       if (r.variableDutyCycle) segs.push(T('at a duty from'), srcTok(model, r.dutyCycleInput, 'dutyCycleInput'))
       else if (r.pwmEnabled) segs.push(T('at'), val((r.fixedDuty ?? r.fixedDutyCycle ?? 100) + ' %', 'pwm'))
       segs.push(T('.'))
+      if (r.clearOnReassert) segs.push(T('A trip that stays off clears when the input switches off, so switching it on again retries.'))
       return segs
     }
+    case 'sys':
+      // upstream fault clear: only the retry-all signal makes a sentence (sleep / mute have their own screen)
+      return r.retryAllInput ? [T('Each time'), srcTok(model, r.retryAllInput, 'retryAllInput'), T('turns on, every tripped output on'), self(n), T('tries again (at most once every 2 s).')] : null
     default: return null
   }
 }

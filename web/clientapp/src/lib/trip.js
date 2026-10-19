@@ -35,9 +35,16 @@ export function tripReason(evt, out = {}) {
   return { kind, limitA, label, onS, peakA, text, clears: clearsText(evt.state, out) };
 }
 
+/** What clears a latched Fault: a power cycle, and (upstream fault clear) the output's input going off and on
+ *  again (out.clearOnReassert) or the module's retry-all signal (retryAll = it has one wired). */
+export function latchClears(out = {}, retryAll = false) {
+  const ways = [out.clearOnReassert && 'its input switches off and on again', retryAll && 'the retry-all signal turns on', 'the module is power-cycled'].filter(Boolean);
+  return ways.length > 1 ? ways.slice(0, -1).join(', ') + ' or ' + ways.at(-1) : ways[0];
+}
+
 /** How the state clears, from the output's reset mode. */
-export function clearsText(state, out = {}) {
-  if (state === 'Fault') return 'Latched — clears only when the module is power-cycled.';
+export function clearsText(state, out = {}, retryAll = false) {
+  if (state === 'Fault') return out.clearOnReassert || retryAll ? `Latched — clears when ${latchClears(out, retryAll)}.` : 'Latched — clears only when the module is power-cycled.';
   const mode = RESET[out.resetMode ?? 0] ?? 'None';
   if (state === 'Overcurrent' && mode === 'Count') return `Retries every ${out.resetTime ?? 0} ms, up to ${out.resetCountLimit ?? 0} times, then latches Fault.`;
   if (state === 'Overcurrent' && mode === 'Endless') return `Retries every ${out.resetTime ?? 0} ms.`;

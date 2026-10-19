@@ -103,6 +103,9 @@
 
   // ---- steps
   const fOut = $derived(tpl.fields.filter((f) => f.t === 'out'))
+  // a module pick (a template that sets a module setting, not an output): PDMs that have the setting
+  const fMod = $derived(tpl.fields.filter((f) => f.t === 'module'))
+  const modOpts = $derived(mods.filter((d) => d.retryAllInput != null).map((d) => ({ value: d.guid, label: d.name })))
   const fIn = $derived(tpl.fields.filter(isInput))
   const fSet = $derived(tpl.fields.filter((f) => f.t === 'number' || f.t === 'op' || f.t === 'check'))
   const steps = $derived([
@@ -114,7 +117,7 @@
   const cur = $derived(steps[Math.min(step, steps.length - 1)])
   const stepIssue = $derived.by(() => {
     if (cur.id === 'out') {
-      const miss = fOut.filter((f) => !f.opt && blank(sel[f.k]))
+      const miss = [...fMod, ...fOut].filter((f) => !f.opt && blank(sel[f.k]))
       if (miss.length) return 'Pick: ' + miss.map((f) => f.label).join(', ')
       const o = fOut.filter((f) => !blank(sel[f.k])).map((f) => String(sel[f.k]))
       if (new Set(o).size !== o.length) return 'The same output is picked twice.'
@@ -263,6 +266,12 @@
         <h2>Where should “{name || tpl.name}” go?</h2>
         <p class="muted">{tpl.desc}</p>
         <Field label="Name of this function" bind:value={name} data-testid="fn-name" />
+        {#each fMod as f (f.k)}
+          <div class="fld" data-field={f.k}>
+            <Select label={f.label} items={modOpts} value={String(sel[f.k] ?? '')} onchange={(v) => (sel[f.k] = v)} data-testid={'pick-' + f.k} />
+            {#if !modOpts.length}<span class="muted">No PDM in the project has this setting: it needs dingoFW with fault clear.</span>{/if}
+          </div>
+        {/each}
         {#if fOut.length}<p class="muted relay-note" data-testid="relay-note"><b>Via relay?</b> {RELAY_WHY}</p>{/if}
         {#each fOut as f (f.k)}
           <div class="fld" data-field={f.k}>

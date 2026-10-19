@@ -157,7 +157,8 @@ export function trackWrites(api, devices) {
   const note = (g, r) => { if (!seen.has(g)) seen.set(g, new Set()); seen.get(g).add(r?.written === false ? 'project' : 'live'); return r }
   const t = { ...api,
     setFunction: async (g, ...a) => note(g, await api.setFunction(g, ...a)),
-    outputConfig: async (g, b) => note(g, await api.outputConfig(g, b)) }
+    outputConfig: async (g, b) => note(g, await api.outputConfig(g, b)),
+    deviceInputs: async (g, b) => note(g, await api.deviceInputs(g, b)) }
   const anyLive = () => [...seen.values()].some((s) => s.has('live'))
   return [t, () => (anyLive() ? [...seen].filter(([, s]) => s.has('project')).map(([g]) => devices.find((d) => d.guid === g)?.name ?? g) : [])]
 }
@@ -187,6 +188,7 @@ export async function undoTemplate(api0, devices, inst, keep = []) {
     const k = key(w), [g, n] = k.split(':'), d = devOf(g)
     if (!snaps[k] && d) await step(`${name(g)} output ${n}`, () => wireOut(api, d, +n, inst.prev?.[k] ?? inst.prev?.[w] ?? 0))
   }
+  if (inst.device) await step(`${name(inst.guid)} retry-all signal`, () => api.deviceInputs(inst.guid, inst.device))   // module settings it set
   for (const [k, s] of Object.entries(snaps)) { const g = k.split(':')[0], d = devOf(g); if (s && d) await step(`${name(g)} output ${s.number}`, () => restoreOutput(api, d, s)) }
   for (const c of [...(inst.created ?? [])].reverse()) {
     const g = c.guid ?? inst.guid, k = `${g}|${c.number}`
@@ -297,10 +299,10 @@ export async function applyTemplate(api0, { devices, tpl, sel, relays, name, id,
     await tpl.build(ctx, s)
     const p = partial()
     return { ...(p.length ? { partial: partialMsg(p, 'Apply') + ` — Write All ${p.length > 1 ? 'them' : 'it'} (device_action writeall), then Burn` } : {}), id, key: tpl.key, name: (name ?? '').trim() || tpl.name, guid: dev.guid, sel: { ...sel }, relays: { ...relays },
-      created: [...created, ...ctx.created], wired: ctx.wired, prev, outs, enabled, cans, pins, at: new Date().toISOString() }
+      created: [...created, ...ctx.created], wired: ctx.wired, prev, outs, enabled, cans, pins, ...(ctx.device ? { device: ctx.device } : {}), at: new Date().toISOString() }
   } catch (e) {
     // Roll back what this run made so a failed apply leaves no half-built circuit.
-    await undoTemplate(api, devices, { guid: dev.guid, created: [...created, ...(ctx?.created ?? [])], wired: ctx?.wired ?? [], prev, outs, enabled, cans }, others)
+    await undoTemplate(api, devices, { guid: dev.guid, created: [...created, ...(ctx?.created ?? [])], wired: ctx?.wired ?? [], prev, outs, enabled, cans, device: ctx?.device }, others)
       .catch((u) => { e.message += ` (and the roll-back ${u.message})` })
     throw e
   }
@@ -340,6 +342,10 @@ export async function planTemplate(api, { devices, defs, templates, req, old = n
   for (const f of tpl.fields.filter((f) => f.t === 'out' && !blank(picks[f.k]))) {
     const o = matchOption(outOpts, picks[f.k])
     if (o.error) errors.push(`${f.label}: ${o.error}`); else { sel[f.k] = o.value; resolved[f.k] = o.label }
+  }
+  for (const f of tpl.fields.filter((f) => f.t === 'module' && !blank(picks[f.k]))) {
+    const d = mods.find((x) => x.name.toLowerCase() === String(picks[f.k]).trim().toLowerCase())
+    if (!d) errors.push(`${f.label}: no module called “${picks[f.k]}”`); else { sel[f.k] = d.guid; resolved[f.k] = d.name }
   }
   const lm = logicModule(tpl, sel)
   if (lm.error) errors.push(lm.error)
