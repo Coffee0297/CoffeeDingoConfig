@@ -404,6 +404,7 @@ public class DeviceManager(ILogger<DeviceManager> logger, ILoggerFactory loggerF
             ui.WakeReason = frame.Payload[1]; ui.WakeSource = frame.Payload[2];
             ui.WakeCount = frame.Payload[3] | frame.Payload[4] << 8;
             ui.SleepBlockers = frame.Payload[6];
+            if (device is PdmDevice pdm) pdm.SleepInfoSeen = true;
             ui.CheckRetries = 0; ui.CheckAskedAt = DateTime.UtcNow;   // it (re)booted: unanswered config checks get another round
             // the module announces it after every boot (5.6.3) and answers when asked: log each wake once
             if (!ui.WakeLogged)
@@ -584,6 +585,9 @@ public class DeviceManager(ILogger<DeviceManager> logger, ILoggerFactory loggerF
     private void NoteAwake(IDevice device)
     {
         var ui = GetDeviceUiState(device.Guid);
+        // status frames still in flight just after the goodbye (the module flushes ~100 ms before it stops): not a
+        // wake. Asking SleepInfo now would itself wake the module (any CAN frame does).
+        if (ui.Asleep && DateTime.UtcNow - ui.AsleepSince < TimeSpan.FromSeconds(1)) return;
         ui.Asleep = false;
         if (ui.CheckAfterWake) { ui.CheckAfterWake = false; CheckConfig(device.Guid); }
         if (device is not IDeviceConfigurable c) return;
@@ -593,7 +597,8 @@ public class DeviceManager(ILogger<DeviceManager> logger, ILoggerFactory loggerF
             if (DateTime.UtcNow - ui.VersionAskedAt > TimeSpan.FromSeconds(30)) { ui.VersionAskedAt = DateTime.UtcNow; RequestVersion(device.Guid); }
             return;
         }
-        if (!ui.SleepInfoAsked && domain.Common.Firmware.Has(c.Version, domain.Devices.Functions.MathFunction.Since))
+        // upstream dingoFW: asked too; only feat/sleep-wake-info answers (others ignore an unknown command)
+        if (!ui.SleepInfoAsked && (c.Family == domain.Common.FwFamily.Upstream || domain.Common.Firmware.Has(c.Version, domain.Devices.Functions.MathFunction.Since)))
         {
             ui.SleepInfoAsked = true;
             RequestSleepInfo(device.Guid);

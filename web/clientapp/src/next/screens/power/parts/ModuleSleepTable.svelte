@@ -2,7 +2,7 @@
   // Every module: its role in sleeping, live sleep status, last wake (firmware 5.6).
   import { Card, StateDot } from '../../../ui/index.js'
   import { live, hex } from '../../../lib/live.svelte.js'
-  import { sleepStatus, canSleep, wakeWords } from './sleepLogic.js'
+  import { sleepStatus, canSleep, wakeWords, noWakeWords } from './sleepLogic.js'
   let { seq } = $props()
   const mods = $derived(live.devices.filter((d) => /pdm|canboard/i.test(d.type ?? '')))
   function role(d) {
@@ -26,7 +26,7 @@
             <td><strong>{d.name}</strong> <span class="muted mono">{hex(d.baseId)}</span></td>
             <td class="muted">{role(d)}</td>
             <td><StateDot tone={st.key} shape={st.key === 'on' ? 'dot' : st.key === 'off' ? 'ring' : 'diamond'} label={st.word} /> <span class="muted">{st.detail}</span></td>
-            <td class="muted">{wakeWords(d) || (d.version && !/^v?0\.0\.0$/.test(d.version) ? 'Needs firmware 5.6' : 'Not reported')}</td>
+            <td class="muted">{wakeWords(d) || noWakeWords(d)}</td>
           </tr>
         {/each}
       </tbody>

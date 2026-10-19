@@ -604,4 +604,19 @@ public class UpstreamFamilyTests
         Assert.Equal(expect == 0, (bool)p[4].GetValue());
         Assert.Equal(expect == 0 ? 3 : expect, (int)p[11].GetValue());   // disabled: sub 11 back at its default
     }
+
+    // feat/sleep-wake-info: Msg 0 byte 0 bits 2-7 = seconds to auto sleep (63 none). Plain upstream sends 0 there, so the
+    // countdown counts only once the module answered SleepInfo.
+    [Fact]
+    public void SleepCountdown_OnlyAfterSleepInfo()
+    {
+        var d = UpstreamPdm();
+        var q = Q();
+        d.Read(0x682, [(4 << 2) | 1, 0, 0, 0, 0, 0, 0, 0], ref q, []);
+        Assert.Null(d.SleepCountdownS);
+        d.SleepInfoSeen = true;
+        Assert.Equal(4, d.SleepCountdownS);
+        d.Read(0x682, [63 << 2, 0, 0, 0, 0, 0, 0, 0], ref q, []);
+        Assert.Null(d.SleepCountdownS);   // not counting
+    }
 }

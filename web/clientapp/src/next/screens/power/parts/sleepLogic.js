@@ -89,6 +89,10 @@ export function wakeWords(d) {
   return w.count > 0 ? `${what} (${w.count} wake${w.count === 1 ? '' : 's'} since power-on)` : what
 }
 
+/** Why no wake reason is shown: firmware too old (fork before 5.6, upstream without SleepInfo) or not said yet. */
+export const noWakeWords = (d) => d?.family === 'upstream' ? 'Not reported by this firmware'
+  : d?.version && !/^v?0\.0\.0$/.test(d.version) ? 'Needs firmware 5.6' : 'Not reported'
+
 /** Which module a CAN id belongs to (base-1 .. base+span), or null. */
 export function moduleOfId(id, devices) {
   for (const d of devices) {

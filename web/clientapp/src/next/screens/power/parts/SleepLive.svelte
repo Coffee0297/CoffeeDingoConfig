@@ -2,7 +2,7 @@
   // Live sleep status for every module, plus Sleep now / Wake up for the whole car.
   import { Card, Chip, StateDot, Button, Banner } from '../../../ui/index.js'
   import { live, api, toast, hex } from '../../../lib/live.svelte.js'
-  import { sleepStatus, canSleep, wakeWords, upSub } from './sleepLogic.js'
+  import { sleepStatus, canSleep, wakeWords, noWakeWords, upSub } from './sleepLogic.js'
   import Confirm from './Confirm.svelte'
 
   const mods = $derived(live.devices.filter((d) => /pdm|canboard/i.test(d.type ?? '')))
@@ -43,7 +43,7 @@
           <tr data-module={d.name}>
             <td><strong>{d.name}</strong> <span class="muted mono">{hex(d.baseId)}</span></td>
             <td><StateDot tone={st.key} shape={st.key === 'on' ? 'dot' : st.key === 'off' ? 'ring' : 'diamond'} label={st.word} /> <span class="muted">{st.detail}</span></td>
-            <td class="muted" data-testid="last-wake">{wakeWords(d) || (d.version && !/^v?0\.0\.0$/.test(d.version) ? 'Needs firmware 5.6' : 'Not reported')}</td>
+            <td class="muted" data-testid="last-wake">{wakeWords(d) || noWakeWords(d)}</td>
           </tr>
         {/each}
       </tbody>

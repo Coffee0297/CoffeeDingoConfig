@@ -223,7 +223,10 @@ public class PdmDevice : IDeviceConfigurable
     [JsonIgnore] private DateTime LastRxTime { get; set; }
     // G14: seconds until auto-sleep from the status frame (firmware 5.6), null = not counting / unknown
     [JsonIgnore] public int SleepCountdownRaw { get; set; } = 63;
-    [JsonIgnore] public int? SleepCountdownS => domain.Common.Firmware.Has(Version, Functions.MathFunction.Since) && SleepCountdownRaw < 63 ? SleepCountdownRaw : null;
+    // Upstream dingoFW sends the countdown only with feat/sleep-wake-info (bits 2-7 read 0 without it): trust it once the
+    // module has answered SleepInfo (50).
+    [JsonIgnore] public bool SleepInfoSeen { get; set; }
+    [JsonIgnore] public int? SleepCountdownS => (domain.Common.Firmware.Has(Version, Functions.MathFunction.Since) || SleepInfoSeen) && SleepCountdownRaw < 63 ? SleepCountdownRaw : null;
 
     [JsonIgnore] private Dictionary<int, List<(DbcSignal Signal, Action<double> SetValue)>> StatusSigs { get; set; } = null!;
 
