@@ -10,7 +10,7 @@
   import { FAM_COLOR, FAM_NAME, OPS, OP_WORDS, JOIN, TIMER_MODES, EDGES, MATH_OPS, isRelational, sourceOptions, canWire, hexId, parseId } from './model.js'
   import { sentenceFor } from './sentence.js'
   import { fmt } from './livevals.js'
-  import { lacks, isUpstream } from '../../hardware/parts/util.js'
+  import { lacks, isUpstream, has } from '../../hardware/parts/util.js'
   import { remoteItems, isRemoteKey } from '../../../lib/remote.js'
 
   let { model, node, dev, lv, links = [], idMap = null, busy = false, onsave, onremove, onselect, onungroup, onopenlink, unsaved = $bindable(false) } = $props()
@@ -23,7 +23,7 @@
   let seededFor = ''
   const EDIT = {
     virtualinput: ['name', 'var0', 'var1', 'var2', 'not0', 'not1', 'not2', 'cond0', 'cond1', 'mode'],
-    condition: ['name', 'input', 'operator', 'arg', 'argOff'],
+    condition: ['name', 'input', 'operator', 'arg', 'argOff', 'delayOn', 'delayOff'],
     timer: ['name', 'input', 'mode', 'preset', 'edge', 'resetInput'],
     flasher: ['name', 'input', 'onTime', 'offTime', 'single'],
     counter: ['name', 'incInput', 'decInput', 'resetInput', 'incEdge', 'decEdge', 'resetEdge', 'minCount', 'maxCount', 'wrapAround', 'holdToReset', 'resetTime'],
@@ -104,6 +104,7 @@
       for (let i = 1; i < draft.xSize; i++) if (!(draft.xAxis[i] > draft.xAxis[i - 1])) return `X point ${i + 1} must be above X point ${i}.`
       if (draft.ySize > 1) for (let i = 1; i < draft.ySize; i++) if (!(draft.yAxis[i] > draft.yAxis[i - 1])) return `Y point ${i + 1} must be above Y point ${i}.`
     }
+    if (k === 'condition' && [draft.delayOn, draft.delayOff].some((x) => !(x >= 0 && x <= 60000))) return 'Delays must be 0 to 60 s.'
     if (k === 'counter' && draft.maxCount <= draft.minCount) return 'Max must be above min.'
     if (k === 'canmsg' && (draft.dlc < 0 || draft.dlc > 8)) return 'Length must be 0 to 8 bytes.'
     if (k === 'comfortblink' && (draft.tapMs < 100 || draft.tapMs > 5000)) return 'The tap time must be 0.1 to 5 s.'
@@ -246,6 +247,13 @@
       {#if isRelational(draft.operator)}
         <Checkbox label="Separate off point (hysteresis)" hint="Stops it chattering right at the value" bind:checked={hyst} />
         {#if hyst}<Field label="Off again at" type="number" step="any" bind:value={() => draft.argOff ?? 0, (v) => (draft.argOff = toNum(v))} hint={'On past ' + draft.arg + ', off again past ' + draft.argOff + '.'} />{/if}
+      {/if}
+      <!-- upstream dingoFW feat/condition-delay (subs 5/6): only on a module whose firmware has them -->
+      {#if isUpstream(dev) && has(dev, 0x1500 + node.n - 1, 5)}
+        <div class="two">
+          <Field label="Delay on" type="number" step="0.1" min="0" max="60" unit="s" hint="True this long first" bind:value={() => (draft.delayOn ?? 0) / 1000, (v) => (draft.delayOn = Math.round(toNum(v) * 1000))} />
+          <Field label="Delay off" type="number" step="0.1" min="0" max="60" unit="s" hint="False this long first" bind:value={() => (draft.delayOff ?? 0) / 1000, (v) => (draft.delayOff = Math.round(toNum(v) * 1000))} />
+        </div>
       {/if}
     {:else if node.kind === 'timer'}
       <span class="sec">Settings</span>

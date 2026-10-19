@@ -34,7 +34,9 @@ export function sentenceFor(model, n) {
     case 'condition': {
       const segs = [self(n), T('is on when'), srcTok(model, r.input, 'input'), T(OP_WORDS[r.operator ?? 0] ?? '?'), val(r.arg ?? 0, 'arg')]
       if (isRelational(r.operator) && r.argOff != null && r.argOff !== r.arg) segs.push(T('(off again at'), val(r.argOff, 'argOff'), T(')'))
+      if (r.delayOn > 0) segs.push(T('for at least'), val(secs(r.delayOn), 'delayOn'))
       segs.push(T('.'))
+      if (r.delayOff > 0) segs.push(T('It stays on'), val(secs(r.delayOff), 'delayOff'), T('after that stops being true.'))
       return segs
     }
     case 'timer': {
