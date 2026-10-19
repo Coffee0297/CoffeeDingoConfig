@@ -7,7 +7,8 @@
 
   // upstream: 16-400 Hz, 0 = keep (its timers cannot make 1-15 Hz); varFreq: the firmware has "frequency follows a signal" (output subs 21-23; upstream by its param list)
   // rampDuty: the firmware has "ramp every duty change" (output sub 24)
-  let { guid, f = $bindable(), upstream = false, varFreq = true, rampDuty = true } = $props()
+  // ssTimeout: the firmware has the current-limited soft start (upstream output sub 30)
+  let { guid, f = $bindable(), upstream = false, varFreq = true, rampDuty = true, ssTimeout = false } = $props()
   const vf = $derived(varFreq && !!f.variableFreq)
 
   let nums = $state([])
@@ -81,6 +82,10 @@
     <Switch bind:checked={f.softStart} label="Soft start" hint="Ramps up when it turns on." />
     {#if f.softStart}
       <Stepper label="Ramp time" bind:value={f.softStartRamp} min={0} max={10000} step={100} unit="ms" data-testid="ramp" />
+      {#if ssTimeout && f.pwmEnabled}
+        <Stepper label="Must reach full duty within" bind:value={f.softStartTimeout} min={0} max={60000} step={500} unit="ms" data-testid="ss-timeout" />
+        <span class="muted note" data-testid="ss-timeout-hint">{#if Number(f.softStartTimeout) > 0}Current-limited start: the ramp waits while the current is above the inrush limit ({f.inrushLimit} A) instead of tripping, and trips if it has not finished after {f.softStartTimeout} ms (a stalled motor).{#if Number(f.minDuty) === 0} Set a lowest duty the motor turns at: at 0 % a motor reads near stall current and the ramp never gets going.{/if}{#if Number(f.inrushTime) < Number(f.softStartTimeout)} The inrush time ({f.inrushTime} ms) is shorter: after it the normal trip current applies to the held ramp.{/if}{:else}0 = off: the inrush limit trips as usual during the ramp.{/if}</span>
+      {/if}
       {#if rampDuty && f.pwmEnabled && f.variableDutyCycle}
         <Switch bind:checked={f.rampDutyChanges} label="Ramp every duty change" hint={`Slews on each change too, at up to 100 % per ${Number(f.softStartRamp) || 0} ms (the ramp time), not only at turn-on.`} />
       {/if}

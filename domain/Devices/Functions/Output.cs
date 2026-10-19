@@ -60,6 +60,8 @@ public class Output : IDeviceFunction
     [JsonPropertyName("clearOnReassert")] public bool ClearOnReassert { get; set; }
     // upstream feat/hard-short-trip: A, 0 = off; above it the output latches Fault at once, also inside the inrush time
     [JsonPropertyName("hardShortLimit")] public double HardShortLimit { get => field; set => field = Math.Clamp(value, 0.0, 100.0); } = 0.0;
+    // upstream feat/soft-start-current-limit: ms, 0 = off; a PWM soft start holds while over the inrush limit and trips if not done in this time
+    [JsonPropertyName("softStartTimeout")] public int SoftStartTimeout { get => field; set => field = Math.Clamp(value, 0, 60000); } = 0;
     
     [JsonIgnore][Plotable(displayName:"Current", unit:"A")] public double Current { get; set; }
     [JsonIgnore][Plotable(displayName:"State")] public OutState State { get; set; }
@@ -99,6 +101,12 @@ public class Output : IDeviceFunction
                 GetValue = () => UnderTrip, SetValue = val => UnderTrip = (bool)val, ValueType = typeof(bool), DefaultValue = false },
             new DeviceParameter { ParentName = Name, Name = $"output[{Number}].hardShortLimit", Index = idx, SubIndex = 32,
                 GetValue = () => HardShortLimit, SetValue = val => HardShortLimit = (double)val, ValueType = typeof(double), DefaultValue = 0.0 },
+            new DeviceParameter
+            {
+                ParentName = Name, Name = $"output[{Number}].softStartTimeout", Index = BaseIndex + (Number - 1), SubIndex = 30,
+                GetValue = () => SoftStartTimeout, SetValue = val => SoftStartTimeout = (int)val,
+                ValueType = typeof(int), DefaultValue = 0
+            },
         ];
     }
 

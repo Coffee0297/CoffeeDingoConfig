@@ -40,6 +40,7 @@ export const binBody = (o, input, enabled = true) => {
     WarnLimit: o.warnLimit ?? 0, OpenLoadLimit: o.openLoadLimit ?? 0, OpenLoadTime: o.openLoadTime ?? 1000,
     UnderLimit: o.underLimit ?? 0, UnderTime: o.underTime ?? 1000, UnderTrip: !!o.underTrip,   // upstream subs 27-29: kept on a re-wire
     HardShortLimit: o.hardShortLimit ?? 0,   // upstream output sub 32: carried so a re-wire keeps it
+    SoftStartTimeout: o.softStartTimeout ?? 0,   // upstream output sub 30: carried so a re-wire keeps it
   }
 }
 

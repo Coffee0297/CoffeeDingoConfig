@@ -5,7 +5,8 @@
   import { latchClears } from '../../../../lib/trip.js'
   // canClear: the module has "clear on re-assert" (upstream fault clear); retryAll: it has a retry-all signal wired
   // hardShort: the firmware has the hard short limit (upstream output sub 32)
-  let { f = $bindable(), rating = null, warn = true, openLoad = true, under = false, canClear = false, retryAll = false, hardShort = false } = $props()
+  // ssTarget: a current-limited soft start is set (the inrush limit is then the soft start's current target)
+  let { f = $bindable(), rating = null, warn = true, openLoad = true, under = false, canClear = false, retryAll = false, hardShort = false, ssTarget = false } = $props()
   const UNDER = [{ value: '0', label: 'Report only' }, { value: '1', label: 'Switch the output off' }]
 
   const RESET = [{ value: '0', label: 'Stay off (latch)' }, { value: '1', label: 'Retry a few times' }, { value: '2', label: 'Retry for ever' }]
@@ -30,7 +31,7 @@
     </div>
     <div>
       <Stepper label="Inrush allowed" bind:value={f.inrushLimit} min={0} max={100} step={1} decimals={1} unit="A" data-testid="inrush" />
-      <span class="hint">motors and lamps start high</span>
+      <span class="hint">{ssTarget ? "also the soft start's current target" : "motors and lamps start high"}</span>
     </div>
     <Stepper label="Inrush time" bind:value={f.inrushTime} min={0} max={10000} step={50} unit="ms" data-testid="inrush-time" />
     <Select label="After a trip" items={RESET} bind:value={rm} onchange={(v) => (f.resetMode = Number(v))} data-testid="reset-mode" />

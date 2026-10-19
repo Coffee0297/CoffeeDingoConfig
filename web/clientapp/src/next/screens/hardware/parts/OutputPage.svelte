@@ -56,6 +56,7 @@
       underLimit: o.underLimit ?? 0, underTime: o.underTime ?? 1000, underTrip: !!o.underTrip,
       clearOnReassert: !!o.clearOnReassert,
       hardShortLimit: o.hardShortLimit ?? 0,
+      softStartTimeout: o.softStartTimeout ?? 0,
     }
   }
   // Seed once per output so the 10 Hz telemetry never overwrites an edit in progress.
@@ -67,6 +68,7 @@
   // PWM frequency from a signal (output subs 21-23): on upstream only where the module has it
   const varFreq = $derived(isCb || has(dev, 0x1000 + n - 1, 21))
   const rampDuty = $derived(isCb || has(dev, 0x1000 + n - 1, 24))
+  const ssTimeout = $derived(!isCb && isUpstream(dev) && has(dev, 0x1000 + n - 1, 30))   // upstream current-limited soft start
   const overRating = $derived(rating != null && Number(f?.currentLimit) > rating)
 
   function validate() {
@@ -117,6 +119,7 @@
           UnderLimit: Number(f.underLimit) || 0, UnderTime: Math.round(Number(f.underTime) || 0), UnderTrip: !!f.underTrip,
           ClearOnReassert: !!f.clearOnReassert,
           HardShortLimit: Number(f.hardShortLimit) || 0,
+          SoftStartTimeout: Math.round(Number(f.softStartTimeout) || 0),
         })
       }
       project.dirty = true
@@ -213,11 +216,11 @@
       <div class="col">
         <OutputChain {guid} {dev} bind:f {feed} {connected} raw={src} />
         {#if !isCb}
-          <OutputProtection bind:f {rating} warn={has(dev, 0x1000 + n - 1, 18)} openLoad={has(dev, 0x1000 + n - 1, 19)} under={isUpstream(dev) && has(dev, 0x1000 + n - 1, 27)} canClear={isUpstream(dev) && has(dev, 0x1000 + n - 1, 25)} retryAll={dev.retryAllInput > 0} hardShort={isUpstream(dev) && has(dev, 0x1000 + n - 1, 32)} />
+          <OutputProtection bind:f {rating} warn={has(dev, 0x1000 + n - 1, 18)} openLoad={has(dev, 0x1000 + n - 1, 19)} under={isUpstream(dev) && has(dev, 0x1000 + n - 1, 27)} canClear={isUpstream(dev) && has(dev, 0x1000 + n - 1, 25)} retryAll={dev.retryAllInput > 0} hardShort={isUpstream(dev) && has(dev, 0x1000 + n - 1, 32)} ssTarget={ssTimeout && f.pwmEnabled && f.softStart && Number(f.softStartTimeout) > 0} />
         {:else}
           <Card title="Protection"><p class="muted">The CANBoard switches this load to ground and cannot measure or limit current. Put a fuse in the load wire.</p></Card>
         {/if}
-        <OutputDrive {guid} bind:f upstream={isUpstream(dev)} {varFreq} {rampDuty} />
+        <OutputDrive {guid} bind:f upstream={isUpstream(dev)} {varFreq} {rampDuty} {ssTimeout} />
       </div>
       <div class="col">
         <OutputBench {bench} {blocker} modName={dev.name} limit={isCb ? 0 : Number(f.currentLimit) || 0} inrush={Number(f.inrushLimit) || 0} inrushTime={Number(f.inrushTime) || 0} />

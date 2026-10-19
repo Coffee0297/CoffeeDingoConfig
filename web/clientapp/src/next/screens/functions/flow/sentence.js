@@ -106,6 +106,8 @@ export function sentenceFor(model, n) {
       if (r.clearOnReassert) segs.push(T('A trip that stays off clears when the input switches off, so switching it on again retries.'))
       // upstream hard short limit (output sub 32)
       if (r.hardShortLimit > 0) segs.push(T('Above'), val(r.hardShortLimit + ' A', 'hardShortLimit'), T('(a dead short) it latches off at once, without retrying.'))
+      // upstream current-limited soft start (output sub 30): the inrush limit holds the ramp, the timeout trips
+      if (r.pwmEnabled && r.softStart && r.softStartTimeout > 0) segs.push(T('Its soft start waits while the current is above'), val((r.inrushLimit ?? 0) + ' A', 'inrushLimit'), T('and it trips if not at full duty after'), val(r.softStartTimeout + ' ms', 'softStartTimeout'), T('.'))
       return segs
     }
     case 'sys':
