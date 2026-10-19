@@ -60,7 +60,8 @@ this fork's: PDM currents (Msg 0 total, Msg 1–2 per output) are **1 A/bit**, n
 Msg 3 byte 7 are 0; Msg 27–29 (+29..+31) are the timers (byte 0 outputs, byte 1 running; then elapsed per
 timer, u16 in 10 ms) instead of the table outputs; CAN-input value frames use the input's own byte order.
 Upstream with lookup tables (params 0x1B00, feat/lookup-tables) adds Msg 30 (`base+32`): table 1-2 as float32 LE,
-sent while a table is enabled, so such a PDM spans `base+32` and no longer fits a 0x20 spacing.
+sent while a table is enabled, so such a PDM spans `base+32` and no longer fits a 0x20 spacing. With 4 tables
+(feat/more-tables) Msg 31 (`base+33`) carries tables 3-4 the same way, sent while table 3 or 4 is enabled.
 The upstream CANBoard has no DO duty frame and no timers; its other frames match the fork's.
 
 ---

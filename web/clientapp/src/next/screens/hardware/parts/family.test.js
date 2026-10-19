@@ -31,6 +31,7 @@ assert.equal(lacks({ family: 'fork', version: 'v5.6.6' }, [5, 6, 0], 0x1c00), fa
 // an upstream PDM with lookup tables (0x1B00) also sends Msg 30 at +32
 assert.equal(spanAfter('dingoPDM', up), 30)
 assert.equal(spanAfter('dingoPDM', { ...up, paramRuns: [...up.paramRuns, [0x1b00, 2, 0, 1]] }), 32)
+assert.equal(spanAfter('dingoPDM', { ...up, paramRuns: [...up.paramRuns, [0x1b00, 4, 0, 1]] }), 33)   // more-tables: Msg 31
 assert.equal(spanAfter('dingoPDM', fork), 30)
 assert.equal(spanAfter('CANBoard'), 14)
 

@@ -19,9 +19,12 @@ export const ID_BEFORE = 1
 // (command/response), +14 the ignition state frame (firmware 5.6). dingoPDM owns base..base+30
 // (firmware ≥ 5.5.107 adds Msg 27 = table outputs at +29; +30 is the 5.6 ignition state frame; its
 // +12/+13 already fall inside that span). At the usual 0x10 / 0x20 spacing both still fit.
-// An upstream-dingoFW PDM with lookup tables (param block 0x1B00) also sends Msg 30 at +32: pass the device.
-export const spanAfter = (type, dev) => (/canboard/i.test(type || '') ? 14 : upstreamTables(dev) ? 32 : 30)
-const upstreamTables = (dev) => dev?.family === 'upstream' && (dev.paramRuns ?? []).some((r) => r[0] + r[1] > 0x1b00 && r[0] < 0x1c00)
+// An upstream-dingoFW PDM with lookup tables (param block 0x1B00) also sends Msg 30 at +32 (tables 1-2) and, with
+// 3-4 tables (feat/more-tables), Msg 31 at +33: pass the device.
+export const spanAfter = (type, dev) => (/canboard/i.test(type || '') ? 14 : [30, 32, 32, 33, 33][upstreamTables(dev)])
+// number of 0x1B00 table blocks in the upstream module's param list (0 for the fork / unread)
+const upstreamTables = (dev) => dev?.family !== 'upstream' ? 0
+  : Math.min(4, new Set((dev.paramRuns ?? []).flatMap((r) => Array.from({ length: r[1] }, (_, k) => r[0] + k)).filter((i) => i >= 0x1b00 && i < 0x1c00)).size)
 export const isModule = (type) => /pdm|canboard/i.test(type || '')
 
 export function nextPow2(n) {

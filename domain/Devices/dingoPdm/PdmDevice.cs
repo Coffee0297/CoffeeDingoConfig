@@ -33,6 +33,10 @@ public class PdmDevice : IDeviceConfigurable
     [JsonIgnore] protected int NumMath { get; private set; } = 8;
     [JsonIgnore] protected int NumCanMessages { get; private set; } = 4;
     [JsonIgnore] protected int NumTables { get; private set; } = 2;
+    /// <summary>Tables the module runs. Upstream: its 0x1B00 blocks from the param list (none while unknown; 2, or 4
+    /// with feat/more-tables). Fork: the definition's count.</summary>
+    [JsonIgnore] public int TableCount => !Upstream ? NumTables : Math.Min(Tables.Count, ParamSet.Order
+        .Where(k => k.Index >= LookupTable.UpstreamBaseIndex && k.Index < LookupTable.UpstreamBaseIndex + 0x100).Select(k => k.Index).Distinct().Count());
     [JsonIgnore] protected int NumKeypads { get; private set; } = 2;
     [JsonIgnore] protected const int LuaOutputSlots = 32;  // matches firmware NUM_LUA_OUTPUTS
 
@@ -290,7 +294,7 @@ public class PdmDevice : IDeviceConfigurable
         NumTimers = Timers.Count;
         NumMath = Maths.Count;
         NumCanMessages = CanMessages.Count;
-        NumTables = Tables.Count;
+        NumTables = Math.Min(Tables.Count, definition.NumTables);   // an upstream project may hold more (TableCount)
         NumKeypads = Keypads.Count;
         // The JsonConstructor sizes the starter-disable for the default 8 outputs before the saved
         // output list is known, and the firmware only has 0x1800:2..(2+NumOutputs-1) — a surplus
@@ -353,6 +357,8 @@ public class PdmDevice : IDeviceConfigurable
     private void InitStatusSigs()
     {
         StatusSigs = new Dictionary<int, List<(DbcSignal Signal, Action<double> SetValue)>>();
+        // upstream may run up to 4 tables (feat/more-tables); runs first of the per-family rebuild (sigs, var map, params)
+        if (Upstream) while (Tables.Count < LookupTable.UpstreamMax) Tables.Add(new LookupTable(Tables.Count + 1, "table" + (Tables.Count + 1)));
 
         var cyclicIndex = CyclicRxOffset;
         // upstream dingoFW sends currents in whole amps, the fork in 0.1 A
@@ -564,18 +570,17 @@ public class PdmDevice : IDeviceConfigurable
                     val => Timers[index].ElapsedMs = val));
             }
             MaxCyclicId = cyclicIndex + 2;
-            // feat/lookup-tables: Msg 30 (+32) table 1-2 as float32 LE. Only when the module has tables: a stock
-            // upstream PDM never sends +32, and at 0x20 spacing that id is the next module's base.
-            if (FwFamily.HasBlock(this, LookupTable.UpstreamBaseIndex, false))
+            // feat/lookup-tables: Msg 30 (+32) table 1-2, feat/more-tables: Msg 31 (+33) table 3-4, float32 LE. Only
+            // the frames of tables the module has: a stock upstream PDM never sends +32, and at 0x20 spacing that id
+            // is the next module's base.
+            for (var i = 0; i < TableCount; i++)
             {
-                StatusSigs[cyclicIndex + 3] = [];
-                for (var i = 0; i < NumTables && i < 2; i++)
-                {
-                    var index = i;
-                    StatusSigs[cyclicIndex + 3].Add((new DbcSignal { Name = $"Table{index + 1}.Value", StartBit = i * 32, Length = 32, IsSigned = true, IsFloat = true },
-                        val => Tables[index].Value = val));
-                }
-                MaxCyclicId = cyclicIndex + 3;
+                var index = i;
+                var off = cyclicIndex + 3 + i / 2;
+                if (!StatusSigs.ContainsKey(off)) StatusSigs[off] = [];
+                StatusSigs[off].Add((new DbcSignal { Name = $"Table{index + 1}.Value", StartBit = i % 2 * 32, Length = 32, IsSigned = true, IsFloat = true },
+                    val => Tables[index].Value = val));
+                MaxCyclicId = off;
             }
             return;
         }
@@ -1015,14 +1020,13 @@ public class PdmDevice : IDeviceConfigurable
                 VarMap.Add(new DeviceVariable { GetName = () => Timers[num].Name, OwnerKind = "timer", OwnerNumber = num + 1,
                     PropertyName = "State", DataType = "bool", VariableIndex = index++, SingleVariable = false });
             }
-        // feat/lookup-tables: one value per table
-        if (FwFamily.HasBlock(this, LookupTable.UpstreamBaseIndex, false))
-            for (var i = 0; i < NumTables; i++)
-            {
-                var num = i;
-                VarMap.Add(new DeviceVariable { GetName = () => Tables[num].Name, OwnerKind = "table", OwnerNumber = num + 1,
-                    PropertyName = "Value", DataType = "float", VariableIndex = index++, SingleVariable = false });
-            }
+        // feat/lookup-tables: one value per table the module has (2, or 4 with feat/more-tables)
+        for (var i = 0; i < TableCount; i++)
+        {
+            var num = i;
+            VarMap.Add(new DeviceVariable { GetName = () => Tables[num].Name, OwnerKind = "table", OwnerNumber = num + 1,
+                PropertyName = "Value", DataType = "float", VariableIndex = index++, SingleVariable = false });
+        }
     }
 
     private void InitParams()
@@ -1116,7 +1120,8 @@ public class PdmDevice : IDeviceConfigurable
         foreach (var condition in Conditions) allParams.AddRange(condition.Params);
         foreach (var counter in Counters) allParams.AddRange(counter.Params);
         foreach (var flasher in Flashers) allParams.AddRange(flasher.Params);
-        foreach (var table in Tables) allParams.AddRange(Upstream ? table.UpstreamParams : table.Params);   // upstream: 0x1B00 (its 0x1A00 is the timer)
+        // upstream: 0x1B00 (its 0x1A00 is the timer), every table it may have; the fork: the definition's count
+        foreach (var table in Upstream ? Tables : Tables.Take(NumTables)) allParams.AddRange(Upstream ? table.UpstreamParams : table.Params);
         foreach (var timer in Timers) allParams.AddRange(Family == FwFamily.Upstream ? timer.UpstreamParams : timer.Params);
         foreach (var m in Maths) allParams.AddRange(m.Params);
         foreach (var m in CanMessages) allParams.AddRange(m.Params);

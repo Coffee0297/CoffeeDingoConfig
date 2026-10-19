@@ -49,6 +49,7 @@ public class UpstreamTableTests
         var d = UpstreamPdm();
         LearnParams(d, [.. Block(0x0000, 1, 9), .. Block(0x1A00, 8, 5), .. Block(LookupTable.UpstreamBaseIndex, 2, 85)]);
         Assert.Equal(227, d.VarMap.Count);
+        Assert.Equal(2, d.TableCount);
         Assert.All(d.VarMap.Skip(217).Take(8), v => Assert.Equal("timer", v.OwnerKind));
         Assert.Equal([("table", 1), ("table", 2)], d.VarMap.Skip(225).Select(v => (v.OwnerKind, v.OwnerNumber)));
         Assert.Equal(Enumerable.Range(0, 227), d.VarMap.Select(v => v.VariableIndex));
@@ -68,6 +69,23 @@ public class UpstreamTableTests
         Assert.Equal(-20, d.Tables[1].Value, 3);
     }
 
+    // feat/more-tables: 4 tables (nm more-tables dingopdm_v7.elf: pVarMap 0x394 bytes = 229), tables 3-4 in Msg 31 (+33)
+    [Fact]
+    public void Pdm_WithFourTables_AppendsFour_AndDecodesMsg31()
+    {
+        var d = UpstreamPdm();
+        LearnParams(d, [.. Block(0x0000, 1, 9), .. Block(0x1A00, 8, 5), .. Block(LookupTable.UpstreamBaseIndex, 4, 85)]);
+        Assert.Equal(4, d.TableCount);
+        Assert.Equal(229, d.VarMap.Count);
+        Assert.Equal([1, 2, 3, 4], d.VarMap.Skip(225).Select(v => { Assert.Equal("table", v.OwnerKind); return v.OwnerNumber; }));
+        Assert.Equal(85, d.Params.Count(p => p.Index == 0x1B03 && FwFamily.Has(d, p)));
+        Assert.Equal(33, d.MaxCyclicId);
+        var q = Q();
+        d.Read(0x680 + 33, [.. BitConverter.GetBytes(3.25f), .. BitConverter.GetBytes(44f)], ref q, []);
+        Assert.Equal(3.25, d.Tables[2].Value, 3);
+        Assert.Equal(44, d.Tables[3].Value, 3);
+    }
+
     [Fact]
     public void Pdm_WithoutTables_KeepsStockLayout()
     {
@@ -84,6 +102,8 @@ public class UpstreamTableTests
     {
         var d = new PdmDevice("PDM", 0x680);
         Assert.Equal(85, d.Params.Count(p => p.Index == 0x1A00));
+        Assert.Equal(2, d.TableCount);
+        Assert.DoesNotContain(d.Params, p => p.Index == 0x1A02);   // the fork has 2 tables
         Assert.Equal(0x1A00, LookupTable.BaseFor(FwFamily.Fork));
     }
 }

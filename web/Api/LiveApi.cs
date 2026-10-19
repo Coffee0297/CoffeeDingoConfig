@@ -927,7 +927,7 @@ public static class LiveApi
                     inputs = p.Inputs, canInputs = p.CanInputs, virtualInputs = p.VirtualInputs,
                     conditions = p.Conditions, counters = p.Counters, flashers = p.Flashers,
                     timers = Has(p, TimerFunction.BaseFor(p.Family), true) ? p.Timers : null,
-                    tables = Has(p, LookupTable.BaseFor(p.Family)) ? p.Tables : null,
+                    tables = Has(p, LookupTable.BaseFor(p.Family)) ? p.Tables.Take(p.TableCount).ToList() : null,
                     maths = Has(p, MathFunction.BaseIndex) ? p.Maths : null, canMessages = Has(p, CanMessage.BaseIndex) ? p.CanMessages : null,
                     ignition = p.Ignition,   // firmware 5.6
                     comfortBlinks = Has(p, ComfortBlink.BaseIndex) ? new[] { p.ComfortBlink } : null,   // 5.6.1 (one; an array for the flow builder)
@@ -1610,7 +1610,7 @@ public static class LiveApi
                 foreach (var c in p.Counters) s.Add(new("Counter", c.Name, c.Value.ToString(), c.Value != 0, c.Enabled, N: c.Number));
                 foreach (var f in p.Flashers) s.Add(new("Flasher", f.Name, f.Value ? "on" : "off", f.Value, f.Enabled, N: f.Number));
                 foreach (var t in p.Timers) s.Add(new("Timer", t.Name, t.Value ? "on" : "off", t.Value, t.Enabled, N: t.Number));
-                foreach (var t in p.Tables) s.Add(new("Table", t.Name, t.Value.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture), t.Value != 0, t.Enabled, N: t.Number));
+                foreach (var t in p.Tables.Take(p.TableCount)) s.Add(new("Table", t.Name, t.Value.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture), t.Value != 0, t.Enabled, N: t.Number));
                 foreach (var o in p.Outputs) s.Add(new("Output", o.Name, o.State.ToString(), o.State.ToString() == "On", o.Enabled, N: o.Number));
             }
             else if (dm.GetDevice(g) is CanboardDevice cb)
