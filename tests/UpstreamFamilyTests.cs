@@ -149,6 +149,27 @@ public class UpstreamFamilyTests
         Assert.True(d.ConfigMismatch);
     }
 
+    // feat/pwm-variable-frequency: output subs 21-23 (the fork's numbers) only where the module listed them; a WriteAll
+    // sends the frequency source and denominator in the module's order
+    [Fact]
+    public void VariableFrequency_ByParamList()
+    {
+        var d = UpstreamPdm();
+        var keys = Enumerable.Range(0, 24).Select(s => (0x1000, s)).ToList();
+        d.ParamSet.Learn(keys, new());
+        d.Outputs[0].VariableFreq = true; d.Outputs[0].FreqInput = 8; d.Outputs[0].FreqInputDenom = 10;
+        var q = Q();
+        var outgoing = new List<DeviceCanFrame>();
+        d.Read(0x680, [20, 0, 0, 0, 0, 0, 0, 0], ref q, outgoing);
+        Assert.Equal(keys, outgoing.Take(keys.Count).Select(f => (f.Frame.Payload[2] << 8 | f.Frame.Payload[1], (int)f.Frame.Payload[3])));
+        Assert.Equal(1, outgoing[21].Frame.Payload[4]);
+        Assert.Equal(8, outgoing[22].Frame.Payload[4]);
+        Assert.Equal(10, outgoing[23].Frame.Payload[4]);
+
+        d.ParamSet.Learn(Enumerable.Range(0, 18).Select(s => (0x1000, s)).ToList(), new());   // stock upstream: none of them
+        Assert.DoesNotContain(d.Params.Where(p => p.Index == 0x1000 && p.SubIndex is >= 21 and <= 23), p => FwFamily.Has(d, p));
+    }
+
     [Fact]
     public void ParamRuns_RoundTrip_KeepOrder()
     {

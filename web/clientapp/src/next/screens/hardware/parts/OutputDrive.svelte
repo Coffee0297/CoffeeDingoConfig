@@ -5,7 +5,9 @@
   import { remoteItems, resolveRemote, isRemoteKey } from '../../../lib/remote.js'
   import { href } from '../../../router.svelte.js'
 
-  let { guid, f = $bindable() } = $props()
+  // varFreq: the firmware has "frequency follows a signal" (output subs 21-23; upstream by its param list); upstream clamps it to 16-400 Hz
+  let { guid, f = $bindable(), varFreq = true, freqMin = 15 } = $props()
+  const vf = $derived(varFreq && !!f.variableFreq)
 
   let nums = $state([])
   $effect(() => {
@@ -62,14 +64,14 @@
         <Stepper label="Duty" bind:value={f.fixedDuty} min={0} max={100} step={5} unit="%" data-testid="duty" />
       {/if}
       <Stepper label="Lowest duty" bind:value={f.minDuty} min={0} max={100} step={5} unit="%" />
-      {#if f.variableFreq}
+      {#if vf}
         <Select label="Frequency comes from" items={items} bind:value={freqSrc} onchange={(v) => pickSrc('freqInput', v)} disabled={linking} />
         <Field label="Signal value at 400 Hz" type="number" bind:value={freqFull} min={400} step={400} onchange={setFreqFull} hint={'frequency = signal ÷ ' + (f.freqInputDenom || 1)} />
       {:else}
         <Stepper label="Frequency" bind:value={f.freq} min={15} max={400} step={5} unit="Hz" data-testid="freq" />
       {/if}
     </div>
-    <Switch bind:checked={f.variableFreq} label="Frequency follows a signal" hint="Advanced. 15 to 400 Hz." />
+    {#if varFreq}<Switch bind:checked={f.variableFreq} label="Frequency follows a signal" hint={`Advanced. ${freqMin} to 400 Hz.`} />{/if}
   {/if}
   <div class="soft">
     <Switch bind:checked={f.softStart} label="Soft start" hint="Ramps up when it turns on." />

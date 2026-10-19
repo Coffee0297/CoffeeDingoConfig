@@ -91,6 +91,8 @@ export function sentenceFor(model, n) {
       const segs = [T('When'), srcTok(model, src, 'input'), T('is on → turn on'), self(n)]
       if (r.variableDutyCycle) segs.push(T('at a duty from'), srcTok(model, r.dutyCycleInput, 'dutyCycleInput'))
       else if (r.pwmEnabled) segs.push(T('at'), val((r.fixedDuty ?? r.fixedDutyCycle ?? 100) + ' %', 'pwm'))
+      // Hz = signal ÷ denominator (the firmware clamps it to its PWM range)
+      if (r.pwmEnabled && r.variableFreq) segs.push(T('with a frequency of'), srcTok(model, r.freqInput, 'freqInput'), T('÷'), val(r.freqInputDenom ?? 1, 'freqInputDenom'), T('Hz'))
       segs.push(T('.'))
       return segs
     }

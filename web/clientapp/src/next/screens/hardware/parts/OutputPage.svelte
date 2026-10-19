@@ -15,7 +15,7 @@
   import SaveBar from './SaveBar.svelte'
   import { createBench } from './bench.svelte.js'
   import { signalFeed, ring } from './feeds.svelte.js'
-  import { resample, olderThan, isUpstream } from './util.js'
+  import { resample, olderThan, isUpstream, has } from './util.js'
 
   let { guid, n } = $props()
 
@@ -61,6 +61,8 @@
   function revert() { if (src) { f = seedFrom(src); snap = JSON.stringify(f); saveErr = '' } }
 
   const rating = $derived(!isCb && dev ? outputRatingA(defs, dev.type, n) : null)
+  // PWM frequency from a signal (output subs 21-23): on upstream only where the module has it
+  const varFreq = $derived(isCb || has(dev, 0x1000 + n - 1, 21))
   const overRating = $derived(rating != null && Number(f?.currentLimit) > rating)
 
   function validate() {
@@ -69,14 +71,15 @@
     if (f.pwmEnabled) {
       const minD = Math.round(+f.minDuty || 0)
       if (minD < 0 || minD > 100) return 'Lowest duty must be 0 to 100 %.'
-      if (!f.variableFreq) { const fr = Math.round(+f.freq || 0); if (fr < 15 || fr > 400) return 'PWM frequency must be 15 to 400 Hz.' }
+      const vf = varFreq && f.variableFreq
+      if (!vf) { const fr = Math.round(+f.freq || 0); if (fr < 15 || fr > 400) return 'PWM frequency must be 15 to 400 Hz.' }
       if (!f.variableDutyCycle) {
         const d = Math.round(+f.fixedDuty || 0)
         if (d < 0 || d > 100) return 'Duty must be 0 to 100 %.'
         if (minD > d) return `Lowest duty (${minD} %) cannot be above the duty (${d} %).`
       }
       if (f.variableDutyCycle && !Number(f.dutyCycleInput)) return 'Choose the signal the duty comes from.'
-      if (f.variableFreq && !Number(f.freqInput)) return 'Choose the signal the frequency comes from.'
+      if (vf && !Number(f.freqInput)) return 'Choose the signal the frequency comes from.'
     }
     return ''
   }
@@ -207,7 +210,7 @@
         {:else}
           <Card title="Protection"><p class="muted">The CANBoard switches this load to ground and cannot measure or limit current. Put a fuse in the load wire.</p></Card>
         {/if}
-        <OutputDrive {guid} bind:f />
+        <OutputDrive {guid} bind:f {varFreq} freqMin={isUpstream(dev) ? 16 : 15} />
       </div>
       <div class="col">
         <OutputBench {bench} {blocker} modName={dev.name} limit={isCb ? 0 : Number(f.currentLimit) || 0} inrush={Number(f.inrushLimit) || 0} inrushTime={Number(f.inrushTime) || 0} />
