@@ -208,7 +208,8 @@ export function createSim(model, snapshot) {
           // reset mode None latches at once, Count once its retries have run out, Endless never
           if (n.kind === 'output' && (!r.resetMode || (r.resetMode === 1 && t - s.trip >= (r.resetCountLimit ?? 0) * (r.resetTime ?? 0)))) s.latched = true
           status[n.id] = { text: s.latched ? 'FAULT' : 'TRIPPED', tone: 'fault', why: n.kind === 'output'
-            ? `Over ${lim} A: the output trips. ${s.latched ? `It stays off until ${until}.` : r.resetMode ? `It tries again after ${(r.resetTime ?? 0) / 1000} s${r.resetMode === 1 ? `, up to ${r.resetCountLimit} times, then stays off` : ''}.` : ''}`
+            ? r.hardShortLimit > 0 ? `Over ${lim} A: the output trips. If it is a dead short (above ${r.hardShortLimit} A) it latches off at once instead, without retrying; a smaller overload ${r.resetMode ? 'retries as set' : 'stays off until it is reset'}.`
+            : `Over ${lim} A: the output trips. ${s.latched ? `It stays off until ${until}.` : r.resetMode ? `It tries again after ${(r.resetTime ?? 0) / 1000} s${r.resetMode === 1 ? `, up to ${r.resetCountLimit} times, then stays off` : ''}.` : ''}`
             : 'Low-side output tripped (simulated).' }
         } else if (n.kind === 'output' && (m(n.id).uTrip || (f === 'under' && want && r.underLimit > 0))) {
           // too little current (upstream subs 27-29): after the time, report Undercurrent, or switch off and latch Fault

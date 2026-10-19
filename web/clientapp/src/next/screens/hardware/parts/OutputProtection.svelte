@@ -4,7 +4,8 @@
   // under: the undercurrent limit (upstream output subs 27-29, upstream modules only)
   import { latchClears } from '../../../../lib/trip.js'
   // canClear: the module has "clear on re-assert" (upstream fault clear); retryAll: it has a retry-all signal wired
-  let { f = $bindable(), rating = null, warn = true, openLoad = true, under = false, canClear = false, retryAll = false } = $props()
+  // hardShort: the firmware has the hard short limit (upstream output sub 32)
+  let { f = $bindable(), rating = null, warn = true, openLoad = true, under = false, canClear = false, retryAll = false, hardShort = false } = $props()
   const UNDER = [{ value: '0', label: 'Report only' }, { value: '1', label: 'Switch the output off' }]
 
   const RESET = [{ value: '0', label: 'Stay off (latch)' }, { value: '1', label: 'Retry a few times' }, { value: '2', label: 'Retry for ever' }]
@@ -62,9 +63,16 @@
         {#if f.underTrip && num(f.underLimit)}<span class="hint bad">latches Fault: only where losing this load is safe (not a fuel pump)</span>{/if}
       </div>
     {/if}
+    {#if hardShort}
+      <div>
+        <Stepper label="Dead short above" bind:value={f.hardShortLimit} min={0} max={100} step={1} decimals={1} unit="A" data-testid="hard-short" />
+        <span class="hint" class:bad={num(f.hardShortLimit) > 0 && num(f.hardShortLimit) <= num(f.inrushLimit)}>{num(f.hardShortLimit) > 0 && num(f.hardShortLimit) <= num(f.inrushLimit) ? '■ at or below the inrush allowed: a healthy load can latch off at switch-on' : 'latches off at once, even during inrush; no retry. Well above the inrush, below where the current reading tops out. 0 = off'}</span>
+      </div>
+    {/if}
   </div>
   <p class="sum" data-testid="protection-summary">
     Trips above <strong>{f.currentLimit} A</strong>{#if num(f.inrushTime) > 0}, or <strong>{f.inrushLimit} A</strong> during the first <strong>{f.inrushTime} ms</strong>{/if}; {afterTrip}.
+    {#if hardShort && num(f.hardShortLimit) > 0}Above <strong>{f.hardShortLimit} A</strong> (a dead short) it latches off at once, also during inrush, without retrying.{/if}
     {#if warn}{#if num(f.warnLimit) > 0}Warns at <strong>{f.warnLimit} A</strong>.{:else}No early warning.{/if}{/if}
     {#if openLoad}{#if num(f.openLoadLimit) > 0}Reports "load missing?" below <strong>{f.openLoadLimit} A</strong> for <strong>{f.openLoadTime} ms</strong>.{:else}Missing load is not checked.{/if}{/if}
     {#if under && num(f.underLimit) > 0}Below <strong>{f.underLimit} A</strong> for <strong>{f.underTime} ms</strong> it {f.underTrip ? 'switches off and latches Fault' : 'reports Undercurrent'}.{/if}

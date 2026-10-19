@@ -58,6 +58,8 @@ public class Output : IDeviceFunction
     [JsonPropertyName("underTrip")] public bool UnderTrip { get; set; }
     // upstream feat/fault-clear: a latched Fault clears when the output's input goes off, so switching it on again retries
     [JsonPropertyName("clearOnReassert")] public bool ClearOnReassert { get; set; }
+    // upstream feat/hard-short-trip: A, 0 = off; above it the output latches Fault at once, also inside the inrush time
+    [JsonPropertyName("hardShortLimit")] public double HardShortLimit { get => field; set => field = Math.Clamp(value, 0.0, 100.0); } = 0.0;
     
     [JsonIgnore][Plotable(displayName:"Current", unit:"A")] public double Current { get; set; }
     [JsonIgnore][Plotable(displayName:"State")] public OutState State { get; set; }
@@ -95,6 +97,8 @@ public class Output : IDeviceFunction
                 GetValue = () => UnderTime, SetValue = val => UnderTime = (int)val, ValueType = typeof(int), DefaultValue = 1000 },
             new DeviceParameter { ParentName = Name, Name = $"output[{Number}].underTrip", Index = idx, SubIndex = 29,
                 GetValue = () => UnderTrip, SetValue = val => UnderTrip = (bool)val, ValueType = typeof(bool), DefaultValue = false },
+            new DeviceParameter { ParentName = Name, Name = $"output[{Number}].hardShortLimit", Index = idx, SubIndex = 32,
+                GetValue = () => HardShortLimit, SetValue = val => HardShortLimit = (double)val, ValueType = typeof(double), DefaultValue = 0.0 },
         ];
     }
 

@@ -104,6 +104,8 @@ export function sentenceFor(model, n) {
       if (r.pwmEnabled && r.variableDutyCycle && r.rampDutyChanges && (r.softStart ?? r.softStartEnabled))
         segs.push(T('Duty changes ramp at up to 100 % per'), val((r.softStartRamp ?? r.softStartRampTime ?? 0) + ' ms', 'softStartRamp'), T('.'))
       if (r.clearOnReassert) segs.push(T('A trip that stays off clears when the input switches off, so switching it on again retries.'))
+      // upstream hard short limit (output sub 32)
+      if (r.hardShortLimit > 0) segs.push(T('Above'), val(r.hardShortLimit + ' A', 'hardShortLimit'), T('(a dead short) it latches off at once, without retrying.'))
       return segs
     }
     case 'sys':

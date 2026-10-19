@@ -276,6 +276,28 @@ public class UpstreamFamilyTests
         Assert.True(FwFamily.Has(d, ramp));
     }
 
+    // feat/hard-short-trip: output 0x1000+i sub 32 fHardShortLimit (A, float, 0..100), upstream modules only
+    [Fact]
+    public void HardShortLimit_UpstreamOnly()
+    {
+        var d = UpstreamPdm();
+        var p = Assert.Single(d.Params, x => x.Index == 0x1001 && x.SubIndex == 32);
+        Assert.Equal(typeof(double), p.ValueType);
+        d.Outputs[1].HardShortLimit = 150;
+        Assert.Equal(100.0, p.GetValue());   // the firmware's range
+        d.Outputs[1].HardShortLimit = 40;
+        var frame = ParamCodec.ToFrame(domain.Enums.MessageCommand.WriteAllVal, p, 0).Payload;
+        Assert.Equal(40f, BitConverter.ToSingle(frame, 4));   // sent as a float
+        d.ParamSet.Learn(Enumerable.Range(0, 18).Select(s => (0x1001, s)).ToList(), new());
+        Assert.False(FwFamily.Has(d, p));
+
+        var f = new PdmDevice("PDM", 0x680);
+        f.SetLogger(NullLogger<PdmDevice>.Instance);
+        var q = Q();
+        f.Read(0x680, [31, 0, 0, 0, 5, 6, 0, 6], ref q, []);
+        Assert.DoesNotContain(f.Params, x => x.SubIndex == 32 && x.Index >= 0x1000 && x.Index < 0x1008);
+    }
+
     [Fact]
     public void ParamRuns_RoundTrip_KeepOrder()
     {

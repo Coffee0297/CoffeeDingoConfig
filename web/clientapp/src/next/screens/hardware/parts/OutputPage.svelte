@@ -55,6 +55,7 @@
       primaryOutput: o.primaryOutput ?? -1, warnLimit: o.warnLimit ?? 0, openLoadLimit: o.openLoadLimit ?? 0, openLoadTime: o.openLoadTime ?? 1000,
       underLimit: o.underLimit ?? 0, underTime: o.underTime ?? 1000, underTrip: !!o.underTrip,
       clearOnReassert: !!o.clearOnReassert,
+      hardShortLimit: o.hardShortLimit ?? 0,
     }
   }
   // Seed once per output so the 10 Hz telemetry never overwrites an edit in progress.
@@ -115,6 +116,7 @@
           WarnLimit: Number(f.warnLimit), OpenLoadLimit: Number(f.openLoadLimit), OpenLoadTime: Math.round(Number(f.openLoadTime)),
           UnderLimit: Number(f.underLimit) || 0, UnderTime: Math.round(Number(f.underTime) || 0), UnderTrip: !!f.underTrip,
           ClearOnReassert: !!f.clearOnReassert,
+          HardShortLimit: Number(f.hardShortLimit) || 0,
         })
       }
       project.dirty = true
@@ -211,7 +213,7 @@
       <div class="col">
         <OutputChain {guid} {dev} bind:f {feed} {connected} raw={src} />
         {#if !isCb}
-          <OutputProtection bind:f {rating} warn={has(dev, 0x1000 + n - 1, 18)} openLoad={has(dev, 0x1000 + n - 1, 19)} under={isUpstream(dev) && has(dev, 0x1000 + n - 1, 27)} canClear={isUpstream(dev) && has(dev, 0x1000 + n - 1, 25)} retryAll={dev.retryAllInput > 0} />
+          <OutputProtection bind:f {rating} warn={has(dev, 0x1000 + n - 1, 18)} openLoad={has(dev, 0x1000 + n - 1, 19)} under={isUpstream(dev) && has(dev, 0x1000 + n - 1, 27)} canClear={isUpstream(dev) && has(dev, 0x1000 + n - 1, 25)} retryAll={dev.retryAllInput > 0} hardShort={isUpstream(dev) && has(dev, 0x1000 + n - 1, 32)} />
         {:else}
           <Card title="Protection"><p class="muted">The CANBoard switches this load to ground and cannot measure or limit current. Put a fuse in the load wire.</p></Card>
         {/if}
