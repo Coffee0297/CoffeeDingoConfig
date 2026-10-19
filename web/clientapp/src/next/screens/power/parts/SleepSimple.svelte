@@ -2,7 +2,7 @@
   // "Automatic sleep" card: the three simple switches, written to every module that can sleep.
   import { Card, Chip, Switch, Stepper, FwBadge } from '../../../ui/index.js'
   import { live, toast } from '../../../lib/live.svelte.js'
-  import { SUB, canSleep, writeParams, TIMEOUT_MIN_S, TIMEOUT_MAX_S, secs } from './sleepLogic.js'
+  import { SUB, canSleep, writeParams, TIMEOUT_MIN_S, TIMEOUT_MAX_S, secs, lastWake } from './sleepLogic.js'
   import { isUpstream } from '../../hardware/parts/util.js'
 
   const mods = $derived(live.devices.filter((d) => /pdm|canboard/i.test(d.type ?? '') && canSleep(d)))
@@ -35,7 +35,7 @@
   function setAuto(on) {
     if (on) {
       const bad = reachable.filter(noWake)
-      if (bad.length) { toast(`${bad.map((d) => d.name).join(', ')} has no way to wake up except USB. Tick a wake input or CAN activity below first.`, 'error', 9000); return }
+      if (bad.length) { toast(`${bad.map((d) => `${d.name} has no way to wake up except ${lastWake(d)}`).join('; ')}. Tick a wake input or CAN activity below first.`, 'error', 9000); return }
     }
     apply([[SUB.enabled, on ? 1 : 0]], 'automatic sleep')
   }
