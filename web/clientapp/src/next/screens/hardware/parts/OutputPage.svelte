@@ -62,6 +62,8 @@
   function revert() { if (src) { f = seedFrom(src); snap = JSON.stringify(f); saveErr = '' } }
 
   const rating = $derived(!isCb && dev ? outputRatingA(defs, dev.type, n) : null)
+  // PWM frequency from a signal (output subs 21-23): on upstream only where the module has it
+  const varFreq = $derived(isCb || has(dev, 0x1000 + n - 1, 21))
   const overRating = $derived(rating != null && Number(f?.currentLimit) > rating)
 
   function validate() {
@@ -70,14 +72,15 @@
     if (f.pwmEnabled) {
       const minD = Math.round(+f.minDuty || 0)
       if (minD < 0 || minD > 100) return 'Lowest duty must be 0 to 100 %.'
-      if (!f.variableFreq && pwmFreqError(dev, f.freq)) return pwmFreqError(dev, f.freq)
+      const vf = varFreq && f.variableFreq
+      if (!vf && pwmFreqError(dev, f.freq)) return pwmFreqError(dev, f.freq)
       if (!f.variableDutyCycle) {
         const d = Math.round(+f.fixedDuty || 0)
         if (d < 0 || d > 100) return 'Duty must be 0 to 100 %.'
         if (minD > d) return `Lowest duty (${minD} %) cannot be above the duty (${d} %).`
       }
       if (f.variableDutyCycle && !Number(f.dutyCycleInput)) return 'Choose the signal the duty comes from.'
-      if (f.variableFreq && !Number(f.freqInput)) return 'Choose the signal the frequency comes from.'
+      if (vf && !Number(f.freqInput)) return 'Choose the signal the frequency comes from.'
     }
     return ''
   }
@@ -209,7 +212,7 @@
         {:else}
           <Card title="Protection"><p class="muted">The CANBoard switches this load to ground and cannot measure or limit current. Put a fuse in the load wire.</p></Card>
         {/if}
-        <OutputDrive {guid} bind:f upstream={isUpstream(dev)} />
+        <OutputDrive {guid} bind:f upstream={isUpstream(dev)} {varFreq} />
       </div>
       <div class="col">
         <OutputBench {bench} {blocker} modName={dev.name} limit={isCb ? 0 : Number(f.currentLimit) || 0} inrush={Number(f.inrushLimit) || 0} inrushTime={Number(f.inrushTime) || 0} />
