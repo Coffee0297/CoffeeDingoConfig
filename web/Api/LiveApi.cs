@@ -329,9 +329,9 @@ public static class DingoMap
 
     static WakeDto? Wake(DeviceUiState? ui) => ui?.WakeReason is int r
         ? new WakeDto(r switch { 1 => "can", 2 => "input", 3 => "usb", _ => "power-on" }, ui.WakeSource, ui.WakeCount) : null;
-    static IgnitionDto? Ign(domain.Devices.Functions.Ignition? g, int baseId, string? type) => g is null ? null
+    static IgnitionDto? Ign(domain.Devices.Functions.Ignition? g, int stateId) => g is null ? null
         : new IgnitionDto(g.Enabled, g.Role == domain.Devices.Functions.IgnitionRole.Main ? "main" : "follower",
-            g.State.ToString().ToLowerInvariant(), g.Dash, g.MainStateId, baseId + domain.Devices.Functions.Ignition.StateOffsetFor(type),
+            g.State.ToString().ToLowerInvariant(), g.Dash, g.MainStateId, stateId,
             (DateTime.UtcNow - g.LastStateFrame).TotalMilliseconds < 1000);
 
     public static DeviceDto ToDto(IDevice d, DeviceUiState? ui = null)
@@ -356,7 +356,7 @@ public static class DingoMap
                 p.CanBootloader, p.Connected && p.ConfigMismatch, p.LastConfigDiff.Count, false,
                 p.CanFiltersEnabled, p.ConnectUsbToCan, StoredOnModule: ui?.StoredOnModule, InBootloader: !p.Connected && ui?.InBootloader == true, PendingEdits: p.ConfigMismatch ? ui?.PendingEdits ?? 0 : 0,
                 HasLed: ui?.HasLed, Asleep: ui?.Asleep == true && !p.Connected, LastWake: Wake(ui), SleepCountdownS: p.SleepCountdownS,
-                SleepBlockers: ui?.SleepBlockers, Ignition: Ign(p.Ignition, p.BaseId, p.Type),
+                SleepBlockers: ui?.SleepBlockers, Ignition: Ign(p.Ignition, p.BaseId + (p.IgnitionStateOffset ?? domain.Devices.Functions.Ignition.StateOffsetFor(p.Type, p.Family, p.PdmType))),
                 Family: p.Family, ParamsRead: p.ParamSet.FromModule, ParamRuns: p.ParamRuns);
         }
         if (d is domain.Devices.Canboard.CanboardDevice cb)
@@ -369,7 +369,7 @@ public static class DingoMap
                 cb.SleepEnabled, cb.SleepTimeoutMs, cb.SleepIgnoreAlwaysOn, cb.ForceSleepInput, cb.MuteTxInput, cb.WakeDigInputMask, cb.WakeOnCan,
                 cb.CanBootloader, cb.Connected && cb.ConfigMismatch, cb.LastConfigDiff.Count, CanSleep: cb.CanSleep, StoredOnModule: ui?.StoredOnModule, InBootloader: !cb.Connected && ui?.InBootloader == true, PendingEdits: cb.ConfigMismatch ? ui?.PendingEdits ?? 0 : 0,
                 HasLed: ui?.HasLed, Asleep: ui?.Asleep == true && !cb.Connected, LastWake: Wake(ui), SleepCountdownS: cb.SleepCountdownS,
-                SleepBlockers: cb.SleepCountdownS != null ? cb.SleepBlockersRaw : ui?.SleepBlockers, Ignition: Ign(cb.Ignition, cb.BaseId, cb.Type),
+                SleepBlockers: cb.SleepCountdownS != null ? cb.SleepBlockersRaw : ui?.SleepBlockers, Ignition: Ign(cb.Ignition, cb.BaseId + domain.Devices.Functions.Ignition.StateOffsetFor(cb.Type)),
                 DigitalOut: cb.DigitalOutputs.Select(o => new DigitalOutDto(o.Number, o.Name, o.Enabled, o.State, o.Input)).ToArray(),
                 Family: cb.Family, ParamsRead: cb.ParamSet.FromModule, ParamRuns: cb.ParamRuns);
         return new DeviceDto(d.Guid.ToString(), d.Name, d.Type, d.BaseId, d.Connected,

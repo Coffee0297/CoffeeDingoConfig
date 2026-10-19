@@ -1002,6 +1002,11 @@ public class PdmDevice : IDeviceConfigurable
                 VarMap.Add(new DeviceVariable { GetName = () => Timers[num].Name, OwnerKind = "timer", OwnerNumber = num + 1,
                     PropertyName = "State", DataType = "bool", VariableIndex = index++, SingleVariable = false });
             }
+        // feat/ignition-block: the seven ignition roles
+        if (FwFamily.HasBlock(this, Functions.Ignition.BaseIndex, false))
+            foreach (var role in new[] { "Ignition", "Accessory", "Cranking", "Running", "Ready", "Dash", "Link OK" })
+                VarMap.Add(new DeviceVariable { GetName = () => "Ignition", OwnerKind = "ignition", OwnerNumber = 1,
+                    PropertyName = role, DataType = "bool", VariableIndex = index++, SingleVariable = false });
     }
 
     private void InitParams()
@@ -1179,10 +1184,15 @@ public class PdmDevice : IDeviceConfigurable
         return Connected & !lastConnected;
     }
     
+    // The ignition state frame's offset. Upstream: only a module with the block (feat/ignition-block) sends it, and
+    // +32 is otherwise the base id of a module 0x20 above, which this one must not claim.
+    [JsonIgnore] public int? IgnitionStateOffset => !Upstream ? Functions.Ignition.StateOffsetFor(Type)
+        : FwFamily.HasBlock(this, Functions.Ignition.BaseIndex, false) ? Functions.Ignition.StateOffsetFor(Type, Family, PdmType) : null;
+
     public bool InIdRange(int id)
     {
         // + the ignition state frame (firmware 5.6), the first id after the module's own range
-        return (id >= BaseId) && (id <= MaxCyclicId + BaseId || id == BaseId + Functions.Ignition.StateOffsetFor(Type));
+        return (id >= BaseId) && (id <= MaxCyclicId + BaseId || id == BaseId + IgnitionStateOffset);
     }
     
     public void Read(int id, byte[] data, 
@@ -1192,7 +1202,7 @@ public class PdmDevice : IDeviceConfigurable
         var offset = id - BaseId;
 
         // Ignition state frame (firmware 5.6), sent by a main module: ['I', state, flags]
-        if (!Upstream && offset == Functions.Ignition.StateOffsetFor(Type) && data.Length >= 3 && data[0] == 'I')
+        if (offset == IgnitionStateOffset && data.Length >= 3 && data[0] == 'I')
         {
             Ignition.State = (Functions.IgnitionState)data[1];
             Ignition.Dash = (data[2] & 0x10) != 0;

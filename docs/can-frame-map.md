@@ -60,6 +60,9 @@ this fork's: PDM currents (Msg 0 total, Msg 1–2 per output) are **1 A/bit**, n
 Msg 3 byte 7 are 0; Msg 27–29 (+29..+31) are the timers (byte 0 outputs, byte 1 running; then elapsed per
 timer, u16 in 10 ms) instead of the table outputs; CAN-input value frames use the input's own byte order.
 The upstream CANBoard has no DO duty frame and no timers; its other frames match the fork's.
+With `feat/ignition-block`, an enabled *main* module sends the ignition state as Msg 30 = base + 32 (PT-DPDM Msg 31 =
+base + 33), `['I', state, flags]` as on the fork; at 0x20 spacing that is the next module's base id, so space an
+upstream main at least 0x30 below its neighbour (the Modules page flags the clash).
 
 ---
 
