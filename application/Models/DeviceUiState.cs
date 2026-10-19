@@ -27,6 +27,7 @@ public class DeviceUiState
     public void SyncEdits(Func<bool> mismatch) { lock (Edits) if (!mismatch()) Edits.Clear(); }   // read under the lock: an edit may be landing
     // Firmware 5.6
     public bool? HasLed { get; set; }               // Identify reply (G12)
+    public bool TestReplied { get; set; }           // an OutputTest (48) reply came since the last request
     public bool Asleep { get; set; }                // announced "going to sleep" and quiet since (G14)
     public DateTime? AsleepSince { get; set; }
     public int? WakeReason { get; set; }            // SleepInfo: 0 power-on, 1 CAN, 2 digital input, 3 USB (G14)

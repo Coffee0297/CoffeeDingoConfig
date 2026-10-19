@@ -172,7 +172,6 @@
     if (!live.connected) return 'Connect to the car first. Tests run only while connected.'
     if (!live.programmingAllowed) return 'Sim adapter: programming is turned off.'
     if (!dev?.connected) return `${dev?.name ?? 'The module'} is not answering on the bus.`
-    if (isUpstream(dev)) return 'Upstream dingoFW has no output test command.'
     if (olderThan(dev?.version, [5, 5, 107])) return 'Needs firmware 5.5.107 or newer.'
     if (!src?.enabled) return 'Turn the output on and save first. The test only runs on an enabled output.'
     if (dirty) return 'Save your changes first. The test uses what is on the module.'
@@ -232,7 +231,7 @@
         <OutputDrive {guid} bind:f upstream={isUpstream(dev)} {varFreq} {rampDuty} {ssTimeout} softStop={!isCb && isUpstream(dev) && has(dev, 0x1000 + n - 1, 31)} />
       </div>
       <div class="col">
-        <OutputBench {bench} {blocker} modName={dev.name} limit={isCb ? 0 : Number(f.currentLimit) || 0} inrush={Number(f.inrushLimit) || 0} inrushTime={Number(f.inrushTime) || 0} />
+        <OutputBench {bench} {blocker} modName={dev.name} pwm={!(isCb && isUpstream(dev))} minFreq={isUpstream(dev) ? 16 : 15} limit={isCb ? 0 : Number(f.currentLimit) || 0} inrush={Number(f.inrushLimit) || 0} inrushTime={Number(f.inrushTime) || 0} />
         {#if !isCb}
           <Card title="Current, last 60 s" aria-label="Current history">
             {#snippet actions()}<span class="mono muted" data-testid="peak">peak {peak.toFixed(1)} A · now {amps?.toFixed(1)} A</span>{/snippet}
