@@ -305,8 +305,9 @@ public class CanboardDevice : IDeviceConfigurable
             ));
         }
 
-        // Timers 1-4 (1-bit each, upper nibble of byte 3: bits 28-31), firmware >= 5.5.107
-        for (var i = 0; i < (Family == FwFamily.Upstream ? 0 : NumTimers) && i < 4; i++)
+        // Timers 1-4 (1-bit each, upper nibble of byte 3: bits 28-31), firmware >= 5.5.107; upstream with
+        // feat/canboard-timers (the nibble is always 0 on a stock upstream CANBoard, which has no timers)
+        for (var i = 0; i < NumTimers && i < 4; i++)
         {
             var index = i;
             StatusSigs[cyclicIndex].Add((
