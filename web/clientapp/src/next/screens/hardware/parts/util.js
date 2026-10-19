@@ -118,6 +118,7 @@ export function consumersOf(idxs, funcs, outputs, moduleName, dev) {
     if (['inputVal', 'dutyCycleInput', 'freqInput'].some((f) => set.has(Number(o[f])))) add(o.name?.trim() || 'Output ' + o.number, `${moduleName} out ${o.number}`)
   }
   if (dev && (set.has(dev.forceSleepInput) || set.has(dev.muteTxInput))) add('Car sleep', moduleName)
+  if (dev && set.has(dev.shedInput)) add('Load shedding', moduleName)
   return hits
 }
 

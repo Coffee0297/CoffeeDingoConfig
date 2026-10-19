@@ -24,7 +24,7 @@ public record OutputDto(int Number, string Name, string State, double Current, i
     double WarnLimit, double OpenLoadLimit, int OpenLoadTime, string WireColor, string WireStripe, double WireLength, double WireGaugeMm2,
     bool VariableDutyCycle = false, int DutyCycleInput = 0, int DutyCycleDenom = 100,
     bool VariableFreq = false, int FreqInput = 0, int FreqInputDenom = 1, bool RampDutyChanges = false,
-    int PrimaryOutput = -1);
+    int PrimaryOutput = -1, bool Shed = false);
 public record DeviceDto(string Guid, string Name, string Type, int BaseId, bool Connected,
     double Battery, double Current, double Temp, string State, string Version, string Bitrate, OutputDto[] Outputs,
     bool Reading, int ReadDone, int ReadTotal, bool SleepEnabled, int SleepTimeoutMs,
@@ -50,7 +50,9 @@ public record DeviceDto(string Guid, string Name, string Type, int BaseId, bool 
     DigitalOutDto[]? DigitalOut = null,
     // "fork" (dingoFW 5.x) or "upstream" (dingoFW 0.x). Upstream: ParamsRead = its param list came from a Read this
     // session (Apply needs it); ParamRuns = that list, [firstIndex, indexCount, sub…] (see util.js has/hasBlock).
-    string Family = "fork", bool ParamsRead = false, int[][]? ParamRuns = null);
+    string Family = "fork", bool ParamsRead = false, int[][]? ParamRuns = null,
+    // upstream feat/load-shed: the signal that sheds the opted-in outputs (null = this module has none)
+    int? ShedInput = null);
 public record DigitalOutDto(int Number, string Name, bool Enabled, bool On, int Input);
 public record WakeDto(string Reason, int Source, int Count);
 public record IgnitionDto(bool Enabled, string Role, string State, bool Dash, int MainStateId, int StateId, bool Live);
@@ -74,7 +76,7 @@ public record SetOutputReq(int Number, double CurrentLimit);
 /// <summary>Output bench test: mode on | pwm | off; duty %, freq Hz (0 = the output's own), hold s (1–30).</summary>
 public record OutputTestReq(string? Mode, int Duty = 100, int Freq = 0, int Hold = 5);
 /// <summary>The module's own var-map inputs (device params 0x0000:10 / :11); null = leave unchanged, 0 = unwired.</summary>
-public record DeviceInputsReq(int? ForceSleepInput, int? MuteTxInput);
+public record DeviceInputsReq(int? ForceSleepInput, int? MuteTxInput, int? ShedInput = null);
 // Everything but Number is optional: a field left out of the body keeps the output's current value, so a
 // partial body (what the MCP set_output_config tool sends) merges instead of zeroing Enabled/Input/limits.
 // The SPA's _binBody always sends every field, so its saves are unchanged.
@@ -85,7 +87,7 @@ public record OutputConfigReq(int Number, bool? Enabled = null, int? Input = nul
     string? WireColor = null, string? WireStripe = null, double? WireLength = null, double? WireGaugeMm2 = null,
     bool? VariableDutyCycle = null, int? DutyCycleInput = null, int? DutyCycleDenom = null,
     bool? VariableFreq = null, int? FreqInput = null, int? FreqInputDenom = null, bool? RampDutyChanges = null,
-    int? PrimaryOutput = null);
+    int? PrimaryOutput = null, bool? Shed = null);
 public record ApplyProfileReq(string Source);
 public record RenameReq(string Name);
 public record ReadParamReq(int Index, int Sub);
@@ -348,7 +350,7 @@ public static class DingoMap
                 o.PwmEnabled, o.Frequency, o.FixedDutyCycle, o.MinDutyCycle, o.SoftStartEnabled, o.SoftStartRampTime,
                 o.WarnLimit, o.OpenLoadLimit, o.OpenLoadTime, o.WireColor, o.WireStripe, o.WireLength, o.WireGaugeMm2,
                 o.VariableDutyCycle, o.DutyCycleInput, o.DutyCycleDenominator, o.VariableFreq, o.FreqInput, o.FreqInputDenom, o.RampDutyChanges,
-                o.PrimaryOutput)).ToArray();
+                o.PrimaryOutput, o.Shed)).ToArray();
             return new DeviceDto(p.Guid.ToString(), p.Name, p.Type, p.BaseId, p.Connected,
                 p.BatteryVoltage, p.TotalCurrent, p.BoardTempC, p.DeviceState.ToString(),
                 p.Version, BitrateLabel(p.BitRate), outs, reading, readDone, readTotal,
@@ -357,7 +359,7 @@ public static class DingoMap
                 p.CanFiltersEnabled, p.ConnectUsbToCan, StoredOnModule: ui?.StoredOnModule, InBootloader: !p.Connected && ui?.InBootloader == true, PendingEdits: p.ConfigMismatch ? ui?.PendingEdits ?? 0 : 0,
                 HasLed: ui?.HasLed, Asleep: ui?.Asleep == true && !p.Connected, LastWake: Wake(ui), SleepCountdownS: p.SleepCountdownS,
                 SleepBlockers: ui?.SleepBlockers, Ignition: Ign(p.Ignition, p.BaseId, p.Type),
-                Family: p.Family, ParamsRead: p.ParamSet.FromModule, ParamRuns: p.ParamRuns);
+                Family: p.Family, ParamsRead: p.ParamSet.FromModule, ParamRuns: p.ParamRuns, ShedInput: p.HasShed ? p.ShedInput : null);
         }
         if (d is domain.Devices.Canboard.CanboardDevice cb)
             // CANBoard has no battery/total-current sensing (those are PDM smart-output features) — leave
@@ -862,6 +864,7 @@ public static class LiveApi
             if (r.WarnLimit is { } wl) o.WarnLimit = wl;
             if (r.OpenLoadLimit is { } oll) o.OpenLoadLimit = oll;
             if (r.OpenLoadTime is { } olt) o.OpenLoadTime = olt;
+            if (r.Shed is { } sh) o.Shed = sh;
             // The record edit above always persists (offline config authoring). Only push to the
             // module over CAN when it is actually live; report which happened so the UI can say
             // "written to device" vs "saved to project".
@@ -933,7 +936,7 @@ public static class LiveApi
                     comfortBlinks = Has(p, ComfortBlink.BaseIndex) ? new[] { p.ComfortBlink } : null,   // 5.6.1 (one; an array for the flow builder)
                     canOutputs = p.CanOutputs, wiper = p.Wipers, starterDisable = p.StarterDisable,
                     keypads = p.Keypads,
-                    device = new { forceSleepInput = p.ForceSleepInput, muteTxInput = p.MuteTxInput, canSleep = p.CanSleep },
+                    device = new { forceSleepInput = p.ForceSleepInput, muteTxInput = p.MuteTxInput, canSleep = p.CanSleep, shedInput = p.HasShed ? p.ShedInput : (int?)null },
                 });
             if (dm.GetDevice(g) is CanboardDevice c)
                 return Results.Ok(new
@@ -968,8 +971,16 @@ public static class LiveApi
             if (r.ForceSleepInput is { } fs && !cfg.CanSleep) return Results.BadRequest(new { ok = false, error = "this module's firmware cannot sleep (a CANBoard sleeps from 5.5.111): it has no force-sleep input" });
             if (Check(r.ForceSleepInput, "force-sleep input") is { } e1) return Results.BadRequest(new { ok = false, error = e1 });
             if (Check(r.MuteTxInput, "mute-TX input") is { } e2) return Results.BadRequest(new { ok = false, error = e2 });
+            if (r.ShedInput is { } sh)
+            {
+                if (dev is not PdmDevice { HasShed: true }) return Results.BadRequest(new { ok = false, error = "this module's firmware has no load-shed input (upstream dingoFW with load shedding, PDMs only)" });
+                var sv = cfg.VarMap.FirstOrDefault(x => x.VariableIndex == sh);
+                if (sh != 0 && sv == null) return Results.BadRequest(new { ok = false, error = $"signal #{sh} is not in this module's var map" });
+                // a module signal (Always On, battery volts, …) is never 0 on a running module: it would shed for good
+                if (sh != 0 && sv?.OwnerKind == "sys") return Results.BadRequest(new { ok = false, error = $"\"{DingoMap.VarLabel(sv)}\" is never off on a running module: as the shed input it would keep the opted-in outputs off for good; use a condition (e.g. battery below a voltage)" });
+            }
             Dictionary<string, string> DevSnap() => dev is PdmDevice q
-                ? new() { ["forceSleepInput"] = q.ForceSleepInput.ToString(), ["muteTxInput"] = q.MuteTxInput.ToString() }
+                ? new() { ["forceSleepInput"] = q.ForceSleepInput.ToString(), ["muteTxInput"] = q.MuteTxInput.ToString(), ["shedInput"] = q.ShedInput.ToString() }
                 : new() { ["forceSleepInput"] = ((CanboardDevice)dev).ForceSleepInput.ToString(), ["muteTxInput"] = ((CanboardDevice)dev).MuteTxInput.ToString() };
             var track = new EditTrack("device", 0, "Module", DevSnap);
             switch (dev)
@@ -977,6 +988,7 @@ public static class LiveApi
                 case PdmDevice p:
                     if (r.ForceSleepInput is { } a) p.ForceSleepInput = a;
                     if (r.MuteTxInput is { } b) p.MuteTxInput = b;
+                    if (r.ShedInput is { } sh2) p.ShedInput = sh2;
                     break;
                 case CanboardDevice c:
                     if (r.ForceSleepInput is { } f) c.ForceSleepInput = f;
@@ -992,10 +1004,12 @@ public static class LiveApi
                 var keys = new List<(int, int)>();
                 if (r.ForceSleepInput is not null) keys.Add((0x0000, SubOf("device.forceSleepInput")));
                 if (r.MuteTxInput is not null) keys.Add((0x0000, SubOf("device.muteTxInput")));
+                if (r.ShedInput is not null) keys.Add((0x0000, SubOf("device.shedInput")));
                 res = await dm.WriteAndConfirm(g, keys, () =>
                 {
                     if (r.ForceSleepInput is { } a) dm.WriteParam(g, 0x0000, SubOf("device.forceSleepInput"), (uint)a);
                     if (r.MuteTxInput is { } b) dm.WriteParam(g, 0x0000, SubOf("device.muteTxInput"), (uint)b);
+                    if (r.ShedInput is { } c) dm.WriteParam(g, 0x0000, SubOf("device.shedInput"), (uint)c);
                 });
             }
             var (fsNow, mtNow) = dev is PdmDevice pp ? (pp.ForceSleepInput, pp.MuteTxInput) : (((CanboardDevice)dev).ForceSleepInput, ((CanboardDevice)dev).MuteTxInput);
@@ -2056,6 +2070,7 @@ public static class LiveApi
                 {
                     case (PdmDevice p, "forceSleepInput"): p.ForceSleepInput = v; break;
                     case (PdmDevice p, "muteTxInput"): p.MuteTxInput = v; break;
+                    case (PdmDevice p, "shedInput"): p.ShedInput = v; break;
                     case (CanboardDevice c, "muteTxInput"): c.MuteTxInput = v; break;
                     default: return "that setting can't be put back";
                 }
@@ -2115,7 +2130,7 @@ public static class LiveApi
         foreach (var t in p.GetTimers()) used.Add(t.Input);
         foreach (var t in p.GetTables()) { used.Add(t.XInput); used.Add(t.YInput); }
         foreach (var c in p.GetCanOutputs()) used.Add(c.Input);
-        used.Add(p.ForceSleepInput); used.Add(p.MuteTxInput);
+        used.Add(p.ForceSleepInput); used.Add(p.MuteTxInput); used.Add(p.ShedInput);
         var luaVars = p.VarMap.Where(v => v.OwnerKind == "lua").ToList();   // OwnerNumber = slot + 1
         var consumedSlots = luaVars.Where(v => used.Contains(v.VariableIndex)).Select(v => v.OwnerNumber - 1).ToHashSet();
         foreach (var s in written.Where(s => !consumedSlots.Contains(s)).OrderBy(s => s))

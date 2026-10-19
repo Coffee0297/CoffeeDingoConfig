@@ -209,7 +209,8 @@ export function buildModel(dev, funcs, vmap) {
 
   // target fields of every candidate (enabled blocks only — a disabled block's fields don't run)
   const targetsOf = (c) => {
-    if (c.kind === 'sys') return KINDS.sys.ins
+    // upstream load shedding: the module's shed input (null on a module that has none)
+    if (c.kind === 'sys') return c.row?.shedInput != null ? [...KINDS.sys.ins, ['shedInput', 'Shed loads', 'bool']] : KINDS.sys.ins
     if (!c.enabled && c.kind !== 'output') return []   // a switched-off PDM output still shows (and keeps) its input
     let ins = KINDS[c.kind]?.ins ?? []
     if (c.kind === 'table' && (c.row?.ySize ?? 1) <= 1) ins = ins.filter(([f]) => f !== 'yInput')

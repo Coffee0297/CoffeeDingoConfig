@@ -168,6 +168,10 @@ public class PdmDevice : IDeviceConfigurable
     // broadcasts; the wake sources are a per-digital-input mask + CAN (USB always wakes).
     [JsonPropertyName("forceSleepInput")] public int ForceSleepInput { get; set; }
     [JsonPropertyName("muteTxInput")] public int MuteTxInput { get; set; }
+    // upstream feat/load-shed (0x0000:13): while this signal is on, outputs with Shed set are held off
+    [JsonPropertyName("shedInput")] public int ShedInput { get; set; }
+    /// <summary>The module has the load-shed input: upstream, and in its param list (or that list not read yet).</summary>
+    [JsonIgnore] public bool HasShed => Upstream && (!ParamSet.Known || ParamSet.Contains(BaseIndex, 13));
     [JsonPropertyName("wakeDigInputMask")] public int WakeDigInputMask { get; set; } = 0xFF;
     [JsonPropertyName("wakeOnCan")] public bool WakeOnCan { get; set; } = true;
     [JsonPropertyName("filtersEnabled")] public bool CanFiltersEnabled { get; set; }
@@ -1088,7 +1092,7 @@ public class PdmDevice : IDeviceConfigurable
         // The firmware default = "every digital input wakes"; clamp a fresh/legacy record to the real pin count.
         WakeDigInputMask &= (1 << NumDigitalInputs) - 1;
 
-        foreach (var output in Outputs) allParams.AddRange(output.Params);
+        foreach (var output in Outputs) allParams.AddRange(Upstream ? output.Params.Concat(output.UpstreamParams) : output.Params);
         foreach (var input in Inputs) allParams.AddRange(input.Params);
         foreach (var canInput in CanInputs) allParams.AddRange(canInput.Params);
         foreach (var virtualInput in VirtualInputs) allParams.AddRange(virtualInput.Params);
@@ -1140,6 +1144,8 @@ public class PdmDevice : IDeviceConfigurable
             GetValue = () => MuteTxInput, SetValue = val => MuteTxInput = (int)val, ValueType = typeof(int), DefaultValue = 0 },
         new() { ParentName = Name, Name = "device.forceSleepInput", Index = BaseIndex, SubIndex = 8,
             GetValue = () => ForceSleepInput, SetValue = val => ForceSleepInput = (int)val, ValueType = typeof(int), DefaultValue = 0 },
+        new() { ParentName = Name, Name = "device.shedInput", Index = BaseIndex, SubIndex = 13,
+            GetValue = () => ShedInput, SetValue = val => ShedInput = (int)val, ValueType = typeof(int), DefaultValue = 0 },
     ];
 
     private void Clear()

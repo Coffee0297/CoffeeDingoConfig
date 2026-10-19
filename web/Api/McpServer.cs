@@ -446,7 +446,7 @@ public static class McpServer
             Schema("""{"type":"object","properties":{"guid":{"type":"string"},"number":{"type":"integer"},"currentLimit":{"type":"number"}},"required":["guid","number","currentLimit"]}"""),
             a => new(POST, $"/api/devices/{Str(a, "guid")}/output", Json(new { Number = Num(a, "number"), CurrentLimit = NumOpt(a, "currentLimit", 0) }))),
 
-        new("set_output_config", "Write an output's configuration. Pass an OutputConfigReq object under 'config' (Number, Enabled, Input, CurrentLimit, InrushLimit, InrushTime, ResetMode, ResetTime, ResetCountLimit, PwmEnabled, Freq, FixedDuty, MinDuty, SoftStart, SoftStartRamp, ...). Only Number is required — a field left out keeps the output's current value, so a partial body merges rather than resetting the rest.",
+        new("set_output_config", "Write an output's configuration. Pass an OutputConfigReq object under 'config' (Number, Enabled, Input, CurrentLimit, InrushLimit, InrushTime, ResetMode, ResetTime, ResetCountLimit, PwmEnabled, Freq, FixedDuty, MinDuty, SoftStart, SoftStartRamp, Shed (upstream load shedding: held off while the module's shed input is on), ...). Only Number is required — a field left out keeps the output's current value, so a partial body merges rather than resetting the rest.",
             Schema("""{"type":"object","properties":{"guid":{"type":"string"},"config":{"type":"object"}},"required":["guid","config"]}"""),
             a => new(POST, $"/api/devices/{Str(a, "guid")}/outputconfig", JsonRaw(ObjArg(a, "config")))),
 

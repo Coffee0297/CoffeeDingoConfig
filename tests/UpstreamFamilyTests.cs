@@ -84,7 +84,7 @@ public class UpstreamFamilyTests
     {
         var d = UpstreamPdm();
         var dev = d.Params.Where(p => p.Index == 0).ToDictionary(p => p.SubIndex, p => p.Name);
-        Assert.Equal(Enumerable.Range(0, 9), dev.Keys.Order());
+        Assert.Equal(Enumerable.Range(0, 9).Append(13), dev.Keys.Order());   // 13: feat/load-shed shed input
         Assert.Equal("device.muteTxInput", dev[7]);
         Assert.Equal("device.forceSleepInput", dev[8]);
         Assert.Equal(5, d.Params.Count(p => p.Index == 0x1A00));   // timer 1, not a table
@@ -147,6 +147,30 @@ public class UpstreamFamilyTests
         d.Read(0x680, [22, 1, 0, 0, 0, 0, 0, 0], ref q, outgoing);   // applied = 0
         Assert.Contains(outgoing, f => f.Name == "WriteAll (retry)");
         Assert.True(d.ConfigMismatch);
+    }
+
+    // feat/load-shed (core/param_defs.h): device 0x0000 sub 13 nShedInput, output 0x1000+i sub 26 bShed; upstream only
+    [Fact]
+    public void LoadShed_Params_UpstreamOnly()
+    {
+        var d = UpstreamPdm();
+        var si = Assert.Single(d.Params, p => p.Name == "device.shedInput");
+        Assert.Equal((0x0000, 13), (si.Index, si.SubIndex));
+        Assert.Equal(8, d.Params.Count(p => p.SubIndex == 26 && p.Index >= 0x1000 && p.Index < 0x1008));
+        Assert.True(d.HasShed);   // list not read yet
+        d.Outputs[1].Shed = true; d.ShedInput = 8;
+        Assert.Equal(true, d.Params.Single(p => p.Index == 0x1001 && p.SubIndex == 26).GetValue());
+        Assert.Equal(8, si.GetValue());
+        d.ParamSet.Learn([(0, 0), (0x1000, 0)], new());   // stock upstream
+        Assert.False(d.HasShed);
+
+        var f = new PdmDevice("PDM", 0x680);
+        f.SetLogger(NullLogger<PdmDevice>.Instance);
+        var q = Q();
+        f.Read(0x680, [31, 0, 0, 0, 5, 6, 0, 6], ref q, []);
+        Assert.DoesNotContain(f.Params, p => p.Index >= 0x1000 && p.Index < 0x1008 && p.SubIndex == 26);
+        Assert.DoesNotContain(f.Params, p => p.Name == "device.shedInput");
+        Assert.False(f.HasShed);
     }
 
     [Fact]

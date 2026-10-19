@@ -266,7 +266,7 @@ export function vDrop(lengthM, amps, mm2, sysV = 13.8) {
 export const NODE_INPUTS = {
   output: ['input', 'dutyCycleInput', 'freqInput'], virtualinput: ['var0', 'var1', 'var2'], condition: ['input'],
   flasher: ['input'], counter: ['incInput', 'decInput', 'resetInput'], timer: ['input'], table: ['xInput', 'yInput'], canoutput: ['input'],
-  sys: ['forceSleepInput', 'muteTxInput'],   // the module block itself: force-sleep / mute-TX signals (device params)
+  sys: ['forceSleepInput', 'muteTxInput', 'shedInput'],   // the module block itself: force-sleep / mute-TX signals (device params)
 }
 
 // Apply a graph edge: write the target function's input field = the source's varmap index.

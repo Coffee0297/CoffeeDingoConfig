@@ -92,8 +92,12 @@ export function sentenceFor(model, n) {
       if (r.variableDutyCycle) segs.push(T('at a duty from'), srcTok(model, r.dutyCycleInput, 'dutyCycleInput'))
       else if (r.pwmEnabled) segs.push(T('at'), val((r.fixedDuty ?? r.fixedDutyCycle ?? 100) + ' %', 'pwm'))
       segs.push(T('.'))
+      if (r.shed) segs.push(T('It switches off while the module sheds loads.'))
       return segs
     }
+    case 'sys':
+      // upstream load shedding: only the shed input makes a sentence (sleep / mute have their own screen)
+      return r.shedInput ? [T('While'), srcTok(model, r.shedInput, 'shedInput'), T('is on,'), self(n), T('holds every output set to shed off (load shedding).')] : null
     default: return null
   }
 }

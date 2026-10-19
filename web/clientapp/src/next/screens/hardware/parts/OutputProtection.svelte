@@ -1,6 +1,7 @@
 <script>
-  import { Card, Stepper, Select } from '../../../ui/index.js'
-  let { f = $bindable(), rating = null } = $props()
+  import { Card, Stepper, Select, Switch } from '../../../ui/index.js'
+  // canShed: the module has load shedding (upstream feat/load-shed: device 0x0000:13 + output sub 26); shedWired: its shed input is set
+  let { f = $bindable(), rating = null, canShed = false, shedWired = false } = $props()
 
   const RESET = [{ value: '0', label: 'Stay off (latch)' }, { value: '1', label: 'Retry a few times' }, { value: '2', label: 'Retry for ever' }]
   let rm = $state('0')
@@ -36,10 +37,14 @@
       <span class="hint">open load. 0 = off</span>
     </div>
     <Stepper label="Load missing for" bind:value={f.openLoadTime} min={0} max={10000} step={100} unit="ms" disabled={!num(f.openLoadLimit)} />
+    {#if canShed}
+      <Switch label="Switch off while load shedding" hint={shedWired ? 'Held off while the module’s shed input is on (e.g. battery low); back on by itself after.' : 'The module has no shed input set yet: set it on the Power screen or with the Load shed function.'} bind:checked={f.shed} data-testid="shed" />
+    {/if}
   </div>
   <p class="sum" data-testid="protection-summary">
     Trips above <strong>{f.currentLimit} A</strong>{#if num(f.inrushTime) > 0}, or <strong>{f.inrushLimit} A</strong> during the first <strong>{f.inrushTime} ms</strong>{/if}; {afterTrip}.
     {#if num(f.warnLimit) > 0}Warns at <strong>{f.warnLimit} A</strong>.{:else}No early warning.{/if}
+    {#if canShed && f.shed}Switches off while the module sheds loads.{/if}
     {#if num(f.openLoadLimit) > 0}Reports "load missing?" below <strong>{f.openLoadLimit} A</strong> for <strong>{f.openLoadTime} ms</strong>.{:else}Missing load is not checked.{/if}
   </p>
 </Card>
