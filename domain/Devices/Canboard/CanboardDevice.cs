@@ -714,6 +714,14 @@ public class CanboardDevice : IDeviceConfigurable
                 VarMap.Add(new DeviceVariable { GetName = () => Timers[num].Name, OwnerKind = "timer", OwnerNumber = num + 1,
                     PropertyName = "State", DataType = "bool", VariableIndex = index++, SingleVariable = false });
             }
+        // feat/analog-linear-scaling: one scaled value per analog input (0x2200 sub 10; the block itself always exists)
+        if (ParamSet.Contains(AnalogInput.BaseIndex, 10))
+            for (var i = 0; i < NumAnalogInputs; i++)
+            {
+                var num = i;
+                VarMap.Add(new DeviceVariable { GetName = () => AnalogInputs[num].Name, OwnerKind = "analoginput", OwnerNumber = num + 1,
+                    PropertyName = "Scaled Value", DataType = "float", VariableIndex = index++, SingleVariable = false });
+            }
     }
 
     private void InitParams()

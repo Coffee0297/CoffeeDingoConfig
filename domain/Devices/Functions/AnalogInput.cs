@@ -34,7 +34,8 @@ public class AnalogInput : IDeviceFunction
     // captured there would read and write the constructor's default objects (a loaded project then wrote
     // every rotary/switch/scale setting as its default).
     [JsonIgnore] public List<DeviceParameter> Params => InitParams();
-    // Upstream dingoFW: switch, then the uniform rotary (sub 7-9 offset/step/max position); no scale block.
+    // Upstream dingoFW: switch, then the uniform rotary (sub 7-9 offset/step/max position), then linear scaling
+    // (sub 10-12, feat/analog-linear-scaling; dropped by the param filter on a module without it).
     [JsonIgnore] public List<DeviceParameter> UpstreamParams => InitParams(upstream: true);
     
     [JsonConstructor]
@@ -65,7 +66,12 @@ public class AnalogInput : IDeviceFunction
         );
 
         allParams.AddRange(Switch.InitParams(ref subIndex));
-        if (upstream) { allParams.AddRange(Rotary.UpstreamParams(ref subIndex)); return allParams; }
+        if (upstream)
+        {
+            allParams.AddRange(Rotary.UpstreamParams(ref subIndex));
+            allParams.AddRange(Scale.InitParams(ref subIndex, defaultGain: 1.0));   // firmware default gain 1
+            return allParams;
+        }
         allParams.AddRange(Rotary.InitParams(ref subIndex));
         allParams.AddRange(Scale.InitParams(ref subIndex));
 

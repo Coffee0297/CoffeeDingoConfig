@@ -8,7 +8,7 @@
   import { autoTolerance, decodePoints, NO_POS, nodeVoltageMv, recommendPullup, resistorForMv, nearestStandard } from '../../../../lib/ladder.js'
   import { inputModel } from './input.svelte.js'
   import { signalFeed, ring } from './feeds.svelte.js'
-  import { resample, isUpstream } from './util.js'
+  import { resample, isUpstream, lacks } from './util.js'
   import SaveBar from './SaveBar.svelte'
   import UsedBy from './UsedBy.svelte'
   import LadderDesigner from './LadderDesigner.svelte'
@@ -18,8 +18,10 @@
   const dev = $derived(M.dev)
   const row = $derived(M.row)
   const feed = signalFeed(() => guid, 200)
-  // upstream dingoFW: no sensor scaling and a uniform rotary (position = (mV - offset) / step, at most max)
+  // upstream dingoFW: a uniform rotary (position = (mV - offset) / step, at most max); sensor scaling only with
+  // feat/analog-linear-scaling (0x2200 sub 10, known after a Read)
   const up = $derived(isUpstream(dev))
+  const scaleOk = $derived(!up || !lacks(dev, [0, 0, 0], 0x2200, 10))
 
   // ---- form ----
   const VSUP = 5000, OPTS = { vsupMv: VSUP, rpu: recommendPullup({ vsupMv: VSUP }) }
@@ -59,6 +61,7 @@
     if (f.mode === 'linear' && Number(f.highV) === Number(f.lowV)) return 'The two voltages must be different.'
     if (f.mode === 'ladder' && !ascending) return 'The position voltages must go up with the position number.'
     if (f.mode === 'uniform' && !(Number(f.uni.stepMv) > 0)) return 'The step must be above 0 mV.'
+    if (f.mode === 'linear' && !(Math.abs(gain) <= 1e9 && Math.abs(offs) <= 1e9)) return 'The two points give a scale the module cannot hold (above 1e9).'
     return ''
   })
   async function save() {
@@ -71,7 +74,7 @@
       rotary: { enabled: f.mode === 'ladder', invert: f.rot.invert, numPos: f.rot.rows.length, tolerance: Math.round(tol), points: pts, positionNames: names },
     }
     if (up) {
-      delete body.scale
+      if (!scaleOk) delete body.scale
       body.rotary = { enabled: f.mode === 'uniform', invert: f.uni.invert, offsetMv: Number(f.uni.offsetMv), stepMv: Number(f.uni.stepMv), maxPos: Number(f.uni.maxPos) }
     }
     if (await M.save(body)) snap = JSON.stringify(f)
@@ -159,7 +162,7 @@
       <Banner tone="fault" title="The reading is outside the sensor range">An open sender wire usually reads close to 5 V; a short to ground reads close to 0 V. Check the wire before you trust the value.</Banner>
     {/if}
 
-    <Segmented label="Use this input as" items={up ? [{ value: 'threshold', label: 'On / off threshold' }, { value: 'uniform', label: 'Multi-position switch' }]
+    <Segmented label="Use this input as" items={up ? [{ value: 'threshold', label: 'On / off threshold' }, ...(scaleOk ? [{ value: 'linear', label: 'Linear sensor' }] : []), { value: 'uniform', label: 'Multi-position switch' }]
       : [{ value: 'threshold', label: 'On / off threshold' }, { value: 'linear', label: 'Linear sensor' }, { value: 'ladder', label: 'Multi-position switch' }]} bind:value={useVal}
       onchange={(v) => { f.mode = v; if (!f.enabled) f.enabled = true }} data-testid="use-as" />
 
