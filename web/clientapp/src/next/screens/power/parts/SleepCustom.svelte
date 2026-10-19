@@ -10,6 +10,7 @@
   import { href } from '../../../router.svelte.js'
   import { remoteItems, resolveRemote, isRemoteKey } from '../../../lib/remote.js'
   import { broadcastOf } from '../../functions/flow/car.js'
+  import { isUpstream, hasBlock } from '../../hardware/parts/util.js'
 
   const mods = $derived(live.devices.filter((d) => /pdm|canboard/i.test(d.type ?? '')))
   let selGuid = $state('')
@@ -111,7 +112,7 @@
       </div>
       <div class="f">
         <Select label="Mute-transmit input: stop talking on the bus while this is true" items={muteItems} value={String(d?.muteTxInput ?? 0)} disabled={!d || busy || sigState !== 'ok'} onchange={(v) => pick('mute', v)} data-testid="mute-input" />
-        <span class="muted note">Config replies and your own CAN outputs are not muted.</span>
+        <span class="muted note">Config replies and your own CAN outputs are not muted.{#if d && isUpstream(d) && d.paramRuns && hasBlock(d, 0x1D00)} Repeating CAN messages are held back too; a "once" CAN message still goes out.{/if}</span>
         <Button size="sm" disabled={!d || busy || !live.connected} onclick={() => learn('mute')} data-testid="learn-mute">Learn a switch</Button>
       </div>
     </div>
