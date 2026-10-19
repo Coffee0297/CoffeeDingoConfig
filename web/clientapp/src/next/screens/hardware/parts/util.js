@@ -19,6 +19,14 @@ export function olderThan(v, min) {
 /** The module runs upstream dingoFW (version 0.x) rather than the fork (5.x). */
 export const isUpstream = (dev) => dev?.family === 'upstream'
 
+/** Why a fixed output PWM frequency is refused ('' = fine). Upstream: 16-400 Hz or 0 = keep the timer's period (its
+ *  timers can't make 1-15 Hz; fix/pwm-low-freq firmware runs them at 16). Fork: 15-400 Hz. */
+export function pwmFreqError(dev, hz) {
+  const fr = Math.round(+hz || 0)
+  if (isUpstream(dev)) return fr === 0 || (fr >= 16 && fr <= 400) ? '' : 'PWM frequency must be 16 to 400 Hz (0 = keep the current period).'
+  return fr >= 15 && fr <= 400 ? '' : 'PWM frequency must be 15 to 400 Hz.'
+}
+
 // dev.paramRuns: the upstream module's params as runs [firstIndex, indexCount, sub, sub, …] (null until a Read).
 function* paramsOf(dev) {
   for (const r of dev?.paramRuns ?? []) for (let k = 0; k < r[1]; k++) for (const s of r.slice(2)) yield [r[0] + k, s]

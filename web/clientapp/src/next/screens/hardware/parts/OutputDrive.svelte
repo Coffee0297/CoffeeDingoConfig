@@ -5,7 +5,8 @@
   import { remoteItems, resolveRemote, isRemoteKey } from '../../../lib/remote.js'
   import { href } from '../../../router.svelte.js'
 
-  let { guid, f = $bindable() } = $props()
+  // upstream: 16-400 Hz, 0 = keep (its timers can't make 1-15 Hz)
+  let { guid, f = $bindable(), upstream = false } = $props()
 
   let nums = $state([])
   $effect(() => {
@@ -66,10 +67,13 @@
         <Select label="Frequency comes from" items={items} bind:value={freqSrc} onchange={(v) => pickSrc('freqInput', v)} disabled={linking} />
         <Field label="Signal value at 400 Hz" type="number" bind:value={freqFull} min={400} step={400} onchange={setFreqFull} hint={'frequency = signal ÷ ' + (f.freqInputDenom || 1)} />
       {:else}
-        <Stepper label="Frequency" bind:value={f.freq} min={15} max={400} step={5} unit="Hz" data-testid="freq" />
+        <div>
+          <Stepper label="Frequency" bind:value={f.freq} min={upstream ? 0 : 15} max={400} step={upstream ? 1 : 5} unit="Hz" data-testid="freq" />
+          {#if upstream}<span class="hint">16 to 400 Hz; 0 = keep the current period</span>{/if}
+        </div>
       {/if}
     </div>
-    <Switch bind:checked={f.variableFreq} label="Frequency follows a signal" hint="Advanced. 15 to 400 Hz." />
+    <Switch bind:checked={f.variableFreq} label="Frequency follows a signal" hint={upstream ? 'Advanced. 16 to 400 Hz.' : 'Advanced. 15 to 400 Hz.'} />
   {/if}
   <div class="soft">
     <Switch bind:checked={f.softStart} label="Soft start" hint="Ramps up when it turns on." />
@@ -87,6 +91,7 @@
 </Card>
 
 <style>
+  .hint { display: block; font-size: var(--text-xs); color: var(--color-text-muted); margin-top: 4px; }
   .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: var(--space-3); }
   .soft { display: flex; flex-direction: column; gap: var(--space-2); max-width: 520px; }
   .crank { display: flex; flex-direction: column; gap: var(--space-2); padding-top: var(--space-3); border-top: 1px solid var(--color-line); }
