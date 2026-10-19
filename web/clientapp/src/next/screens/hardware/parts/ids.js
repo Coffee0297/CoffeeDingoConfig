@@ -14,8 +14,8 @@ export const hexId = (n) => '0x' + Number(n).toString(16).toUpperCase().padStart
 
 /** The first other module whose frame span overlaps `type` at `base` (null when free). */
 export function clashOf(devices, selfGuid, type, base) {
-  const after = spanAfter(type)
-  return (devices ?? []).find((x) => x.guid !== selfGuid && isModule(x.type) && x.baseId - ID_BEFORE <= base + after && base - ID_BEFORE <= x.baseId + spanAfter(x.type)) ?? null
+  const after = spanAfter(type, (devices ?? []).find((x) => x.guid === selfGuid))
+  return (devices ?? []).find((x) => x.guid !== selfGuid && isModule(x.type) && x.baseId - ID_BEFORE <= base + after && base - ID_BEFORE <= x.baseId + spanAfter(x.type, x)) ?? null
 }
 
 /** The span a module takes: "0x680 to 0x69D". */

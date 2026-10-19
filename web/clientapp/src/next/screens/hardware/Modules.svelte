@@ -63,7 +63,7 @@
   const range = $derived.by(() => {
     if (!mods.length) return { lo: 0x600, hi: 0x800 }
     const lo = Math.max(0, (Math.min(...mods.map((m) => m.baseId)) - ID_BEFORE) & ~0x3f)
-    const top = Math.max(...mods.map((m) => m.baseId + spanAfter(m.type) + 1))
+    const top = Math.max(...mods.map((m) => m.baseId + spanAfter(m.type, m) + 1))
     const hi = Math.min(0x800, Math.ceil(top / 0x40) * 0x40)
     return { lo, hi: Math.max(hi, lo + 0x40) }
   })
@@ -156,7 +156,7 @@
           <div class="map" role="img" aria-label={mapLabel}>
             {#if obdIn}<span class="obd" style="left: {pct(0x7df)}; width: {w(0x11)}">OBD-II reserve</span>{/if}
             {#each mods as m, i (m.guid)}
-              <span class="box" class:bad={clashes.has(m.guid)} class:on={selected?.guid === m.guid} style="left: {pct(m.baseId)}; width: {w(spanAfter(m.type) + 1)}; top: {(i % 3) * 36 + 4}px">{clashes.has(m.guid) ? '■ ' : ''}{m.name}</span>
+              <span class="box" class:bad={clashes.has(m.guid)} class:on={selected?.guid === m.guid} style="left: {pct(m.baseId)}; width: {w(spanAfter(m.type, m) + 1)}; top: {(i % 3) * 36 + 4}px">{clashes.has(m.guid) ? '■ ' : ''}{m.name}</span>
             {/each}
           </div>
           <div class="ticks" aria-hidden="true">{#each ticks as t (t)}<span class="mono">{hexId(t)}</span>{/each}</div>

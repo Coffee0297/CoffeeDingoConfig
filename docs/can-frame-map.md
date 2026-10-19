@@ -59,6 +59,8 @@ dingoConfig speaks both: a module whose Version reply has major 0 is *upstream*.
 this fork's: PDM currents (Msg 0 total, Msg 1–2 per output) are **1 A/bit**, not 0.1 A; Msg 0 bits 2–7 and
 Msg 3 byte 7 are 0; Msg 27–29 (+29..+31) are the timers (byte 0 outputs, byte 1 running; then elapsed per
 timer, u16 in 10 ms) instead of the table outputs; CAN-input value frames use the input's own byte order.
+Upstream with lookup tables (params 0x1B00, feat/lookup-tables) adds Msg 30 (`base+32`): table 1-2 as float32 LE,
+sent while a table is enabled, so such a PDM spans `base+32` and no longer fits a 0x20 spacing.
 The upstream CANBoard has no DO duty frame and no timers; its other frames match the fork's.
 
 ---

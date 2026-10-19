@@ -564,6 +564,19 @@ public class PdmDevice : IDeviceConfigurable
                     val => Timers[index].ElapsedMs = val));
             }
             MaxCyclicId = cyclicIndex + 2;
+            // feat/lookup-tables: Msg 30 (+32) table 1-2 as float32 LE. Only when the module has tables: a stock
+            // upstream PDM never sends +32, and at 0x20 spacing that id is the next module's base.
+            if (FwFamily.HasBlock(this, LookupTable.UpstreamBaseIndex, false))
+            {
+                StatusSigs[cyclicIndex + 3] = [];
+                for (var i = 0; i < NumTables && i < 2; i++)
+                {
+                    var index = i;
+                    StatusSigs[cyclicIndex + 3].Add((new DbcSignal { Name = $"Table{index + 1}.Value", StartBit = i * 32, Length = 32, IsSigned = true, IsFloat = true },
+                        val => Tables[index].Value = val));
+                }
+                MaxCyclicId = cyclicIndex + 3;
+            }
             return;
         }
         // Msg 27 (offset +29): table 1-2 outputs as IEEE-754 float32 LE (firmware >= 5.5.107).
@@ -1002,6 +1015,14 @@ public class PdmDevice : IDeviceConfigurable
                 VarMap.Add(new DeviceVariable { GetName = () => Timers[num].Name, OwnerKind = "timer", OwnerNumber = num + 1,
                     PropertyName = "State", DataType = "bool", VariableIndex = index++, SingleVariable = false });
             }
+        // feat/lookup-tables: one value per table
+        if (FwFamily.HasBlock(this, LookupTable.UpstreamBaseIndex, false))
+            for (var i = 0; i < NumTables; i++)
+            {
+                var num = i;
+                VarMap.Add(new DeviceVariable { GetName = () => Tables[num].Name, OwnerKind = "table", OwnerNumber = num + 1,
+                    PropertyName = "Value", DataType = "float", VariableIndex = index++, SingleVariable = false });
+            }
     }
 
     private void InitParams()
@@ -1095,7 +1116,7 @@ public class PdmDevice : IDeviceConfigurable
         foreach (var condition in Conditions) allParams.AddRange(condition.Params);
         foreach (var counter in Counters) allParams.AddRange(counter.Params);
         foreach (var flasher in Flashers) allParams.AddRange(flasher.Params);
-        if (Family == FwFamily.Fork) foreach (var table in Tables) allParams.AddRange(table.Params);   // upstream 0x1A00 is the timer
+        foreach (var table in Tables) allParams.AddRange(Upstream ? table.UpstreamParams : table.Params);   // upstream: 0x1B00 (its 0x1A00 is the timer)
         foreach (var timer in Timers) allParams.AddRange(Family == FwFamily.Upstream ? timer.UpstreamParams : timer.Params);
         foreach (var m in Maths) allParams.AddRange(m.Params);
         foreach (var m in CanMessages) allParams.AddRange(m.Params);
@@ -1114,7 +1135,7 @@ public class PdmDevice : IDeviceConfigurable
             NotifySuccess = msg => SuccessNotification?.Invoke(msg),
             NotifyError = msg => ErrorNotification?.Invoke(msg),
             WriteAllFailed = () => { var h = WriteAllIncomplete; h?.Invoke(); return h != null; },
-            ParamSetLearned = InitVarMap   // upstream: which blocks the module has decides the var map tail
+            ParamSetLearned = () => { InitStatusSigs(); InitVarMap(); }   // upstream: which blocks the module has decides the var map tail and the table frame
         };
     }
 

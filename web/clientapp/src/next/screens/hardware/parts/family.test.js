@@ -1,6 +1,7 @@
 // node src/next/screens/hardware/parts/family.test.js — upstream dingoFW gating helpers
 import assert from 'node:assert/strict'
 import { has, hasBlock, lacks, olderThan, isUpstream } from './util.js'
+import { spanAfter } from '../../../../lib/canids.js'
 
 const fork = { family: 'fork', version: 'v5.5.112' }
 const up = { family: 'upstream', version: 'v0.6.3', paramRuns: [[0, 1, 0, 1, 2, 3, 4, 5, 6, 7, 8], [0x1000, 8, 0, 1, 2], [0x1a00, 8, 0, 1, 2, 3, 4]] }
@@ -26,5 +27,11 @@ assert.equal(lacks(upUnread, [5, 6, 0], 0x1a00), true) // not read yet
 assert.equal(lacks(up, [5, 6, 0], 0x1000, 2), false)
 assert.equal(lacks(fork, [5, 6, 0], 0x1c00), true)
 assert.equal(lacks({ family: 'fork', version: 'v5.6.6' }, [5, 6, 0], 0x1c00), false)
+
+// an upstream PDM with lookup tables (0x1B00) also sends Msg 30 at +32
+assert.equal(spanAfter('dingoPDM', up), 30)
+assert.equal(spanAfter('dingoPDM', { ...up, paramRuns: [...up.paramRuns, [0x1b00, 2, 0, 1]] }), 32)
+assert.equal(spanAfter('dingoPDM', fork), 30)
+assert.equal(spanAfter('CANBoard'), 14)
 
 console.log('family.test.js ok')
