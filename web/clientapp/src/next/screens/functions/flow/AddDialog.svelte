@@ -30,6 +30,9 @@
       { label: 'Flasher', sub: 'blink on / off', kind: 'flasher', arr: 'flashers', body: { onTime: 500, offTime: 500 } },
       { label: 'Comfort blink', sub: 'a lever tap blinks 3 times; held, a normal blink', kind: 'comfortblink', arr: 'comfortBlinks', fw: '5.6.1', body: { tapMs: 1000, blinks: 3 } },
       { label: 'Counter', sub: 'count presses up / down', kind: 'counter', arr: 'counters' },
+      // only on a module whose firmware has the latch/gate block (upstream dingoFW, param 0x2600): hidden elsewhere
+      { label: 'Latch (set / reset)', sub: 'on at a set edge, off at a reset edge or after a time', kind: 'latchgate', arr: 'latchGates', onlyIfPresent: true, body: { type: 0, timeMs: 0 } },
+      { label: 'Gate (hold a value)', sub: 'follows a value while enabled, holds it while not', kind: 'latchgate', arr: 'latchGates', onlyIfPresent: true, body: { type: 1 } },
       { label: 'Table', sub: 'a value from a curve or map', kind: 'table', arr: 'tables', pdmOnly: true },
     ] },
     { name: 'OUTPUTS', fam: 'out', items: [
@@ -46,7 +49,7 @@
     <div class="grp">
       <span class="gn" style="color: {FAM_COLOR[g.fam]}">{g.name}</span>
       <div class="items">
-        {#each g.items as it (it.label)}
+        {#each g.items.filter((x) => !x.onlyIfPresent || has(x.arr)) as it (it.label)}
           {@const old = !!it.fw && olderThan(version, it.fw.split('.').map(Number))}
           {@const avail = old ? false : it.hw ? true : has(it.arr) && free(it.arr) > 0}
           {@const absent = it.arr && !has(it.arr)}

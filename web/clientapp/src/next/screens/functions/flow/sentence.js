@@ -61,6 +61,14 @@ export function sentenceFor(model, n) {
       segs.push(T('in a'), val(`${r.xSize}${(r.ySize ?? 1) > 1 ? ' × ' + r.ySize : ''} point`, 'xSize'), T('table, in between it interpolates.'))
       return segs
     }
+    case 'latchgate': {
+      if (r.type === 1) return [self(n), T('follows'), srcTok(model, r.input, 'input'), T('while'), srcTok(model, r.controlInput, 'controlInput'), T('is on, and holds its last value while it is off.')]
+      const segs = [self(n), T('turns on when'), srcTok(model, r.input, 'input'), T('turns on')]
+      if (r.controlInput) segs.push(T(', off when'), srcTok(model, r.controlInput, 'controlInput'), T('turns on (reset wins)'))
+      if (r.timeMs > 0) segs.push(T(r.controlInput ? ', or' : ', and off'), val(secs(r.timeMs), 'timeMs'), T('after it was set'))
+      segs.push(T('.'))
+      return segs
+    }
     case 'canoutput':
       return [T('Send'), srcTok(model, r.input, 'input'), T('on CAN ID'), val(hexId(r.id) + (r.ide ? ' ext' : ''), 'id'), T('at bit'), val(r.startBit ?? 0, 'startBit'), T(', ×'), val(r.factor ?? 1, 'factor'), T(', every'), val((r.interval ?? 0) + ' ms', 'interval'), T('.')]
     case 'caninput':
@@ -100,6 +108,6 @@ export function sentenceFor(model, n) {
 
 /** Card heading for the sentence view: family · kind. */
 export function cardKind(n) {
-  const k = { virtualinput: 'COMBINE', condition: 'COMPARE', timer: 'TIMER · ' + (TIMER_MODES[n.row?.mode ?? 0] ?? '').toUpperCase(), flasher: 'FLASHER', counter: 'COUNTER', table: 'TABLE', canoutput: 'CAN OUTPUT', caninput: 'CAN INPUT', math: 'MATH', canmsg: 'CAN MESSAGE', comfortblink: 'COMFORT BLINK', output: 'OUTPUT', digitaloutput: 'OUTPUT' }[n.kind] ?? n.kindLabel.toUpperCase()
+  const k = { virtualinput: 'COMBINE', condition: 'COMPARE', timer: 'TIMER · ' + (TIMER_MODES[n.row?.mode ?? 0] ?? '').toUpperCase(), flasher: 'FLASHER', counter: 'COUNTER', table: 'TABLE', canoutput: 'CAN OUTPUT', caninput: 'CAN INPUT', math: 'MATH', canmsg: 'CAN MESSAGE', comfortblink: 'COMFORT BLINK', latchgate: n.row?.type === 1 ? 'GATE' : 'LATCH', output: 'OUTPUT', digitaloutput: 'OUTPUT' }[n.kind] ?? n.kindLabel.toUpperCase()
   return k
 }

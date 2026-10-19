@@ -1,9 +1,10 @@
 // Client-side simulator of one module's blocks. Nothing is sent to the car.
 // Mirrors the firmware (functions/*.cpp): Condition hysteresis, VirtualInput AND/OR/NOR (a real NOR from
 // firmware 5.6.6; before it was NAND) with NOT per input and momentary/latching, Timer on-delay/off-delay/pulse, Flasher,
-// Counter edges, Table interpolation, CAN input operator + timeout, outputs with injected faults.
+// Counter edges, Table interpolation, Latch / Gate (upstream feat/latch-gate-block), CAN input operator + timeout, outputs with injected faults.
 import { interpolate } from '../../../../lib/table.js'
 import { fmt } from './livevals.js'
+import { latchGateStep } from './latchgate.js'
 
 const truthy = (v) => v === true || (typeof v === 'number' && v !== 0)
 const asNum = (v) => (v === true ? 1 : v === false || v == null ? 0 : +v || 0)
@@ -138,6 +139,9 @@ export function createSim(model, snapshot) {
           x.just = false
         }
         vals[outL] = on(s.L); vals[outR] = on(s.R)
+      } else if (n.kind === 'latchgate') {
+        const out = port(n, 'Value'); if (!out) continue
+        vals[out] = latchGateStep(s, r, asNum(val(r.input)), asNum(val(r.controlInput)), t)
       } else if (n.kind === 'flasher') {
         const out = port(n, 'State'); if (!out) continue
         if (!truthy(val(r.input))) { vals[out] = false; s.on = false; continue }

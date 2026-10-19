@@ -31,5 +31,7 @@ public record PdmDeviceDefinition(
     System.Text.Json.JsonElement? Board = null,
     // Math and CAN Message blocks (firmware 5.6)
     int NumMath = 8,
-    int NumCanMessages = 4
+    int NumCanMessages = 4,
+    // Latch / Gate blocks (upstream dingoFW feat/latch-gate-block)
+    int NumLatchGates = 8
     );
