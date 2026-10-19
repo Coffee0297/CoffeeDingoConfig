@@ -27,8 +27,11 @@ public class Counter : IDeviceFunction
     [JsonPropertyName("resetTime")] public int ResetTime { get => field; set => field = Math.Clamp(value, 0, 10000); } = 2000;
     
     [JsonIgnore][Plotable(displayName:"State")] public int Value {get; set;}
+    // Upstream dingoFW feat/retain-values (sub 12): the count is kept across power-off and sleep (FRAM). The fork has none.
+    [JsonPropertyName("retain")] public bool Retain { get; set; }
 
     [JsonIgnore] public List<DeviceParameter> Params { get; }
+    [JsonIgnore] public List<DeviceParameter> UpstreamParams { get; }
 
     [JsonConstructor]
     public Counter(int number, string name)
@@ -36,6 +39,11 @@ public class Counter : IDeviceFunction
         Number = number;
         Name = name;
         Params = InitParams();
+        UpstreamParams =
+        [
+            .. Params,
+            new() { ParentName = Name, Name = $"counter[{Number}].retain", Index = BaseIndex + (Number - 1), SubIndex = 12, GetValue = () => Retain, SetValue = v => Retain = (bool)v, ValueType = typeof(bool), DefaultValue = false },
+        ];
     }
 
     private List<DeviceParameter> InitParams()

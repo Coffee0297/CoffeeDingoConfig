@@ -13,7 +13,7 @@
   import { curveProblem, curvePlot, curveAt, CURVE_MAX } from './curve.js'
   import { fmt } from './livevals.js'
   import { latchGateIns, latchGateProblem, LATCH_TYPES } from './latchgate.js'
-  import { lacks, has, isUpstream } from '../../hardware/parts/util.js'
+  import { lacks, has, isUpstream, upstreamHas } from '../../hardware/parts/util.js'
   import { remoteItems, isRemoteKey } from '../../../lib/remote.js'
   import { COUT_KINDS, hasCoutKind, coutKindProblem, snapChecksum, otherChecksums } from './canoutkind.js'
 
@@ -27,11 +27,11 @@
   let seededFor = ''
   let spSignal = $state(false)   // PID: "from a signal" picked, signal not chosen yet
   const EDIT = {
-    virtualinput: ['name', 'var0', 'var1', 'var2', 'not0', 'not1', 'not2', 'cond0', 'cond1', 'mode'],
+    virtualinput: ['name', 'var0', 'var1', 'var2', 'not0', 'not1', 'not2', 'cond0', 'cond1', 'mode', 'retain'],
     condition: ['name', 'input', 'operator', 'arg', 'argOff', 'delayOn', 'delayOff'],
     timer: ['name', 'input', 'mode', 'preset', 'edge', 'resetInput'],
     flasher: ['name', 'input', 'onTime', 'offTime', 'single'],
-    counter: ['name', 'incInput', 'decInput', 'resetInput', 'incEdge', 'decEdge', 'resetEdge', 'minCount', 'maxCount', 'wrapAround', 'holdToReset', 'resetTime'],
+    counter: ['name', 'incInput', 'decInput', 'resetInput', 'incEdge', 'decEdge', 'resetEdge', 'minCount', 'maxCount', 'wrapAround', 'holdToReset', 'resetTime', 'retain'],
     table: ['name', 'xInput', 'yInput', 'xSize', 'ySize', 'xAxis', 'yAxis', 'cells'],
     canoutput: ['name', 'input', 'id', 'ide', 'startBit', 'bitLength', 'byteOrder', 'factor', 'offset', 'signed', 'interval', 'kind', 'triggerInput'],
     caninput: ['name', 'id', 'ide', 'startBit', 'bitLength', 'factor', 'offset', 'operator', 'operand', 'mode', 'timeoutEnabled', 'timeout', 'timeoutValue', 'timeoutUseValue'],
@@ -51,7 +51,7 @@
     spSignal = false
     const r = node?.row ?? {}
     const b = {}
-    for (const f of EDIT[node?.kind] ?? []) b[f] = node.kind === 'output' && f === 'input' ? r.inputVal ?? 0 : r[f] ?? (f === 'argOff' ? r.arg : f.startsWith('not') || ['ide', 'single', 'wrapAround', 'holdToReset', 'signed', 'invert', 'timeoutEnabled', 'timeoutUseValue'].includes(f) ? false : 0)
+    for (const f of EDIT[node?.kind] ?? []) b[f] = node.kind === 'output' && f === 'input' ? r.inputVal ?? 0 : r[f] ?? (f === 'argOff' ? r.arg : f.startsWith('not') || ['ide', 'single', 'wrapAround', 'holdToReset', 'signed', 'invert', 'timeoutEnabled', 'timeoutUseValue', 'retain'].includes(f) ? false : 0)
     if (node?.kind === 'canmsg') b.data = Array.from({ length: 8 }, (_, k) => +(r.data?.[k] ?? 0))
     if (node?.kind === 'table') {
       // fixed-size arrays (8 / 8 / 64); a fresh slot is all zero, which is not an ascending axis
@@ -246,6 +246,10 @@
         {@render seg('Second join', segItems(JOIN), String(draft.cond1 ?? 0), (v) => (draft.cond1 = Number(v)), !Number(draft.var2))}
       </div>
       {@render seg('Mode', [{ value: '0', label: 'Follows' }, { value: '1', label: 'Push on / push off' }], String(draft.mode ?? 0), (v) => (draft.mode = Number(v)), false)}
+      <!-- upstream dingoFW feat/retain-values (sub 10): a latched state kept across power-off -->
+      {#if draft.mode === 1 && upstreamHas(dev, 0x1400 + node.n - 1, 10)}
+        <Checkbox label="Keep across power-off" hint="Comes back as it was after the ignition was off or the module slept" bind:checked={() => !!draft.retain, (v) => (draft.retain = v)} />
+      {/if}
       <p class="hint">NOR: on only when none are on. Firmware older than 5.6.6 treats it as NAND (on unless both are on).</p>
     {/if}
 
@@ -409,6 +413,10 @@
       <Checkbox label="Wrap round past max" bind:checked={() => !!draft.wrapAround, (v) => (draft.wrapAround = v)} />
       <Checkbox label="Hold to reset" bind:checked={() => !!draft.holdToReset, (v) => (draft.holdToReset = v)} />
       {#if draft.holdToReset}<Field label="Hold for" type="number" unit="ms" bind:value={() => draft.resetTime ?? 0, (v) => (draft.resetTime = toNum(v))} />{/if}
+      <!-- upstream dingoFW feat/retain-values (sub 12) -->
+      {#if upstreamHas(dev, 0x1600 + node.n - 1, 12)}
+        <Checkbox label="Keep the count across power-off" hint="Comes back as it was after the ignition was off or the module slept" bind:checked={() => !!draft.retain, (v) => (draft.retain = v)} />
+      {/if}
     {:else if node.kind === 'table'}
       <span class="sec">Points</span>
       <div class="two">

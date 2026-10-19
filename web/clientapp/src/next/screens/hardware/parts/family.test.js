@@ -1,6 +1,6 @@
 // node src/next/screens/hardware/parts/family.test.js — upstream dingoFW gating helpers
 import assert from 'node:assert/strict'
-import { has, hasBlock, lacks, olderThan, isUpstream, pwmFreqError } from './util.js'
+import { has, hasBlock, lacks, olderThan, isUpstream, pwmFreqError, upstreamHas } from './util.js'
 import { spanAfter } from '../../../../lib/canids.js'
 
 const fork = { family: 'fork', version: 'v5.5.112' }
@@ -16,6 +16,11 @@ assert.equal(has(up, 0x1007, 18), false)   // fork-only warn limit
 assert.equal(has(up, 0x1008, 0), false)
 assert.equal(has(fork, 0x1000, 18), true)  // fork: gate by version instead
 assert.equal(has(upUnread, 0x1000, 18), true)
+
+assert.equal(upstreamHas(up, 0x1007, 2), true)
+assert.equal(upstreamHas(up, 0x1007, 18), false)
+assert.equal(upstreamHas(fork, 0x1000, 0), false)       // never on the fork
+assert.equal(upstreamHas(upUnread, 0x1000, 0), false)   // not before the Read
 
 assert.equal(hasBlock(up, 0x1a00), true)
 assert.equal(hasBlock(up, 0x1c00), false)

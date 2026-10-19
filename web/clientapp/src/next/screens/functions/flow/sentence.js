@@ -31,6 +31,7 @@ export function sentenceFor(model, n) {
       const segs = [self(n), T('is on when'), ...part(0), j(r.cond0), ...part(1)]
       if (r.var2) segs.push(j(r.cond1), ...part(2))
       segs.push(T(r.mode === 1 ? '(each time this becomes true, it flips on or off).' : 'is true.'))
+      if (r.mode === 1 && r.retain) segs.push(T('It stays as it was after power-off.'))
       return segs
     }
     case 'condition': {
@@ -57,6 +58,7 @@ export function sentenceFor(model, n) {
       if (r.decInput) segs.push(T(', down on'), srcTok(model, r.decInput, 'decInput'))
       if (r.resetInput) segs.push(T(', back to 0 on'), srcTok(model, r.resetInput, 'resetInput'))
       segs.push(T(', from'), val(r.minCount ?? 0, 'minCount'), T('to'), val(r.maxCount ?? 0, 'maxCount'), T(r.wrapAround ? 'and wraps round.' : '.'))
+      if (r.retain) segs.push(T('The count stays after power-off.'))
       return segs
     }
     case 'table': {

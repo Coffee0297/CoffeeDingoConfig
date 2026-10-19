@@ -23,8 +23,11 @@ public class VirtualInput : IDeviceFunction
     [JsonPropertyName("mode")] public InputMode Mode {get; set;} = InputMode.Momentary;
 
     [JsonIgnore][Plotable(displayName:"State")] public bool Value {get; set;}
+    // Upstream dingoFW feat/retain-values (sub 10): a latched state is kept across power-off and sleep (FRAM). The fork has none.
+    [JsonPropertyName("retain")] public bool Retain { get; set; }
 
     [JsonIgnore] public List<DeviceParameter> Params { get; }
+    [JsonIgnore] public List<DeviceParameter> UpstreamParams { get; }
 
     [JsonConstructor]
     public VirtualInput(int number, string name)
@@ -32,6 +35,11 @@ public class VirtualInput : IDeviceFunction
         Number = number;
         Name = name;
         Params = InitParams();
+        UpstreamParams =
+        [
+            .. Params,
+            new() { ParentName = Name, Name = $"virtualInput[{Number}].retain", Index = BaseIndex + (Number - 1), SubIndex = 10, GetValue = () => Retain, SetValue = v => Retain = (bool)v, ValueType = typeof(bool), DefaultValue = false },
+        ];
     }
 
     private List<DeviceParameter> InitParams()

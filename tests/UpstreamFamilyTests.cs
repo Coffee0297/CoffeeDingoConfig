@@ -552,4 +552,26 @@ public class UpstreamFamilyTests
         var f = new PdmDevice("PDM", 0x680);
         Assert.DoesNotContain(f.Params, p => p.Index == 0x2000 && p.SubIndex == 11);
     }
+
+    [Fact]
+    public void RetainFlags_UpstreamOnly_AtFirmwareSubs()
+    {
+        // feat/retain-values param_defs.h: counter 0x1600+i sub 12, virtual input 0x1400+i sub 10, keypad button
+        // 0x3100+k*32+b sub 22 (Bool). The fork has none of them, so they never reach a fork module.
+        var d = UpstreamPdm();
+        var c = d.Params.Single(p => p.Index == 0x1601 && p.SubIndex == 12);
+        var v = d.Params.Single(p => p.Index == 0x1402 && p.SubIndex == 10);
+        var b = d.Params.Single(p => p.Index == 0x3100 + 32 + 4 && p.SubIndex == 22);
+        Assert.All(new[] { c, v, b }, p => Assert.Equal(typeof(bool), p.ValueType));
+        c.SetValue(true); v.SetValue(true); b.SetValue(true);
+        Assert.True(d.Counters[1].Retain);
+        Assert.True(d.VirtualInputs[2].Retain);
+        Assert.True(d.Keypads[1].Buttons[4].Retain);
+
+        var f = new PdmDevice("PDM", 0x680);
+        f.SetLogger(NullLogger<PdmDevice>.Instance);
+        var q = Q();
+        f.Read(0x680, [31, 0, 0, 0, 5, 6, 0, 6], ref q, []);
+        Assert.DoesNotContain(f.Params, p => p.Name.EndsWith(".retain"));
+    }
 }

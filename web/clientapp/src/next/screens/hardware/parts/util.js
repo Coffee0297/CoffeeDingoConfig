@@ -43,6 +43,10 @@ export function hasBlock(dev, base) {
   if (!isUpstream(dev) || !dev.paramRuns) return true
   return dev.paramRuns.some((r) => r[0] + r[1] > base && r[0] < base + 0x100)
 }
+/** An upstream-only setting at (index, sub): only on an upstream module whose Read listed it (never on the fork,
+ *  never before the list is known: a CANBoard lacks some subs a PDM has). */
+export const upstreamHas = (dev, index, sub = 0) => isUpstream(dev) && !!dev.paramRuns && has(dev, index, sub)
+
 /** A fork feature from firmware `min`, at param block `base` (or the single param base:sub): is it missing on this
  *  module? Fork: by version. Upstream: by its param list, missing until a Read shows it (no base = a fork-only
  *  command such as Lua or identify: always missing). */

@@ -22,6 +22,11 @@ public class Button : IDeviceFunction
     [JsonPropertyName("blinkColors")] public int[] BlinkColors {get; set;}
     [JsonPropertyName("faultBlinkColor")] public int FaultBlinkColor {get; set;}
     [JsonIgnore] public List<DeviceParameter> Params { get; set; } = null!;
+    // Upstream dingoFW feat/retain-values (sub 22): a latched button state is kept across power-off and sleep (FRAM). The fork has none.
+    [JsonPropertyName("retain")] public bool Retain { get; set; }
+    [JsonIgnore] public List<DeviceParameter> UpstreamParams => [.. Params,
+        new() { ParentName = Name, Name = $"keypad[{KeypadNumber}].button[{Number}].retain", Index = BaseIndex + ((KeypadNumber - 1) * 32) + (Number - 1),
+            SubIndex = 22, GetValue = () => Retain, SetValue = v => Retain = (bool)v, ValueType = typeof(bool), DefaultValue = false }];
     
     [JsonConstructor]
     public Button(int keypadNumber, int number, string name)

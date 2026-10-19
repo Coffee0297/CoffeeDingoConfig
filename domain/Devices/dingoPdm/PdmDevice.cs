@@ -1243,9 +1243,9 @@ public class PdmDevice : IDeviceConfigurable
         foreach (var output in Outputs) allParams.AddRange(Upstream ? output.Params.Concat(output.UpstreamParams) : output.Params);
         foreach (var input in Inputs) allParams.AddRange(input.Params);
         foreach (var canInput in CanInputs) allParams.AddRange(Family == FwFamily.Upstream ? canInput.UpstreamParams : canInput.Params);
-        foreach (var virtualInput in VirtualInputs) allParams.AddRange(virtualInput.Params);
+        foreach (var virtualInput in VirtualInputs) allParams.AddRange(Family == FwFamily.Upstream ? virtualInput.UpstreamParams : virtualInput.Params);
         foreach (var condition in Conditions) allParams.AddRange(Family == FwFamily.Upstream ? condition.UpstreamParams : condition.Params);
-        foreach (var counter in Counters) allParams.AddRange(counter.Params);
+        foreach (var counter in Counters) allParams.AddRange(Family == FwFamily.Upstream ? counter.UpstreamParams : counter.Params);
         foreach (var flasher in Flashers) allParams.AddRange(flasher.Params);
         // upstream: 0x1B00 (its 0x1A00 is the timer), every table it may have; the fork: the definition's count
         foreach (var table in Upstream ? Tables : Tables.Take(NumTables)) allParams.AddRange(Upstream ? table.UpstreamParams : table.Params);
@@ -1261,7 +1261,7 @@ public class PdmDevice : IDeviceConfigurable
         allParams.AddRange(Wipers.Params);
         foreach (var canOutput in CanOutputs) allParams.AddRange(Family == FwFamily.Upstream ? canOutput.UpstreamParams : canOutput.Params);
         foreach (var keypad in Keypads) allParams.AddRange(keypad.BaseParams);
-        foreach (var keypad in Keypads) allParams.AddRange(keypad.ButtonParams);
+        foreach (var keypad in Keypads) allParams.AddRange(Family == FwFamily.Upstream ? keypad.Buttons.SelectMany(b => b.UpstreamParams) : keypad.ButtonParams);
         foreach (var keypad in Keypads) allParams.AddRange(keypad.DialParams);
         Params = allParams;
 
