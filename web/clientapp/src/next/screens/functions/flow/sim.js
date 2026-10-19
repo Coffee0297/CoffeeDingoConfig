@@ -265,7 +265,7 @@ export function createSim(model, snapshot) {
         if (ucIdx) vals[ucIdx] = status[n.id]?.text === 'UNDERCURRENT'
       } else if (n.kind === 'canoutput' && n.enabled) {
         status[n.id] = r.kind > 0 ? { text: r.kind === 1 ? 'COUNTER' : 'CHECKSUM', tone: 'on', why: `Sends ${r.kind === 1 ? 'a rolling counter' : 'a checksum of the frame'} on ${'0x' + Number(r.id ?? 0).toString(16).toUpperCase()} every ${r.interval} ms (simulated, nothing is sent).` }
-          : r.input ? { text: 'SENDS ' + fmt(val(r.input)), tone: 'on', why: `Sends ${fmt(val(r.input))} on ${'0x' + Number(r.id ?? 0).toString(16).toUpperCase()} every ${r.interval} ms (simulated, nothing is sent).` }
+          : r.input ? { text: 'SENDS ' + fmt(val(r.input)), tone: 'on', why: `Sends ${fmt(val(r.input))} on ${'0x' + Number(r.id ?? 0).toString(16).toUpperCase()} ${r.triggerInput ? 'each time its trigger turns on' : `every ${r.interval} ms`} (simulated, nothing is sent).` }
           : { text: 'NOTHING', tone: 'warn', why: 'No value to send.' }
       }
     }

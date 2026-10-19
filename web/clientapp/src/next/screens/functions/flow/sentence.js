@@ -68,7 +68,7 @@ export function sentenceFor(model, n) {
     case 'canoutput':
       if (r.kind === 1) return [T('Send a rolling counter on CAN ID'), val(hexId(r.id) + (r.ide ? ' ext' : ''), 'id'), T('at bit'), val(`${r.startBit ?? 0}+${r.bitLength ?? 0}`, 'startBit'), T(', one up each frame, every'), val((r.interval ?? 0) + ' ms', 'interval'), T('.')]
       if (r.kind >= 2) return [T('Send a'), val(COUT_KINDS[r.kind] ?? '?', 'kind'), T('of the frame on CAN ID'), val(hexId(r.id) + (r.ide ? ' ext' : ''), 'id'), T('in byte'), val(Math.floor((r.startBit ?? 0) / 8), 'startBit'), T(', every'), val((r.interval ?? 0) + ' ms', 'interval'), T('.')]
-      return [T('Send'), srcTok(model, r.input, 'input'), T('on CAN ID'), val(hexId(r.id) + (r.ide ? ' ext' : ''), 'id'), T('at bit'), val(r.startBit ?? 0, 'startBit'), T(', ×'), val(r.factor ?? 1, 'factor'), T(', every'), val((r.interval ?? 0) + ' ms', 'interval'), T('.')]
+      return [T('Send'), srcTok(model, r.input, 'input'), T('on CAN ID'), val(hexId(r.id) + (r.ide ? ' ext' : ''), 'id'), T('at bit'), val(r.startBit ?? 0, 'startBit'), T(', ×'), val(r.factor ?? 1, 'factor'), ...(r.triggerInput ? [T(', once each time'), srcTok(model, r.triggerInput, 'triggerInput'), T('turns on.')] : [T(', every'), val((r.interval ?? 0) + ' ms', 'interval'), T('.')])]
     case 'caninput':
       return [self(n), T('reads CAN ID'), val(hexId(r.id) + (r.ide ? ' ext' : ''), 'id'), T(', bits'), val(`${r.startBit}+${r.bitLength}`, 'startBit'), T(', and is on when the value'), T(OP_WORDS[r.operator ?? 0] ?? '?'), val(r.operand ?? 0, 'operand'), T(r.timeoutEnabled ? `(no frame for ${r.timeout} ms → reads ${model.upstream && !r.timeoutUseValue ? '0, off' : r.timeoutValue ?? 0}).` : '.')]
     case 'comfortblink':

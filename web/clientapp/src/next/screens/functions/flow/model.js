@@ -5,7 +5,7 @@
 // `v<index>` and a wire is simply "target field = that index". The var map's own type (bool | int | float)
 // decides the port: round = on/off, square = number.
 
-import { olderThan, isUpstream } from '../../hardware/parts/util.js'
+import { olderThan, isUpstream, has } from '../../hardware/parts/util.js'
 
 export const isCb = (dev) => /can.?board/i.test(dev?.type ?? '')
 
@@ -49,6 +49,13 @@ export const JOIN = ['AND', 'OR', 'NOR']
 // mode 3 (one pulse, edges ignored while it runs) and the reset input exist on upstream dingoFW only
 export const TIMER_MODES = ['On-delay', 'Off-delay', 'Pulse', 'One pulse']
 export const EDGES = ['Rising', 'Falling', 'Both']
+/** The firmware (feat/can-output-trigger) gives one frame (same ID and ID type) one schedule: a trigger on any output
+ *  packed in it makes the whole frame sent on triggers only. This module's other enabled outputs in `row`'s frame,
+ *  split by whether they have a trigger. */
+export function framePeers(model, id, row) {
+  const peers = [...model.nodes.values()].filter((o) => o.kind === 'canoutput' && o.id !== id && o.enabled && (+o.row?.id || 0) === (+row?.id || 0) && !!o.row?.ide === !!row?.ide)
+  return { triggered: peers.filter((o) => o.row?.triggerInput).map((o) => o.title), untriggered: peers.filter((o) => !o.row?.triggerInput).map((o) => o.title) }
+}
 export const isRelational = (op) => [2, 3, 4, 5].includes(Number(op))
 /** Upstream dingoFW (feat/condition-hysteresis) stores a band ≥ 0, not the release point: on past `arg`, off again at
  *  arg − band (>, ≥) or arg + band (<, ≤). A release point on the wrong side of `arg` is no band. Same as the backend's
@@ -124,7 +131,7 @@ function subline(kind, n, row, dev) {
     case 'flasher': return `Flasher · ${row?.onTime ?? 0} / ${row?.offTime ?? 0} ms` + (row?.single ? ' · once' : '')
     case 'counter': return `Counter · ${row?.minCount ?? 0} to ${row?.maxCount ?? 0}` + (row?.wrapAround ? ' · wraps' : '')
     case 'table': return `Table · ${row?.xSize ?? 1}${(row?.ySize ?? 1) > 1 ? ' × ' + row.ySize : ''} points`
-    case 'canoutput': return `CAN ${hexId(row?.id)}${row?.ide ? ' ext' : ''} · every ${row?.interval ?? 0} ms`
+    case 'canoutput': return `CAN ${hexId(row?.id)}${row?.ide ? ' ext' : ''} · ` + (row?.triggerInput ? 'on a trigger' : `every ${row?.interval ?? 0} ms`)
     case 'math': return `Math · ${MATH_OPS[row?.op ?? 0]?.fn('A', row?.inputB ? 'B' : (row?.constB ?? 0))}` + ((row?.factor ?? 1) !== 1 || (row?.offset ?? 0) !== 0 ? ` · ×${row?.factor ?? 1} ${(row?.offset ?? 0) < 0 ? '−' : '+'} ${Math.abs(row?.offset ?? 0)}` : '')
     case 'canmsg': return `CAN ${hexId(row?.id)}${row?.ide ? ' ext' : ''} · ` + (row?.mode === 1 ? 'once' : `every ${row?.intervalMs ?? 0} ms`)
     case 'comfortblink': return `Comfort blink · tap < ${secs(row?.tapMs ?? 1000)}: ${row?.blinks ?? 3} blinks`
@@ -225,6 +232,8 @@ export function buildModel(dev, funcs, vmap) {
     let ins = KINDS[c.kind]?.ins ?? []
     if (c.kind === 'table' && (c.row?.ySize ?? 1) <= 1) ins = ins.filter(([f]) => f !== 'yInput')
     if (c.kind === 'timer' && isUpstream(dev)) ins = [...ins, ['resetInput', 'Reset', 'bool']]
+    // upstream dingoFW feat/can-output-trigger (sub 12): send on each rise of this signal instead of the interval
+    if (c.kind === 'canoutput' && isUpstream(dev) && has(dev, 0x2000 + c.n - 1, 12)) ins = [...ins, ['triggerInput', 'Trigger', 'bool']]
     if (c.kind === 'ignition' && c.row?.role === 1) ins = []   // a follower copies the main module's state
     if (c.kind === 'output' || c.kind === 'digitaloutput') ins = ins.filter(([f]) => f === 'input' || (f === 'dutyCycleInput' && c.row?.variableDutyCycle) || (f === 'freqInput' && c.row?.variableFreq))
     return ins
@@ -256,7 +265,7 @@ export function buildModel(dev, funcs, vmap) {
     const ins = targetsOf(c).map(([field, label, accepts], i) => ({
       id: field, label, accepts, src: Number(fieldOf(c.kind, c.row, field)) || 0,
       not: c.kind === 'virtualinput' ? !!c.row?.['not' + i] : false,
-      optional: (c.kind === 'virtualinput' && field === 'var2') || (c.kind === 'timer' && field === 'resetInput') || (c.kind === 'counter' && field !== 'incInput') || c.kind === 'sys' || (c.kind === 'math' && field === 'inputB') || c.kind === 'ignition',
+      optional: (c.kind === 'virtualinput' && field === 'var2') || (c.kind === 'timer' && field === 'resetInput') || (c.kind === 'canoutput' && field === 'triggerInput') || (c.kind === 'counter' && field !== 'incInput') || c.kind === 'sys' || (c.kind === 'math' && field === 'inputB') || c.kind === 'ignition',
     }))
     const outs = outPortsFor(c.kind, c.row, varsOf.get(c.id) ?? [], consumed)
     const physical = c.kind === 'input' || c.kind === 'analoginput' || c.kind === 'output' || c.kind === 'digitaloutput' || c.kind === 'sys' || c.kind === 'lua' || c.kind === 'keypad'

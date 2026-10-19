@@ -41,8 +41,12 @@ public class CanOutput : IDeviceFunction
     // 4 CRC8 SAE J1850, 5 CRC8 AUTOSAR. Counters/checksums ignore input, factor, offset and signed.
     [JsonPropertyName("kind")] public int Kind { get => field; set => field = Math.Clamp(value, 0, 5); }
 
+    // Upstream dingoFW feat/can-output-trigger (sub 12): a var; 0 = send on the interval. Set, the frame is sent once on each
+    // rising edge of that var (with every output packed in it) and not on the interval.
+    [JsonPropertyName("triggerInput")] public int TriggerInput { get; set; }
+
     [JsonIgnore] public List<DeviceParameter> Params { get; }
-    /// <summary>Upstream: the same subs 0-10 plus the kind (sub 11); a module without it drops it by its param list.</summary>
+    /// <summary>Upstream: subs 0-10, the kind (sub 11), the trigger (sub 12); a module without one drops it by its param list.</summary>
     [JsonIgnore] public List<DeviceParameter> UpstreamParams { get; }
 
     [JsonConstructor]
@@ -53,7 +57,9 @@ public class CanOutput : IDeviceFunction
 
         Params = InitParams();
         UpstreamParams = [.. Params, new DeviceParameter { ParentName = Name, Name = $"canOutput[{Number}].kind", Index = BaseIndex + (Number - 1), SubIndex = 11,
-            GetValue = () => Kind, SetValue = val => Kind = (int)val, ValueType = typeof(int), DefaultValue = 0 }];
+            GetValue = () => Kind, SetValue = val => Kind = (int)val, ValueType = typeof(int), DefaultValue = 0 },
+            new DeviceParameter { ParentName = Name, Name = $"canOutput[{Number}].triggerInput", Index = BaseIndex + (Number - 1), SubIndex = 12,
+            GetValue = () => TriggerInput, SetValue = val => TriggerInput = (int)val, ValueType = typeof(int), DefaultValue = 0 }];
     }
 
     private List<DeviceParameter> InitParams()
