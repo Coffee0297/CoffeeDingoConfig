@@ -8,7 +8,8 @@
   // upstream: 16-400 Hz, 0 = keep (its timers cannot make 1-15 Hz); varFreq: the firmware has "frequency follows a signal" (output subs 21-23; upstream by its param list)
   // rampDuty: the firmware has "ramp every duty change" (output sub 24)
   // ssTimeout: the firmware has the current-limited soft start (upstream output sub 30)
-  let { guid, f = $bindable(), upstream = false, varFreq = true, rampDuty = true, ssTimeout = false } = $props()
+  // softStop: the firmware has the soft stop (upstream output sub 31)
+  let { guid, f = $bindable(), upstream = false, varFreq = true, rampDuty = true, ssTimeout = false, softStop = false } = $props()
   const vf = $derived(varFreq && !!f.variableFreq)
 
   let nums = $state([])
@@ -77,6 +78,10 @@
       {/if}
     </div>
     {#if varFreq}<Switch bind:checked={f.variableFreq} label="Frequency follows a signal" hint={upstream ? 'Advanced. 16 to 400 Hz.' : 'Advanced. 15 to 400 Hz.'} />{/if}
+    {#if softStop}
+      <Stepper label="Soft stop" bind:value={f.softStopTime} min={0} max={10000} step={100} unit="ms" data-testid="soft-stop" />
+      <span class="muted note">{Number(f.softStopTime) > 0 ? `When its input turns off, the duty ramps down to 0 over ${f.softStopTime} ms, then it switches off. A trip, starter disable, load shedding or sleep still cuts it at once.` : '0 = off: it switches off at once.'}</span>
+    {/if}
   {/if}
   <div class="soft">
     <Switch bind:checked={f.softStart} label="Soft start" hint="Ramps up when it turns on." />

@@ -57,6 +57,7 @@
       clearOnReassert: !!o.clearOnReassert,
       hardShortLimit: o.hardShortLimit ?? 0,
       softStartTimeout: o.softStartTimeout ?? 0,
+      softStopTime: o.softStopTime ?? 0,
     }
   }
   // Seed once per output so the 10 Hz telemetry never overwrites an edit in progress.
@@ -120,6 +121,7 @@
           ClearOnReassert: !!f.clearOnReassert,
           HardShortLimit: Number(f.hardShortLimit) || 0,
           SoftStartTimeout: Math.round(Number(f.softStartTimeout) || 0),
+          SoftStopTime: Math.round(Number(f.softStopTime) || 0),
         })
       }
       project.dirty = true
@@ -220,7 +222,7 @@
         {:else}
           <Card title="Protection"><p class="muted">The CANBoard switches this load to ground and cannot measure or limit current. Put a fuse in the load wire.</p></Card>
         {/if}
-        <OutputDrive {guid} bind:f upstream={isUpstream(dev)} {varFreq} {rampDuty} {ssTimeout} />
+        <OutputDrive {guid} bind:f upstream={isUpstream(dev)} {varFreq} {rampDuty} {ssTimeout} softStop={!isCb && isUpstream(dev) && has(dev, 0x1000 + n - 1, 31)} />
       </div>
       <div class="col">
         <OutputBench {bench} {blocker} modName={dev.name} limit={isCb ? 0 : Number(f.currentLimit) || 0} inrush={Number(f.inrushLimit) || 0} inrushTime={Number(f.inrushTime) || 0} />

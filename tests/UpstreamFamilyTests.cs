@@ -319,6 +319,27 @@ public class UpstreamFamilyTests
         Assert.DoesNotContain(f.Params, x => x.SubIndex == 30 && x.Index >= 0x1000 && x.Index < 0x1008);
     }
 
+    // feat/soft-stop: output 0x1000+i sub 31 nSoftStopTime (ms, 0..10000), upstream modules only
+    [Fact]
+    public void SoftStop_UpstreamOnly()
+    {
+        var d = UpstreamPdm();
+        var p = Assert.Single(d.Params, x => x.Index == 0x1006 && x.SubIndex == 31);
+        Assert.Equal("output[7].softStopTime", p.Name);
+        d.Outputs[6].SoftStopTime = 10001;
+        Assert.Equal(10000, p.GetValue());   // the firmware's range
+        d.ParamSet.Learn(Enumerable.Range(0, 18).Select(s => (0x1006, s)).ToList(), new());
+        Assert.False(FwFamily.Has(d, p));
+        d.ParamSet.Learn([.. Enumerable.Range(0, 18).Select(s => (0x1006, s)), (0x1006, 31)], new());
+        Assert.True(FwFamily.Has(d, p));
+
+        var f = new PdmDevice("PDM", 0x680);
+        f.SetLogger(NullLogger<PdmDevice>.Instance);
+        var q = Q();
+        f.Read(0x680, [31, 0, 0, 0, 5, 6, 0, 6], ref q, []);
+        Assert.DoesNotContain(f.Params, x => x.SubIndex == 31 && x.Index >= 0x1000 && x.Index < 0x1008);
+    }
+
     [Fact]
     public void ParamRuns_RoundTrip_KeepOrder()
     {

@@ -41,6 +41,7 @@ export const binBody = (o, input, enabled = true) => {
     UnderLimit: o.underLimit ?? 0, UnderTime: o.underTime ?? 1000, UnderTrip: !!o.underTrip,   // upstream subs 27-29: kept on a re-wire
     HardShortLimit: o.hardShortLimit ?? 0,   // upstream output sub 32: carried so a re-wire keeps it
     SoftStartTimeout: o.softStartTimeout ?? 0,   // upstream output sub 30: carried so a re-wire keeps it
+    SoftStopTime: o.softStopTime ?? 0,   // upstream output sub 31: carried so a re-wire keeps it
   }
 }
 

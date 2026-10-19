@@ -108,6 +108,8 @@ export function sentenceFor(model, n) {
       if (r.hardShortLimit > 0) segs.push(T('Above'), val(r.hardShortLimit + ' A', 'hardShortLimit'), T('(a dead short) it latches off at once, without retrying.'))
       // upstream current-limited soft start (output sub 30): the inrush limit holds the ramp, the timeout trips
       if (r.pwmEnabled && r.softStart && r.softStartTimeout > 0) segs.push(T('Its soft start waits while the current is above'), val((r.inrushLimit ?? 0) + ' A', 'inrushLimit'), T('and it trips if not at full duty after'), val(r.softStartTimeout + ' ms', 'softStartTimeout'), T('.'))
+      // upstream soft stop (output sub 31)
+      if (r.pwmEnabled && r.softStopTime > 0) segs.push(T('When it turns off, its duty ramps down over'), val(r.softStopTime + ' ms', 'softStopTime'), T('first.'))
       return segs
     }
     case 'sys':

@@ -203,6 +203,7 @@ export function createSim(model, snapshot) {
         if (retry || (s.latched && r.clearOnReassert && !want)) { s.latched = false; s.trip = undefined }
         if (f === 'oc' && want) {
           if (onIdx) vals[onIdx] = false; if (ocIdx) vals[ocIdx] = true; if (fIdx) vals[fIdx] = true; if (curIdx) vals[curIdx] = 0
+          m(n.id).on = false   // a trip cuts a soft stop at once
           const lim = r.currentLimit ?? '?'
           s.trip ??= t
           // reset mode None latches at once, Count once its retries have run out, Endless never
@@ -237,6 +238,17 @@ export function createSim(model, snapshot) {
           else status[n.id] = { text: 'OPEN LOAD', tone: 'warn', why: 'The module drives the output but reads almost no current. Check the plug and the fuse.' }
         } else {
           s.trip = undefined
+          // upstream soft stop (output sub 31): a PWM output that was on ramps down for its soft-stop time after its
+          // input turns off, and reports On meanwhile; disabling it (or a trip) cuts at once
+          if (want || !r.enabled || !r.pwmEnabled || !(r.softStopTime > 0)) { s.stopAt = undefined; s.on = want }
+          else if (s.on) { s.stopAt ??= t; if (t - s.stopAt >= r.softStopTime) { s.on = false; s.stopAt = undefined } }
+          if (!want && s.on) {
+            if (onIdx) vals[onIdx] = true; if (ocIdx) vals[ocIdx] = false; if (fIdx) vals[fIdx] = false
+            if (curIdx) vals[curIdx] = nominal ?? null
+            status[n.id] = { text: 'STOPPING', tone: 'on', why: `Its input is off: the duty ramps down over ${r.softStopTime} ms, then it switches off.` }
+            if (wIdx) vals[wIdx] = false; if (olIdx) vals[olIdx] = false; if (ucIdx) vals[ucIdx] = false
+            continue
+          }
           if (onIdx) vals[onIdx] = want; if (ocIdx) vals[ocIdx] = false; if (fIdx) vals[fIdx] = false
           if (curIdx) vals[curIdx] = want ? (nominal ?? null) : 0
           m(n.id).openAt = undefined; m(n.id).underAt = undefined
