@@ -1,8 +1,9 @@
 // Client-side simulator of one module's blocks. Nothing is sent to the car.
 // Mirrors the firmware (functions/*.cpp): Condition hysteresis, VirtualInput AND/OR/NOR (a real NOR from
 // firmware 5.6.6; before it was NAND) with NOT per input and momentary/latching, Timer on-delay/off-delay/pulse, Flasher,
-// Counter edges, Table interpolation, CAN input operator + timeout, outputs with injected faults.
+// Counter edges, Table interpolation, Curve (upstream feat/curve-block), CAN input operator + timeout, outputs with injected faults.
 import { interpolate } from '../../../../lib/table.js'
+import { curveAt } from './curve.js'
 import { fmt } from './livevals.js'
 
 const truthy = (v) => v === true || (typeof v === 'number' && v !== 0)
@@ -92,6 +93,9 @@ export function createSim(model, snapshot) {
       } else if (n.kind === 'table') {
         const out = port(n, 'Value'); if (!out) continue
         vals[out] = interpolate(r.xSize, r.ySize, r.xAxis ?? [], r.yAxis ?? [], r.cells ?? [], asNum(val(r.xInput)), (r.ySize ?? 1) > 1 ? asNum(val(r.yInput)) : 0)
+      } else if (n.kind === 'curve') {
+        const out = port(n, 'Value'); if (!out) continue
+        vals[out] = curveAt(r.points, r.x, r.y, asNum(val(r.input)))
       } else if (n.kind === 'math') {
         // same as the firmware's MathEval: B a signal or the constant, ÷0 gives 0, then × factor + offset
         const out = port(n, 'Value'); if (!out) continue
