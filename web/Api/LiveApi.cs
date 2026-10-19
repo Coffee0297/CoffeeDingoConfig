@@ -1172,12 +1172,13 @@ public static class LiveApi
                 if (i == 0) dm.RequestVersion(g);
                 await Task.Delay(100);
             }
-            if (c.Family == domain.Common.FwFamily.Upstream || !domain.Common.Firmware.Has(c.Version, domain.Devices.Functions.MathFunction.Since))
-                return Results.Json(new { ok = false, error = c.Family == domain.Common.FwFamily.Upstream ? "This firmware (upstream dingoFW) has no identify command."
-                    : "Needs firmware 5.6: older firmware has no identify command." }, statusCode: 409);
+            // upstream dingoFW: only builds with feat/identify have it; the reply tells (others ignore an unknown command)
+            var upstream = c.Family == domain.Common.FwFamily.Upstream;
+            if (!upstream && !domain.Common.Firmware.Has(c.Version, domain.Devices.Functions.MathFunction.Since))
+                return Results.Json(new { ok = false, error = "Needs firmware 5.6: older firmware has no identify command." }, statusCode: 409);
             var ok = await dm.IdentifyConfirmed(g, seconds ?? 10);
             return ok ? Results.Ok(new { ok, hasLed = dm.GetDeviceUiState(g).HasLed })
-                      : Results.Json(new { ok, error = "The module did not answer." }, statusCode: 409);
+                      : Results.Json(new { ok, error = upstream ? "No answer: this upstream dingoFW has no identify command." : "The module did not answer." }, statusCode: 409);
         });
 
         api.MapPost("/devices/{guid}/flash-can", async (string guid, HttpRequest req, CanFlashService flasher) =>
@@ -1902,7 +1903,7 @@ public static class LiveApi
     // short-circuit with, or null when it's safe to proceed. Mirrors the /{action} guard so every
     // CAN-commit path fails loud and consistent instead of "succeeding" against an empty bus.
     // (Base-ID/rename are offline-safe and firmware/DFU runs over USB — neither uses this.)
-    // Fork-only commands (Lua, overload log, output test, identify): upstream dingoFW has none of them. A feature branch
+    // Fork-only commands (Lua, overload log, output test): upstream dingoFW has none of them. A feature branch
     // that ports one to upstream swaps this guard for a detection (FwFamily.HasBlock, or a probe of the command).
     private static IResult? ForkOnly(IDevice? d, string what) => d is IDeviceConfigurable { Family: domain.Common.FwFamily.Upstream }
         ? Results.Json(new { ok = false, error = $"This module runs upstream dingoFW, which has no {what}." }, statusCode: 409) : null;

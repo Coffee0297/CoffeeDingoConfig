@@ -96,7 +96,7 @@
             <thead><tr><th>State</th><th>Type</th><th>Name</th><th>Base ID</th><th>Firmware</th><th>Last seen</th><th>Actions</th></tr></thead>
             <tbody>
               {#each mods as d (d.guid)}
-                {@const st = moduleState(d)} {@const oldFw = lacks(d, [5, 6, 0])}
+                {@const st = moduleState(d)} {@const oldFw = !isUpstream(d) && lacks(d, [5, 6, 0])}
                 <tr class:sel={selected?.guid === d.guid} class:bad={clashes.has(d.guid)} data-testid={'row-' + d.name} tabindex="0" aria-current={selected?.guid === d.guid ? 'true' : undefined}
                   title="Click to show its settings" onclick={(e) => rowClick(e, d)} onkeydown={(e) => rowKey(e, d)}>
                   <td data-label="State"><StateDot tone={st.key} shape={st.shape} label={st.word} /></td>
@@ -118,7 +118,7 @@
                   <td class="mono" data-label="Firmware">{fwText(d)}</td>
                   <td class="muted" data-label="Last seen">{lastSeen(d)}</td>
                   <td class="acts">
-                    <Button size="sm" disabled={oldFw || !d.connected || !live.connected} title={oldFw ? (isUpstream(d) ? `${d.name} runs upstream dingoFW, which has no identify command` : `Needs firmware 5.6: ${d.name} runs ${fwText(d)}`) : !d.connected || !live.connected ? 'The module is not answering' : 'Blink its LEDs for 10 s'} onclick={() => blinkModule(d)} aria-label={`Identify ${d.name}: blink its LED`}>Identify</Button>
+                    <Button size="sm" disabled={oldFw || !d.connected || !live.connected} title={oldFw ? `Needs firmware 5.6: ${d.name} runs ${fwText(d)}` : !d.connected || !live.connected ? 'The module is not answering' : isUpstream(d) ? 'Blink its LEDs for 10 s (upstream dingoFW: only if its build has identify)' : 'Blink its LEDs for 10 s'} onclick={() => blinkModule(d)} aria-label={`Identify ${d.name}: blink its LED`}>Identify</Button>
                     <DropdownMenu.Root>
                       <DropdownMenu.Trigger class="more" aria-label={`More actions for ${d.name}`} data-testid={'more-' + d.name}>⋯</DropdownMenu.Trigger>
                       <DropdownMenu.Portal>
