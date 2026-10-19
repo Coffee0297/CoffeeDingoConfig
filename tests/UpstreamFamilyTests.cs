@@ -149,6 +149,50 @@ public class UpstreamFamilyTests
         Assert.True(d.ConfigMismatch);
     }
 
+    // feat/wire-load: output sub 33 nThermalTau (s, 0..600); a ReadAll that lists it adds 8 "Wire Load" vars after the
+    // timers (nm dingopdm_v7.elf of feat/wire-load: pVarMap 0x3a4 bytes = 233) and decodes Msg 30 at base+32
+    private static PdmDevice ReadAllFrom(List<(int, int)> keys)
+    {
+        var d = UpstreamPdm();
+        var q = Q();
+        var crc = new CumulativeCrc32();
+        d.Read(0x680, [10, 0, 0, 0, 0, 0, 0, 0], ref q, []);
+        foreach (var (i, s) in keys)
+        {
+            byte[] v = [0, 0, 0, 0];
+            crc.Update(v);
+            d.Read(0x680, [11, (byte)i, (byte)(i >> 8), (byte)s, .. v], ref q, []);
+        }
+        d.Read(0x680, [12, (byte)keys.Count, (byte)(keys.Count >> 8), 0, .. BitConverter.GetBytes(crc.Final)], ref q, []);
+        return d;
+    }
+
+    [Fact]
+    public void WireLoad_VarMapAndFrame_WhenListed()
+    {
+        var outs = Enumerable.Range(0, 8).SelectMany(o => Enumerable.Range(0, 18).Select(s => (0x1000 + o, s))).ToList();
+        var timer = new List<(int, int)> { (0x1A00, 0) };
+        var stock = ReadAllFrom([.. outs, .. timer]);
+        Assert.Equal(225, stock.VarMap.Count);
+        Assert.Equal(31, stock.MaxCyclicId);
+
+        var d = ReadAllFrom([.. outs.Concat(Enumerable.Range(0, 8).Select(o => (0x1000 + o, 33))).OrderBy(k => k.Item1), .. timer]);
+        Assert.True(d.ParamSet.FromModule);
+        Assert.Equal(233, d.VarMap.Count);
+        Assert.Equal(("output", 1, "Wire Load"), (d.VarMap[225].OwnerKind, d.VarMap[225].OwnerNumber, d.VarMap[225].PropertyName));
+        Assert.Equal(("output", 8, "Wire Load"), (d.VarMap[232].OwnerKind, d.VarMap[232].OwnerNumber, d.VarMap[232].PropertyName));
+        Assert.Equal("timer", d.VarMap[224].OwnerKind);
+        Assert.Equal(32, d.MaxCyclicId);
+        Assert.True(d.InIdRange(0x680 + 32));
+        var q = Q();
+        d.Read(0x680 + 32, [38, 0, 120, 0, 0, 0, 0, 255], ref q, []);
+        Assert.Equal(38, d.Outputs[0].WireLoad);
+        Assert.Equal(120, d.Outputs[2].WireLoad);
+        Assert.Equal(255, d.Outputs[7].WireLoad);
+        d.Outputs[0].ThermalTau = 700;
+        Assert.Equal(600, d.Params.Single(p => p.Index == 0x1000 && p.SubIndex == 33).GetValue());
+    }
+
     [Fact]
     public void ParamRuns_RoundTrip_KeepOrder()
     {

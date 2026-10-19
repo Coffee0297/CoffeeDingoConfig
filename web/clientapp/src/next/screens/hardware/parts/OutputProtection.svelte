@@ -1,6 +1,7 @@
 <script>
   import { Card, Stepper, Select } from '../../../ui/index.js'
-  let { f = $bindable(), rating = null } = $props()
+  // wireTau: the firmware has the wire load estimate (upstream output sub 33)
+  let { f = $bindable(), rating = null, wireTau = false } = $props()
 
   const RESET = [{ value: '0', label: 'Stay off (latch)' }, { value: '1', label: 'Retry a few times' }, { value: '2', label: 'Retry for ever' }]
   let rm = $state('0')
@@ -36,6 +37,12 @@
       <span class="hint">open load. 0 = off</span>
     </div>
     <Stepper label="Load missing for" bind:value={f.openLoadTime} min={0} max={10000} step={100} unit="ms" disabled={!num(f.openLoadLimit)} />
+    {#if wireTau}
+      <div>
+        <Stepper label="Wire time constant" bind:value={f.thermalTau} min={0} max={600} step={5} unit="s" data-testid="wire-tau" />
+        <span class="hint">estimates how warm the wire runs (load %); 20-50 s is typical. Report only. 0 = off</span>
+      </div>
+    {/if}
   </div>
   <p class="sum" data-testid="protection-summary">
     Trips above <strong>{f.currentLimit} A</strong>{#if num(f.inrushTime) > 0}, or <strong>{f.inrushLimit} A</strong> during the first <strong>{f.inrushTime} ms</strong>{/if}; {afterTrip}.

@@ -8,6 +8,7 @@
   import { isTripped, isOn, num, worstCaseA } from '../car/parts/summary.js'
   import LiveTabs from './parts/LiveTabs.svelte'
   import Tile from './parts/Tile.svelte'
+  import { wireLoad, wireLoadText } from '../hardware/parts/wireload.js'
 
   // temperature as a share of the all-off limit (G18), so the bar fills toward the shutdown
   const tempBar = (d, lim) => (lim ? { pct: (d.temp / lim.crit) * 100 } : {})
@@ -82,7 +83,7 @@
         id: `${d.guid}:${o.number}`, name: o.name?.trim() || `Output ${o.number}`, mod: d.name,
         value: !d.connected ? 'No data' : tripped ? o.state : q(num(o.current)), unit: !d.connected || tripped ? '' : 'A',
         pct: d.connected && o.currentLimit ? (num(o.current) / o.currentLimit) * 100 : null,
-        sub: !d.connected ? 'module not answering' : tripped ? `limit ${o.currentLimit} A` : lingering ? `off ${Math.round((now - lastOn[id]) / 1000)} s ago` : on ? `of ${o.currentLimit} A${o.warnLimit ? ' · warn at ' + o.warnLimit + ' A' : ''}` : o.enabled === false ? 'not enabled' : 'off',
+        sub: !d.connected ? 'module not answering' : tripped ? `limit ${o.currentLimit} A` : lingering ? `off ${Math.round((now - lastOn[id]) / 1000)} s ago` : on ? `of ${o.currentLimit} A${o.warnLimit ? ' · warn at ' + o.warnLimit + ' A' : ''}${wireLoad(o) ? ' · ' + wireLoadText(wireLoad(o)) : ''}` : o.enabled === false ? 'not enabled' : 'off',
         tone: !d.connected ? 'stale' : tripped ? 'fault' : on ? 'on' : 'off', key: keys.out(d.guid, o.number),
         href: href('hardware', 'module', d.guid, 'output', o.number), graph: href('live', 'plot', { signal: keys.out(d.guid, o.number) }),
       }

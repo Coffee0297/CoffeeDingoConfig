@@ -564,6 +564,18 @@ public class PdmDevice : IDeviceConfigurable
                     val => Timers[index].ElapsedMs = val));
             }
             MaxCyclicId = cyclicIndex + 2;
+            // feat/wire-load Msg 30 (+32): load % of outputs 1-8, one byte each (sent while any output has a time constant)
+            if (ParamSet.Contains(Output.BaseIndex, 33))
+            {
+                StatusSigs[cyclicIndex + 3] = [];
+                for (var i = 0; i < NumOutputs && i < 8; i++)
+                {
+                    var index = i;
+                    StatusSigs[cyclicIndex + 3].Add((new DbcSignal { Name = $"Output{index + 1}.WireLoad", StartBit = i * 8, Length = 8, Unit = "%" },
+                        val => Outputs[index].WireLoad = val));
+                }
+                MaxCyclicId = cyclicIndex + 3;
+            }
             return;
         }
         // Msg 27 (offset +29): table 1-2 outputs as IEEE-754 float32 LE (firmware >= 5.5.107).
@@ -1002,6 +1014,15 @@ public class PdmDevice : IDeviceConfigurable
                 VarMap.Add(new DeviceVariable { GetName = () => Timers[num].Name, OwnerKind = "timer", OwnerNumber = num + 1,
                     PropertyName = "State", DataType = "bool", VariableIndex = index++, SingleVariable = false });
             }
+        // feat/wire-load (0x1000 sub 33): per output the wire load % (fLoad). A sub, not a block: every PDM has outputs.
+        // Canonical order: after output-state-signals and undercurrent-trip (status/integration-order.txt).
+        if (ParamSet.Contains(Output.BaseIndex, 33))
+            for (var i = 0; i < NumOutputs; i++)
+            {
+                var num = i;
+                VarMap.Add(new DeviceVariable { GetName = () => Outputs[num].Name, OwnerKind = "output", OwnerNumber = num + 1,
+                    PropertyName = "Wire Load", DataType = "float", VariableIndex = index++, SingleVariable = false });
+            }
     }
 
     private void InitParams()
@@ -1088,7 +1109,7 @@ public class PdmDevice : IDeviceConfigurable
         // The firmware default = "every digital input wakes"; clamp a fresh/legacy record to the real pin count.
         WakeDigInputMask &= (1 << NumDigitalInputs) - 1;
 
-        foreach (var output in Outputs) allParams.AddRange(output.Params);
+        foreach (var output in Outputs) allParams.AddRange(Upstream ? output.Params.Concat(output.UpstreamParams) : output.Params);
         foreach (var input in Inputs) allParams.AddRange(input.Params);
         foreach (var canInput in CanInputs) allParams.AddRange(canInput.Params);
         foreach (var virtualInput in VirtualInputs) allParams.AddRange(virtualInput.Params);
@@ -1114,7 +1135,7 @@ public class PdmDevice : IDeviceConfigurable
             NotifySuccess = msg => SuccessNotification?.Invoke(msg),
             NotifyError = msg => ErrorNotification?.Invoke(msg),
             WriteAllFailed = () => { var h = WriteAllIncomplete; h?.Invoke(); return h != null; },
-            ParamSetLearned = InitVarMap   // upstream: which blocks the module has decides the var map tail
+            ParamSetLearned = () => { InitVarMap(); InitStatusSigs(); }   // upstream: which params the module has decides the var map tail and extra frames
         };
     }
 

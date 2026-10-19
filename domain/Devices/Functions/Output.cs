@@ -51,10 +51,14 @@ public class Output : IDeviceFunction
     [JsonPropertyName("warnLimit")] public double WarnLimit { get => field; set => field = Math.Clamp(value, 0.0, 100.0); } = 0.0;        //A, 0 = disabled
     [JsonPropertyName("openLoadLimit")] public double OpenLoadLimit { get => field; set => field = Math.Clamp(value, 0.0, 100.0); } = 0.0; //A, 0 = disabled
     [JsonPropertyName("openLoadTime")] public int OpenLoadTime { get => field; set => field = Math.Clamp(value, 0, 60000); } = 1000;     //ms below floor before flagging
+    // upstream feat/wire-load: wire time constant, s, 0 = off; the module estimates the wire's load % from I² (report only)
+    [JsonPropertyName("thermalTau")] public int ThermalTau { get => field; set => field = Math.Clamp(value, 0, 600); } = 0;
     
     [JsonIgnore][Plotable(displayName:"Current", unit:"A")] public double Current { get; set; }
     [JsonIgnore][Plotable(displayName:"State")] public OutState State { get; set; }
     [JsonIgnore][Plotable(displayName:"ResetCount")] public int ResetCount { get; set; }
+    // upstream feat/wire-load: the wire's estimated load % (100 = the temperature the current limit reaches for good)
+    [JsonIgnore][Plotable(displayName:"WireLoad", unit:"%")] public double WireLoad { get; set; }
     [JsonIgnore][Plotable(displayName:"DutyCycle", unit:"%")] public double CurrentDutyCycle
     {
         get;
@@ -67,6 +71,8 @@ public class Output : IDeviceFunction
     [JsonIgnore][Plotable(displayName:"CalcCurrent", unit:"A")] public double CalculatedCurrent { get; private set; }
 
     [JsonIgnore] public List<DeviceParameter> Params { get; }
+    // Upstream-only subs (free in the fork, whose firmware lacks them): added on upstream modules only.
+    [JsonIgnore] public List<DeviceParameter> UpstreamParams { get; }
 
     [JsonConstructor]
     public Output(int number, string name)
@@ -75,6 +81,15 @@ public class Output : IDeviceFunction
         Name = name;
 
         Params = InitParams();
+        UpstreamParams =
+        [
+            new DeviceParameter
+            {
+                ParentName = Name, Name = $"output[{Number}].thermalTau", Index = BaseIndex + (Number - 1), SubIndex = 33,
+                GetValue = () => ThermalTau, SetValue = val => ThermalTau = (int)val,
+                ValueType = typeof(int), DefaultValue = 0
+            }
+        ];
     }
 
     private List<DeviceParameter> InitParams()
