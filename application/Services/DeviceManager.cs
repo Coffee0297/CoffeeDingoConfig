@@ -395,6 +395,7 @@ public class DeviceManager(ILogger<DeviceManager> logger, ILoggerFactory loggerF
         else if (cmd == domain.Enums.MessageCommand.BurnParams) ok = frame.Payload[4] == 1;
         else if (cmd == domain.Enums.MessageCommand.Identify) { GetDeviceUiState(device.Guid).HasLed = frame.Payload[2] != 0; ok = true; }
         else if (cmd == domain.Enums.MessageCommand.OutputTest) { GetDeviceUiState(device.Guid).TestReplied = true; ok = frame.Payload[7] == 1; }
+        else if (cmd == domain.Enums.MessageCommand.ResetCause) { GetDeviceUiState(device.Guid).ResetFlags = frame.Payload[1]; ok = true; }
         else if (cmd == domain.Enums.MessageCommand.SleepInfo)
         {
             var ui = GetDeviceUiState(device.Guid);
@@ -429,7 +430,7 @@ public class DeviceManager(ILogger<DeviceManager> logger, ILoggerFactory loggerF
             return;
         }
         else { if (cmd == domain.Enums.MessageCommand.Write) GetDeviceUiState(device.Guid).StoredOnModule = false; return; }
-        if (ok && cmd != domain.Enums.MessageCommand.Identify && cmd != domain.Enums.MessageCommand.OutputTest) GetDeviceUiState(device.Guid).StoredOnModule = cmd == domain.Enums.MessageCommand.BurnParams;
+        if (ok && cmd is not (domain.Enums.MessageCommand.Identify or domain.Enums.MessageCommand.ResetCause or domain.Enums.MessageCommand.OutputTest)) GetDeviceUiState(device.Guid).StoredOnModule = cmd == domain.Enums.MessageCommand.BurnParams;
         if (_confirms.TryRemove((device.BaseId, cmd), out var tcs)) tcs.TrySetResult(ok);
     }
 
@@ -481,6 +482,20 @@ public class DeviceManager(ILogger<DeviceManager> logger, ILoggerFactory loggerF
                 SendOnly = true, DeviceBaseId = d.BaseId, Name = "Identify",
                 Frame = new CanFrame(d.BaseId + PdmDevice.ConfigTxOffset, 8,
                     [Convert.ToByte(domain.Enums.MessageCommand.Identify), (byte)Math.Clamp(seconds, 1, 60), 0, 0, 0, 0, 0, 0])
+            });
+            return true;
+        }, 2000)
+        : Task.FromResult(false);
+
+    /// <summary>Upstream feat/reset-cause: ask why the module last reset; waits for the reply (2 s), which lands in
+    /// DeviceUiState.ResetFlags.</summary>
+    public Task<bool> ResetCauseConfirmed(Guid deviceId) => GetDevice(deviceId) is { } d
+        ? Confirmed(d, domain.Enums.MessageCommand.ResetCause, () =>
+        {
+            QueueMessage(new DeviceCanFrame
+            {
+                SendOnly = true, DeviceBaseId = d.BaseId, Name = "Reset cause",
+                Frame = new CanFrame(d.BaseId + PdmDevice.ConfigTxOffset, 8, [Convert.ToByte(domain.Enums.MessageCommand.ResetCause), 0, 0, 0, 0, 0, 0, 0])
             });
             return true;
         }, 2000)

@@ -101,6 +101,8 @@ export const api = {
   remove: (guid) => j('POST', `/api/devices/${guid}/remove`),
   // firmware 5.6: blink the module's status LEDs for `seconds` -> { ok, hasLed } (the CANBoard has none)
   blink: (guid, seconds = 10) => j('POST', `/api/devices/${guid}/identify?seconds=${seconds}`),
+  // upstream feat/reset-cause: { flags, cause, names } why the module last reset (409 when its firmware does not say)
+  resetCause: (guid) => j('GET', `/api/devices/${guid}/resetcause`),
   action: (guid, act) => j('POST', `/api/devices/${guid}/${act}`, undefined, 45000),   // write/writeall/burn wait for the module's confirm (server caps 30 s)
   outputConfig: (guid, body) => j('POST', `/api/devices/${guid}/outputconfig`, body),
   // Bench test: { mode: 'on'|'pwm'|'off', duty, freq, hold } — live module only, releases by itself after `hold` s.

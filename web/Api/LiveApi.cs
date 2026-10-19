@@ -1222,6 +1222,20 @@ public static class LiveApi
                       : Results.Json(new { ok, error = "The module did not answer." }, statusCode: 409);
         });
 
+        // Why the module last reset (upstream feat/reset-cause, request 55): power-on, brown-out, pin, software, watchdog.
+        api.MapGet("/devices/{guid}/resetcause", async (string guid, DeviceManager dm, ICommsAdapterManager adapters) =>
+        {
+            if (!Guid.TryParse(guid, out var g)) return Results.BadRequest();
+            if (await RequireLiveModuleAsync(g, dm, adapters, "read the reset cause") is { } bad) return bad;
+            if (dm.GetDevice(g) is not IDeviceConfigurable c) return Results.BadRequest();
+            if (c.Family != domain.Common.FwFamily.Upstream)
+                return Results.Json(new { ok = false, error = "This firmware (dingoFW 5.x) does not report why it reset." }, statusCode: 409);
+            if (!await dm.ResetCauseConfirmed(g) || dm.GetDeviceUiState(g).ResetFlags is not int f)
+                return Results.Json(new { ok = false, error = "No answer: this firmware does not report why it reset." }, statusCode: 409);
+            var cb = c is CanboardDevice;
+            return Results.Ok(new { ok = true, flags = f, cause = domain.Common.ResetCause.Decode(f, cb), names = domain.Common.ResetCause.Flags(f, cb) });
+        });
+
         api.MapPost("/devices/{guid}/flash-can", async (string guid, HttpRequest req, CanFlashService flasher) =>
         {
             if (!Guid.TryParse(guid, out var g)) return Results.BadRequest();
