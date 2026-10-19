@@ -22,7 +22,12 @@
   })
   const items = $derived([{ value: '0', label: 'Choose a value' }, ...nums.filter((v) => v.index !== 0).map((v) => ({ value: String(v.index), label: v.name })), ...remote])
   async function pickSrc(key, v) {
-    if (!isRemoteKey(v)) { f[key] = Number(v); return }
+    if (!isRemoteKey(v)) {
+      f[key] = Number(v)
+      // a PID output is the duty in % already (duty % = signal ÷ denominator)
+      if (key === 'dutyCycleInput' && nums.find((x) => x.index === Number(v))?.kind === 'pid') f.dutyCycleDenom = 1
+      return
+    }
     linking = true
     try {
       f[key] = await resolveRemote(guid, v, 'num')
@@ -57,7 +62,9 @@
     <div class="grid">
       {#if f.variableDutyCycle}
         <Select label="Duty comes from" items={items} bind:value={dutySrc} onchange={(v) => pickSrc('dutyCycleInput', v)} disabled={linking} data-testid="duty-source" />
-        <Field label="Signal value at 100 % duty" type="number" bind:value={dutyFull} min={100} step={100} onchange={setDutyFull} hint={'duty % = signal ÷ ' + (f.dutyCycleDenom || 1)} />
+        {@const fromPid = nums.find((x) => x.index === Number(f.dutyCycleInput))?.kind === 'pid'}
+        <Field label="Signal value at 100 % duty" type="number" bind:value={dutyFull} min={100} step={100} onchange={setDutyFull}
+          hint={fromPid && (f.dutyCycleDenom || 1) !== 1 ? '▲ A PID output is the duty in %: set this to 100.' : 'duty % = signal ÷ ' + (f.dutyCycleDenom || 1)} />
       {:else}
         <Stepper label="Duty" bind:value={f.fixedDuty} min={0} max={100} step={5} unit="%" data-testid="duty" />
       {/if}

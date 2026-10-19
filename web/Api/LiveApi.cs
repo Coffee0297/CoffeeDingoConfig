@@ -126,6 +126,7 @@ public static class FunctionMap
                 "canmsg"              => (p.CanMessages.FirstOrDefault(x => x.Number == number), CanMessage.BaseIndex + n),
                 "ignition"            => (p.Ignition, Ignition.BaseIndex),
                 "comfortblink"        => (p.ComfortBlink, ComfortBlink.BaseIndex),
+                "pid"                 => (p.Pids.FirstOrDefault(x => x.Number == number), PidFunction.BaseIndex + n),
                 "canoutput" or "cout" => (p.CanOutputs.FirstOrDefault(x => x.Number == number), CanOutput.BaseIndex + n),
                 "wiper" or "wip"      => (p.Wipers, Wiper.BaseIndex),
                 "starterdisable" or "std" => (p.StarterDisable, StarterDisable.BaseIndex),
@@ -830,6 +831,7 @@ public static class LiveApi
             var o = d?.Outputs.FirstOrDefault(x => x.Number == r.Number);
             if (o == null) return Results.NotFound();
             var track = Track("output", o.Number, string.IsNullOrWhiteSpace(o.Name) ? $"o{o.Number}" : $"o{o.Number} {o.Name}", o);
+            var prevDutyInput = o.DutyCycleInput;
             if (r.Name != null) o.Name = r.Name;          // label only — not written over CAN
             if (r.WireColor != null) o.WireColor = r.WireColor;    // documentation labels only
             if (r.WireStripe != null) o.WireStripe = r.WireStripe;
@@ -862,6 +864,9 @@ public static class LiveApi
             if (r.WarnLimit is { } wl) o.WarnLimit = wl;
             if (r.OpenLoadLimit is { } oll) o.OpenLoadLimit = oll;
             if (r.OpenLoadTime is { } olt) o.OpenLoadTime = olt;
+            // duty % = signal ÷ denominator and a PID output already is the duty in %: wiring a PID in sets it to 1
+            if (o.DutyCycleInput != prevDutyInput && d!.VarMap.FirstOrDefault(v => v.VariableIndex == o.DutyCycleInput)?.OwnerKind == "pid")
+                o.DutyCycleDenominator = 1;
             // The record edit above always persists (offline config authoring). Only push to the
             // module over CAN when it is actually live; report which happened so the UI can say
             // "written to device" vs "saved to project".
@@ -931,6 +936,7 @@ public static class LiveApi
                     maths = Has(p, MathFunction.BaseIndex) ? p.Maths : null, canMessages = Has(p, CanMessage.BaseIndex) ? p.CanMessages : null,
                     ignition = p.Ignition,   // firmware 5.6
                     comfortBlinks = Has(p, ComfortBlink.BaseIndex) ? new[] { p.ComfortBlink } : null,   // 5.6.1 (one; an array for the flow builder)
+                    pids = p.Family == domain.Common.FwFamily.Upstream && Has(p, PidFunction.BaseIndex) ? p.Pids : null,   // upstream feat/pid only
                     canOutputs = p.CanOutputs, wiper = p.Wipers, starterDisable = p.StarterDisable,
                     keypads = p.Keypads,
                     device = new { forceSleepInput = p.ForceSleepInput, muteTxInput = p.MuteTxInput, canSleep = p.CanSleep },
@@ -1011,7 +1017,14 @@ public static class LiveApi
             if (fn == null || paramIndex < 0) return Results.NotFound(new { error = $"unknown function {kind} #{number}" });
             using var doc = await JsonDocument.ParseAsync(req.Body);
             var track = Track(CanonKind(kind), number, FnLabel(kind, number, fn), fn);
+            var before = fn is PidFunction ? JsonSerializer.SerializeToElement(fn, fn.GetType()) : default;
             var rejected = FunctionMap.ApplyJson(fn, doc.RootElement);
+            // the firmware refuses out-of-range values and runs crossed limits as "disabled": refuse them here
+            if (rejected.Count == 0 && fn is PidFunction pid && pid.Problem() is { } why)
+            {
+                FunctionMap.ApplyJson(fn, before);
+                return Results.BadRequest(new { ok = false, error = why + " — nothing was written to the device" });
+            }
             // A field the model couldn't take (bad enum value, wrong type) must not become a silent
             // "saved": refuse, and don't push a half-applied slot to the device.
             if (rejected.Count > 0)
@@ -1611,6 +1624,8 @@ public static class LiveApi
                 foreach (var f in p.Flashers) s.Add(new("Flasher", f.Name, f.Value ? "on" : "off", f.Value, f.Enabled, N: f.Number));
                 foreach (var t in p.Timers) s.Add(new("Timer", t.Name, t.Value ? "on" : "off", t.Value, t.Enabled, N: t.Number));
                 foreach (var t in p.Tables) s.Add(new("Table", t.Name, t.Value.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture), t.Value != 0, t.Enabled, N: t.Number));
+                if (p.Family == domain.Common.FwFamily.Upstream && domain.Common.FwFamily.HasBlock(p, PidFunction.BaseIndex, false))
+                    foreach (var c in p.Pids) s.Add(new("PID", c.Name, c.Value.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture), c.Value != 0, c.Enabled, N: c.Number));
                 foreach (var o in p.Outputs) s.Add(new("Output", o.Name, o.State.ToString(), o.State.ToString() == "On", o.Enabled, N: o.Number));
             }
             else if (dm.GetDevice(g) is CanboardDevice cb)
@@ -2030,7 +2045,7 @@ public static class LiveApi
         ["input"] = "Input", ["pin"] = "Input", ["caninput"] = "CAN input", ["can"] = "CAN input", ["virtualinput"] = "Logic", ["cmb"] = "Logic",
         ["condition"] = "Condition", ["cmp"] = "Condition", ["counter"] = "Counter", ["cnt"] = "Counter", ["flasher"] = "Flasher", ["fl"] = "Flasher",
         ["timer"] = "Timer", ["tmr"] = "Timer", ["table"] = "Table", ["tbl"] = "Table", ["math"] = "Math", ["canmsg"] = "CAN message",
-        ["ignition"] = "Ignition", ["comfortblink"] = "Comfort blink", ["canoutput"] = "CAN output", ["cout"] = "CAN output",
+        ["ignition"] = "Ignition", ["comfortblink"] = "Comfort blink", ["pid"] = "PID", ["canoutput"] = "CAN output", ["cout"] = "CAN output",
         ["wiper"] = "Wiper", ["wip"] = "Wiper", ["starterdisable"] = "Starter disable", ["std"] = "Starter disable", ["keypad"] = "Keypad",
         ["keypadbutton"] = "Keypad button", ["keypaddial"] = "Keypad dial", ["digitaloutput"] = "Output", ["dout"] = "Output",
         ["analoginput"] = "Analog input", ["ain"] = "Analog input",
@@ -2115,6 +2130,7 @@ public static class LiveApi
         foreach (var t in p.GetTimers()) used.Add(t.Input);
         foreach (var t in p.GetTables()) { used.Add(t.XInput); used.Add(t.YInput); }
         foreach (var c in p.GetCanOutputs()) used.Add(c.Input);
+        foreach (var c in p.Pids) { used.Add(c.SetpointInput); used.Add(c.ProcessInput); used.Add(c.ActivateInput); used.Add(c.FeedFwdInput); }
         used.Add(p.ForceSleepInput); used.Add(p.MuteTxInput);
         var luaVars = p.VarMap.Where(v => v.OwnerKind == "lua").ToList();   // OwnerNumber = slot + 1
         var consumedSlots = luaVars.Where(v => used.Contains(v.VariableIndex)).Select(v => v.OwnerNumber - 1).ToHashSet();
@@ -2147,6 +2163,7 @@ public static class LiveApi
                 "Flasher" => p.GetFlashers().FirstOrDefault(x => x.Number == n)?.Name,
                 "Timer" => p.GetTimers().FirstOrDefault(x => x.Number == n)?.Name,
                 "Table" => p.GetTables().FirstOrDefault(x => x.Number == n)?.Name,
+                "Pid" => p.Pids.FirstOrDefault(x => x.Number == n)?.Name,
                 _ => null,
             },
             CanboardDevice c => kind switch
@@ -2187,6 +2204,7 @@ public static class LiveApi
                 "flasher" => p.GetFlashers().FirstOrDefault(x => x.Number == n)?.Enabled ?? true,
                 "timer" => p.GetTimers().FirstOrDefault(x => x.Number == n)?.Enabled ?? true,
                 "table" => p.GetTables().FirstOrDefault(x => x.Number == n)?.Enabled ?? true,
+                "pid" => p.Pids.FirstOrDefault(x => x.Number == n)?.Enabled ?? true,
                 "output" => p.GetOutputs().FirstOrDefault(x => x.Number == n)?.Enabled ?? true,
                 "wiper" => p.GetWipers()?.Enabled ?? false,
                 "keypad" => p.GetKeypads().FirstOrDefault(x => x.Number == n)?.Enabled ?? true,
@@ -2236,6 +2254,7 @@ public static class LiveApi
                 "Flasher" => p.GetFlashers().FirstOrDefault(x => x.Number == n)?.Enabled ?? false,
                 "Timer" => p.GetTimers().FirstOrDefault(x => x.Number == n)?.Enabled ?? false,
                 "Table" => p.GetTables().FirstOrDefault(x => x.Number == n)?.Enabled ?? false,
+                "Pid" => p.Pids.FirstOrDefault(x => x.Number == n)?.Enabled ?? false,
                 "Wiper" => p.GetWipers()?.Enabled ?? false,
                 _ => true,
             };

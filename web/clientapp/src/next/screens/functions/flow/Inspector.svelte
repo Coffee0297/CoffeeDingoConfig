@@ -7,7 +7,7 @@
   import { untrack } from 'svelte'
   import { Button, Chip, Field, Select, Segmented, Checkbox, Banner } from '../../../ui/index.js'
   import { href } from '../../../router.svelte.js'
-  import { FAM_COLOR, FAM_NAME, OPS, OP_WORDS, JOIN, TIMER_MODES, EDGES, MATH_OPS, isRelational, sourceOptions, canWire, hexId, parseId } from './model.js'
+  import { FAM_COLOR, FAM_NAME, OPS, OP_WORDS, JOIN, TIMER_MODES, EDGES, MATH_OPS, isRelational, sourceOptions, canWire, hexId, parseId, pidProblem } from './model.js'
   import { sentenceFor } from './sentence.js'
   import { fmt } from './livevals.js'
   import { lacks, isUpstream } from '../../hardware/parts/util.js'
@@ -33,6 +33,7 @@
     math: ['name', 'inputA', 'inputB', 'op', 'constB', 'factor', 'offset'],
     canmsg: ['name', 'input', 'id', 'ide', 'dlc', 'data', 'mode', 'intervalMs'],
     comfortblink: ['name', 'leftInput', 'rightInput', 'clockInput', 'tapMs', 'blinks'],
+    pid: ['name', 'setpointInput', 'processInput', 'activateInput', 'feedFwdInput', 'invert', 'kp', 'ki', 'kd', 'feedForward', 'outMin', 'outMax', 'iMin', 'iMax', 'spRate', 'deadband', 'pvMin', 'pvMax', 'fallback', 'periodMs'],
     input: ['name', 'invert', 'mode', 'debounceTime'],
     digitaloutput: ['name', 'input'],
     output: ['name', 'input', 'dutyCycleInput'],
@@ -108,6 +109,7 @@
     if (k === 'canmsg' && (draft.dlc < 0 || draft.dlc > 8)) return 'Length must be 0 to 8 bytes.'
     if (k === 'comfortblink' && (draft.tapMs < 100 || draft.tapMs > 5000)) return 'The tap time must be 0.1 to 5 s.'
     if (k === 'comfortblink' && (!Number.isInteger(draft.blinks) || draft.blinks < 1 || draft.blinks > 10)) return 'Blinks must be 1 to 10.'
+    if (k === 'pid') { const p = pidProblem(draft); if (p) return p[0].toUpperCase() + p.slice(1) + '.' }
     if (k === 'canmsg' && draft.mode === 0 && (draft.intervalMs < 10 || draft.intervalMs > 60000)) return 'Repeat every 10 to 60000 ms.'
     if (k === 'canmsg' && draft.data.some((x) => !Number.isInteger(x) || x < 0 || x > 255)) return 'Each byte must be 00 to FF.'
     return ''
@@ -117,7 +119,7 @@
     err = validate()
     if (err) return
     const body = { ...dirtyBody }
-    for (const k of Object.keys(body)) if (!isRemoteKey(body[k]) && (typeof base[k] === 'number' || ['input', 'var0', 'var1', 'var2', 'xInput', 'yInput', 'incInput', 'decInput', 'resetInput', 'inputA', 'inputB', 'leftInput', 'rightInput', 'clockInput'].includes(k))) body[k] = Number(body[k])
+    for (const k of Object.keys(body)) if (!isRemoteKey(body[k]) && (typeof base[k] === 'number' || ['input', 'var0', 'var1', 'var2', 'xInput', 'yInput', 'incInput', 'decInput', 'resetInput', 'inputA', 'inputB', 'leftInput', 'rightInput', 'clockInput', 'setpointInput', 'processInput', 'activateInput', 'feedFwdInput'].includes(k))) body[k] = Number(body[k])
     await onsave?.(node.id, body, `${node.title}: ${Object.keys(body).join(', ')}`)
   }
 
@@ -149,7 +151,11 @@
   const sentence = $derived(node ? sentenceFor(model, node) : null)
   const sentenceText = $derived(sentence ? sentence.map((s) => s.t ?? s.label).join(' ').replace(/ ([.,)])/g, '$1').replace(/\( /g, '(') : '')
   const reads = $derived(sentenceText || ({ sys: "This module's own signals: always on, state, board temperature and battery voltage. Its force-sleep and mute-CAN inputs are set here.", input: 'A switch wired to this module. Settings for the pin are below.', analoginput: 'An analog input (sensor, switch ladder or rotary). Calibrate it on its Hardware screen.', lua: 'Values set by the Lua program on this module (Expert › Lua).', keypad: 'Buttons of a CAN keypad.' }[node?.kind] ?? 'A block on this module.'))
-  const graphHref = $derived(node && dev ? href('live', 'plot', { signal: node.kind === 'output' ? `out:${dev.guid}:${node.n}` : `${dev.guid}|${node.title}` }) : '#')
+  // a PID graphs with its setpoint and measured value (when they are signals of this module)
+  const srcTitle = (idx) => { const v = model.byIdx.get(Number(idx)); return v && v.kind !== 'sys' ? model.nodes.get(`${v.kind}:${v.number}`)?.title : null }
+  const graphSignal = (n) => n.kind === 'output' ? `out:${dev.guid}:${n.n}`
+    : [n.title, ...(n.kind === 'pid' ? [srcTitle(n.row?.setpointInput), srcTitle(n.row?.processInput)] : [])].filter(Boolean).map((t) => `${dev.guid}|${t}`).join(',')
+  const graphHref = $derived(node && dev ? href('live', 'plot', { signal: graphSignal(node) }) : '#')
   const hwHref = $derived.by(() => {
     if (!node || !dev) return null
     const { kind, n } = parseId(node.id)
@@ -289,6 +295,37 @@
         <Field label="Blinks for a tap" type="number" min="1" max="10" step="1" bind:value={() => draft.blinks ?? 3, (v) => (draft.blinks = Math.round(toNum(v)))} />
       </div>
       <p class="hint">A tap of the lever blinks that many times, then stops. Held longer than the tap time it blinks until released. A tap the other way during a comfort blink cancels it. Use Left / Right as "indicator on" in place of the lever; blinks are counted on the indicator clock, so every module stops on the same blink.</p>
+    {:else if node.kind === 'pid'}
+      <span class="sec">Direction</span>
+      {@render seg('The output rises while the measured value is', [{ value: 'false', label: 'below the setpoint (heater)' }, { value: 'true', label: 'above it (fan, pump)' }], String(!!draft.invert), (v) => (draft.invert = v === 'true'), false)}
+      <span class="sec">Gains</span>
+      <div class="three">
+        <Field label="Kp" type="number" min="0" step="any" bind:value={() => draft.kp ?? 1, (v) => (draft.kp = toNum(v))} />
+        <Field label="Ki" type="number" min="0" step="any" unit="/s" bind:value={() => draft.ki ?? 0, (v) => (draft.ki = toNum(v))} />
+        <Field label="Kd" type="number" min="0" step="any" unit="s" bind:value={() => draft.kd ?? 0, (v) => (draft.kd = toNum(v))} />
+      </div>
+      <div class="two">
+        <Field label="Output min" type="number" step="any" bind:value={() => draft.outMin ?? 0, (v) => (draft.outMin = toNum(v))} />
+        <Field label="Output max" type="number" step="any" bind:value={() => draft.outMax ?? 100, (v) => (draft.outMax = toNum(v))} />
+        <Field label="I min" type="number" step="any" bind:value={() => draft.iMin ?? -100, (v) => (draft.iMin = toNum(v))} />
+        <Field label="I max" type="number" step="any" bind:value={() => draft.iMax ?? 100, (v) => (draft.iMax = toNum(v))} />
+        <Field label="Feed-forward (constant)" type="number" step="any" bind:value={() => draft.feedForward ?? 0, (v) => (draft.feedForward = toNum(v))} hint="Added to the output always" />
+        <Field label="Update every" type="number" min="2" max="1000" unit="ms" bind:value={() => draft.periodMs ?? 20, (v) => (draft.periodMs = Math.round(toNum(v)))} />
+        <Field label="Setpoint rate" type="number" min="0" step="any" unit="/s" bind:value={() => draft.spRate ?? 0, (v) => (draft.spRate = toNum(v))} hint="0 = jumps at once" />
+        <Field label="Deadband" type="number" min="0" step="any" bind:value={() => draft.deadband ?? 0, (v) => (draft.deadband = toNum(v))} hint="Errors smaller than this count as 0" />
+      </div>
+      <span class="sec">Sensor check</span>
+      <div class="three">
+        <Field label="Measured valid from" type="number" step="any" bind:value={() => draft.pvMin ?? 0, (v) => (draft.pvMin = toNum(v))} />
+        <Field label="to" type="number" step="any" bind:value={() => draft.pvMax ?? 0, (v) => (draft.pvMax = toNum(v))} />
+        <Field label="Else output" type="number" step="any" bind:value={() => draft.fallback ?? 0, (v) => (draft.fallback = toNum(v))} />
+      </div>
+      {#if draft.pvMin || draft.pvMax}
+        <p class="hint" class:bad={!draft.fallback && draft.invert} role="status">{!draft.fallback && draft.invert ? '▲ A cooling fan or pump should run when its sensor is lost: set "Else output" to 100.' : 'Outside the window (sensor lost, or a CAN input that timed out to 0) the output holds "Else output": 100 for a fan or pump, 0 for a heater.'}</p>
+      {:else}
+        <p class="hint">Both 0 = no check. Set a window that excludes 0 (e.g. 1 to 200 °C), so a lost CAN sensor gives the fallback instead of a dead fan.</p>
+      {/if}
+      <p class="hint">To drive a fan or pump: wire Output to an output's "Duty from" (the output's denominator is set to 1, so 100 = 100 %). Live: the output comes from the module; P, I and D are not sent over CAN.</p>
     {:else if node.kind === 'ignition'}
       <p class="hint">The ignition and start button are set up on their own page: mode, inputs, crank limits and which module is the main one.</p>
       <Button size="sm" href={href('power', 'ignition')}>Open ignition setup</Button>

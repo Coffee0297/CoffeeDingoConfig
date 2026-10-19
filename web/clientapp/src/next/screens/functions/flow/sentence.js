@@ -68,6 +68,17 @@ export function sentenceFor(model, n) {
     case 'comfortblink':
       return [T('A tap of'), srcTok(model, r.leftInput, 'leftInput'), T('or'), srcTok(model, r.rightInput, 'rightInput'), T('shorter than'), val(secs(r.tapMs ?? 1000), 'tapMs'),
         T('blinks'), val(r.blinks ?? 3, 'blinks'), T('times on'), srcTok(model, r.clockInput, 'clockInput'), T('; held longer it blinks until released, and a tap the other way cancels it.')]
+    case 'pid': {
+      const segs = [self(n), T('drives its output'), val(`${r.outMin ?? 0} to ${r.outMax ?? 100}`, 'outMin'), T('up while'), srcTok(model, r.processInput, 'processInput'),
+        T(r.invert ? 'is above' : 'is below'), r.setpointInput ? srcTok(model, r.setpointInput, 'setpointInput') : val(0, 'setpointInput'),
+        T(': Kp'), val(r.kp ?? 1, 'kp'), T(', Ki'), val((r.ki ?? 0) + ' /s', 'ki'), T(', Kd'), val((r.kd ?? 0) + ' s', 'kd')]
+      if (r.feedForward) segs.push(T(', plus'), val(r.feedForward, 'feedForward'))
+      if (r.feedFwdInput) segs.push(T(', plus'), srcTok(model, r.feedFwdInput, 'feedFwdInput'))
+      if (r.pvMin || r.pvMax) segs.push(T('. Outside'), val(`${r.pvMin} to ${r.pvMax}`, 'pvMin'), T('it holds'), val(r.fallback ?? 0, 'fallback'))
+      if ((r.activateInput ?? 1) !== 1) segs.push(T(r.activateInput ? '. Only while' : '. It has no "active while" input, so it sends only the feed-forward'), ...(r.activateInput ? [srcTok(model, r.activateInput, 'activateInput'), T('is on')] : []))
+      segs.push(T('.'))
+      return segs
+    }
     case 'math': {
       const a = srcTok(model, r.inputA, 'inputA'), b = r.inputB ? srcTok(model, r.inputB, 'inputB') : val(r.constB ?? 0, 'constB')
       const op = r.op ?? 0
@@ -100,6 +111,6 @@ export function sentenceFor(model, n) {
 
 /** Card heading for the sentence view: family · kind. */
 export function cardKind(n) {
-  const k = { virtualinput: 'COMBINE', condition: 'COMPARE', timer: 'TIMER · ' + (TIMER_MODES[n.row?.mode ?? 0] ?? '').toUpperCase(), flasher: 'FLASHER', counter: 'COUNTER', table: 'TABLE', canoutput: 'CAN OUTPUT', caninput: 'CAN INPUT', math: 'MATH', canmsg: 'CAN MESSAGE', comfortblink: 'COMFORT BLINK', output: 'OUTPUT', digitaloutput: 'OUTPUT' }[n.kind] ?? n.kindLabel.toUpperCase()
+  const k = { virtualinput: 'COMBINE', condition: 'COMPARE', timer: 'TIMER · ' + (TIMER_MODES[n.row?.mode ?? 0] ?? '').toUpperCase(), flasher: 'FLASHER', counter: 'COUNTER', table: 'TABLE', canoutput: 'CAN OUTPUT', caninput: 'CAN INPUT', math: 'MATH', canmsg: 'CAN MESSAGE', pid: 'PID', comfortblink: 'COMFORT BLINK', output: 'OUTPUT', digitaloutput: 'OUTPUT' }[n.kind] ?? n.kindLabel.toUpperCase()
   return k
 }

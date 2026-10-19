@@ -31,5 +31,7 @@ public record PdmDeviceDefinition(
     System.Text.Json.JsonElement? Board = null,
     // Math and CAN Message blocks (firmware 5.6)
     int NumMath = 8,
-    int NumCanMessages = 4
+    int NumCanMessages = 4,
+    // PID controllers (upstream dingoFW feat/pid, NUM_PIDS 4 on every PDM board; the CANBoard has none)
+    int NumPids = 4
     );

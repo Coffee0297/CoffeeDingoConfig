@@ -149,6 +149,81 @@ public class UpstreamFamilyTests
         Assert.True(d.ConfigMismatch);
     }
 
+    // A full ReadAll of `keys` (values: what the app holds), so the module's param list is learned as on a real Read.
+    private static void ReadAll(PdmDevice d, List<(int Index, int Sub)> keys)
+    {
+        var q = Q();
+        var crc = new CumulativeCrc32();
+        d.Read(0x680, [10, 0, 0, 0, 0, 0, 0, 0], ref q, []);
+        foreach (var (i, s) in keys)
+        {
+            var known = d.Params.FirstOrDefault(p => p.Index == i && p.SubIndex == s);
+            byte[] v = known is null ? [0, 0, 0, 0] : ParamCodec.ToFrame(domain.Enums.MessageCommand.ReadAllRsp, known, 0).Payload[4..];
+            crc.Update(v);
+            d.Read(0x680, [11, (byte)i, (byte)(i >> 8), (byte)s, .. v], ref q, []);
+        }
+        d.Read(0x680, [12, (byte)keys.Count, (byte)(keys.Count >> 8), 0, .. BitConverter.GetBytes(crc.Final)], ref q, []);
+    }
+    private static List<(int, int)> Block(int baseIndex, int count, int subs) =>
+        Enumerable.Range(0, count).SelectMany(n => Enumerable.Range(0, subs).Select(s => (baseIndex + n, s))).ToList();
+
+    // feat/pid firmware (dingopdm_v7.elf of that branch): pVarMap 0x3c4 bytes = 241 entries = 225 + 4 PIDs x
+    // (Output, P, I, D) right after the timers; params 0x2300+n subs 0-19 (core/param_defs.h PID_PARAMS);
+    // Msg 30 (+32) = 4 x int16 x10 outputs.
+    [Fact]
+    public void Pid_OnlyWhenTheModuleHasIt_VarMapParamsAndFrame()
+    {
+        var d = UpstreamPdm();
+        Assert.Equal(225, d.VarMap.Count);              // list unknown: no PID
+        Assert.False(d.InIdRange(0x680 + 32));         // +32 is a neighbour's base id: not claimed without the block
+
+        ReadAll(d, [.. Block(0x0000, 1, 9), .. Block(0x1A00, 8, 5), .. Block(0x2300, 4, 20)]);
+        Assert.Equal(241, d.VarMap.Count);
+        Assert.Equal(Enumerable.Range(0, 241), d.VarMap.Select(v => v.VariableIndex));
+        Assert.Equal(("timer", 8), (d.VarMap[224].OwnerKind, d.VarMap[224].OwnerNumber));
+        Assert.Equal(("pid", 1, "Output"), (d.VarMap[225].OwnerKind, d.VarMap[225].OwnerNumber, d.VarMap[225].PropertyName));
+        Assert.Equal(("pid", 4, "D"), (d.VarMap[240].OwnerKind, d.VarMap[240].OwnerNumber, d.VarMap[240].PropertyName));
+        Assert.Equal(["Output", "P", "I", "D"], d.VarMap.Skip(229).Take(4).Select(v => v.PropertyName));
+        Assert.All(d.VarMap.Skip(225), v => Assert.Equal("float", v.DataType));
+
+        // params vs PID_PARAMS: subs 0-19, Float / Var / Bool, firmware defaults
+        var pid = d.Params.Where(p => p.Index == 0x2301).OrderBy(p => p.SubIndex).ToList();
+        Assert.Equal(Enumerable.Range(0, 20), pid.Select(p => p.SubIndex));
+        Assert.Equal(80, d.Params.Count(p => p.Index is >= 0x2300 and <= 0x2303));
+        int[] floats = [4, 6, 7, 8, 9, 10, 11, 12, 14, 15, 16, 17, 18], bools = [0, 13];
+        Assert.All(pid, p => Assert.Equal(floats.Contains(p.SubIndex) ? typeof(double) : bools.Contains(p.SubIndex) ? typeof(bool) : typeof(int), p.ValueType));
+        Assert.Equal([false, 0, 0, 1, 0.0, 0, 1.0, 0.0, 0.0, -100.0, 100.0, 0.0, 100.0, false, 0.0, 0.0, 0.0, 0.0, 0.0, 20], pid.Select(p => p.DefaultValue));
+        Assert.Equal([false, 0, 0, 1, 0.0, 0, 1.0, 0.0, 0.0, -100.0, 100.0, 0.0, 100.0, false, 0.0, 0.0, 0.0, 0.0, 0.0, 20], pid.Select(p => p.GetValue()));
+        // a float param goes out as IEEE float32
+        d.Pids[1].Kp = 2.5;
+        Assert.Equal(2.5f, BitConverter.ToSingle(ParamCodec.ToFrame(domain.Enums.MessageCommand.WriteAllVal, pid[6], 0).Payload, 4));
+
+        // live output: Msg 30 at +32, signed int16 LE x10
+        Assert.True(d.InIdRange(0x680 + 32));
+        var q = Q();
+        d.Read(0x680 + 32, [0xFA, 0x00, 0x18, 0xFC, 0xE8, 0x03, 0, 0], ref q, []);
+        Assert.Equal([25.0, -100.0, 100.0, 0.0], d.Pids.Select(p => Math.Round(p.Value, 3)));
+    }
+
+    [Fact]
+    public void Pid_ForkHasNone_AndProblemRefusesWhatTheFirmwareWould()
+    {
+        var f = new PdmDevice("PDM", 0x680);
+        f.SetLogger(NullLogger<PdmDevice>.Instance);
+        var q = Q();
+        f.Read(0x680, [31, 0, 0, 0, 5, 6, 0, 6], ref q, []);
+        Assert.DoesNotContain(f.Params, p => p.Index is >= 0x2300 and < 0x2400);
+        Assert.DoesNotContain(f.VarMap, v => v.OwnerKind == "pid");
+
+        var pid = new domain.Devices.Functions.PidFunction(1, "pid1");
+        Assert.Null(pid.Problem());
+        pid.PeriodMs = 1; Assert.NotNull(pid.Problem()); pid.PeriodMs = 20;
+        pid.OutMin = 101; Assert.Contains("output min", pid.Problem()); pid.OutMin = 0;
+        pid.IMin = 200; Assert.NotNull(pid.Problem()); pid.IMin = -100;
+        pid.PvMin = 5; Assert.NotNull(pid.Problem()); pid.PvMax = 200; Assert.Null(pid.Problem());
+        pid.Ki = -1; Assert.NotNull(pid.Problem()); pid.Ki = double.NaN; Assert.NotNull(pid.Problem());
+    }
+
     [Fact]
     public void ParamRuns_RoundTrip_KeepOrder()
     {

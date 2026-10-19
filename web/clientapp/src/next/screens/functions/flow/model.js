@@ -39,6 +39,8 @@ export const KINDS = {
   math: { label: 'Math', fam: 'logic', arr: 'maths', def: 'numMath', addable: true, fw: [5, 6, 0], ins: [['inputA', 'A', 'num'], ['inputB', 'B', 'num']] },
   canmsg: { label: 'CAN message', fam: 'out', arr: 'canMessages', def: 'numCanMessages', addable: true, fw: [5, 6, 0], ins: [['input', 'While', 'bool']] },
   comfortblink: { label: 'Comfort blink', fam: 'time', arr: 'comfortBlinks', addable: true, fw: [5, 6, 1], ins: [['leftInput', 'Lever left', 'bool'], ['rightInput', 'Lever right', 'bool'], ['clockInput', 'Indicator clock', 'bool']] },
+  // upstream dingoFW feat/pid (PDMs; /functions has `pids` only when the module has the 0x2300 block)
+  pid: { label: 'PID', fam: 'logic', arr: 'pids', def: 'numPids', addable: true, ins: [['setpointInput', 'Setpoint', 'num'], ['processInput', 'Measured', 'num'], ['activateInput', 'Active while', 'bool'], ['feedFwdInput', 'Feed-forward signal', 'num']] },
   ignition: { label: 'Ignition', fam: 'fn', ins: [['ignitionInput', 'Ignition switch', 'bool'], ['startInput', 'Start button', 'bool'], ['crankAllowInput', 'Crank allowed', 'bool'], ['runningInput', 'Engine running', 'bool']] },
 }
 export const arrOf = (kind, dev) => (kind === 'input' ? (isCb(dev) ? 'digitalIn' : 'inputs') : KINDS[kind]?.arr)
@@ -118,6 +120,7 @@ function subline(kind, n, row, dev) {
     case 'canoutput': return `CAN ${hexId(row?.id)}${row?.ide ? ' ext' : ''} · every ${row?.interval ?? 0} ms`
     case 'math': return `Math · ${MATH_OPS[row?.op ?? 0]?.fn('A', row?.inputB ? 'B' : (row?.constB ?? 0))}` + ((row?.factor ?? 1) !== 1 || (row?.offset ?? 0) !== 0 ? ` · ×${row?.factor ?? 1} ${(row?.offset ?? 0) < 0 ? '−' : '+'} ${Math.abs(row?.offset ?? 0)}` : '')
     case 'canmsg': return `CAN ${hexId(row?.id)}${row?.ide ? ' ext' : ''} · ` + (row?.mode === 1 ? 'once' : `every ${row?.intervalMs ?? 0} ms`)
+    case 'pid': return `PID · Kp ${row?.kp ?? 1} Ki ${row?.ki ?? 0} Kd ${row?.kd ?? 0}` + (row?.invert ? ' · cooling' : '') + ` · ${row?.outMin ?? 0} to ${row?.outMax ?? 100}`
     case 'comfortblink': return `Comfort blink · tap < ${secs(row?.tapMs ?? 1000)}: ${row?.blinks ?? 3} blinks`
     case 'ignition': return `Ignition · ${row?.role === 1 ? 'follows the main module' : ['switch + button', 'button only', 'key'][row?.mode ?? 0]}`
     case 'output': return `Output ${n} · ${row?.currentLimit ?? '?'} A` + (row?.enabled === false ? ' · switched off' : row?.pwmEnabled ? ' · PWM' : '')
@@ -151,6 +154,21 @@ function outPortsFor(kind, row, vars, consumed) {
   return vars.filter(keep).map((v) => ({ id: 'v' + v.index, idx: v.index, label: portLabel(v), type: portType(v), prop: v.prop }))
 }
 
+/** Why the firmware would refuse a PID config (its param ranges) or run it as "disabled" (crossed limits); '' = fine. */
+export function pidProblem(r) {
+  const n = (k, d = 0) => (r?.[k] == null || r[k] === '' ? d : Number(r[k]))
+  const bad = (v, lo = -1e6) => !Number.isFinite(v) || v < lo || v > 1e6
+  const per = n('periodMs', 20)
+  if (!Number.isInteger(per) || per < 2 || per > 1000) return 'the update period must be 2 to 1000 ms'
+  if (bad(n('kp', 1), 0) || bad(n('ki'), 0) || bad(n('kd'), 0)) return 'Kp, Ki and Kd must be 0 or more (the direction is set by "cooling")'
+  if (bad(n('spRate'), 0) || bad(n('deadband'), 0)) return 'the setpoint rate and deadband must be 0 or more'
+  if (['feedForward', 'iMin', 'iMax', 'outMin', 'outMax', 'pvMin', 'pvMax', 'fallback'].some((k) => bad(n(k, { iMin: -100, iMax: 100, outMax: 100 }[k] ?? 0)))) return 'limits, feed-forward and fallback must be within ±1000000'
+  if (n('outMin') > n('outMax', 100)) return 'output min is above output max'
+  if (n('iMin', -100) > n('iMax', 100)) return 'I min is above I max'
+  if (n('pvMin') > n('pvMax')) return "the sensor window's low end is above its high end"
+  return ''
+}
+
 /** Plain reasons a block can't run yet (empty = complete). */
 export function incompleteReasons(kind, row, enabled) {
   if (!row || !enabled) return []
@@ -171,6 +189,7 @@ export function incompleteReasons(kind, row, enabled) {
     case 'canoutput': if (!row.input) r.push('needs a value to send'); if (!row.id) r.push('needs a CAN ID'); break
     case 'caninput': if (!row.id) r.push('needs a CAN ID'); if (!row.bitLength) r.push('needs a bit length'); break
     case 'math': if (!row.inputA) r.push('needs an A input'); break
+    case 'pid': if (!row.processInput) r.push('needs a measured value'); { const p = pidProblem(row); if (p) r.push(p) } break
     case 'comfortblink': if (!row.leftInput || !row.rightInput) r.push('needs both lever inputs'); if (!row.clockInput) r.push('needs the indicator clock'); break
     case 'canmsg': if (!row.input) r.push('needs a signal to send on'); if (!row.id) r.push('needs a CAN ID'); break
     case 'output': if (!row.inputVal) r.push('has no input, so it never switches'); break
@@ -198,7 +217,7 @@ export function buildModel(dev, funcs, vmap) {
   const physIn = isCb(dev) ? funcs?.digitalIn : funcs?.inputs
   for (const r of physIn ?? []) add('input', r.number, r, !!r.enabled)
   for (const r of funcs?.analogIn ?? []) add('analoginput', r.number, r, !!r.enabled)
-  for (const k of ['caninput', 'virtualinput', 'condition', 'counter', 'flasher', 'timer', 'table', 'canoutput', 'digitaloutput', 'math', 'canmsg', 'comfortblink']) {
+  for (const k of ['caninput', 'virtualinput', 'condition', 'counter', 'flasher', 'timer', 'table', 'canoutput', 'digitaloutput', 'math', 'canmsg', 'comfortblink', 'pid']) {
     for (const r of funcs?.[KINDS[k].arr] ?? []) add(k, r.number, r, !!r.enabled)
   }
   if (funcs?.ignition) add('ignition', 1, funcs.ignition, !!funcs.ignition.enabled)
@@ -245,7 +264,7 @@ export function buildModel(dev, funcs, vmap) {
     const ins = targetsOf(c).map(([field, label, accepts], i) => ({
       id: field, label, accepts, src: Number(fieldOf(c.kind, c.row, field)) || 0,
       not: c.kind === 'virtualinput' ? !!c.row?.['not' + i] : false,
-      optional: (c.kind === 'virtualinput' && field === 'var2') || (c.kind === 'timer' && field === 'resetInput') || (c.kind === 'counter' && field !== 'incInput') || c.kind === 'sys' || (c.kind === 'math' && field === 'inputB') || c.kind === 'ignition',
+      optional: (c.kind === 'virtualinput' && field === 'var2') || (c.kind === 'timer' && field === 'resetInput') || (c.kind === 'counter' && field !== 'incInput') || c.kind === 'sys' || (c.kind === 'math' && field === 'inputB') || (c.kind === 'pid' && field !== 'processInput') || c.kind === 'ignition',
     }))
     const outs = outPortsFor(c.kind, c.row, varsOf.get(c.id) ?? [], consumed)
     const physical = c.kind === 'input' || c.kind === 'analoginput' || c.kind === 'output' || c.kind === 'digitaloutput' || c.kind === 'sys' || c.kind === 'lua' || c.kind === 'keypad'
@@ -344,6 +363,7 @@ export function slotUsage(dev, funcs, defs) {
     ['Flashers', 'flashers', 'numFlashers'], ['Counters', 'counters', 'numCounters'], ['Tables', 'tables', 'numTables'],
     ['CAN inputs', 'canInputs', 'numCanInputs'], ['CAN outputs', 'canOutputs', 'numCanOutputs'],
     ...(olderThan(dev?.version, [5, 6, 0]) ? [] : [['Math', 'maths', 'numMath'], ['CAN messages', 'canMessages', 'numCanMessages']]),
+    ['PIDs', 'pids', 'numPids'],   // only where /functions has them (upstream with the PID block)
   ]
   return rows.filter(([, arr]) => Array.isArray(funcs?.[arr])).map(([label, arr, key]) => {
     const list = funcs[arr]

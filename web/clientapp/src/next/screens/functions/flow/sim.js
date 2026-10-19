@@ -1,7 +1,7 @@
 // Client-side simulator of one module's blocks. Nothing is sent to the car.
 // Mirrors the firmware (functions/*.cpp): Condition hysteresis, VirtualInput AND/OR/NOR (a real NOR from
 // firmware 5.6.6; before it was NAND) with NOT per input and momentary/latching, Timer on-delay/off-delay/pulse, Flasher,
-// Counter edges, Table interpolation, CAN input operator + timeout, outputs with injected faults.
+// Counter edges, Table interpolation, PID (upstream feat/pid), CAN input operator + timeout, outputs with injected faults.
 import { interpolate } from '../../../../lib/table.js'
 import { fmt } from './livevals.js'
 
@@ -28,6 +28,40 @@ function check(m, mode, v) {
   return !!m.out
 }
 const edgeOf = (e, prev, cur) => (Number(e) === 0 ? !prev && cur : Number(e) === 1 ? prev && !cur : prev !== cur)
+
+// firmware Pid::Update (functions/pid.cpp), one call per main-loop pass. s = the block's memory, r = its config,
+// now in ms, sp / pv / act / ffv = the input values. Fills s.val, s.p, s.i, s.d.
+const clampF = (f, lo, hi) => { if (!(f > lo)) f = lo; if (f > hi) f = hi; return Number.isFinite(f) ? f : 0 }
+export function pidStep(s, r, now, sp, pv, act, ffv) {
+  const n = (k, d = 0) => (r[k] == null ? d : +r[k])
+  const outMin = n('outMin'), outMax = n('outMax', 100), iMin = n('iMin', -100), iMax = n('iMax', 100), pvMin = n('pvMin'), pvMax = n('pvMax')
+  s.i ??= 0
+  if (!r.enabled || outMin > outMax || iMin > iMax || pvMin > pvMax) { s.init = false; s.prevValid = false; s.val = s.p = s.i = s.d = 0; return s }
+  if (s.init && now - s.tLast < n('periodMs', 20)) return s
+  const dt = s.init ? (now - s.tLast) * 0.001 : 0
+  s.tLast = now; s.init = true
+  const ff = n('feedForward') + ffv
+  if (!(act > 0.5)) { s.prevValid = false; s.p = s.i = s.d = 0; s.val = clampF(ff, outMin, outMax); return s }
+  const windowOn = pvMin !== 0 || pvMax !== 0
+  if (!Number.isFinite(sp) || !Number.isFinite(pv) || !Number.isFinite(ff) || (windowOn && (pv < pvMin || pv > pvMax))) {
+    s.prevValid = false; s.p = s.d = 0; s.val = clampF(n('fallback'), outMin, outMax); s.fault = true; return s
+  }
+  s.fault = false
+  if (!s.prevValid) { s.prevValid = true; s.ramp = pv; s.prevPv = pv }
+  const rate = n('spRate')
+  s.ramp = rate > 0 ? clampF(sp, s.ramp - rate * dt, s.ramp + rate * dt) : sp
+  let err = r.invert ? pv - s.ramp : s.ramp - pv
+  if (Math.abs(err) < n('deadband')) err = 0
+  s.p = n('kp', 1) * err
+  const dPv = pv - s.prevPv
+  s.prevPv = pv
+  s.d = dt > 0 ? (n('kd') * (r.invert ? dPv : -dPv)) / dt : 0
+  const iNew = clampF(s.i + n('ki') * err * dt, iMin, iMax)
+  const out = ff + s.p + iNew + s.d
+  if (!((out > outMax && iNew > s.i) || (out < outMin && iNew < s.i))) s.i = iNew
+  s.val = clampF(ff + s.p + s.i + s.d, outMin, outMax)
+  return s
+}
 
 export const SOURCE_KINDS = new Set(['input', 'analoginput', 'caninput', 'sys', 'lua', 'keypad'])
 
@@ -138,6 +172,12 @@ export function createSim(model, snapshot) {
           x.just = false
         }
         vals[outL] = on(s.L); vals[outR] = on(s.R)
+      } else if (n.kind === 'pid') {
+        // the firmware runs it every main-loop pass and gates on its own period; here once per sim step
+        pidStep(s, { ...r, enabled: true }, t, asNum(val(r.setpointInput)), asNum(val(r.processInput)), asNum(val(r.activateInput)), asNum(val(r.feedFwdInput)))
+        for (const [prop, k] of [['Output', 'val'], ['P', 'p'], ['I', 'i'], ['D', 'd']]) { const o = port(n, prop); if (o) vals[o] = s[k] }
+        if (s.fault) status[n.id] = { text: 'FALLBACK', tone: 'warn', why: `The measured value is outside ${r.pvMin} to ${r.pvMax}: the output holds the fallback ${r.fallback}.` }
+        else delete status[n.id]
       } else if (n.kind === 'flasher') {
         const out = port(n, 'State'); if (!out) continue
         if (!truthy(val(r.input))) { vals[out] = false; s.on = false; continue }

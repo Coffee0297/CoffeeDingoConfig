@@ -293,6 +293,11 @@ export async function applyTemplate(api0, { devices, tpl, sel, relays, name, id,
       prev[v] ??= was(v)
       const [g, n] = String(v).split(':')
       return g === dev.guid ? wireOut(api, dev, +n, idx) : wireRemote(devOf(g), +n, idx)
+    }, outputDuty: (v, duty, on) => {
+      // PWM with the duty from a 0–100 % signal (duty % = signal ÷ denominator, so 1)
+      prev[v] ??= was(v)
+      const o = (dev.outputs ?? []).find((x) => x.number === numOut(v)) ?? { number: numOut(v) }
+      return api.outputConfig(dev.guid, { ...binBody(o, on), PwmEnabled: true, VariableDutyCycle: true, DutyCycleInput: duty, DutyCycleDenom: 1 })
     } })
     await tpl.build(ctx, s)
     const p = partial()

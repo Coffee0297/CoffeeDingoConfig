@@ -47,6 +47,8 @@ export function liveOf(v, sig, dev, model) {
       return v.prop === 'State' ? !!s.on : num(s.value)
     }
     case 'counter': case 'table': return num(sig.get(SIG_KIND[v.kind] + '|' + name)?.value)
+    // the PID status frame carries the output only; P / I / D are not on CAN
+    case 'pid': return v.prop === 'Output' ? num(sig.get('PID|' + name)?.value) : null
     default: {
       const k = SIG_KIND[v.kind]
       if (!k) return null
