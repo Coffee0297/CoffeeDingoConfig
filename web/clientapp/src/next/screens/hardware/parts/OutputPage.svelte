@@ -1,7 +1,7 @@
 <script>
   // One output of one module: PDM smart output (current sensing, limits, wiring) or CANBoard low-side output.
   import { untrack } from 'svelte'
-  import { Page, PageHeader, Card, Button, Chip, StateDot, Banner, Empty, LineChart, Meter } from '../../../ui/index.js'
+  import { Page, PageHeader, Card, Button, Chip, StateDot, Banner, Empty, LineChart, Meter, Checkbox } from '../../../ui/index.js'
   import { live, defs, api, device, moduleState, isCanboard, project } from '../../../lib/live.svelte.js'
   import { href } from '../../../router.svelte.js'
   import { pinFor, boardOf } from '../../../../lib/pinmap.js'
@@ -61,6 +61,7 @@
       softStopTime: o.softStopTime ?? 0,
       shed: !!o.shed,
       thermalTau: o.thermalTau ?? 0,
+      stayAlive: !!o.stayAlive,
     }
   }
   // Seed once per output so the 10 Hz telemetry never overwrites an edit in progress.
@@ -129,6 +130,7 @@
           SoftStopTime: Math.round(Number(f.softStopTime) || 0),
           Shed: !!f.shed,
           ThermalTau: Math.round(Number(f.thermalTau) || 0),
+          StayAlive: !!f.stayAlive,
         })
       }
       project.dirty = true
@@ -225,6 +227,15 @@
         <OutputChain {guid} {dev} bind:f {feed} {connected} raw={src} />
         {#if !isCb}
           <OutputProtection bind:f {rating} warn={has(dev, 0x1000 + n - 1, 18)} openLoad={has(dev, 0x1000 + n - 1, 19)} under={isUpstream(dev) && has(dev, 0x1000 + n - 1, 27)} canClear={isUpstream(dev) && has(dev, 0x1000 + n - 1, 25)} retryAll={dev.retryAllInput > 0} hardShort={isUpstream(dev) && has(dev, 0x1000 + n - 1, 32)} ssTarget={ssTimeout && f.pwmEnabled && f.softStart && Number(f.softStartTimeout) > 0} canShed={dev.shedInput != null && has(dev, 0x1000 + n - 1, 26)} shedWired={dev.shedInput > 0} {wireTau} />
+          <!-- upstream dingoFW feat/stay-alive-outputs (sub 34) -->
+          {#if isUpstream(dev) && has(dev, 0x1000 + n - 1, 34)}
+            <Card title="While the module sleeps" aria-label="While the module sleeps">
+              <Checkbox label="Stays on while asleep" hint="For an alarm, a tracker or courtesy lights. If it is on when the module goes to sleep it stays on, and it no longer keeps the module awake." bind:checked={f.stayAlive} data-testid="stay-alive" />
+              {#if f.stayAlive}
+                <Banner tone="warn" title="No current protection while asleep.">The module does not measure or trip this output while it sleeps: a short is limited only by the switch's own current limit and the fuse. It runs at 100 % even when set to PWM, and goes off for a moment at every wake. Paired outputs: tick it on both.</Banner>
+              {/if}
+            </Card>
+          {/if}
         {:else}
           <Card title="Protection"><p class="muted">The CANBoard switches this load to ground and cannot measure or limit current. Put a fuse in the load wire.</p></Card>
         {/if}

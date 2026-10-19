@@ -643,4 +643,22 @@ public class UpstreamFamilyTests
         f.Read(0x680, [31, 0, 0, 0, 5, 6, 0, 6], ref q, []);
         Assert.DoesNotContain(f.Params, x => x.Index == 0x0100);   // the fork has no wake frame
     }
+
+    [Fact]
+    public void StayAlive_UpstreamOnly_OutputSub34()
+    {
+        // feat/stay-alive-outputs param_defs.h: output 0x1000+i sub 34 (Bool); the fork has no sub 34
+        var d = UpstreamPdm();
+        var p = d.Params.Single(x => x.Index == 0x1002 && x.SubIndex == 34);
+        Assert.Equal(typeof(bool), p.ValueType);
+        p.SetValue(true);
+        Assert.True(d.Outputs[2].StayAlive);
+        Assert.Equal(8, d.Params.Count(x => x.SubIndex == 34 && x.Index is >= 0x1000 and < 0x1008));
+
+        var f = new PdmDevice("PDM", 0x680);
+        f.SetLogger(NullLogger<PdmDevice>.Instance);
+        var q = Q();
+        f.Read(0x680, [31, 0, 0, 0, 5, 6, 0, 6], ref q, []);
+        Assert.DoesNotContain(f.Params, x => x.Name.EndsWith(".stayAlive"));
+    }
 }

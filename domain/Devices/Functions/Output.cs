@@ -85,6 +85,10 @@ public class Output : IDeviceFunction
     }
     [JsonIgnore][Plotable(displayName:"CalcCurrent", unit:"A")] public double CalculatedCurrent { get; private set; }
 
+    // Upstream dingoFW feat/stay-alive-outputs (sub 34): an output that is on when the module goes to sleep stays on
+    // (solid, 100 % even with PWM) with NO firmware current protection while asleep. The fork has none.
+    [JsonPropertyName("stayAlive")] public bool StayAlive { get; set; }
+
     [JsonIgnore] public List<DeviceParameter> Params { get; }
     // Upstream-only subs (free in the fork, whose firmware lacks them): added on upstream modules only.
     [JsonIgnore] public List<DeviceParameter> UpstreamParams { get; }
@@ -133,6 +137,8 @@ public class Output : IDeviceFunction
                 GetValue = () => ThermalTau, SetValue = val => ThermalTau = (int)val,
                 ValueType = typeof(int), DefaultValue = 0
             },
+            new() { ParentName = Name, Name = $"output[{Number}].stayAlive", Index = BaseIndex + (Number - 1), SubIndex = 34,
+                GetValue = () => StayAlive, SetValue = v => StayAlive = (bool)v, ValueType = typeof(bool), DefaultValue = false },
         ];
     }
 

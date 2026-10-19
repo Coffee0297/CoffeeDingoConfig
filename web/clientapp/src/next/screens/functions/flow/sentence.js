@@ -141,6 +141,7 @@ export function sentenceFor(model, n) {
       // upstream soft stop (output sub 31)
       if (r.pwmEnabled && r.softStopTime > 0) segs.push(T('When it turns off, its duty ramps down over'), val(r.softStopTime + ' ms', 'softStopTime'), T('first.'))
       if (r.shed) segs.push(T('It switches off while the module sheds loads.'))
+      if (r.stayAlive) segs.push(T('It stays on while the module sleeps, without current protection.'))
       return segs
     }
     case 'sys': {

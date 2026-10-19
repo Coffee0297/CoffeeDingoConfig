@@ -24,7 +24,7 @@ public record OutputDto(int Number, string Name, string State, double Current, i
     double WarnLimit, double OpenLoadLimit, int OpenLoadTime, string WireColor, string WireStripe, double WireLength, double WireGaugeMm2,
     bool VariableDutyCycle = false, int DutyCycleInput = 0, int DutyCycleDenom = 100,
     bool VariableFreq = false, int FreqInput = 0, int FreqInputDenom = 1, bool RampDutyChanges = false,
-    int PrimaryOutput = -1, double UnderLimit = 0, int UnderTime = 1000, bool UnderTrip = false, bool ClearOnReassert = false, double HardShortLimit = 0.0, int SoftStartTimeout = 0, int SoftStopTime = 0, bool Shed = false, int ThermalTau = 0, double WireLoad = 0);
+    int PrimaryOutput = -1, double UnderLimit = 0, int UnderTime = 1000, bool UnderTrip = false, bool ClearOnReassert = false, double HardShortLimit = 0.0, int SoftStartTimeout = 0, int SoftStopTime = 0, bool Shed = false, int ThermalTau = 0, double WireLoad = 0, bool StayAlive = false);
 public record DeviceDto(string Guid, string Name, string Type, int BaseId, bool Connected,
     double Battery, double Current, double Temp, string State, string Version, string Bitrate, OutputDto[] Outputs,
     bool Reading, int ReadDone, int ReadTotal, bool SleepEnabled, int SleepTimeoutMs,
@@ -91,7 +91,7 @@ public record OutputConfigReq(int Number, bool? Enabled = null, int? Input = nul
     string? WireColor = null, string? WireStripe = null, double? WireLength = null, double? WireGaugeMm2 = null,
     bool? VariableDutyCycle = null, int? DutyCycleInput = null, int? DutyCycleDenom = null,
     bool? VariableFreq = null, int? FreqInput = null, int? FreqInputDenom = null, bool? RampDutyChanges = null,
-    int? PrimaryOutput = null, double? UnderLimit = null, int? UnderTime = null, bool? UnderTrip = null, bool? ClearOnReassert = null, double? HardShortLimit = null, int? SoftStartTimeout = null, int? SoftStopTime = null, bool? Shed = null, int? ThermalTau = null);
+    int? PrimaryOutput = null, double? UnderLimit = null, int? UnderTime = null, bool? UnderTrip = null, bool? ClearOnReassert = null, double? HardShortLimit = null, int? SoftStartTimeout = null, int? SoftStopTime = null, bool? Shed = null, int? ThermalTau = null, bool? StayAlive = null);
 public record ApplyProfileReq(string Source);
 public record RenameReq(string Name);
 public record ReadParamReq(int Index, int Sub);
@@ -357,7 +357,7 @@ public static class DingoMap
                 o.PwmEnabled, o.Frequency, o.FixedDutyCycle, o.MinDutyCycle, o.SoftStartEnabled, o.SoftStartRampTime,
                 o.WarnLimit, o.OpenLoadLimit, o.OpenLoadTime, o.WireColor, o.WireStripe, o.WireLength, o.WireGaugeMm2,
                 o.VariableDutyCycle, o.DutyCycleInput, o.DutyCycleDenominator, o.VariableFreq, o.FreqInput, o.FreqInputDenom, o.RampDutyChanges,
-                o.PrimaryOutput, o.UnderLimit, o.UnderTime, o.UnderTrip, o.ClearOnReassert, o.HardShortLimit, o.SoftStartTimeout, o.SoftStopTime, o.Shed, o.ThermalTau, o.WireLoad)).ToArray();
+                o.PrimaryOutput, o.UnderLimit, o.UnderTime, o.UnderTrip, o.ClearOnReassert, o.HardShortLimit, o.SoftStartTimeout, o.SoftStopTime, o.Shed, o.ThermalTau, o.WireLoad, o.StayAlive)).ToArray();
             return new DeviceDto(p.Guid.ToString(), p.Name, p.Type, p.BaseId, p.Connected,
                 p.BatteryVoltage, p.TotalCurrent, p.BoardTempC, p.DeviceState.ToString(),
                 p.Version, BitrateLabel(p.BitRate), outs, reading, readDone, readTotal,
@@ -882,6 +882,7 @@ public static class LiveApi
             if (r.FreqInputDenom is { } fid) o.FreqInputDenom = fid;
             if (r.RampDutyChanges is { } rdc) o.RampDutyChanges = rdc;
             if (r.PrimaryOutput is { } po) o.PrimaryOutput = po;
+            if (r.StayAlive is { } sa) o.StayAlive = sa;
             if (r.WarnLimit is { } wl) o.WarnLimit = wl;
             if (r.OpenLoadLimit is { } oll) o.OpenLoadLimit = oll;
             if (r.OpenLoadTime is { } olt) o.OpenLoadTime = olt;
