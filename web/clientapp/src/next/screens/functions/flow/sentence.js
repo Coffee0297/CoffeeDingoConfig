@@ -94,6 +94,9 @@ export function sentenceFor(model, n) {
       if (r.variableDutyCycle) segs.push(T('at a duty from'), srcTok(model, r.dutyCycleInput, 'dutyCycleInput'))
       else if (r.pwmEnabled) segs.push(T('at'), val((r.fixedDuty ?? r.fixedDutyCycle ?? 100) + ' %', 'pwm'))
       segs.push(T('.'))
+      // report only: the state reads Warning / Open load, protection is unchanged
+      if (r.warnLimit > 0) segs.push(T('It reports a warning above'), val(r.warnLimit + ' A', 'warnLimit'), T('.'))
+      if (r.openLoadLimit > 0) segs.push(T('It reports a missing load below'), val(r.openLoadLimit + ' A', 'openLoadLimit'), T('for'), val((r.openLoadTime ?? 1000) + ' ms', 'openLoadTime'), T('.'))
       return segs
     }
     default: return null

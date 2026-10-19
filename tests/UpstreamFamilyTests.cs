@@ -168,6 +168,27 @@ public class UpstreamFamilyTests
         Assert.True(d.ConfigMismatch);
     }
 
+    // feat/output-warn-openload: output subs 18-20 (same numbers as the fork's) only where the module listed them, and
+    // Msg 3 output state nibbles 4 = Warning, 5 = OpenLoad
+    [Fact]
+    public void WarnOpenLoad_ByParamList_AndMsg3States()
+    {
+        var d = UpstreamPdm();
+        var warn = d.Params.Single(p => p.Index == 0x1000 && p.SubIndex == 18);
+        Assert.Equal("output[1].warnLimit", warn.Name);
+        d.ParamSet.Learn(Enumerable.Range(0, 18).Select(s => (0x1000, s)).ToList(), new());   // stock upstream
+        Assert.False(FwFamily.Has(d, warn));
+        d.ParamSet.Learn(Enumerable.Range(0, 21).Select(s => (0x1000, s)).ToList(), new());   // feat/output-warn-openload
+        Assert.True(FwFamily.Has(d, warn));
+        Assert.True(FwFamily.Has(d, d.Params.Single(p => p.Index == 0x1000 && p.SubIndex == 20)));
+
+        var q = Q();
+        d.Read(0x680 + 5, [0x41, 0x05, 0, 0, 0, 0, 0, 0], ref q, []);   // outputs 1 On, 2 Warning, 3 OpenLoad
+        Assert.Equal(domain.Enums.dingoPdm.OutState.On, d.Outputs[0].State);
+        Assert.Equal(domain.Enums.dingoPdm.OutState.Warning, d.Outputs[1].State);
+        Assert.Equal(domain.Enums.dingoPdm.OutState.OpenLoad, d.Outputs[2].State);
+    }
+
     [Fact]
     public void ParamRuns_RoundTrip_KeepOrder()
     {

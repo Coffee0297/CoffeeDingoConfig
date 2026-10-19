@@ -15,7 +15,7 @@
   import SaveBar from './SaveBar.svelte'
   import { createBench } from './bench.svelte.js'
   import { signalFeed, ring } from './feeds.svelte.js'
-  import { resample, olderThan, isUpstream, pwmFreqError } from './util.js'
+  import { resample, olderThan, isUpstream, pwmFreqError, has } from './util.js'
 
   let { guid, n } = $props()
 
@@ -203,7 +203,7 @@
       <div class="col">
         <OutputChain {guid} {dev} bind:f {feed} {connected} raw={src} />
         {#if !isCb}
-          <OutputProtection bind:f {rating} />
+          <OutputProtection bind:f {rating} warn={has(dev, 0x1000 + n - 1, 18)} openLoad={has(dev, 0x1000 + n - 1, 19)} />
         {:else}
           <Card title="Protection"><p class="muted">The CANBoard switches this load to ground and cannot measure or limit current. Put a fuse in the load wire.</p></Card>
         {/if}
