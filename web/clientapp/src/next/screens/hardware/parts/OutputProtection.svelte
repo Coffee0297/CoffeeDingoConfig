@@ -1,8 +1,10 @@
 <script>
-  import { Card, Stepper, Select } from '../../../ui/index.js'
+  import { Card, Stepper, Select, Switch } from '../../../ui/index.js'
   // warn / openLoad: the firmware has the warning / open-load limits (output subs 18-20; on upstream by its param list)
   // under: the undercurrent limit (upstream output subs 27-29, upstream modules only)
-  let { f = $bindable(), rating = null, warn = true, openLoad = true, under = false } = $props()
+  import { latchClears } from '../../../../lib/trip.js'
+  // canClear: the module has "clear on re-assert" (upstream fault clear); retryAll: it has a retry-all signal wired
+  let { f = $bindable(), rating = null, warn = true, openLoad = true, under = false, canClear = false, retryAll = false } = $props()
   const UNDER = [{ value: '0', label: 'Report only' }, { value: '1', label: 'Switch the output off' }]
 
   const RESET = [{ value: '0', label: 'Stay off (latch)' }, { value: '1', label: 'Retry a few times' }, { value: '2', label: 'Retry for ever' }]
@@ -13,8 +15,9 @@
 
   const over = $derived(rating != null && Number(f.currentLimit) > rating)
   const num = (x) => Number(x) || 0
-  const afterTrip = $derived(num(f.resetMode) === 0 ? 'stays off until the module is power-cycled'
-    : num(f.resetMode) === 1 ? `retries ${num(f.resetCountLimit)} time${num(f.resetCountLimit) === 1 ? '' : 's'}, ${num(f.resetTime)} ms apart, then stays off`
+  const until = $derived(latchClears({ clearOnReassert: canClear && f.clearOnReassert }, retryAll))
+  const afterTrip = $derived(num(f.resetMode) === 0 ? `stays off until ${until}`
+    : num(f.resetMode) === 1 ? `retries ${num(f.resetCountLimit)} time${num(f.resetCountLimit) === 1 ? '' : 's'}, ${num(f.resetTime)} ms apart, then stays off until ${until}`
     : `retries for ever, ${num(f.resetTime)} ms apart`)
 </script>
 
@@ -32,6 +35,9 @@
     <Select label="After a trip" items={RESET} bind:value={rm} onchange={(v) => (f.resetMode = Number(v))} data-testid="reset-mode" />
     <Stepper label="Retries" bind:value={f.resetCountLimit} min={0} max={100} step={1} disabled={num(f.resetMode) !== 1} />
     <Stepper label="Wait between retries" bind:value={f.resetTime} min={0} max={60000} step={100} unit="ms" disabled={num(f.resetMode) === 0} />
+    {#if canClear}
+      <Switch label="Clear by switching off and on" hint="A latched trip clears when the input goes off; switching it on again retries once." bind:checked={f.clearOnReassert} disabled={num(f.resetMode) === 2} data-testid="clear-reassert" />
+    {/if}
     {#if warn}
       <div>
         <Stepper label="Warn at" bind:value={f.warnLimit} min={0} max={100} step={0.5} decimals={1} unit="A" data-testid="warn" />

@@ -8,7 +8,8 @@
 // uses the same list.
 //
 // Field types: bool / num = an input signal, out = an output (load: lamp | motor | pump | horn | fan | load),
-// number = a value, op = a comparison, check = a yes/no option. opt = may be left empty.
+// number = a value, op = a comparison, check = a yes/no option, module = a module's guid (where the logic runs
+// when the template has no output). opt = may be left empty.
 // In build(ctx, s) an output is its '<guid>:<n>' value: pass it to ctx.wireOutput / ctx.outName as is.
 
 const And = 0, Or = 1   // BoolOperator
@@ -255,6 +256,10 @@ TEMPLATES.push(
       await ctx.wireOutput(s.output, on)
       if (s.output2) await ctx.wireOutput(s.output2, on)
     } },
+  { key: 'retryall', group: 'power', name: 'Dash reset button (retry tripped outputs)', icon: '↻',
+    desc: 'A dash or keypad button retries every tripped output on a PDM, without a power cycle. The module allows one retry every 2 s, so a held button does not hammer a short. Needs dingoFW with fault clear.',
+    fields: [{ k: 'pdm', t: 'module', label: 'PDM whose tripped outputs it retries' }, { k: 'button', t: 'bool', label: 'Reset button (keypad button or dash switch)' }],
+    build: async (ctx, s) => { await ctx.retryAll(+s.button) } },
   { key: 'reminder', group: 'lights', name: 'Lights-on reminder', icon: '🔔',
     desc: 'Beeps a buzzer while the lights are on with the ignition off (and the door open, if you pick a door switch).',
     fields: [{ k: 'lights', t: 'bool', label: 'Lights on' }, { k: 'ign', t: 'bool', label: 'Ignition' }, { k: 'door', t: 'bool', label: 'Door switch (only while open)', opt: true },
@@ -329,6 +334,7 @@ export async function previewTemplate(tpl, sel, outName = (o) => 'output ' + o) 
     wireOutput: async (o, src) => { wires.push({ out: o, src: ids(src)[0] ?? null }) },
     outSignal: async (o) => { const t = TOK_SIG + ++sigs; node.set(t, 'out:' + o); return t },
     setOutputPwm: async (o, { source }) => { wires.push({ out: o, src: ids(source)[0] ?? null, pwm: true }) },
+    retryAll: async (src) => { op('retryall', 'Retry all tripped outputs', ids(src), 'module setting') },
     wiper: async (cfg) => {
       const id = op('wiper', 'Wiper block', ids(cfg.slowInput, cfg.fastInput, cfg.interInput, cfg.parkInput, cfg.washInput), `${cfg.washWipeCycles} wipes after wash`)
       return { slow: id, fast: id, park: id, inter: id, wash: id, swipe: id }
@@ -386,7 +392,7 @@ export async function liveCtx(env) {
     return i
   }
   const ctx = withAnyOf({
-    created, wired, outName: env.outName ?? ((n) => 'output' + n),
+    created, wired, device: null, outName: env.outName ?? ((n) => 'output' + n),
     alwaysOn: () => vmap.find((v) => v.name === 'Always On')?.index ?? 1,
     // Every field is set: a free slot keeps whatever it held before (a leftover argOff is a hysteresis release
     // point — e.g. argOff 2 on a '> 2500' never lets the output turn off).
@@ -411,6 +417,12 @@ export async function liveCtx(env) {
       if (!env.isCanboard || g !== guid) throw new Error('PWM-from-analog is wired on CANBoard outputs; for a PDM output set it in the output editor')
       await api.setFunction(guid, 'digitaloutput', +n, { enabled: true, input: on ?? ctx.alwaysOn(), pwmEnabled: true, variableDutyCycle: true, dutyCycleInput: source, dutyCycleDenominator: Math.max(1, Math.round(full / 100)), minDutyCycle: min, frequency: freq, variableFreq: false, freqInput: 0, rampDutyChanges: false, softStartEnabled: true, softStartRampTime: 500 })
       wired.push(o)
+    },
+    // The module's retry-all signal (upstream fault clear); ctx.device keeps the old value for a remove.
+    retryAll: async (src) => {
+      if (funcs?.device?.retryAllInput == null) throw new Error("This module's firmware has no retry-all input (dingoFW with fault clear, PDMs only)")
+      ctx.device = { retryAllInput: funcs.device.retryAllInput }
+      await api.deviceInputs(guid, { retryAllInput: src })
     },
     // The native wiper block (a singleton, PDM only).
     wiper: async (cfg) => {
@@ -454,6 +466,8 @@ export function outputOptions(mods, pinFor, ioTag) {
 // picked). Outputs on other modules follow the logic over CAN.
 export function logicModule(tpl, sel) {
   const g = (k) => String(sel[k]).split(':')[0]
+  const mod = tpl.fields.find((f) => f.t === 'module' && !blank(sel[f.k]))
+  if (mod) return { guid: String(sel[mod.k]) }
   if (tpl.logicOn && !blank(sel[tpl.logicOn])) return { guid: g(tpl.logicOn) }
   const n = new Map()
   for (const f of tpl.fields) if (f.t === 'out' && !blank(sel[f.k])) n.set(g(f.k), (n.get(g(f.k)) ?? 0) + 1)

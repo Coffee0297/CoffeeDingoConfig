@@ -15,6 +15,7 @@ const mkApi = (host) => {
     broadcastSignals: (g, inUse = false) => j('GET', `/api/devices/${g}/broadcast-signals${inUse ? '?inUse=true' : ''}`),
     setFunction: (g, kind, n, body) => j('POST', `/api/devices/${g}/function/${kind}/${n}`, body),
     outputConfig: (g, body) => j('POST', `/api/devices/${g}/outputconfig`, body),
+    deviceInputs: (g, body) => j('POST', `/api/devices/${g}/device-inputs`, body),
   }
 }
 

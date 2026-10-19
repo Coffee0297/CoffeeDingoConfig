@@ -56,6 +56,8 @@ public class Output : IDeviceFunction
     [JsonPropertyName("underLimit")] public double UnderLimit { get => field; set => field = Math.Clamp(value, 0.0, 100.0); } = 0.0;
     [JsonPropertyName("underTime")] public int UnderTime { get => field; set => field = Math.Clamp(value, 0, 60000); } = 1000;
     [JsonPropertyName("underTrip")] public bool UnderTrip { get; set; }
+    // upstream feat/fault-clear: a latched Fault clears when the output's input goes off, so switching it on again retries
+    [JsonPropertyName("clearOnReassert")] public bool ClearOnReassert { get; set; }
     
     [JsonIgnore][Plotable(displayName:"Current", unit:"A")] public double Current { get; set; }
     [JsonIgnore][Plotable(displayName:"State")] public OutState State { get; set; }
@@ -85,6 +87,8 @@ public class Output : IDeviceFunction
         var idx = BaseIndex + (Number - 1);
         UpstreamParams =
         [
+            new DeviceParameter { ParentName = Name, Name = $"output[{Number}].clearOnReassert", Index = idx, SubIndex = 25,
+                GetValue = () => ClearOnReassert, SetValue = val => ClearOnReassert = (bool)val, ValueType = typeof(bool), DefaultValue = false },
             new DeviceParameter { ParentName = Name, Name = $"output[{Number}].underLimit", Index = idx, SubIndex = 27,
                 GetValue = () => UnderLimit, SetValue = val => UnderLimit = (double)val, ValueType = typeof(double), DefaultValue = 0.0 },
             new DeviceParameter { ParentName = Name, Name = $"output[{Number}].underTime", Index = idx, SubIndex = 28,

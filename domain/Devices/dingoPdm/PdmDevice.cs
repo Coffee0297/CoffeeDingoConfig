@@ -168,6 +168,10 @@ public class PdmDevice : IDeviceConfigurable
     // broadcasts; the wake sources are a per-digital-input mask + CAN (USB always wakes).
     [JsonPropertyName("forceSleepInput")] public int ForceSleepInput { get; set; }
     [JsonPropertyName("muteTxInput")] public int MuteTxInput { get; set; }
+    // upstream feat/fault-clear (0x0000:12): a rising edge retries every tripped output (firmware: at most every 2 s)
+    [JsonPropertyName("retryAllInput")] public int RetryAllInput { get; set; }
+    /// <summary>The module has the retry-all input: upstream, and in its param list (or that list not read yet).</summary>
+    [JsonIgnore] public bool HasRetryAll => Upstream && (!ParamSet.Known || ParamSet.Contains(BaseIndex, 12));
     [JsonPropertyName("wakeDigInputMask")] public int WakeDigInputMask { get; set; } = 0xFF;
     [JsonPropertyName("wakeOnCan")] public bool WakeOnCan { get; set; } = true;
     [JsonPropertyName("filtersEnabled")] public bool CanFiltersEnabled { get; set; }
@@ -1160,6 +1164,8 @@ public class PdmDevice : IDeviceConfigurable
             GetValue = () => MuteTxInput, SetValue = val => MuteTxInput = (int)val, ValueType = typeof(int), DefaultValue = 0 },
         new() { ParentName = Name, Name = "device.forceSleepInput", Index = BaseIndex, SubIndex = 8,
             GetValue = () => ForceSleepInput, SetValue = val => ForceSleepInput = (int)val, ValueType = typeof(int), DefaultValue = 0 },
+        new() { ParentName = Name, Name = "device.retryAllInput", Index = BaseIndex, SubIndex = 12,
+            GetValue = () => RetryAllInput, SetValue = val => RetryAllInput = (int)val, ValueType = typeof(int), DefaultValue = 0 },
     ];
 
     private void Clear()

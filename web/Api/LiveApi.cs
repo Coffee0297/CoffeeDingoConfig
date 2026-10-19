@@ -24,7 +24,7 @@ public record OutputDto(int Number, string Name, string State, double Current, i
     double WarnLimit, double OpenLoadLimit, int OpenLoadTime, string WireColor, string WireStripe, double WireLength, double WireGaugeMm2,
     bool VariableDutyCycle = false, int DutyCycleInput = 0, int DutyCycleDenom = 100,
     bool VariableFreq = false, int FreqInput = 0, int FreqInputDenom = 1, bool RampDutyChanges = false,
-    int PrimaryOutput = -1, double UnderLimit = 0, int UnderTime = 1000, bool UnderTrip = false);
+    int PrimaryOutput = -1, double UnderLimit = 0, int UnderTime = 1000, bool UnderTrip = false, bool ClearOnReassert = false);
 public record DeviceDto(string Guid, string Name, string Type, int BaseId, bool Connected,
     double Battery, double Current, double Temp, string State, string Version, string Bitrate, OutputDto[] Outputs,
     bool Reading, int ReadDone, int ReadTotal, bool SleepEnabled, int SleepTimeoutMs,
@@ -50,7 +50,9 @@ public record DeviceDto(string Guid, string Name, string Type, int BaseId, bool 
     DigitalOutDto[]? DigitalOut = null,
     // "fork" (dingoFW 5.x) or "upstream" (dingoFW 0.x). Upstream: ParamsRead = its param list came from a Read this
     // session (Apply needs it); ParamRuns = that list, [firstIndex, indexCount, sub…] (see util.js has/hasBlock).
-    string Family = "fork", bool ParamsRead = false, int[][]? ParamRuns = null);
+    string Family = "fork", bool ParamsRead = false, int[][]? ParamRuns = null,
+    // upstream feat/fault-clear: the signal that retries every tripped output (null = this module has none)
+    int? RetryAllInput = null);
 public record DigitalOutDto(int Number, string Name, bool Enabled, bool On, int Input);
 public record WakeDto(string Reason, int Source, int Count);
 public record IgnitionDto(bool Enabled, string Role, string State, bool Dash, int MainStateId, int StateId, bool Live);
@@ -74,7 +76,7 @@ public record SetOutputReq(int Number, double CurrentLimit);
 /// <summary>Output bench test: mode on | pwm | off; duty %, freq Hz (0 = the output's own), hold s (1–30).</summary>
 public record OutputTestReq(string? Mode, int Duty = 100, int Freq = 0, int Hold = 5);
 /// <summary>The module's own var-map inputs (device params 0x0000:10 / :11); null = leave unchanged, 0 = unwired.</summary>
-public record DeviceInputsReq(int? ForceSleepInput, int? MuteTxInput);
+public record DeviceInputsReq(int? ForceSleepInput, int? MuteTxInput, int? RetryAllInput = null);
 // Everything but Number is optional: a field left out of the body keeps the output's current value, so a
 // partial body (what the MCP set_output_config tool sends) merges instead of zeroing Enabled/Input/limits.
 // The SPA's _binBody always sends every field, so its saves are unchanged.
@@ -85,7 +87,7 @@ public record OutputConfigReq(int Number, bool? Enabled = null, int? Input = nul
     string? WireColor = null, string? WireStripe = null, double? WireLength = null, double? WireGaugeMm2 = null,
     bool? VariableDutyCycle = null, int? DutyCycleInput = null, int? DutyCycleDenom = null,
     bool? VariableFreq = null, int? FreqInput = null, int? FreqInputDenom = null, bool? RampDutyChanges = null,
-    int? PrimaryOutput = null, double? UnderLimit = null, int? UnderTime = null, bool? UnderTrip = null);
+    int? PrimaryOutput = null, double? UnderLimit = null, int? UnderTime = null, bool? UnderTrip = null, bool? ClearOnReassert = null);
 public record ApplyProfileReq(string Source);
 public record RenameReq(string Name);
 public record ReadParamReq(int Index, int Sub);
@@ -348,7 +350,7 @@ public static class DingoMap
                 o.PwmEnabled, o.Frequency, o.FixedDutyCycle, o.MinDutyCycle, o.SoftStartEnabled, o.SoftStartRampTime,
                 o.WarnLimit, o.OpenLoadLimit, o.OpenLoadTime, o.WireColor, o.WireStripe, o.WireLength, o.WireGaugeMm2,
                 o.VariableDutyCycle, o.DutyCycleInput, o.DutyCycleDenominator, o.VariableFreq, o.FreqInput, o.FreqInputDenom, o.RampDutyChanges,
-                o.PrimaryOutput, o.UnderLimit, o.UnderTime, o.UnderTrip)).ToArray();
+                o.PrimaryOutput, o.UnderLimit, o.UnderTime, o.UnderTrip, o.ClearOnReassert)).ToArray();
             return new DeviceDto(p.Guid.ToString(), p.Name, p.Type, p.BaseId, p.Connected,
                 p.BatteryVoltage, p.TotalCurrent, p.BoardTempC, p.DeviceState.ToString(),
                 p.Version, BitrateLabel(p.BitRate), outs, reading, readDone, readTotal,
@@ -357,7 +359,7 @@ public static class DingoMap
                 p.CanFiltersEnabled, p.ConnectUsbToCan, StoredOnModule: ui?.StoredOnModule, InBootloader: !p.Connected && ui?.InBootloader == true, PendingEdits: p.ConfigMismatch ? ui?.PendingEdits ?? 0 : 0,
                 HasLed: ui?.HasLed, Asleep: ui?.Asleep == true && !p.Connected, LastWake: Wake(ui), SleepCountdownS: p.SleepCountdownS,
                 SleepBlockers: ui?.SleepBlockers, Ignition: Ign(p.Ignition, p.BaseId, p.Type),
-                Family: p.Family, ParamsRead: p.ParamSet.FromModule, ParamRuns: p.ParamRuns);
+                Family: p.Family, ParamsRead: p.ParamSet.FromModule, ParamRuns: p.ParamRuns, RetryAllInput: p.HasRetryAll ? p.RetryAllInput : null);
         }
         if (d is domain.Devices.Canboard.CanboardDevice cb)
             // CANBoard has no battery/total-current sensing (those are PDM smart-output features) — leave
@@ -865,6 +867,7 @@ public static class LiveApi
             if (r.UnderLimit is { } ul) o.UnderLimit = ul;
             if (r.UnderTime is { } ut) o.UnderTime = ut;
             if (r.UnderTrip is { } utr) o.UnderTrip = utr;
+            if (r.ClearOnReassert is { } cor) o.ClearOnReassert = cor;
             // The record edit above always persists (offline config authoring). Only push to the
             // module over CAN when it is actually live; report which happened so the UI can say
             // "written to device" vs "saved to project".
@@ -936,7 +939,7 @@ public static class LiveApi
                     comfortBlinks = Has(p, ComfortBlink.BaseIndex) ? new[] { p.ComfortBlink } : null,   // 5.6.1 (one; an array for the flow builder)
                     canOutputs = p.CanOutputs, wiper = p.Wipers, starterDisable = p.StarterDisable,
                     keypads = p.Keypads,
-                    device = new { forceSleepInput = p.ForceSleepInput, muteTxInput = p.MuteTxInput, canSleep = p.CanSleep },
+                    device = new { forceSleepInput = p.ForceSleepInput, muteTxInput = p.MuteTxInput, canSleep = p.CanSleep, retryAllInput = p.HasRetryAll ? p.RetryAllInput : (int?)null },
                 });
             if (dm.GetDevice(g) is CanboardDevice c)
                 return Results.Ok(new
@@ -971,8 +974,13 @@ public static class LiveApi
             if (r.ForceSleepInput is { } fs && !cfg.CanSleep) return Results.BadRequest(new { ok = false, error = "this module's firmware cannot sleep (a CANBoard sleeps from 5.5.111): it has no force-sleep input" });
             if (Check(r.ForceSleepInput, "force-sleep input") is { } e1) return Results.BadRequest(new { ok = false, error = e1 });
             if (Check(r.MuteTxInput, "mute-TX input") is { } e2) return Results.BadRequest(new { ok = false, error = e2 });
+            if (r.RetryAllInput is { } ra)
+            {
+                if (dev is not PdmDevice { HasRetryAll: true }) return Results.BadRequest(new { ok = false, error = "this module's firmware has no retry-all input (upstream dingoFW with fault clear, PDMs only)" });
+                if (ra != 0 && !cfg.VarMap.Any(x => x.VariableIndex == ra)) return Results.BadRequest(new { ok = false, error = $"signal #{ra} is not in this module's var map" });
+            }
             Dictionary<string, string> DevSnap() => dev is PdmDevice q
-                ? new() { ["forceSleepInput"] = q.ForceSleepInput.ToString(), ["muteTxInput"] = q.MuteTxInput.ToString() }
+                ? new() { ["forceSleepInput"] = q.ForceSleepInput.ToString(), ["muteTxInput"] = q.MuteTxInput.ToString(), ["retryAllInput"] = q.RetryAllInput.ToString() }
                 : new() { ["forceSleepInput"] = ((CanboardDevice)dev).ForceSleepInput.ToString(), ["muteTxInput"] = ((CanboardDevice)dev).MuteTxInput.ToString() };
             var track = new EditTrack("device", 0, "Module", DevSnap);
             switch (dev)
@@ -980,6 +988,7 @@ public static class LiveApi
                 case PdmDevice p:
                     if (r.ForceSleepInput is { } a) p.ForceSleepInput = a;
                     if (r.MuteTxInput is { } b) p.MuteTxInput = b;
+                    if (r.RetryAllInput is { } ra2) p.RetryAllInput = ra2;
                     break;
                 case CanboardDevice c:
                     if (r.ForceSleepInput is { } f) c.ForceSleepInput = f;
@@ -995,10 +1004,12 @@ public static class LiveApi
                 var keys = new List<(int, int)>();
                 if (r.ForceSleepInput is not null) keys.Add((0x0000, SubOf("device.forceSleepInput")));
                 if (r.MuteTxInput is not null) keys.Add((0x0000, SubOf("device.muteTxInput")));
+                if (r.RetryAllInput is not null) keys.Add((0x0000, SubOf("device.retryAllInput")));
                 res = await dm.WriteAndConfirm(g, keys, () =>
                 {
                     if (r.ForceSleepInput is { } a) dm.WriteParam(g, 0x0000, SubOf("device.forceSleepInput"), (uint)a);
                     if (r.MuteTxInput is { } b) dm.WriteParam(g, 0x0000, SubOf("device.muteTxInput"), (uint)b);
+                    if (r.RetryAllInput is { } c) dm.WriteParam(g, 0x0000, SubOf("device.retryAllInput"), (uint)c);
                 });
             }
             var (fsNow, mtNow) = dev is PdmDevice pp ? (pp.ForceSleepInput, pp.MuteTxInput) : (((CanboardDevice)dev).ForceSleepInput, ((CanboardDevice)dev).MuteTxInput);
@@ -2059,6 +2070,7 @@ public static class LiveApi
                 {
                     case (PdmDevice p, "forceSleepInput"): p.ForceSleepInput = v; break;
                     case (PdmDevice p, "muteTxInput"): p.MuteTxInput = v; break;
+                    case (PdmDevice p, "retryAllInput"): p.RetryAllInput = v; break;
                     case (CanboardDevice c, "muteTxInput"): c.MuteTxInput = v; break;
                     default: return "that setting can't be put back";
                 }
@@ -2118,7 +2130,7 @@ public static class LiveApi
         foreach (var t in p.GetTimers()) used.Add(t.Input);
         foreach (var t in p.GetTables()) { used.Add(t.XInput); used.Add(t.YInput); }
         foreach (var c in p.GetCanOutputs()) used.Add(c.Input);
-        used.Add(p.ForceSleepInput); used.Add(p.MuteTxInput);
+        used.Add(p.ForceSleepInput); used.Add(p.MuteTxInput); used.Add(p.RetryAllInput);
         var luaVars = p.VarMap.Where(v => v.OwnerKind == "lua").ToList();   // OwnerNumber = slot + 1
         var consumedSlots = luaVars.Where(v => used.Contains(v.VariableIndex)).Select(v => v.OwnerNumber - 1).ToHashSet();
         foreach (var s in written.Where(s => !consumedSlots.Contains(s)).OrderBy(s => s))

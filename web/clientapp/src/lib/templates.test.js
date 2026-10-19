@@ -78,6 +78,19 @@ const capi = { functions: async () => ({ conditions: [{ number: 1, enabled: fals
 assert.equal(await (await liveCtx({ api: capi, guid: 'p' })).condition(9, 2, 2500, 'x'), 20)
 assert.equal(cc[0].argOff, 2500)
 
+// dash reset button: no output, runs on the picked PDM and sets its retry-all signal (upstream fault clear)
+const ra = T('retryall')
+assert.match(validate(ra, defaults(ra)), /PDM whose tripped outputs/)
+assert.deepEqual(logicModule(ra, { pdm: 'p', button: 5 }), { guid: 'p' })
+p = await previewTemplate(ra, { pdm: 'p', button: 5 })
+assert.deepEqual(p.ops.map((o) => [o.op, o.ins]), [['retryall', ['in:button']]]); assert.deepEqual(p.need, {})
+const dw = []
+const rapi = { functions: async () => ({ device: { retryAllInput: 7 } }), inputs: async () => [], deviceInputs: async (g, b) => dw.push([g, b]) }
+const rctx = await liveCtx({ api: rapi, guid: 'p' })
+await ra.build(rctx, { pdm: 'p', button: 5 })
+assert.deepEqual(dw, [['p', { retryAllInput: 5 }]]); assert.deepEqual(rctx.device, { retryAllInput: 7 })
+await assert.rejects(ra.build(await liveCtx({ api: { ...rapi, functions: async () => ({ device: {} }) }, guid: 'p' }), { button: 5 }), /no retry-all input/)
+
 // bus-wide outputs: pin, side, rating, free first
 const pdm = { guid: 'p', name: 'PDM-01', type: 'dingoPDM' }, cb = { guid: 'c', name: 'CB-1', type: 'CANBoard' }
 const oo = outputOptions([{ device: pdm, outs: [{ number: 1, name: 'Fuel Pump', input: 9, ratingA: 15 }] }, { device: cb, outs: [{ number: 2, name: '', input: 0 }] }], pinFor, ioTag)

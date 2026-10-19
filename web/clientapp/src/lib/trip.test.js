@@ -1,6 +1,6 @@
 // node src/lib/trip.test.js
 import assert from 'node:assert/strict';
-import { tripReason, onTimeBeforeTrip } from './trip.js';
+import { tripReason, onTimeBeforeTrip, clearsText, latchClears } from './trip.js';
 
 const wave = (onAt) => Array.from({ length: 326 }, (_, k) => { const dt = -10 + k * 0.04; return { dt, i: dt >= onAt && dt <= 0 ? 8 : 0 }; });
 const out = { currentLimit: 12, inrushLimit: 50, inrushTime: 1000, resetMode: 0 };
@@ -23,4 +23,9 @@ assert.equal(tripReason({ state: 'Fault', peakA: 20, limitA: 12, samples: wave(-
 
 // 0.5 s after turn-on, inside a 1000 ms window: inrush
 assert.equal(tripReason({ state: 'Fault', peakA: 63, samples: wave(-0.5) }, out).kind, 'inrush');
+// upstream fault clear: re-assert and / or retry-all clear a latched Fault too
+assert.equal(clearsText('Fault', { clearOnReassert: true }), 'Latched — clears when its input switches off and on again or the module is power-cycled.');
+assert.equal(latchClears({ clearOnReassert: true }, true), 'its input switches off and on again, the retry-all signal turns on or the module is power-cycled');
+assert.equal(latchClears({}, false), 'the module is power-cycled');
+assert.match(clearsText('Fault', {}, true), /retry-all signal turns on or the module is power-cycled/);
 console.log('trip.test OK');

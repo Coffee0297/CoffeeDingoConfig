@@ -103,8 +103,12 @@ export function sentenceFor(model, n) {
       // the firmware ramps only with soft start + a duty from a signal, at 100 % per soft-start ramp time
       if (r.pwmEnabled && r.variableDutyCycle && r.rampDutyChanges && (r.softStart ?? r.softStartEnabled))
         segs.push(T('Duty changes ramp at up to 100 % per'), val((r.softStartRamp ?? r.softStartRampTime ?? 0) + ' ms', 'softStartRamp'), T('.'))
+      if (r.clearOnReassert) segs.push(T('A trip that stays off clears when the input switches off, so switching it on again retries.'))
       return segs
     }
+    case 'sys':
+      // upstream fault clear: only the retry-all signal makes a sentence (sleep / mute have their own screen)
+      return r.retryAllInput ? [T('Each time'), srcTok(model, r.retryAllInput, 'retryAllInput'), T('turns on, every tripped output on'), self(n), T('tries again (at most once every 2 s).')] : null
     default: return null
   }
 }
