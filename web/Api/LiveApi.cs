@@ -70,6 +70,7 @@ public record ProbeReq(string Base);
 public record SetOutputReq(int Number, double CurrentLimit);
 /// <summary>Output bench test: mode on | pwm | off; duty %, freq Hz (0 = the output's own), hold s (1–30).</summary>
 public record OutputTestReq(string? Mode, int Duty = 100, int Freq = 0, int Hold = 5);
+public record CanForceReq(int Id, bool Ide, string? Data, int PeriodMs = 50, int HoldSec = 10);
 /// <summary>The module's own var-map inputs (device params 0x0000:10 / :11); null = leave unchanged, 0 = unwired.</summary>
 public record DeviceInputsReq(int? ForceSleepInput, int? MuteTxInput);
 // Everything but Number is optional: a field left out of the body keeps the output's current value, so a
@@ -459,7 +460,7 @@ public static class LiveApi
     static void MarkClean(ConfigFileManager cfg, DeviceManager dm) => _cleanProject = cfg.SerializeDevices(dm.GetDevices());
     const string SimRefusal = "Sim adapter: programming disabled";
     static readonly System.Text.RegularExpressions.Regex ProgrammingRoute = new(
-        @"^/api/(devices/[^/]+/(write|writeall|burn|bootloader|uploadlua|lua|flash|flash-can|apply-profile|output/\d+/test)|flash/blank|system/cross-module/deploy|sdo/(write|store))$",
+        @"^/api/(devices/[^/]+/(write|writeall|burn|bootloader|uploadlua|lua|flash|flash-can|apply-profile|output/\d+/test)|flash/blank|system/cross-module/deploy|sdo/(write|store)|can/force)$",
         System.Text.RegularExpressions.RegexOptions.IgnoreCase);
     internal static bool IsSim(ICommsAdapterManager m)
     {
@@ -1763,6 +1764,24 @@ public static class LiveApi
             foreach (var m in log.GetMessageSum().OrderBy(m => m.Id))
                 sb.Append($"{m.Direction},0x{m.Id:X3},{(m.IsExtended ? "EXT" : "STD")},{m.Len},{string.Join(' ', (m.Payload ?? Array.Empty<byte>()).Take(m.Len).Select(b => b.ToString("X2")))},{m.Count}\n");
             return Results.File(System.Text.Encoding.UTF8.GetBytes(sb.ToString()), "text/csv", "canlog.csv");
+        });
+
+        // ---- Force a CAN-input value: the app sends the input's source frame until the hold runs out (max 30 s)
+        // or /stop. Only a CAN-sourced value can be forced without firmware support. Refused on the Sim (ProgrammingRoute).
+        api.MapPost("/can/force", (CanForceReq r, CanForcer f) =>
+        {
+            byte[] data;
+            try { data = Convert.FromHexString((r.Data ?? "").Replace(" ", "")); }
+            catch (FormatException) { return Results.BadRequest(new { ok = false, error = "data must be hex bytes" }); }
+            var err = f.Start(new CanFrame(r.Id, data.Length, data, r.Ide), r.PeriodMs, r.HoldSec);
+            return err is null ? Results.Ok(new { ok = true, untilMs = (long)(f.Until - DateTime.UtcNow).TotalMilliseconds }) : Results.BadRequest(new { ok = false, error = err });
+        });
+        api.MapPost("/can/force/stop", (CanForcer f) => { f.Stop(); return Results.Ok(new { ok = true }); });
+        api.MapGet("/can/force/status", (CanForcer f) =>
+        {
+            var fr = f.Frame;
+            return Results.Ok(new { active = f.Active && fr != null, id = fr?.Id, ide = fr?.IsExtended, data = fr is null ? null : Convert.ToHexString(fr.Payload),
+                remainingMs = fr is null ? 0 : Math.Max(0, (long)(f.Until - DateTime.UtcNow).TotalMilliseconds), sent = f.Sent });
         });
 
         // ---- CAN recorder (SavvyCAN-style): record every frame to a CSV and save it to the PC.

@@ -183,6 +183,10 @@ export const api = {
     return r.json()
   },
   canlog: () => j('GET', '/api/canlog'),
+  // Force a CAN input: the app sends { Id, Ide, Data (hex), PeriodMs, HoldSec } until the hold runs out (max 30 s) or stop.
+  canForce: (body) => j('POST', '/api/can/force', body),
+  canForceStop: () => j('POST', '/api/can/force/stop'),
+  canForceStatus: () => j('GET', '/api/can/force/status'),
   syslog: () => j('GET', '/api/syslog'),
   project: () => j('GET', '/api/project'),
   projSave: (FileName, Client) => j('POST', '/api/project/save', { FileName, Client }),
