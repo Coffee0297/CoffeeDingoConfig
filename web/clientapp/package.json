@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "vite build && vite build --config vite.runtime.config.js",
     "preview": "vite preview",
-    "test": "node src/lib/ladder.test.js && node src/lib/table.test.js && node src/lib/trip.test.js && node src/lib/pinmap.test.js && node src/lib/businputs.test.js && node src/lib/templates.test.js && node src/lib/apply.test.js && node src/lib/toast.test.js && node src/next/screens/hardware/parts/learn.test.js"
+    "test": "node src/lib/ladder.test.js && node src/lib/table.test.js && node src/lib/trip.test.js && node src/lib/pinmap.test.js && node src/lib/businputs.test.js && node src/lib/templates.test.js && node src/lib/apply.test.js && node src/lib/toast.test.js && node src/next/screens/hardware/parts/learn.test.js && node src/lib/ecutemplates.test.js"
   },
   "devDependencies": {
     "@playwright/test": "^1.64.1",
