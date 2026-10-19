@@ -1073,17 +1073,18 @@ public static class LiveApi
         api.MapGet("/devices/{guid}/overloads", async (string guid, DeviceManager dm, ICommsAdapterManager adapters) =>
         {
             if (!Guid.TryParse(guid, out var g)) return Results.BadRequest();
-            if (ForkOnly(dm.GetDevice(g), "trip log") is { } fo) return fo;
             if (await RequireLiveModuleAsync(g, dm, adapters, "read trips from") is { } bad) return bad;
             var events = await dm.ReadOverloadLog(g);
-            return Results.Ok(new { events });
+            // Upstream dingoFW has the trip log only with feat/overload-trip-log: no answer to the count = no log.
+            if (events is null && dm.GetDevice(g) is IDeviceConfigurable { Family: domain.Common.FwFamily.Upstream })
+                return Results.Json(new { ok = false, error = "This module's firmware (upstream dingoFW) has no trip log." }, statusCode: 409);
+            return Results.Ok(new { events = events ?? [] });
         });
 
         // Clear the on-device overload log.
         api.MapPost("/devices/{guid}/overloads/clear", async (string guid, DeviceManager dm, ICommsAdapterManager adapters) =>
         {
             if (!Guid.TryParse(guid, out var g)) return Results.BadRequest();
-            if (ForkOnly(dm.GetDevice(g), "trip log") is { } fo) return fo;
             if (await RequireLiveModuleAsync(g, dm, adapters, "clear trips on") is { } bad) return bad;
             dm.ClearOverloadLog(g);
             return Results.Ok(new { ok = true });
@@ -1902,7 +1903,7 @@ public static class LiveApi
     // short-circuit with, or null when it's safe to proceed. Mirrors the /{action} guard so every
     // CAN-commit path fails loud and consistent instead of "succeeding" against an empty bus.
     // (Base-ID/rename are offline-safe and firmware/DFU runs over USB — neither uses this.)
-    // Fork-only commands (Lua, overload log, output test, identify): upstream dingoFW has none of them. A feature branch
+    // Fork-only commands (Lua, output test, identify): plain upstream dingoFW has none of them. A feature branch
     // that ports one to upstream swaps this guard for a detection (FwFamily.HasBlock, or a probe of the command).
     private static IResult? ForkOnly(IDevice? d, string what) => d is IDeviceConfigurable { Family: domain.Common.FwFamily.Upstream }
         ? Results.Json(new { ok = false, error = $"This module runs upstream dingoFW, which has no {what}." }, statusCode: 409) : null;
