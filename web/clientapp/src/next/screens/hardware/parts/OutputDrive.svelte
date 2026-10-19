@@ -5,7 +5,8 @@
   import { remoteItems, resolveRemote, isRemoteKey } from '../../../lib/remote.js'
   import { href } from '../../../router.svelte.js'
 
-  let { guid, f = $bindable() } = $props()
+  // softStop: the firmware has the soft stop (upstream output sub 31)
+  let { guid, f = $bindable(), softStop = false } = $props()
 
   let nums = $state([])
   $effect(() => {
@@ -70,6 +71,10 @@
       {/if}
     </div>
     <Switch bind:checked={f.variableFreq} label="Frequency follows a signal" hint="Advanced. 15 to 400 Hz." />
+    {#if softStop}
+      <Stepper label="Soft stop" bind:value={f.softStopTime} min={0} max={10000} step={100} unit="ms" data-testid="soft-stop" />
+      <span class="muted note">{Number(f.softStopTime) > 0 ? `When its input turns off, the duty ramps down to 0 over ${f.softStopTime} ms, then it switches off. A trip, starter disable, load shedding or sleep still cuts it at once.` : '0 = off: it switches off at once.'}</span>
+    {/if}
   {/if}
   <div class="soft">
     <Switch bind:checked={f.softStart} label="Soft start" hint="Ramps up when it turns on." />

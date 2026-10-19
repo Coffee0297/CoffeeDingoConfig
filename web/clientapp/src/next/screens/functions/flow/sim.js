@@ -173,6 +173,7 @@ export function createSim(model, snapshot) {
         const nominal = mem[n.id]?.amps
         if (f === 'oc' && want) {
           if (onIdx) vals[onIdx] = false; if (ocIdx) vals[ocIdx] = true; if (fIdx) vals[fIdx] = true; if (curIdx) vals[curIdx] = 0
+          m(n.id).on = false   // a trip cuts a soft stop at once
           const lim = r.currentLimit ?? '?'
           status[n.id] = { text: 'TRIPPED', tone: 'fault', why: n.kind === 'output'
             ? `Over ${lim} A: the output trips. ${r.resetMode ? `It tries again after ${(r.resetTime ?? 0) / 1000} s, up to ${r.resetCountLimit} times, then stays off.` : 'It stays off until it is reset.'}`
@@ -181,6 +182,17 @@ export function createSim(model, snapshot) {
           if (onIdx) vals[onIdx] = true; if (ocIdx) vals[ocIdx] = false; if (fIdx) vals[fIdx] = false; if (curIdx) vals[curIdx] = 0
           status[n.id] = { text: 'OPEN LOAD', tone: 'warn', why: 'The module drives the output but reads almost no current. Check the plug and the fuse.' }
         } else {
+          // upstream soft stop (output sub 31): a PWM output that was on ramps down for its soft-stop time after its
+          // input turns off, and reports On meanwhile; disabling it (or a trip) cuts at once
+          const s = m(n.id)
+          if (want || !r.enabled || !r.pwmEnabled || !(r.softStopTime > 0)) { s.stopAt = undefined; s.on = want }
+          else if (s.on) { s.stopAt ??= t; if (t - s.stopAt >= r.softStopTime) { s.on = false; s.stopAt = undefined } }
+          if (!want && s.on) {
+            if (onIdx) vals[onIdx] = true; if (ocIdx) vals[ocIdx] = false; if (fIdx) vals[fIdx] = false
+            if (curIdx) vals[curIdx] = nominal ?? null
+            status[n.id] = { text: 'STOPPING', tone: 'on', why: `Its input is off: the duty ramps down over ${r.softStopTime} ms, then it switches off.` }
+            continue
+          }
           if (onIdx) vals[onIdx] = want; if (ocIdx) vals[ocIdx] = false; if (fIdx) vals[fIdx] = false
           if (curIdx) vals[curIdx] = want ? (nominal ?? null) : 0
           status[n.id] = { text: want ? 'ON' : 'OFF', tone: want ? 'on' : 'off', why: !r.enabled ? 'The output is disabled.' : !src ? 'It has no input, so it never switches.' : want ? 'Its input is on.' : f ? 'It is off, so the fault has nothing to act on yet.' : 'Its input is off.' }
