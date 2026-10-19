@@ -2,7 +2,7 @@
   // Live sleep status for every module, plus Sleep now / Wake up for the whole car.
   import { Card, Chip, StateDot, Button, Banner } from '../../../ui/index.js'
   import { live, api, toast, hex } from '../../../lib/live.svelte.js'
-  import { sleepStatus, canSleep, wakeWords } from './sleepLogic.js'
+  import { sleepStatus, canSleep, wakeWords, upSub } from './sleepLogic.js'
   import Confirm from './Confirm.svelte'
 
   const mods = $derived(live.devices.filter((d) => /pdm|canboard/i.test(d.type ?? '')))
@@ -27,6 +27,8 @@
     if (failed.length) toast(result, 'error', 9000)
   }
   const sleepTargets = $derived(mods.filter((d) => d.connected && canSleep(d)))
+  // upstream dingoFW with feat/sleep-config: the request only acts with automatic sleep on, nothing on and no USB, 2 s later
+  const strict = $derived(sleepTargets.filter((d) => upSub(d, 9)))
   const wakeTargets = $derived(mods.filter((d) => /pdm|canboard/i.test(d.type ?? '') ))
 </script>
 
@@ -59,6 +61,7 @@
   consequence="The modules go quiet and dingoConfig stops seeing them. Wake them with a wake source (door, switch, CAN traffic) or USB. Modules do not sleep while USB is connected."
   onconfirm={() => each('sleep', sleepTargets)}>
   <p>This asks {sleepTargets.length} module{sleepTargets.length === 1 ? '' : 's'} to sleep: {sleepTargets.map((d) => d.name).join(', ')}. Outputs they drive switch off.</p>
+  {#if strict.length}<p data-testid="sleep-strict">{strict.map((d) => d.name).join(', ')} only sleep{strict.length === 1 ? 's' : ''} this way with automatic sleep on, no output on and no USB connected, 2 s after the request. Otherwise {strict.length === 1 ? 'it answers but stays' : 'they answer but stay'} awake.</p>{/if}
 </Confirm>
 
 <style>

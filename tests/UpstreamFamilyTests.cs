@@ -84,7 +84,7 @@ public class UpstreamFamilyTests
     {
         var d = UpstreamPdm();
         var dev = d.Params.Where(p => p.Index == 0).ToDictionary(p => p.SubIndex, p => p.Name);
-        Assert.Equal(Enumerable.Range(0, 9), dev.Keys.Order());
+        Assert.Equal(Enumerable.Range(0, 12), dev.Keys.Order());   // 9-11: feat/sleep-config, sent only if the module has them
         Assert.Equal("device.muteTxInput", dev[7]);
         Assert.Equal("device.forceSleepInput", dev[8]);
         Assert.Equal(5, d.Params.Count(p => p.Index == 0x1A00));   // timer 1, not a table
@@ -162,5 +162,35 @@ public class UpstreamFamilyTests
         Assert.False(t.FromModule);   // a saved list still needs a Read before Apply
         Assert.True(t.HasBlock(0x1800));
         Assert.False(t.HasBlock(0x1C00));
+    }
+
+    // feat/sleep-config: sub 9 timeout, 10 ignore always-on, 11 per-pin wake mask; sub 4 (disable DI wake) stays the
+    // master switch, so a ReadAll's sub 11 (after sub 4) must not undo it, and a WriteAll sends the pair consistently.
+    [Theory]
+    [InlineData(0, 2, 2)]   // DI 2 only
+    [InlineData(1, 3, 0)]   // disabled: no DI wakes, whatever the mask
+    [InlineData(0, 3, 3)]
+    public void SleepConfig_WakeMask_ReadAndWrite(int disable, int mask, int expect)
+    {
+        var d = UpstreamPdm();
+        var q = Q();
+        var keys = Enumerable.Range(0, 12).Select(s => (0x0000, s)).ToList();
+        uint Val(int s) => s switch { 4 => (uint)disable, 9 => 5000, 10 => 1, 11 => (uint)mask, 0 => 0x680, _ => 0 };
+        var crc = new CumulativeCrc32();
+        d.Read(0x680, [10, 0, 0, 0, 0, 0, 0, 0], ref q, []);
+        foreach (var (i, s) in keys)
+        {
+            var v = BitConverter.GetBytes(Val(s));
+            crc.Update(v);
+            d.Read(0x680, [11, (byte)i, (byte)(i >> 8), (byte)s, .. v], ref q, []);
+        }
+        d.Read(0x680, [12, (byte)keys.Count, 0, 0, .. BitConverter.GetBytes(crc.Final)], ref q, []);
+
+        Assert.Equal(expect, d.WakeDigInputMask);
+        Assert.Equal(5000, d.SleepTimeoutMs);
+        Assert.True(d.SleepIgnoreAlwaysOn);
+        var p = d.Params.Where(x => x.Index == 0).ToDictionary(x => x.SubIndex);
+        Assert.Equal(expect == 0, (bool)p[4].GetValue());
+        Assert.Equal(expect == 0 ? 3 : expect, (int)p[11].GetValue());   // disabled: sub 11 back at its default
     }
 }
