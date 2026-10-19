@@ -63,7 +63,8 @@ With upstream feat/wire-load (output param sub 33) a PDM also sends Msg 30 at `b
 time constant: bytes 0-7 = wire load % of outputs 1-8 (u8, saturates at 255). That is the next module's `base+0` at
 0x20 spacing, so the app counts it in such a module's ID span.
 Upstream with lookup tables (params 0x1B00, feat/lookup-tables) adds Msg 30 (`base+32`): table 1-2 as float32 LE,
-sent while a table is enabled, so such a PDM spans `base+32` and no longer fits a 0x20 spacing.
+sent while a table is enabled, so such a PDM spans `base+32` and no longer fits a 0x20 spacing. With 4 tables
+(feat/more-tables) Msg 31 (`base+33`) carries tables 3-4 the same way, sent while table 3 or 4 is enabled.
 The upstream CANBoard has no DO duty frame and no timers; its other frames match the fork's.
 
 ---

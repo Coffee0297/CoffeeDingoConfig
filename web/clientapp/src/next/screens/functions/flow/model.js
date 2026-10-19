@@ -367,6 +367,7 @@ export function slotUsage(dev, funcs, defs) {
   ]
   return rows.filter(([, arr]) => Array.isArray(funcs?.[arr])).map(([label, arr, key]) => {
     const list = funcs[arr]
-    return { label, arr, used: list.filter((x) => x.enabled).length, max: def?.[key] ?? list.length }
+    // upstream: as many tables as the module has (2, or 4 with feat/more-tables), not the fork definition's 2
+    return { label, arr, used: list.filter((x) => x.enabled).length, max: isUpstream(dev) && arr === 'tables' ? list.length : def?.[key] ?? list.length }
   })
 }

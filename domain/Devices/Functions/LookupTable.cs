@@ -14,6 +14,7 @@ public class LookupTable : IDeviceFunction
     [JsonIgnore] public const int BaseIndex = 0x1A00;
     // Upstream dingoFW (feat/lookup-tables): same subs at 0x1B00 (its 0x1A00 is the timer).
     [JsonIgnore] public const int UpstreamBaseIndex = 0x1B00;
+    [JsonIgnore] public const int UpstreamMax = 4;   // feat/more-tables (PDMs); stock feat/lookup-tables has 2
     public static int BaseFor(string family) => family == FwFamily.Upstream ? UpstreamBaseIndex : BaseIndex;
     [JsonIgnore] public const int AxisMax = 8;
     [JsonPropertyName("name")] public string Name {get; set; }
