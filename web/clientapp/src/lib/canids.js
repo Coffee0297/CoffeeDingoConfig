@@ -1,3 +1,4 @@
+import { has } from '../next/screens/hardware/parts/util.js'
 // CAN-ID allocation helpers - the in-UI counterpart of tools/canfree.py, operating on the
 // live project fleet. Single source for the per-type ID footprint, used by BOTH the System
 // view overlap check and the "suggest a free base" action so they can never disagree.
@@ -19,7 +20,9 @@ export const ID_BEFORE = 1
 // (command/response), +14 the ignition state frame (firmware 5.6). dingoPDM owns base..base+30
 // (firmware ≥ 5.5.107 adds Msg 27 = table outputs at +29; +30 is the 5.6 ignition state frame; its
 // +12/+13 already fall inside that span). At the usual 0x10 / 0x20 spacing both still fit.
-export const spanAfter = (type) => (/canboard/i.test(type || '') ? 14 : 30)
+// An upstream dingoFW PDM with the wire load (output sub 33) sends one more frame, Msg 30 at +32 (the load % per output)
+// while any output has a wire time constant: pass the device to count it (a fresh module: by type only).
+export const spanAfter = (type, dev = null) => (/canboard/i.test(type || '') ? 14 : dev?.family === 'upstream' && dev.paramRuns && has(dev, 0x1000, 33) ? 32 : 30)
 export const isModule = (type) => /pdm|canboard/i.test(type || '')
 
 export function nextPow2(n) {
@@ -27,9 +30,9 @@ export function nextPow2(n) {
 }
 
 // IDs occupied by a device of `type` at `base`, including the guard, clamped to [0, STD_MAX].
-function addFootprint(used, type, base) {
+function addFootprint(used, type, base, dev = null) {
   const lo = Math.max(0, base - ID_BEFORE)
-  const hi = Math.min(STD_MAX, base + spanAfter(type))
+  const hi = Math.min(STD_MAX, base + spanAfter(type, dev))
   for (let id = lo; id <= hi; id++) used.add(id)
 }
 
@@ -39,7 +42,7 @@ export function usedIds(devices, { reserve = true, exclude = null } = {}) {
   const used = new Set()
   for (const d of devices || []) {
     if (!isModule(d.type) || d.guid === exclude) continue
-    addFootprint(used, d.type, d.baseId)
+    addFootprint(used, d.type, d.baseId, d)
   }
   if (reserve) for (const id of OBD_RESERVED) used.add(id)
   return used
@@ -80,8 +83,8 @@ export function conflictPairs(devices) {
   for (let i = 0; i < m.length; i++) {
     for (let j = i + 1; j < m.length; j++) {
       const a = m[i], b = m[j]
-      if (a.baseId - ID_BEFORE <= b.baseId + spanAfter(b.type) &&
-          b.baseId - ID_BEFORE <= a.baseId + spanAfter(a.type)) {
+      if (a.baseId - ID_BEFORE <= b.baseId + spanAfter(b.type, b) &&
+          b.baseId - ID_BEFORE <= a.baseId + spanAfter(a.type, a)) {
         out.push([a, b])
       }
     }

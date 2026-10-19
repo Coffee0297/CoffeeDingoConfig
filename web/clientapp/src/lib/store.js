@@ -325,7 +325,7 @@ function bridgeCanId(srcGuid, srcVar, devices = []) {
   const used = new Set(Object.values(b))
   let liveIds = new Set(); try { liveIds = new Set(get(telemetry).ids ?? []) } catch {}
   // …and nothing inside a configured module's frame span (base .. base+29 PDM / +13 CANBoard), live or not
-  const inSpan = (id) => (devices ?? []).some((d) => isModule(d.type) && id >= (d.baseId ?? 0) - 1 && id <= (d.baseId ?? 0) + spanAfter(d.type))
+  const inSpan = (id) => (devices ?? []).some((d) => isModule(d.type) && id >= (d.baseId ?? 0) - 1 && id <= (d.baseId ?? 0) + spanAfter(d.type, d))
   let id = GFX_ID_BASE
   while ((used.has(id) || liveIds.has(id) || inSpan(id)) && id <= GFX_ID_MAX) id++
   if (id > GFX_ID_MAX) throw new Error('No free bridge CAN ID available in 0x101–0x13F — free one up or wire it manually.')

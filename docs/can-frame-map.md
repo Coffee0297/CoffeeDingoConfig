@@ -59,6 +59,9 @@ dingoConfig speaks both: a module whose Version reply has major 0 is *upstream*.
 this fork's: PDM currents (Msg 0 total, Msg 1–2 per output) are **1 A/bit**, not 0.1 A; Msg 0 bits 2–7 and
 Msg 3 byte 7 are 0; Msg 27–29 (+29..+31) are the timers (byte 0 outputs, byte 1 running; then elapsed per
 timer, u16 in 10 ms) instead of the table outputs; CAN-input value frames use the input's own byte order.
+With upstream feat/wire-load (output param sub 33) a PDM also sends Msg 30 at `base+32` while any output has a wire
+time constant: bytes 0-7 = wire load % of outputs 1-8 (u8, saturates at 255). That is the next module's `base+0` at
+0x20 spacing, so the app counts it in such a module's ID span.
 The upstream CANBoard has no DO duty frame and no timers; its other frames match the fork's.
 
 ---

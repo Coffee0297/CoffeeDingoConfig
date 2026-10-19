@@ -1,7 +1,7 @@
 <script>
   // One output of one module: PDM smart output (current sensing, limits, wiring) or CANBoard low-side output.
   import { untrack } from 'svelte'
-  import { Page, PageHeader, Card, Button, Chip, StateDot, Banner, Empty, LineChart } from '../../../ui/index.js'
+  import { Page, PageHeader, Card, Button, Chip, StateDot, Banner, Empty, LineChart, Meter } from '../../../ui/index.js'
   import { live, defs, api, device, moduleState, isCanboard, project } from '../../../lib/live.svelte.js'
   import { href } from '../../../router.svelte.js'
   import { pinFor, boardOf } from '../../../../lib/pinmap.js'
@@ -16,6 +16,7 @@
   import { createBench } from './bench.svelte.js'
   import { signalFeed, ring } from './feeds.svelte.js'
   import { resample, olderThan, isUpstream, pwmFreqError, has } from './util.js'
+  import { wireLoad, wireLoadText, WARN_PCT } from './wireload.js'
 
   let { guid, n } = $props()
 
@@ -59,6 +60,7 @@
       softStartTimeout: o.softStartTimeout ?? 0,
       softStopTime: o.softStopTime ?? 0,
       shed: !!o.shed,
+      thermalTau: o.thermalTau ?? 0,
     }
   }
   // Seed once per output so the 10 Hz telemetry never overwrites an edit in progress.
@@ -71,6 +73,8 @@
   const varFreq = $derived(isCb || has(dev, 0x1000 + n - 1, 21))
   const rampDuty = $derived(isCb || has(dev, 0x1000 + n - 1, 24))
   const ssTimeout = $derived(!isCb && isUpstream(dev) && has(dev, 0x1000 + n - 1, 30))   // upstream current-limited soft start
+  const wireTau = $derived(!isCb && isUpstream(dev) && has(dev, 0x1000 + n - 1, 33))   // upstream wire load
+  const wl = $derived(wireLoad(pdmOut))
   const overRating = $derived(rating != null && Number(f?.currentLimit) > rating)
 
   function validate() {
@@ -124,6 +128,7 @@
           SoftStartTimeout: Math.round(Number(f.softStartTimeout) || 0),
           SoftStopTime: Math.round(Number(f.softStopTime) || 0),
           Shed: !!f.shed,
+          ThermalTau: Math.round(Number(f.thermalTau) || 0),
         })
       }
       project.dirty = true
@@ -220,7 +225,7 @@
       <div class="col">
         <OutputChain {guid} {dev} bind:f {feed} {connected} raw={src} />
         {#if !isCb}
-          <OutputProtection bind:f {rating} warn={has(dev, 0x1000 + n - 1, 18)} openLoad={has(dev, 0x1000 + n - 1, 19)} under={isUpstream(dev) && has(dev, 0x1000 + n - 1, 27)} canClear={isUpstream(dev) && has(dev, 0x1000 + n - 1, 25)} retryAll={dev.retryAllInput > 0} hardShort={isUpstream(dev) && has(dev, 0x1000 + n - 1, 32)} ssTarget={ssTimeout && f.pwmEnabled && f.softStart && Number(f.softStartTimeout) > 0} canShed={dev.shedInput != null && has(dev, 0x1000 + n - 1, 26)} shedWired={dev.shedInput > 0} />
+          <OutputProtection bind:f {rating} warn={has(dev, 0x1000 + n - 1, 18)} openLoad={has(dev, 0x1000 + n - 1, 19)} under={isUpstream(dev) && has(dev, 0x1000 + n - 1, 27)} canClear={isUpstream(dev) && has(dev, 0x1000 + n - 1, 25)} retryAll={dev.retryAllInput > 0} hardShort={isUpstream(dev) && has(dev, 0x1000 + n - 1, 32)} ssTarget={ssTimeout && f.pwmEnabled && f.softStart && Number(f.softStartTimeout) > 0} canShed={dev.shedInput != null && has(dev, 0x1000 + n - 1, 26)} shedWired={dev.shedInput > 0} {wireTau} />
         {:else}
           <Card title="Protection"><p class="muted">The CANBoard switches this load to ground and cannot measure or limit current. Put a fuse in the load wire.</p></Card>
         {/if}
@@ -247,6 +252,16 @@
               <a href={href('live', 'trips')}>Open the trip log</a>
             </p>
           </Card>
+          {#if wireTau}
+            <Card title="Wire load" aria-label="Wire load">
+              {#if !wl}<p class="muted">Set a wire time constant on the Protection card and apply it: the module then estimates how warm this wire runs.</p>
+              {:else if !connected}<p class="muted" role="status">No live data while the module is not answering.</p>
+              {:else}
+                <Meter label="Load on the wire" value={wl.pct} max={100} unit="%" warnAt={WARN_PCT / 100} />
+                <p class="small" data-testid="wire-load">{wireLoadText(wl)}. 100 % is how warm the wire gets carrying {f.currentLimit} A for good; it starts from 0 after every power-up. Nothing trips on it: a Condition on "{title} Wire Load" can act on it.</p>
+              {/if}
+            </Card>
+          {/if}
           <OutputWiring bind:f />
           <Card title="Module limits for this pin">
             <p class="muted">{#if rating != null}OUT{n} is rated <strong>{rating} A</strong> continuous on the {dev.type}{#if driver} (driver <span class="mono" data-testid="out-driver">{driver}</span>){/if}. The trip current cannot be set above it.{:else}No rating is known for this pin.{/if}</p>

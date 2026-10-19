@@ -10,7 +10,7 @@ export function makeNamer(devices, idMap) {
     if (c?.length) return c.map((s) => s.replace(': ', ' · ')).join(', ')
     for (const d of devices) {
       const off = id - d.baseId
-      if (off >= 0 && off <= spanAfter(d.type)) return off === 0 ? `${d.name} · settings` : off === 1 ? `${d.name} · settings reply` : `${d.name} · +${off}`
+      if (off >= 0 && off <= spanAfter(d.type, d)) return off === 0 ? `${d.name} · settings` : off === 1 ? `${d.name} · settings reply` : `${d.name} · +${off}`
     }
     return ''
   }

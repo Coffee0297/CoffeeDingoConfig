@@ -66,10 +66,14 @@ public class Output : IDeviceFunction
     [JsonPropertyName("softStopTime")] public int SoftStopTime { get => field; set => field = Math.Clamp(value, 0, 10000); } = 0;
     // upstream feat/load-shed: held off while the module's shed input is on
     [JsonPropertyName("shed")] public bool Shed { get; set; }
+    // upstream feat/wire-load: wire time constant, s, 0 = off; the module estimates the wire's load % from I² (report only)
+    [JsonPropertyName("thermalTau")] public int ThermalTau { get => field; set => field = Math.Clamp(value, 0, 600); } = 0;
     
     [JsonIgnore][Plotable(displayName:"Current", unit:"A")] public double Current { get; set; }
     [JsonIgnore][Plotable(displayName:"State")] public OutState State { get; set; }
     [JsonIgnore][Plotable(displayName:"ResetCount")] public int ResetCount { get; set; }
+    // upstream feat/wire-load: the wire's estimated load % (100 = the temperature the current limit reaches for good)
+    [JsonIgnore][Plotable(displayName:"WireLoad", unit:"%")] public double WireLoad { get; set; }
     [JsonIgnore][Plotable(displayName:"DutyCycle", unit:"%")] public double CurrentDutyCycle
     {
         get;
@@ -122,6 +126,12 @@ public class Output : IDeviceFunction
                 ParentName = Name, Name = $"output[{Number}].shed", Index = BaseIndex + (Number - 1), SubIndex = 26,
                 GetValue = () => Shed, SetValue = val => Shed = (bool)val,
                 ValueType = typeof(bool), DefaultValue = false
+            },
+            new DeviceParameter
+            {
+                ParentName = Name, Name = $"output[{Number}].thermalTau", Index = BaseIndex + (Number - 1), SubIndex = 33,
+                GetValue = () => ThermalTau, SetValue = val => ThermalTau = (int)val,
+                ValueType = typeof(int), DefaultValue = 0
             },
         ];
     }

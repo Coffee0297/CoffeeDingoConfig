@@ -43,6 +43,7 @@ export const binBody = (o, input, enabled = true) => {
     SoftStartTimeout: o.softStartTimeout ?? 0,   // upstream output sub 30: carried so a re-wire keeps it
     SoftStopTime: o.softStopTime ?? 0,   // upstream output sub 31: carried so a re-wire keeps it
     Shed: o.shed ?? false,   // upstream load shedding: carried so a re-wire never drops the opt-in
+    ThermalTau: o.thermalTau ?? 0,   // upstream output sub 33: carried so a re-wire keeps it
   }
 }
 

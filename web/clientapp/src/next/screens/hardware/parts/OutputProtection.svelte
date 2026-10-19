@@ -7,7 +7,8 @@
   // hardShort: the firmware has the hard short limit (upstream output sub 32)
   // ssTarget: a current-limited soft start is set (the inrush limit is then the soft start's current target)
   // canShed: the module has load shedding (upstream feat/load-shed: device 0x0000:13 + output sub 26); shedWired: its shed input is set
-  let { f = $bindable(), rating = null, warn = true, openLoad = true, under = false, canClear = false, retryAll = false, hardShort = false, ssTarget = false, canShed = false, shedWired = false } = $props()
+  // wireTau: the firmware has the wire load estimate (upstream output sub 33)
+  let { f = $bindable(), rating = null, warn = true, openLoad = true, under = false, canClear = false, retryAll = false, hardShort = false, ssTarget = false, canShed = false, shedWired = false, wireTau = false } = $props()
   const UNDER = [{ value: '0', label: 'Report only' }, { value: '1', label: 'Switch the output off' }]
 
   const RESET = [{ value: '0', label: 'Stay off (latch)' }, { value: '1', label: 'Retry a few times' }, { value: '2', label: 'Retry for ever' }]
@@ -73,6 +74,12 @@
     {/if}
     {#if canShed}
       <Switch label="Switch off while load shedding" hint={shedWired ? 'Held off while the module’s shed input is on (e.g. battery low); back on by itself after.' : 'The module has no shed input set yet: set it on the Power screen or with the Load shed function.'} bind:checked={f.shed} data-testid="shed" />
+    {/if}
+    {#if wireTau}
+      <div>
+        <Stepper label="Wire time constant" bind:value={f.thermalTau} min={0} max={600} step={5} unit="s" data-testid="wire-tau" />
+        <span class="hint">estimates how warm the wire runs (load %); 20-50 s is typical. Report only. 0 = off</span>
+      </div>
     {/if}
   </div>
   <p class="sum" data-testid="protection-summary">

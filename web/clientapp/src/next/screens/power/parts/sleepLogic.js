@@ -105,7 +105,7 @@ export function wakeWords(d) {
 /** Which module a CAN id belongs to (base-1 .. base+span), or null. */
 export function moduleOfId(id, devices) {
   for (const d of devices) {
-    const span = spanAfter(d.type)
+    const span = spanAfter(d.type, d)
     if (id >= d.baseId - 1 && id <= d.baseId + span) return d
   }
   return null
