@@ -1236,6 +1236,31 @@ public static class LiveApi
             return Results.Ok(new { ok = true, flags = f, cause = domain.Common.ResetCause.Decode(f, cb), names = domain.Common.ResetCause.Flags(f, cb) });
         });
 
+        // The module's fault history in FRAM (upstream feat/fault-history, PDMs): newest first, survives power-off.
+        IResult? NoFaultLog(IDevice? dev) => dev switch
+        {
+            PdmDevice { Family: domain.Common.FwFamily.Upstream } => null,
+            PdmDevice => Results.Json(new { ok = false, error = "This firmware (dingoFW 5.x) keeps no fault history: see its trip log." }, statusCode: 409),
+            _ => Results.Json(new { ok = false, error = "Only a PDM keeps a fault history." }, statusCode: 409),
+        };
+        api.MapGet("/devices/{guid}/faultlog", async (string guid, DeviceManager dm, ICommsAdapterManager adapters) =>
+        {
+            if (!Guid.TryParse(guid, out var g)) return Results.BadRequest();
+            if (await RequireLiveModuleAsync(g, dm, adapters, "read the fault history") is { } bad) return bad;
+            if (NoFaultLog(dm.GetDevice(g)) is { } no) return no;
+            if (await dm.ReadFaultLog(g) is not { } log)
+                return Results.Json(new { ok = false, error = "No answer: this firmware keeps no fault history." }, statusCode: 409);
+            return Results.Ok(new { ok = true, bootCount = log.BootCount, entries = log.Entries });
+        });
+        api.MapPost("/devices/{guid}/faultlog/clear", async (string guid, DeviceManager dm, ICommsAdapterManager adapters) =>
+        {
+            if (!Guid.TryParse(guid, out var g)) return Results.BadRequest();
+            if (await RequireLiveModuleAsync(g, dm, adapters, "clear the fault history") is { } bad) return bad;
+            if (NoFaultLog(dm.GetDevice(g)) is { } no) return no;
+            return await dm.ClearFaultLogConfirmed(g) ? Results.Ok(new { ok = true })
+                : Results.Json(new { ok = false, error = "The module did not confirm the clear." }, statusCode: 409);
+        });
+
         api.MapPost("/devices/{guid}/flash-can", async (string guid, HttpRequest req, CanFlashService flasher) =>
         {
             if (!Guid.TryParse(guid, out var g)) return Results.BadRequest();

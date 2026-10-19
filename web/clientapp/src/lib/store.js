@@ -123,6 +123,9 @@ export const api = {
   luaError: (guid) => j('GET', `/api/devices/${guid}/luaerror`),
   overloads: (guid) => j('GET', `/api/devices/${guid}/overloads`),
   overloadsClear: (guid) => j('POST', `/api/devices/${guid}/overloads/clear`),
+  // upstream feat/fault-history: { bootCount, entries: [{ n, output, kind, boot, amps, volts, uptimeMs }] }, newest first
+  faultLog: (guid) => j('GET', `/api/devices/${guid}/faultlog`, undefined, 60000),
+  faultLogClear: (guid) => j('POST', `/api/devices/${guid}/faultlog/clear`),
   async flash(guid, bytes) {
     const r = await fetch(`/api/devices/${guid}/flash`, { method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: bytes })
     if (!r.ok) throw await apiError(r)

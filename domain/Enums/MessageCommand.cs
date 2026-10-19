@@ -51,5 +51,7 @@ public enum MessageCommand
     OvlNotice = 52,         // [cmd, idx] -> [cmd, idx, out (0-based), kind 1 warning / 2 open load, t0..t3]
 
     // Upstream dingoFW feature branches
+    FaultLogRead = 53,      // [cmd, n] -> two frames: [cmd, n, count, out|kind<<4, boot u16, A×10 u16], [cmd, n|0x80, uptime ms u32, V×100 u16]
+    FaultLogClear = 54,     // [cmd] -> [cmd, 1]
     ResetCause = 55,        // [cmd] -> [cmd, RCC CSR >> 24 flags, 0...] why the module last reset (feat/reset-cause)
 }

@@ -396,6 +396,8 @@ public class DeviceManager(ILogger<DeviceManager> logger, ILoggerFactory loggerF
         else if (cmd == domain.Enums.MessageCommand.Identify) { GetDeviceUiState(device.Guid).HasLed = frame.Payload[2] != 0; ok = true; }
         else if (cmd == domain.Enums.MessageCommand.OutputTest) { GetDeviceUiState(device.Guid).TestReplied = true; ok = frame.Payload[7] == 1; }
         else if (cmd == domain.Enums.MessageCommand.ResetCause) { GetDeviceUiState(device.Guid).ResetFlags = frame.Payload[1]; ok = true; }
+        else if (cmd == domain.Enums.MessageCommand.FaultLogRead) { GetDeviceUiState(device.Guid).FaultLogRx[frame.Payload[1]] = frame.Payload.ToArray(); return; }
+        else if (cmd == domain.Enums.MessageCommand.FaultLogClear) ok = frame.Payload[1] == 1;
         else if (cmd == domain.Enums.MessageCommand.SleepInfo)
         {
             var ui = GetDeviceUiState(device.Guid);
@@ -430,7 +432,7 @@ public class DeviceManager(ILogger<DeviceManager> logger, ILoggerFactory loggerF
             return;
         }
         else { if (cmd == domain.Enums.MessageCommand.Write) GetDeviceUiState(device.Guid).StoredOnModule = false; return; }
-        if (ok && cmd is not (domain.Enums.MessageCommand.Identify or domain.Enums.MessageCommand.ResetCause or domain.Enums.MessageCommand.OutputTest)) GetDeviceUiState(device.Guid).StoredOnModule = cmd == domain.Enums.MessageCommand.BurnParams;
+        if (ok && cmd is not (domain.Enums.MessageCommand.Identify or domain.Enums.MessageCommand.ResetCause or domain.Enums.MessageCommand.OutputTest or domain.Enums.MessageCommand.FaultLogClear)) GetDeviceUiState(device.Guid).StoredOnModule = cmd == domain.Enums.MessageCommand.BurnParams;
         if (_confirms.TryRemove((device.BaseId, cmd), out var tcs)) tcs.TrySetResult(ok);
     }
 
@@ -496,6 +498,56 @@ public class DeviceManager(ILogger<DeviceManager> logger, ILoggerFactory loggerF
             {
                 SendOnly = true, DeviceBaseId = d.BaseId, Name = "Reset cause",
                 Frame = new CanFrame(d.BaseId + PdmDevice.ConfigTxOffset, 8, [Convert.ToByte(domain.Enums.MessageCommand.ResetCause), 0, 0, 0, 0, 0, 0, 0])
+            });
+            return true;
+        }, 2000)
+        : Task.FromResult(false);
+
+    /// <summary>Upstream feat/fault-history: read the module's fault history, newest first, and its boot count.
+    /// null when the module does not answer (firmware without it).</summary>
+    public async Task<(int BootCount, List<domain.Common.FaultLogEntry> Entries)?> ReadFaultLog(Guid deviceId)
+    {
+        if (GetDevice(deviceId) is not { } d) return null;
+        var rx = GetDeviceUiState(deviceId).FaultLogRx;
+        async Task<(byte[] A, byte[] B)?> Ask(int n)
+        {
+            for (var attempt = 0; attempt < 2; attempt++)
+            {
+                rx.TryRemove(n, out _); rx.TryRemove(n | 0x80, out _);
+                QueueMessage(new DeviceCanFrame
+                {
+                    SendOnly = true, DeviceBaseId = d.BaseId, Name = "Fault log read",
+                    Frame = new CanFrame(d.BaseId + PdmDevice.ConfigTxOffset, 8, [Convert.ToByte(domain.Enums.MessageCommand.FaultLogRead), (byte)n, 0, 0, 0, 0, 0, 0])
+                });
+                for (var w = 0; w < 1000; w += 10)
+                {
+                    if (rx.TryGetValue(n, out var a) && rx.TryGetValue(n | 0x80, out var b)) return (a, b);
+                    await Task.Delay(10);
+                }
+            }
+            return null;
+        }
+        if (await Ask(0) is not { } first) return null;
+        var entries = new List<domain.Common.FaultLogEntry>();
+        var count = Math.Min(domain.Common.FaultLog.Count(first.A), domain.Common.FaultLog.Size);
+        for (var n = 0; n < count; n++)
+        {
+            var f = n == 0 ? first : await Ask(n);
+            if (f is { } x && domain.Common.FaultLog.Decode(n, x.A, x.B) is { } e) entries.Add(e);
+        }
+        // past the count the boot field is the current boot count (entry 0 already is one on an empty log)
+        var boot = count == 0 ? domain.Common.FaultLog.Boot(first.A) : await Ask(0x7F) is { } c ? domain.Common.FaultLog.Boot(c.A) : 0;
+        return (boot, entries);
+    }
+
+    /// <summary>Upstream feat/fault-history: clear the module's fault history; true once it confirmed.</summary>
+    public Task<bool> ClearFaultLogConfirmed(Guid deviceId) => GetDevice(deviceId) is { } d
+        ? Confirmed(d, domain.Enums.MessageCommand.FaultLogClear, () =>
+        {
+            QueueMessage(new DeviceCanFrame
+            {
+                SendOnly = true, DeviceBaseId = d.BaseId, Name = "Fault log clear",
+                Frame = new CanFrame(d.BaseId + PdmDevice.ConfigTxOffset, 8, [Convert.ToByte(domain.Enums.MessageCommand.FaultLogClear), 0, 0, 0, 0, 0, 0, 0])
             });
             return true;
         }, 2000)
