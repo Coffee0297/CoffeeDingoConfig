@@ -598,7 +598,7 @@ public static class LiveApi
 
         // Identify devices on the bus. Discovery is passive (broadcast signature); device type is
         // then confirmed actively by sending a Version request to each candidate base and reading
-        // the BOARD_ID byte (data8[1]) of the reply — 0=dingoPDM, 1=PDM-MAX, 2=CANBoard. Firmware
+        // the BOARD_ID byte (data8[1]) of the reply — 0=dingoPDM, 1=PDM-MAX, 2=CANBoard, 3=PT-DPDM4 (upstream). Firmware
         // older than the BOARD_ID change replies 0, so detection falls back to the run-length
         // heuristic. CANopen keypads emit heartbeat 0x700+node + buttons 0x180+node. DBC reader
         // devices are passive and can't be detected — add those by hand.
@@ -693,26 +693,28 @@ public static class LiveApi
                     var reply = sum.FirstOrDefault(x =>
                         x.Id == baseId && x.Direction == DataDirection.Rx &&
                         x.Payload is { Length: >= 2 } p && p[0] == (byte)MessageCommand.Version);
-                    if (reply?.Payload is not { Length: >= 2 } pl || pl[1] > 2) continue;
+                    if (reply?.Payload is not { Length: >= 2 } pl || pl[1] > 3) continue;
                     int boardId = pl[1];
-                    // Upstream dingoFW (major 0) sends no board id: a PDM always broadcasts its first 5 status frames
-                    // and says its type in Msg 0 byte 1 (high nibble), a CANBoard always sends only 3.
+                    // Upstream dingoFW (major 0) sends no board id (0) unless built with feat/board-id-and-image-markers
+                    // (1 Max, 2 CANBoard, 3 PT-DPDM4; a dingoPDM is 0 either way). Without one: a PDM always broadcasts
+                    // its first 5 status frames and says its type in Msg 0 byte 1 (high nibble), a CANBoard only 3.
                     var upstream = pl.Length >= 8 && pl[4] == 0;
-                    if (upstream)
+                    var guessed = upstream && boardId == 0;
+                    if (guessed)
                         boardId = runLen < 5 ? 2
                             : sum.FirstOrDefault(x => x.Id == statusId && x.Direction == DataDirection.Rx)?.Payload is { Length: >= 2 } st && st[1] >> 4 is 1 or 2 ? 10 + (st[1] >> 4) : 0;
                     var (type, label) = boardId switch
                     {
                         2 => ("canboard", "CANBoard"),
                         1 or 11 => ("pdm", "dingoPDM-Max"),
-                        12 => ("pdm:2", "PT-DPDM"),
+                        3 or 12 => ("pdm:2", "PT-DPDM"),
                         _ => ("pdm", "dingoPDM"),
                     };
                     // G8: the same reply carries the firmware version (bytes 4..7, as the device classes read it)
                     var version = pl.Length >= 8 ? $"v{pl[4]}.{pl[5]}.{(pl[6] << 8) + pl[7]}" : null;
                     found.Add(new {
                         type, baseId, hex = "0x" + baseId.ToString("X3"), label, confidence = "high", version,
-                        detail = upstream ? $"upstream dingoFW at 0x{baseId:X3}, board told by its status frames ({runLen}): check the type"
+                        detail = guessed ? $"upstream dingoFW at 0x{baseId:X3}, board told by its status frames ({runLen}): check the type"
                             : $"identified via BOARD_ID {boardId} at 0x{baseId:X3} ({runLen} status frames)"
                     });
                 }

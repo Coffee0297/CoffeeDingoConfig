@@ -54,9 +54,14 @@ public sealed class SRecordImage
         return null;
     }
 
-    /// <summary>"dingoPDM v7" fits a "dingoPDM", "dingoPDM-Max v1" a "dingoPDM-Max", "CANBoard v2" a "CANBoard".</summary>
+    /// <summary>"dingoPDM v7" fits a "dingoPDM", "dingoPDM-Max v1" a "dingoPDM-Max", "CANBoard v2" a "CANBoard", upstream's
+    /// "PT-DPDM4" a "PT-DPDM".</summary>
     public static bool BoardMatches(string marker, string deviceType) =>
-        Regex.Replace(marker, @"\s+v\d+$", "").Equals(deviceType, StringComparison.OrdinalIgnoreCase);
+        Regex.Replace(marker, @"\s+v\d+$|(?<=^PT-DPDM)\d+$", "").Equals(deviceType, StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>Firmware line of a version like "0.6.1" (upstream dingoFW, major 0) or "5.6.6" (the fork); null if unknown.</summary>
+    public static string? FamilyOf(string? version) => version is null || !int.TryParse(version.TrimStart('v').Split('.')[0], out var major) ? null
+        : major == 0 ? "upstream" : "fork";
 
     public static SRecordImage ParseText(string text) => Parse(text.Split('\n'));
 

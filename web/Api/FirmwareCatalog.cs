@@ -104,12 +104,17 @@ public static partial class FirmwareCatalog
         var nameVersion = nv.Success ? $"{nv.Groups[1].Value}.{nv.Groups[2].Value}.{nv.Groups[3].Value}" : null;
         var version = imageVersion ?? nameVersion;
         if (imageVersion is not null && nameVersion is not null && imageVersion != nameVersion) problems.Add($"The file name says {nameVersion}, but the image is {imageVersion}.");
-        var board = marker is null ? nameBoard : Regex.Replace(marker, @"\s+v\d+$", "");
-        if (marker is null) problems.Add("The image carries no board marker (firmware before 5.5.109): only the file name says which board it is for.");
+        var board = marker is null ? nameBoard : Regex.Replace(marker, @"\s+v\d+$|(?<=^PT-DPDM)\d+$", "");
+        if (marker is null) problems.Add("The image carries no board marker (older firmware): only the file name says which board it is for.");
         else if (nameBoard is not null && !SRecordImage.BoardMatches(marker, nameBoard)) problems.Add($"The file name says {nameBoard}, but the image is built for {board}.");
         if (version is null) problems.Add("Neither the image nor the file name gives a version.");
-        var modules = board is null ? [] : devices.Where(d => SRecordImage.BoardMatches(board, d.Type))
-            .Select(d => new { guid = d.Guid, name = d.Name, current = CurrentVersion(d) }).ToList<object>();
+        var fits = board is null ? [] : devices.Where(d => SRecordImage.BoardMatches(board, d.Type)).ToList();
+        var modules = fits.Select(d => new { guid = d.Guid, name = d.Name, current = CurrentVersion(d) }).ToList<object>();
+        // upstream dingoFW (0.x) <-> the fork (5.x): another param layout, the module starts from its defaults
+        var imageFamily = SRecordImage.FamilyOf(version);
+        var switching = fits.Where(d => SRecordImage.FamilyOf(CurrentVersion(d)) is { } f && imageFamily is not null && f != imageFamily && CurrentVersion(d) != "v0.0.0").Select(d => d.Name).ToList();
+        if (switching.Count > 0)
+            problems.Add($"This is {(imageFamily == "upstream" ? "upstream dingoFW" : "the dingoFW fork")} {version}; {string.Join(", ", switching)} run{(switching.Count == 1 ? "s" : "")} the {(imageFamily == "upstream" ? "fork" : "upstream firmware")}. Its settings do not carry over: after the update Read the module, then Apply and Store the project again.");
         return new { name, kind = isSrec ? "srec" : "bin", size = data.Length, board, marker, version, modules, problems };
     }
 
