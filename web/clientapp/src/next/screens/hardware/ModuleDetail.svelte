@@ -4,7 +4,8 @@
   // (live inputs, polled) and the module actions in Settings. Outputs and inputs link to their own screens.
   import { onMount } from 'svelte'
   import { Page, PageHeader, Card, Button, Tabs, StateDot, Chip, Empty, Banner } from '../../ui/index.js'
-  import { live, api, device, moduleState, hex } from '../../lib/live.svelte.js'
+  import { live, api, device, moduleState, hex, defs, read, toast } from '../../lib/live.svelte.js'
+  import { setupSheetHtml, printHtml } from '../../../lib/setupsheet.js'
   import { href, go } from '../../router.svelte.js'
   import ModuleSettings from './parts/ModuleSettings.svelte'
   import { hexId, fwText } from './parts/ids.js'
@@ -43,6 +44,17 @@
     if (isPdm) return (d.outputs ?? []).map((o) => ({ n: o.number, name: o.name, enabled: o.enabled !== false, state: o.state, current: o.current, limit: o.currentLimit, input: o.input, tripped: isTripped(o), on: isOn(o) }))
     return byKind('Digital output').map((s) => ({ n: s.n, name: s.name, enabled: s.enabled, state: s.value === 'on' ? 'On' : s.value === 'off' ? 'Off' : `${s.value}%`, on: s.on, tripped: false }))
   })
+  // Printable setup / pinout sheet: this module's project config, pins and wiring notes.
+  let printing = $state(false)
+  async function printSheet() {
+    printing = true
+    try {
+      const [fx, map, vm] = await Promise.all([read(() => api.functions(guid)), api.canIdMap().catch(() => null), api.inputs(guid).catch(() => [])])
+      if (!fx) return
+      const names = Object.fromEntries((vm ?? []).map((v) => [v.index, v.name]))
+      if (!printHtml(setupSheetHtml({ device: d, fx, defs, claimed: map?.claimed ?? {}, names }))) toast('The browser blocked the print window. Allow pop-ups for this page and try again.', 'error', 8000)
+    } finally { printing = false }
+  }
   const stateWord = (o) => (!d?.connected ? 'No data' : o.tripped ? 'Tripped' : o.on ? 'On' : 'Off')
   const stateTone = (o) => (!d?.connected ? 'stale' : o.tripped ? 'fault' : o.on ? 'on' : 'off')
   const stateShape = (o) => (!d?.connected ? 'ring' : o.tripped ? 'square' : o.on ? 'dot' : 'ring')
@@ -60,6 +72,7 @@
     <PageHeader crumbs={[{ label: 'Hardware', href: href('hardware') }, { label: 'Modules', href: href('hardware') }, { label: d.name }]} title={d.name} subtitle={`${d.type} · base ${hexId(d.baseId)} · firmware ${fwText(d)}`}>
       {#snippet tag()}<StateDot tone={st.key} shape={st.shape} label={st.word} />{/snippet}
       {#snippet actions()}
+        <Button onclick={printSheet} busy={printing} data-testid="print-sheet">Print setup sheet</Button>
         {#if d.configMismatch}<Chip tone="warn" symbol="◆">Differs from the car or not compared yet</Chip>{/if}
       {/snippet}
     </PageHeader>
