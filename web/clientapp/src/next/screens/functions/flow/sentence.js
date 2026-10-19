@@ -92,6 +92,8 @@ export function sentenceFor(model, n) {
       if (r.variableDutyCycle) segs.push(T('at a duty from'), srcTok(model, r.dutyCycleInput, 'dutyCycleInput'))
       else if (r.pwmEnabled) segs.push(T('at'), val((r.fixedDuty ?? r.fixedDutyCycle ?? 100) + ' %', 'pwm'))
       segs.push(T('.'))
+      // upstream current-limited soft start (output sub 30): the inrush limit holds the ramp, the timeout trips
+      if (r.pwmEnabled && r.softStart && r.softStartTimeout > 0) segs.push(T('Its soft start waits while the current is above'), val((r.inrushLimit ?? 0) + ' A', 'inrushLimit'), T('and it trips if not at full duty after'), val(r.softStartTimeout + ' ms', 'softStartTimeout'), T('.'))
       return segs
     }
     default: return null
