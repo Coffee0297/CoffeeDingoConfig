@@ -4,6 +4,7 @@
 // Counter edges, Table interpolation, CAN input operator + timeout, outputs with injected faults.
 import { interpolate } from '../../../../lib/table.js'
 import { fmt } from './livevals.js'
+import { upstreamArgOff } from './model.js'
 
 const truthy = (v) => v === true || (typeof v === 'number' && v !== 0)
 const asNum = (v) => (v === true ? 1 : v === false || v == null ? 0 : +v || 0)
@@ -78,7 +79,8 @@ export function createSim(model, snapshot) {
         vals[out] = check(m(n.id), r.mode ?? 0, res)
       } else if (n.kind === 'condition') {
         const out = port(n, 'Value'); if (!out) continue
-        const x = asNum(val(r.input)), set = +r.arg || 0, rel = r.argOff == null ? set : +r.argOff
+        // upstream dingoFW keeps a band, not the release point (model.js hystBand): a wrong-side release point is none
+        const x = asNum(val(r.input)), set = +r.arg || 0, rel = model.upstream ? upstreamArgOff(r.operator, set, r.argOff) : r.argOff == null ? set : +r.argOff
         const hyst = rel !== set, was = truthy(vals[out]), lo = Math.min(set, rel), hi = Math.max(set, rel)
         let v
         switch (Number(r.operator)) {

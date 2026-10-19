@@ -7,10 +7,10 @@
   import { untrack } from 'svelte'
   import { Button, Chip, Field, Select, Segmented, Checkbox, Banner } from '../../../ui/index.js'
   import { href } from '../../../router.svelte.js'
-  import { FAM_COLOR, FAM_NAME, OPS, OP_WORDS, JOIN, TIMER_MODES, EDGES, MATH_OPS, isRelational, sourceOptions, canWire, hexId, parseId } from './model.js'
+  import { FAM_COLOR, FAM_NAME, OPS, OP_WORDS, JOIN, TIMER_MODES, EDGES, MATH_OPS, isRelational, hystBand, sourceOptions, canWire, hexId, parseId } from './model.js'
   import { sentenceFor } from './sentence.js'
   import { fmt } from './livevals.js'
-  import { lacks, isUpstream } from '../../hardware/parts/util.js'
+  import { lacks, isUpstream, has } from '../../hardware/parts/util.js'
   import { remoteItems, isRemoteKey } from '../../../lib/remote.js'
 
   let { model, node, dev, lv, links = [], idMap = null, busy = false, onsave, onremove, onselect, onungroup, onopenlink, unsaved = $bindable(false) } = $props()
@@ -104,6 +104,8 @@
       for (let i = 1; i < draft.xSize; i++) if (!(draft.xAxis[i] > draft.xAxis[i - 1])) return `X point ${i + 1} must be above X point ${i}.`
       if (draft.ySize > 1) for (let i = 1; i < draft.ySize; i++) if (!(draft.yAxis[i] > draft.yAxis[i - 1])) return `Y point ${i + 1} must be above Y point ${i}.`
     }
+    if (k === 'condition' && hyst && isUpstream(dev) && isRelational(draft.operator) && !(hystBand(draft.operator, draft.arg, draft.argOff) > 0))
+      return [2, 4].includes(draft.operator) ? 'Off again at must be below the value.' : 'Off again at must be above the value.'
     if (k === 'counter' && draft.maxCount <= draft.minCount) return 'Max must be above min.'
     if (k === 'canmsg' && (draft.dlc < 0 || draft.dlc > 8)) return 'Length must be 0 to 8 bytes.'
     if (k === 'comfortblink' && (draft.tapMs < 100 || draft.tapMs > 5000)) return 'The tap time must be 0.1 to 5 s.'
@@ -243,7 +245,7 @@
         <Select label="Is" items={OPS.map((o, i) => ({ value: String(i), label: o + '  ' + OP_WORDS[i] }))} bind:value={() => String(draft.operator ?? 0), (v) => (draft.operator = Number(v))} />
         <Field label="Value" type="number" step="any" bind:value={() => draft.arg ?? 0, (v) => (draft.arg = toNum(v))} />
       </div>
-      {#if isRelational(draft.operator)}
+      {#if isRelational(draft.operator) && has(dev, 0x1500 + node.n - 1, 4)}
         <Checkbox label="Separate off point (hysteresis)" hint="Stops it chattering right at the value" bind:checked={hyst} />
         {#if hyst}<Field label="Off again at" type="number" step="any" bind:value={() => draft.argOff ?? 0, (v) => (draft.argOff = toNum(v))} hint={'On past ' + draft.arg + ', off again past ' + draft.argOff + '.'} />{/if}
       {/if}

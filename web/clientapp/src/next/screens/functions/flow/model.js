@@ -50,6 +50,15 @@ export const JOIN = ['AND', 'OR', 'NOR']
 export const TIMER_MODES = ['On-delay', 'Off-delay', 'Pulse', 'One pulse']
 export const EDGES = ['Rising', 'Falling', 'Both']
 export const isRelational = (op) => [2, 3, 4, 5].includes(Number(op))
+/** Upstream dingoFW (feat/condition-hysteresis) stores a band ≥ 0, not the release point: on past `arg`, off again at
+ *  arg − band (>, ≥) or arg + band (<, ≤). A release point on the wrong side of `arg` is no band. Same as the backend's
+ *  Condition.HystBand. */
+export function hystBand(op, arg, argOff) {
+  const a = +arg || 0, o = argOff == null ? a : +argOff
+  return [2, 4].includes(Number(op)) ? Math.max(0, a - o) : [3, 5].includes(Number(op)) ? Math.max(0, o - a) : 0
+}
+/** The release point the firmware actually uses on upstream: arg moved back by the band. */
+export const upstreamArgOff = (op, arg, argOff) => (+arg || 0) + ([3, 5].includes(Number(op)) ? 1 : -1) * hystBand(op, arg, argOff)
 // Math block operations (firmware MathOp order); `fn` shows it with A and B
 export const MATH_OPS = [
   { label: 'A + B', fn: (a, b) => `${a} + ${b}` }, { label: 'A − B', fn: (a, b) => `${a} − ${b}` },
@@ -259,7 +268,7 @@ export function buildModel(dev, funcs, vmap) {
     })
   }
   for (const n of nodes.values()) if (n.disabledSource) n.incomplete = ['is switched off, so the blocks that use it read 0']
-  return { nodes, edges: edges.filter((e) => nodes.has(e.source) && nodes.has(e.target)), byIdx, consumers }
+  return { nodes, edges: edges.filter((e) => nodes.has(e.source) && nodes.has(e.target)), byIdx, consumers, upstream: isUpstream(dev) }
 }
 
 /** Source options for a target that accepts `accepts`, from the var map (configured functions only). */

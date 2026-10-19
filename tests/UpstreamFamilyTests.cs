@@ -15,10 +15,10 @@ namespace tests;
 /// </summary>
 public class UpstreamFamilyTests
 {
-    private static ConcurrentDictionary<(int BaseId, int Index, int SubIndex), DeviceCanFrame> Q() => new();
+    internal static ConcurrentDictionary<(int BaseId, int Index, int SubIndex), DeviceCanFrame> Q() => new();
     private static readonly byte[] UpstreamVersion = [31, 0, 0, 0, 0, 6, 0, 3];   // v0.6.3, no board id
 
-    private static PdmDevice UpstreamPdm()
+    internal static PdmDevice UpstreamPdm()
     {
         var d = new PdmDevice("PDM", 0x680);
         d.SetLogger(NullLogger<PdmDevice>.Instance);
@@ -26,6 +26,25 @@ public class UpstreamFamilyTests
         d.Read(0x680, UpstreamVersion, ref q, []);
         return d;
     }
+
+    /// <summary>A full upstream ReadAll of exactly <paramref name="keys"/> (all values 0): the module's param list,
+    /// as a feature-branch firmware would report it. Upstream PDM/CANBoard first (Version reply).</summary>
+    internal static void LearnParams(domain.Interfaces.IDevice d, int baseId, List<(int Index, int Sub)> keys)
+    {
+        var q = Q();
+        var crc = new CumulativeCrc32();
+        d.Read(baseId, [10, 0, 0, 0, 0, 0, 0, 0], ref q, []);
+        foreach (var (i, s) in keys)
+        {
+            crc.Update([0, 0, 0, 0]);
+            d.Read(baseId, [11, (byte)i, (byte)(i >> 8), (byte)s, 0, 0, 0, 0], ref q, []);
+        }
+        d.Read(baseId, [12, (byte)keys.Count, (byte)(keys.Count >> 8), 0, .. BitConverter.GetBytes(crc.Final)], ref q, []);
+    }
+
+    /// <summary>Every (index, sub) of <paramref name="count"/> blocks at <paramref name="baseIndex"/> with subs 0..subs-1.</summary>
+    internal static IEnumerable<(int, int)> Block(int baseIndex, int count, int subs) =>
+        Enumerable.Range(0, count).SelectMany(n => Enumerable.Range(0, subs).Select(s => (baseIndex + n, s)));
 
     [Fact]
     public void VersionReply_Major0_IsUpstream_AndKnown()
