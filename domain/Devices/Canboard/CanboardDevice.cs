@@ -132,6 +132,8 @@ public class CanboardDevice : IDeviceConfigurable
     [JsonPropertyName("canMessages")] public List<CanMessage> CanMessages { get; init; } = [];
     [JsonPropertyName("ignition")] public Ignition Ignition { get; set; } = null!;
     [JsonPropertyName("comfortBlink")] public ComfortBlink ComfortBlink { get; set; } = null!;   // 5.6.1
+    // upstream dingoFW feat/config-lock (0x0200); the fork has none
+    [JsonPropertyName("lock")] public ConfigLock Lock { get; set; } = new();
 
     [JsonIgnore] private Dictionary<int, List<(DbcSignal Signal, Action<double> SetValue)>> StatusSigs { get; set; } = null!;
 
@@ -741,7 +743,7 @@ public class CanboardDevice : IDeviceConfigurable
     {
         var allParams = new List<DeviceParameter>();
         var subIndex = 0;
-        if (Family == FwFamily.Upstream) allParams.AddRange(UpstreamDeviceParams());
+        if (Family == FwFamily.Upstream) allParams.AddRange([.. UpstreamDeviceParams(), .. Lock.Params(Name)]);   // lock only where the Read lists it
         else allParams.AddRange(
         [
             new DeviceParameter

@@ -17,6 +17,8 @@ public interface IDeviceConfigurable : IDevice
     domain.Common.DeviceParamSet ParamSet { get; }
     /// <summary>Per-param differences captured on the last Read — explains *why* the config didn't match.</summary>
     List<ConfigDiffEntry> LastConfigDiff { get; set; }
+    /// <summary>Config lock (upstream feat/config-lock, 0x0200): the app's copy of the password + contact, and Locked.</summary>
+    domain.Devices.Functions.ConfigLock Lock { get; }
     DeviceCanFrame GetCheckMsg();
     List<DeviceCanFrame> GetReadMsgs(bool allParams);
     List<DeviceCanFrame> GetWriteMsgs(bool allParams);

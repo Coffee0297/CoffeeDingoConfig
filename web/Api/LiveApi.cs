@@ -56,7 +56,15 @@ public record DeviceDto(string Guid, string Name, string Type, int BaseId, bool 
     // upstream feat/load-shed: the signal that sheds the opted-in outputs (null = this module has none)
     int? ShedInput = null,
     // upstream feat/wake-on-frame: the wake frame, when the module's Read listed 0x0100 (null otherwise)
-    domain.Devices.Functions.WakeFrame? WakeFrame = null);
+    domain.Devices.Functions.WakeFrame? WakeFrame = null,
+    // upstream feat/config-lock (null: no lock in this firmware, or not known yet)
+    LockDto? Lock = null);
+// Has: the module has the lock (its Read listed 0x0200, or it refused a request as locked). PasswordSet: the
+// project holds a password, sent on every write. The password itself never goes to the UI.
+public record LockDto(bool Has, bool Locked, string Contact, bool PasswordSet);
+public record LockReq(string? Contact, uint? Password, bool ClearPassword = false);
+public record UnlockReq(uint Password);
+public record FactoryResetReq(string? Confirm);
 public record DigitalOutDto(int Number, string Name, bool Enabled, bool On, int Input);
 public record WakeDto(string Reason, int Source, int Count);
 public record IgnitionDto(bool Enabled, string Role, string State, bool Dash, int MainStateId, int StateId, bool Live);
@@ -336,6 +344,8 @@ public static class DingoMap
         s.Name, s.Id, ide = s.IsExtended, s.MessageName, s.StartBit, s.Length,
         byteOrder = (int)s.ByteOrder, s.IsSigned, s.Factor, s.Offset, s.Unit, s.Min, s.Max, s.Value };
 
+    static LockDto? LockOf(IDeviceConfigurable c) => c.Family == domain.Common.FwFamily.Upstream && (c.Lock.Locked || c.ParamSet.Contains(domain.Devices.Functions.ConfigLock.BaseIndex, 0))
+        ? new LockDto(true, c.Lock.Locked, c.Lock.Contact, c.Lock.Password != 0) : null;
     static WakeDto? Wake(DeviceUiState? ui) => ui?.WakeReason is int r
         ? new WakeDto(r switch { 1 => "can", 2 => "input", 3 => "usb", _ => "power-on" }, ui.WakeSource, ui.WakeCount) : null;
     static IgnitionDto? Ign(domain.Devices.Functions.Ignition? g, int stateId) => g is null ? null
@@ -367,7 +377,7 @@ public static class DingoMap
                 HasLed: ui?.HasLed, Asleep: ui?.Asleep == true && !p.Connected, LastWake: Wake(ui), SleepCountdownS: p.SleepCountdownS,
                 SleepBlockers: ui?.SleepBlockers, Ignition: Ign(p.Ignition, p.BaseId + (p.IgnitionStateOffset ?? domain.Devices.Functions.Ignition.StateOffsetFor(p.Type, p.Family, p.PdmType))),
                 Family: p.Family, ParamsRead: p.ParamSet.FromModule, ParamRuns: p.ParamRuns, RetryAllInput: p.HasRetryAll ? p.RetryAllInput : null, ShedInput: p.HasShed ? p.ShedInput : null,
-                WakeFrame: p.ParamSet.Contains(domain.Devices.Functions.WakeFrame.Index, 0) ? p.WakeFrame : null);
+                WakeFrame: p.ParamSet.Contains(domain.Devices.Functions.WakeFrame.Index, 0) ? p.WakeFrame : null, Lock: LockOf(p));
         }
         if (d is domain.Devices.Canboard.CanboardDevice cb)
             // CANBoard has no battery/total-current sensing (those are PDM smart-output features) — leave
@@ -381,7 +391,7 @@ public static class DingoMap
                 HasLed: ui?.HasLed, Asleep: ui?.Asleep == true && !cb.Connected, LastWake: Wake(ui), SleepCountdownS: cb.SleepCountdownS,
                 SleepBlockers: cb.SleepCountdownS != null ? cb.SleepBlockersRaw : ui?.SleepBlockers, Ignition: Ign(cb.Ignition, cb.BaseId + domain.Devices.Functions.Ignition.StateOffsetFor(cb.Type)),
                 DigitalOut: cb.DigitalOutputs.Select(o => new DigitalOutDto(o.Number, o.Name, o.Enabled, o.State, o.Input)).ToArray(),
-                Family: cb.Family, ParamsRead: cb.ParamSet.FromModule, ParamRuns: cb.ParamRuns);
+                Family: cb.Family, ParamsRead: cb.ParamSet.FromModule, ParamRuns: cb.ParamRuns, Lock: LockOf(cb));
         return new DeviceDto(d.Guid.ToString(), d.Name, d.Type, d.BaseId, d.Connected,
             0, 0, 0, "", "", "", Array.Empty<OutputDto>(), reading, readDone, readTotal, false, 30000, true, 0, 0, 0, true,
             (d as IDeviceConfigurable)?.CanBootloader ?? false, CanSleep: false);   // an ECU (DBC) or other device: nothing to put to sleep
@@ -1285,6 +1295,41 @@ public static class LiveApi
                 : Results.Json(new { ok = false, error = "The module did not confirm the clear." }, statusCode: 409);
         });
 
+        // ---- config lock (upstream feat/config-lock, 0x0200) ----
+        // The project's password + contact text (no CAN: Apply / Write sends them, a lock takes effect after Store + Restart).
+        api.MapPost("/devices/{guid}/lock", (string guid, LockReq r, DeviceManager dm) =>
+        {
+            if (!Guid.TryParse(guid, out var g) || dm.GetDevice(g) is not IDeviceConfigurable c) return Results.BadRequest();
+            if (r.Contact is { } t)
+            {
+                if (t.Length > domain.Devices.Functions.ConfigLock.ContactChars || domain.Devices.Functions.ConfigLock.Clean(t) != t)
+                    return Results.Json(new { ok = false, error = "The contact text is at most 32 plain characters (letters, digits, spaces, punctuation)." }, statusCode: 400);
+                c.Lock.Contact = t;
+            }
+            if (r.ClearPassword) c.Lock.Password = 0;
+            else if (r.Password is { } pw) c.Lock.Password = pw;
+            c.ConfigMismatch = true;   // the module does not hold it until the next write
+            return Results.Ok(new { ok = true, passwordSet = c.Lock.Password != 0 });
+        });
+        api.MapPost("/devices/{guid}/unlock", async (string guid, UnlockReq r, DeviceManager dm, ICommsAdapterManager adapters) =>
+        {
+            if (!Guid.TryParse(guid, out var g)) return Results.BadRequest();
+            if (await RequireLiveModuleAsync(g, dm, adapters, "unlock") is { } bad) return bad;
+            return await dm.UnlockConfirmed(g, r.Password) ? Results.Ok(new { ok = true })
+                : Results.Json(new { ok = false, error = "Not unlocked: wrong password (after a wrong one, wait a second before the next try)." }, statusCode: 409);
+        });
+        // Wipes the configuration (password and contact too), keeps base id + bitrate. Every output turns off at once.
+        api.MapPost("/devices/{guid}/factoryreset", async (string guid, FactoryResetReq r, DeviceManager dm, ICommsAdapterManager adapters) =>
+        {
+            if (!Guid.TryParse(guid, out var g)) return Results.BadRequest();
+            if (r.Confirm != "WIPE") return Results.Json(new { ok = false, error = "Type WIPE to confirm a factory reset." }, statusCode: 400);
+            if (await RequireLiveModuleAsync(g, dm, adapters, "factory reset") is { } bad) return bad;
+            if (dm.GetDevice(g) is not IDeviceConfigurable { Family: domain.Common.FwFamily.Upstream } c || !(c.Lock.Locked || c.ParamSet.Contains(domain.Devices.Functions.ConfigLock.BaseIndex, 0)))
+                return Results.Json(new { ok = false, error = "This module's firmware has no factory reset." }, statusCode: 409);
+            return await dm.FactoryResetConfirmed(g) ? Results.Ok(new { ok = true })
+                : Results.Json(new { ok = false, error = "The module did not confirm that it stored the defaults (see Logs): after a power cycle it may come back with its old configuration. Try again." }, statusCode: 409);
+        });
+
         api.MapPost("/devices/{guid}/flash-can", async (string guid, HttpRequest req, CanFlashService flasher) =>
         {
             if (!Guid.TryParse(guid, out var g)) return Results.BadRequest();
@@ -1959,7 +2004,7 @@ public static class LiveApi
             // These talk to live hardware over CAN. The writes are fire-and-forget, so without
             // a guard they "succeed" silently against an empty bus. Refuse unless the adapter is
             // connected AND the target module is actually broadcasting (seen within ~500 ms).
-            string[] liveActions = ["read", "readall", "write", "writeall", "burn", "sleep", "bootloader", "version", "uploadlua"];
+            string[] liveActions = ["read", "readall", "write", "writeall", "burn", "sleep", "bootloader", "version", "uploadlua", "restart"];
             if (liveActions.Contains(action) && await RequireLiveModuleAsync(g, dm, adapters, action) is { } bad) return bad;
             // Wake up is for a module that is NOT answering (asleep, or woken by CAN and still quiet): only the adapter must be there
             if (action == "wakeup" && !adapters.GetStatus().isConnected) return Results.Text("Not connected to a CAN adapter — connect first.", "text/plain", null, 400);
@@ -1977,6 +2022,8 @@ public static class LiveApi
                             ? "The module hasn't said which firmware it runs, so nothing was written (a write now could reset its newer settings). Try again in a moment."
                             : dm.GetDevice(g) is { } ud && !DeviceManager.ParamsKnown(ud)
                             ? "Read the module first: it runs upstream dingoFW and the app needs its list of settings before it can write them. Nothing was written."
+                            : dm.GetDevice(g) is IDeviceConfigurable { Lock.Locked: true }
+                            ? "The module is locked by its installer: Unlock it first. Nothing was written."
                             : "The module didn't confirm the write (see Logs) — it keeps its previous config" }, statusCode: 409);
                     // the project's Lua belongs to the config: send it unless this app already saw it on the module
                     if (dm.GetDevice(g) is PdmDevice { Family: domain.Common.FwFamily.Fork } && dm.GetDeviceUiState(g).LuaOnModule != dm.GetStoredLua(g)
@@ -1992,6 +2039,12 @@ public static class LiveApi
                 // ?can=true: the OpenBLT CAN-update entry (it waits there for a tool, G9); default: the USB-DFU entry
                 case "bootloader": dm.RequestBootloader(g, canUpdate: can == true); break;
                 case "version": dm.RequestVersion(g); break;
+                // upstream: restart (unstored settings are lost; a stored config lock takes effect)
+                case "restart":
+                    if (dm.GetDevice(g) is not IDeviceConfigurable { Family: domain.Common.FwFamily.Upstream })
+                        return Results.Json(new { ok = false, error = "Restart over CAN is an upstream dingoFW command." }, statusCode: 409);
+                    if (!await dm.RestartConfirmed(g)) return Results.Json(new { ok = false, error = "The module did not confirm the restart." }, statusCode: 409);
+                    break;
                 // Push the Lua program stored on the record (e.g. an offline cross-module deploy) to the
                 // now-live module. Pair with "writeall" to also push the output bindings (params).
                 case "uploadlua":

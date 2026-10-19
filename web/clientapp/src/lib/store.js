@@ -100,6 +100,10 @@ export const api = {
   rename: (guid, Name) => j('POST', `/api/devices/${guid}/rename`, { Name }),
   remove: (guid) => j('POST', `/api/devices/${guid}/remove`),
   // firmware 5.6: blink the module's status LEDs for `seconds` -> { ok, hasLed } (the CANBoard has none)
+  // upstream config lock (0x0200): the project's password / contact (sent by the next write), unlock, factory reset ('WIPE')
+  setLock: (guid, body) => j('POST', `/api/devices/${guid}/lock`, body),
+  unlock: (guid, Password) => j('POST', `/api/devices/${guid}/unlock`, { Password }),
+  factoryReset: (guid) => j('POST', `/api/devices/${guid}/factoryreset`, { Confirm: 'WIPE' }, 10000),
   blink: (guid, seconds = 10) => j('POST', `/api/devices/${guid}/identify?seconds=${seconds}`),
   // upstream feat/reset-cause: { flags, cause, names } why the module last reset (409 when its firmware does not say)
   resetCause: (guid) => j('GET', `/api/devices/${guid}/resetcause`),

@@ -27,6 +27,7 @@ public enum MessageCommand
     Bootloader = 33,
     CheckCrc = 34,
     CheckCrcRsp = 35,
+    Restart = 36,           // [36,'R','E','S','E','T'] -> echo with [6] = 1, then the module resets
 
     // Lua program upload (chunked) — matches the firmware's request_msg handler.
     LuaWrite = 40,          // [cmd, offHi, offLo, b0..b4]
@@ -54,4 +55,9 @@ public enum MessageCommand
     FaultLogRead = 53,      // [cmd, n] -> two frames: [cmd, n, count, out|kind<<4, boot u16, A×10 u16], [cmd, n|0x80, uptime ms u32, V×100 u16]
     FaultLogClear = 54,     // [cmd] -> [cmd, 1]
     ResetCause = 55,        // [cmd] -> [cmd, RCC CSR >> 24 flags, 0...] why the module last reset (feat/reset-cause)
+
+    // upstream dingoFW feat/config-lock
+    Unlock = 56,            // [cmd, pw LE x4] -> [cmd, 1 ok / 0 wrong (every try within 1 s of a wrong one fails)]
+    FactoryReset = 57,      // [cmd, 'W','I','P','E'] -> [cmd, burned ok]: all defaults except base id + bitrate
+    Locked = 58,            // reply to a refused request: [cmd, idxLo, idxHi, sub, refused cmd]
 }

@@ -221,6 +221,8 @@ public class PdmDevice : IDeviceConfigurable
     // upstream dingoFW feat/latch-gate-block (0x2600); the fork has none
     [JsonPropertyName("latchGates")] public List<LatchGateFunction> LatchGates { get; init; } = [];
     [JsonPropertyName("keypads")] public List<KeypadMaster> Keypads { get; init; } = [];
+    // upstream dingoFW feat/config-lock (0x0200); the fork has none
+    [JsonPropertyName("lock")] public ConfigLock Lock { get; set; } = new();
     
     [JsonIgnore] private DateTime LastRxTime { get; set; }
     // G14: seconds until auto-sleep from the status frame (firmware 5.6), null = not counting / unknown
@@ -1175,7 +1177,7 @@ public class PdmDevice : IDeviceConfigurable
     {
         var allParams = new List<DeviceParameter>();
         var subIndex = 0;
-        if (Family == FwFamily.Upstream) allParams.AddRange([.. UpstreamDeviceParams(), .. WakeFrame.Params(Name)]);
+        if (Family == FwFamily.Upstream) allParams.AddRange([.. UpstreamDeviceParams(), .. WakeFrame.Params(Name), .. Lock.Params(Name)]);   // lock only where the Read lists it
         else allParams.AddRange(
         [
             new DeviceParameter

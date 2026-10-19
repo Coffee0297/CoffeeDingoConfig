@@ -16,6 +16,8 @@ public class DeviceParameter
     // snapshot, apply doc and project file but is never read/written over CAN — the device
     // has no storage for it. The I/O loops skip these.
     public bool LocalOnly { get; init; } = false;
+    // The module never reads it back (it answers 0): left out of the Read diff, counted as 0 in the upstream CheckCrc.
+    public bool WriteOnly { get; init; }
     public object DefaultValue { get; init; } = null!;
     // The firmware that first has this param (null = every supported firmware). An older module never
     // gets it: reads, writes and the config CRC skip it, so a 5.5 module still writes and checks cleanly.
