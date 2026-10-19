@@ -162,7 +162,7 @@ public class CanMsgLogger(int maxHistorySize = 100000, string logDirectory = "./
                 if (_recWriter != null)
                 {
                     var data = entry.Payload == null ? "" : string.Join(" ", entry.Payload.Take(entry.Len).Select(b => b.ToString("X2")));
-                    _recWriter.WriteLine($"{entry.Timestamp:yyyy-MM-dd HH:mm:ss.fff},{dir},0x{entry.Id:X},{entry.Len},{data}");
+                    _recWriter.WriteLine(string.Create(System.Globalization.CultureInfo.InvariantCulture, $"{entry.Timestamp:yyyy-MM-dd HH:mm:ss.fff},{dir},0x{entry.Id:X},{entry.Len},{data}"));
                     if ((++RecordedFrames % 500) == 0) _recWriter.Flush();   // bound data loss without flushing every frame
                 }
             }
@@ -191,7 +191,7 @@ public class CanMsgLogger(int maxHistorySize = 100000, string logDirectory = "./
         var dataStr = BitConverter.ToString(entry.Payload).Replace("-", " ");
 
         _logWriter.WriteLine(
-            $"{entry.Timestamp:yyyy-MM-dd HH:mm:ss.fff}," +
+            entry.Timestamp.ToString("yyyy-MM-dd HH:mm:ss.fff", System.Globalization.CultureInfo.InvariantCulture) + "," +
             $"{entry.Direction}," +
             $"{idStr}," +
             $"{entry.Len}," +

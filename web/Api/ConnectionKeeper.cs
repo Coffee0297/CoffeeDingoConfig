@@ -34,6 +34,8 @@ public sealed class ConnectionKeeper(ICommsAdapterManager adapters, UserPreferen
             if (r.Ok)
             {
                 _wanted = true;
+                // a log replay is not the car: keep the car's connection as the one to come back to
+                if (adapter == "Sim") return r;
                 var p = prefs.Preferences;
                 // "USB" keeps no port: it is looked up again on every connect (the COM number can change)
                 p.SelectedAdapter = adapter; p.SelectedPort = adapter == "USB" ? "" : port; p.SelectedBitrate = bitrate;
