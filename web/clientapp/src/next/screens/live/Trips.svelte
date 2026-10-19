@@ -6,6 +6,8 @@
   import { readAllTrips, tripTitle, whenText, noticeText } from './parts/trips.js'
   import { tripFixes } from './parts/tripFixes.js'
   import LiveTabs from './parts/LiveTabs.svelte'
+  import FaultHistory from './parts/FaultHistory.svelte'
+  import { isUpstream } from '../hardware/parts/util.js'
 
   let { guid = undefined, index = undefined } = $props()
 
@@ -16,7 +18,9 @@
   $effect.pre(() => { if (guid != null && index != null) sel = `${guid}:${index}` })
   let zoom = $state('whole')
 
-  const logDevices = $derived(live.devices.filter((d) => (d.outputs ?? []).length > 0))
+  // upstream dingoFW keeps a fault history in FRAM instead of the fork's trip log with waveforms
+  const histDevices = $derived(live.devices.filter((d) => (d.outputs ?? []).length > 0 && isUpstream(d)))
+  const logDevices = $derived(live.devices.filter((d) => (d.outputs ?? []).length > 0 && !isUpstream(d)))
   const answering = $derived(logDevices.filter((d) => d.connected))
   const silent = $derived(logDevices.filter((d) => !d.connected))
 
@@ -97,7 +101,7 @@
   <PageHeader title="Live">
     {#snippet tag()}<LiveTabs current="trips" />{/snippet}
     {#snippet actions()}
-      <Button busy={reading} onclick={load} disabled={!answering.length}>Read trip logs again</Button>
+      {#if logDevices.length}<Button busy={reading} onclick={load} disabled={!answering.length}>Read trip logs again</Button>{/if}
     {/snippet}
   </PageHeader>
 
@@ -113,9 +117,11 @@
     <Banner tone="info" title={`${silent.map((d) => d.name).join(', ')} not answering.`}>Their trip logs are not shown. A module has to be on the bus to read its log.</Banner>
   {/if}
 
+  {#each histDevices as d (d.guid)}<FaultHistory dev={d} />{/each}
+
   {#if reading && !data.items.length && !data.errors.length}
     <p class="muted" role="status">Reading the trip logs from the modules…</p>
-  {:else if data.loaded && !data.items.length && !reading}
+  {:else if data.loaded && !data.items.length && !reading && logDevices.length}
     <Empty title="No trips are logged on the modules" text="Each module records its own output trips, with a −10 s to +3 s current waveform around each one, so a trip that happened while the laptop was away is still here. When an output trips it shows up on this page.">
       {#snippet actions()}<Button href="#/next/live">Back to the dashboard</Button>{/snippet}
     </Empty>
