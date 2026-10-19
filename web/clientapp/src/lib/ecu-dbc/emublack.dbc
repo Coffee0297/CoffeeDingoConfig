@@ -1,0 +1,27 @@
+VERSION ""
+
+NS_ :
+
+BS_:
+
+BU_: ECU
+
+BO_ 1536 EMU_Base0: 8 ECU
+ SG_ RPM : 0|16@1+ (1,0) [0|65535] "rpm" Vector__XXX
+ SG_ TPS : 16|8@1+ (0.5,0) [0|100] "%" Vector__XXX
+ SG_ IAT : 24|8@1- (1,0) [-40|127] "degC" Vector__XXX
+ SG_ MAP : 32|16@1+ (1,0) [0|600] "kPa" Vector__XXX
+
+BO_ 1538 EMU_Base2: 8 ECU
+ SG_ VehicleSpeed : 0|16@1+ (1,0) [0|65535] "km/h" Vector__XXX
+ SG_ OilTemp : 24|8@1+ (1,0) [0|160] "degC" Vector__XXX
+ SG_ OilPressure : 32|8@1+ (0.0625,0) [0|15.9375] "bar" Vector__XXX
+ SG_ FuelPressure : 40|8@1+ (0.0625,0) [0|15.9375] "bar" Vector__XXX
+ SG_ CoolantTemp : 48|16@1- (1,0) [-40|250] "degC" Vector__XXX
+
+BO_ 1539 EMU_Base3: 8 ECU
+ SG_ Gear : 0|8@1+ (1,0) [0|255] "" Vector__XXX
+ SG_ Battery : 16|16@1+ (0.027,0) [0|1769.4] "V" Vector__XXX
+
+CM_ "ECUMaster EMU Black CAN stream, base id 0x600 (the default; these ids assume it), frames base+0 base+2 base+3. Little endian. Not multiplexed: one id per frame.";
+CM_ "Sources: EMUcan library src/EMUcan.cpp _decodeEmuFrame (github.com/designer2k2/EMUcan, commit 336dabd5, 2026-09-07); base id 0x600 and 1 Mbit/s stream settings: https://race-technology.com/wiki/index.php/ECUType/ECUMasterEMUBlack. The ECUMaster stream document (EMU Black software help) was not available as text.";

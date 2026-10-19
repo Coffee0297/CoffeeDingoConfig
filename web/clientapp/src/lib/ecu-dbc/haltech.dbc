@@ -1,0 +1,28 @@
+VERSION ""
+
+NS_ :
+
+BS_:
+
+BU_: ECU
+
+BO_ 864 ECU_EngineData1: 8 ECU
+ SG_ RPM : 7|16@0+ (1,0) [0|65535] "rpm" Vector__XXX
+ SG_ Manifold_Pressure : 23|16@0+ (0.1,0) [0|6553.5] "kPa abs" Vector__XXX
+ SG_ Throttle_Position : 39|16@0+ (0.1,0) [0|100] "%" Vector__XXX
+
+BO_ 865 ECU_EngineData2: 8 ECU
+ SG_ Fuel_Pressure : 7|16@0+ (0.1,-101.3) [-101.3|6452.2] "kPa" Vector__XXX
+ SG_ Oil_Pressure : 23|16@0+ (0.1,-101.3) [-101.3|6452.2] "kPa" Vector__XXX
+
+BO_ 882 ECU_BatteryBaro: 8 ECU
+ SG_ Battery_Voltage : 7|16@0+ (0.1,0) [0|30] "V" Vector__XXX
+ SG_ Barometric_Pressure : 55|16@0+ (0.1,0) [0|200] "kPa abs" Vector__XXX
+
+BO_ 992 ECU_Temperatures: 8 ECU
+ SG_ Coolant_Temperature : 7|16@0+ (0.1,-273.15) [-273.15|6280.35] "degC" Vector__XXX
+ SG_ Air_Temperature : 23|16@0+ (0.1,-273.15) [-273.15|6280.35] "degC" Vector__XXX
+ SG_ Fuel_Temperature : 39|16@0+ (0.1,-273.15) [-273.15|6280.35] "degC" Vector__XXX
+
+CM_ "Haltech ECU broadcast CAN protocol (Elite / Nexus), frames 0x360 0x361 0x372 0x3E0. Big endian (MSB first), 16-bit values. Pressures are sent absolute in 0.1 kPa; the -101.3 offset gives gauge kPa. Temperatures are sent in 0.1 K; the -273.15 offset gives degC.";
+CM_ "Sources: Haltech ECU Broadcast CAN Protocol, https://support.haltech.com/portal/en/kb/articles/haltech-can-ecu-broadcast-protocol (attached PDF, not machine-readable here). Byte layout taken from two open-source encoders of that protocol that agree: rusEFI firmware/controllers/can/can_dash_haltech.cpp (github.com/rusefi/rusefi, commit f0618a9c, 2025-06-24 for can_dash_haltech.dbc) and Speeduino speeduino/comms_CAN.cpp (github.com/speeduino/speeduino, commit 97ef8e8d, 2026-10-03).";
