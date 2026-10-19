@@ -1091,9 +1091,9 @@ public class PdmDevice : IDeviceConfigurable
         foreach (var output in Outputs) allParams.AddRange(output.Params);
         foreach (var input in Inputs) allParams.AddRange(input.Params);
         foreach (var canInput in CanInputs) allParams.AddRange(canInput.Params);
-        foreach (var virtualInput in VirtualInputs) allParams.AddRange(virtualInput.Params);
+        foreach (var virtualInput in VirtualInputs) allParams.AddRange(Family == FwFamily.Upstream ? virtualInput.UpstreamParams : virtualInput.Params);
         foreach (var condition in Conditions) allParams.AddRange(condition.Params);
-        foreach (var counter in Counters) allParams.AddRange(counter.Params);
+        foreach (var counter in Counters) allParams.AddRange(Family == FwFamily.Upstream ? counter.UpstreamParams : counter.Params);
         foreach (var flasher in Flashers) allParams.AddRange(flasher.Params);
         if (Family == FwFamily.Fork) foreach (var table in Tables) allParams.AddRange(table.Params);   // upstream 0x1A00 is the timer
         foreach (var timer in Timers) allParams.AddRange(Family == FwFamily.Upstream ? timer.UpstreamParams : timer.Params);
@@ -1105,7 +1105,7 @@ public class PdmDevice : IDeviceConfigurable
         allParams.AddRange(Wipers.Params);
         foreach (var canOutput in CanOutputs) allParams.AddRange(canOutput.Params);
         foreach (var keypad in Keypads) allParams.AddRange(keypad.BaseParams);
-        foreach (var keypad in Keypads) allParams.AddRange(keypad.ButtonParams);
+        foreach (var keypad in Keypads) allParams.AddRange(Family == FwFamily.Upstream ? keypad.Buttons.SelectMany(b => b.UpstreamParams) : keypad.ButtonParams);
         foreach (var keypad in Keypads) allParams.AddRange(keypad.DialParams);
         Params = allParams;
 
