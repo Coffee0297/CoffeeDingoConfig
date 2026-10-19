@@ -12,6 +12,7 @@
   import { MSG_CHECKSUMS, NO_COUNTER, hasMsgChecksum, msgChecksumWarnings } from './canmsgcheck.js'
   import { curveProblem, curvePlot, curveAt, CURVE_MAX } from './curve.js'
   import { fmt } from './livevals.js'
+  import { latchGateIns, latchGateProblem, LATCH_TYPES } from './latchgate.js'
   import { lacks, isUpstream, has } from '../../hardware/parts/util.js'
   import { remoteItems, isRemoteKey } from '../../../lib/remote.js'
   import { COUT_KINDS, hasCoutKind, coutKindProblem, snapChecksum, otherChecksums } from './canoutkind.js'
@@ -37,6 +38,7 @@
     canmsg: ['name', 'input', 'id', 'ide', 'dlc', 'data', 'mode', 'intervalMs', 'checksum', 'checksumByte', 'counterByte'],
     comfortblink: ['name', 'leftInput', 'rightInput', 'clockInput', 'tapMs', 'blinks'],
     curve: ['name', 'input', 'points', 'x', 'y'],
+    latchgate: ['name', 'type', 'input', 'controlInput', 'timeMs'],
     input: ['name', 'invert', 'mode', 'debounceTime'],
     digitaloutput: ['name', 'input'],
     output: ['name', 'input', 'dutyCycleInput'],
@@ -120,6 +122,7 @@
     if (k === 'counter' && draft.maxCount <= draft.minCount) return 'Max must be above min.'
     if (k === 'curve') { const p = curveProblem(draft); if (p) return p[0].toUpperCase() + p.slice(1) + '.' }
     if (k === 'canmsg' && (draft.dlc < 0 || draft.dlc > 8)) return 'Length must be 0 to 8 bytes.'
+    if (k === 'latchgate') { const p = latchGateProblem(draft); if (p) return p[0].toUpperCase() + p.slice(1) + '.' }
     if (k === 'comfortblink' && (draft.tapMs < 100 || draft.tapMs > 5000)) return 'The tap time must be 0.1 to 5 s.'
     if (k === 'comfortblink' && (!Number.isInteger(draft.blinks) || draft.blinks < 1 || draft.blinks > 10)) return 'Blinks must be 1 to 10.'
     if (k === 'canmsg' && draft.mode === 0 && (draft.intervalMs < 10 || draft.intervalMs > 60000)) return 'Repeat every 10 to 60000 ms.'
@@ -150,7 +153,8 @@
   const remoteFor = (accepts) => (accepts === 'bool' ? remote.bool : [...remote.num, ...remote.bool.filter((i) => !i.value.startsWith('d:'))])
   const optsFor = (accepts) => [...sourceOptions(model, accepts, node?.id), ...remoteFor(accepts)]
   // a counter / checksum output sends no input value
-  const inputRows = $derived((node?.ins ?? []).filter((p) => fields.includes(p.id) && !(node.kind === 'canoutput' && draft.kind > 0 && p.id === 'input')))
+  // a latch / gate's port names follow the type being edited (Set / Reset or Value / Enable)
+  const inputRows = $derived((node?.ins ?? []).filter((p) => fields.includes(p.id) && !(node.kind === 'canoutput' && draft.kind > 0 && p.id === 'input')).map((p) => { const t = node.kind === 'latchgate' && latchGateIns(draft).find(([f]) => f === p.id); return t ? { ...p, label: t[1], accepts: t[2] } : p }))
   const kindOk = $derived(node?.kind === 'canoutput' && hasCoutKind(dev))
   const sharedSums = $derived(node?.kind === 'canoutput' && draft.kind >= 2
     ? otherChecksums([...model.nodes.values()].filter((x) => x.kind === 'canoutput' && x.id !== node.id).map((x) => x.row ?? {}), { ...draft, id: parseInt(String(idText).replace(/^0x/i, ''), 16), enabled: true }) : [])
@@ -316,6 +320,15 @@
         {#if (draft.checksum ?? 0) >= 2}<Select label="Checksum in byte" items={Array.from({ length: 8 }, (_, i) => ({ value: String(i), label: 'Byte ' + i }))} bind:value={() => String(draft.checksumByte ?? 7), (v) => (draft.checksumByte = Number(v))} />{/if}
         {#each msgChecksumWarnings(draft) as w (w)}<p class="hint bad" role="status">▲ {w}</p>{/each}
         <p class="hint">The counter counts 0–15 in the low half of its byte, one step per frame sent (the high half keeps the byte you typed). The checksum covers every other byte of the frame, the counter included.</p>
+      {/if}
+    {:else if node.kind === 'latchgate'}
+      <span class="sec">Settings</span>
+      {@render seg('Type', segItems(LATCH_TYPES), String(draft.type ?? 0), (v) => (draft.type = Number(v)), false)}
+      {#if (draft.type ?? 0) === 0}
+        <Field label="Turn off by itself after (0 = never)" type="number" min="0" max="600" step="0.1" unit="s" bind:value={() => (draft.timeMs ?? 0) / 1000, (v) => (draft.timeMs = Math.round(toNum(v) * 1000))} />
+        <p class="hint">On at the moment Set turns on, off at the moment Reset turns on (Reset wins when both happen together), or after the time above. An input already on when the module starts is not counted.</p>
+      {:else}
+        <p class="hint">While Enable is on the value follows its input (any number); while Enable is off it holds the last value, for example the last good reading of a sensor whose valid flag dropped.</p>
       {/if}
     {:else if node.kind === 'comfortblink'}
       <span class="sec">Settings</span>

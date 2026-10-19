@@ -8,7 +8,7 @@ import { writeBlock } from '../flow/ops.js'
 const outId = (dev, n) => (isCb(dev) ? 'digitaloutput:' : 'output:') + n
 // blocks a copy gets its own slot for; inputs, CAN inputs and outputs (a copy would send the same id twice), Lua outs and
 // the module itself are shared
-const COPYABLE = new Set(['virtualinput', 'condition', 'counter', 'flasher', 'timer', 'table', 'math', 'curve'])
+const COPYABLE = new Set(['virtualinput', 'condition', 'counter', 'flasher', 'timer', 'table', 'math', 'curve', 'latchgate'])
 
 async function moduleOf(guid) {
   const dev = live.devices.find((d) => d.guid === guid)

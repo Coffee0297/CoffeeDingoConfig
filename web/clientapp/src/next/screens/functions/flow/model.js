@@ -7,6 +7,7 @@
 
 import { olderThan, isUpstream, has } from '../../hardware/parts/util.js'
 import { curveProblem } from './curve.js'
+import { latchGateIns, latchGateProblem } from './latchgate.js'
 
 export const isCb = (dev) => /can.?board/i.test(dev?.type ?? '')
 
@@ -42,6 +43,8 @@ export const KINDS = {
   comfortblink: { label: 'Comfort blink', fam: 'time', arr: 'comfortBlinks', addable: true, fw: [5, 6, 1], ins: [['leftInput', 'Lever left', 'bool'], ['rightInput', 'Lever right', 'bool'], ['clockInput', 'Indicator clock', 'bool']] },
   // upstream dingoFW feat/curve-block (PDMs; /functions has `curves` only when the module has the 0x2400 block)
   curve: { label: 'Curve', fam: 'logic', arr: 'curves', def: 'numCurves', addable: true, ins: [['input', 'Input', 'num']] },
+  // upstream dingoFW feat/latch-gate-block (PDMs; /functions has `latchGates` only when the module has the 0x2600 block)
+  latchgate: { label: 'Latch / Gate', fam: 'time', arr: 'latchGates', def: 'numLatchGates', addable: true, ins: latchGateIns() },
   ignition: { label: 'Ignition', fam: 'fn', ins: [['ignitionInput', 'Ignition switch', 'bool'], ['startInput', 'Start button', 'bool'], ['crankAllowInput', 'Crank allowed', 'bool'], ['runningInput', 'Engine running', 'bool']] },
 }
 export const arrOf = (kind, dev) => (kind === 'input' ? (isCb(dev) ? 'digitalIn' : 'inputs') : KINDS[kind]?.arr)
@@ -139,6 +142,7 @@ function subline(kind, n, row, dev) {
     case 'canmsg': return `CAN ${hexId(row?.id)}${row?.ide ? ' ext' : ''} · ` + (row?.mode === 1 ? 'once' : `every ${row?.intervalMs ?? 0} ms`)
     case 'curve': return `Curve · ${row?.points ?? 2} points`
     case 'comfortblink': return `Comfort blink · tap < ${secs(row?.tapMs ?? 1000)}: ${row?.blinks ?? 3} blinks`
+    case 'latchgate': return row?.type === 1 ? 'Gate · holds while off' : 'Latch' + (row?.timeMs > 0 ? ` · cancels after ${secs(row.timeMs)}` : '')
     case 'ignition': return `Ignition · ${row?.role === 1 ? 'follows the main module' : ['switch + button', 'button only', 'key'][row?.mode ?? 0]}`
     case 'output': return `Output ${n} · ${row?.currentLimit ?? '?'} A` + (row?.enabled === false ? ' · switched off' : row?.pwmEnabled ? ' · PWM' : '')
     case 'digitaloutput': return `Digital out ${n}` + (row?.pwmEnabled ? ' · PWM' : '')
@@ -192,6 +196,7 @@ export function incompleteReasons(kind, row, enabled) {
     case 'caninput': if (!row.id) r.push('needs a CAN ID'); if (!row.bitLength) r.push('needs a bit length'); break
     case 'math': if (!row.inputA) r.push('needs an A input'); break
     case 'curve': { if (!row.input) r.push('needs an input'); const p = curveProblem(row); if (p) r.push(p); break }
+    case 'latchgate': { if (!row.input) r.push(row.type === 1 ? 'needs a value input' : 'needs a set input'); if (row.type === 1 && !row.controlInput) r.push('needs an enable input'); if (row.type !== 1 && !row.controlInput && !(row.timeMs > 0)) r.push('needs a reset input or an auto-cancel time'); const p = latchGateProblem(row); if (p) r.push(p); break }
     case 'comfortblink': if (!row.leftInput || !row.rightInput) r.push('needs both lever inputs'); if (!row.clockInput) r.push('needs the indicator clock'); break
     case 'canmsg': if (!row.input) r.push('needs a signal to send on'); if (!row.id) r.push('needs a CAN ID'); break
     case 'output': if (!row.inputVal) r.push('has no input, so it never switches'); break
@@ -219,7 +224,7 @@ export function buildModel(dev, funcs, vmap) {
   const physIn = isCb(dev) ? funcs?.digitalIn : funcs?.inputs
   for (const r of physIn ?? []) add('input', r.number, r, !!r.enabled)
   for (const r of funcs?.analogIn ?? []) add('analoginput', r.number, r, !!r.enabled)
-  for (const k of ['caninput', 'virtualinput', 'condition', 'counter', 'flasher', 'timer', 'table', 'canoutput', 'digitaloutput', 'math', 'canmsg', 'comfortblink', 'curve']) {
+  for (const k of ['caninput', 'virtualinput', 'condition', 'counter', 'flasher', 'timer', 'table', 'canoutput', 'digitaloutput', 'math', 'canmsg', 'comfortblink', 'curve', 'latchgate']) {
     for (const r of funcs?.[KINDS[k].arr] ?? []) add(k, r.number, r, !!r.enabled)
   }
   if (funcs?.ignition) add('ignition', 1, funcs.ignition, !!funcs.ignition.enabled)
@@ -239,6 +244,7 @@ export function buildModel(dev, funcs, vmap) {
     if (c.kind === 'timer' && isUpstream(dev)) ins = [...ins, ['resetInput', 'Reset', 'bool']]
     // upstream dingoFW feat/can-output-trigger (sub 12): send on each rise of this signal instead of the interval
     if (c.kind === 'canoutput' && isUpstream(dev) && has(dev, 0x2000 + c.n - 1, 12)) ins = [...ins, ['triggerInput', 'Trigger', 'bool']]
+    if (c.kind === 'latchgate') ins = latchGateIns(c.row)
     if (c.kind === 'ignition' && c.row?.role === 1) ins = []   // a follower copies the main module's state
     if (c.kind === 'output' || c.kind === 'digitaloutput') ins = ins.filter(([f]) => f === 'input' || (f === 'dutyCycleInput' && c.row?.variableDutyCycle) || (f === 'freqInput' && c.row?.variableFreq))
     return ins
@@ -270,7 +276,7 @@ export function buildModel(dev, funcs, vmap) {
     const ins = targetsOf(c).map(([field, label, accepts], i) => ({
       id: field, label, accepts, src: Number(fieldOf(c.kind, c.row, field)) || 0,
       not: c.kind === 'virtualinput' ? !!c.row?.['not' + i] : false,
-      optional: (c.kind === 'virtualinput' && field === 'var2') || (c.kind === 'timer' && field === 'resetInput') || (c.kind === 'canoutput' && field === 'triggerInput') || (c.kind === 'counter' && field !== 'incInput') || c.kind === 'sys' || (c.kind === 'math' && field === 'inputB') || c.kind === 'ignition',
+      optional: (c.kind === 'virtualinput' && field === 'var2') || (c.kind === 'timer' && field === 'resetInput') || (c.kind === 'canoutput' && field === 'triggerInput') || (c.kind === 'counter' && field !== 'incInput') || c.kind === 'sys' || (c.kind === 'math' && field === 'inputB') || (c.kind === 'latchgate' && field === 'controlInput' && c.row?.type !== 1) || c.kind === 'ignition',
     }))
     const outs = outPortsFor(c.kind, c.row, varsOf.get(c.id) ?? [], consumed)
     const physical = c.kind === 'input' || c.kind === 'analoginput' || c.kind === 'output' || c.kind === 'digitaloutput' || c.kind === 'sys' || c.kind === 'lua' || c.kind === 'keypad'
@@ -370,6 +376,7 @@ export function slotUsage(dev, funcs, defs) {
     ['CAN inputs', 'canInputs', 'numCanInputs'], ['CAN outputs', 'canOutputs', 'numCanOutputs'],
     ...(olderThan(dev?.version, [5, 6, 0]) ? [] : [['Math', 'maths', 'numMath'], ['CAN messages', 'canMessages', 'numCanMessages']]),
     ['Curves', 'curves', 'numCurves'],   // only where /functions has them (upstream with the curve block)
+    ['Latch / Gate', 'latchGates', 'numLatchGates'],   // only where /functions has them (upstream with the latch/gate block)
   ]
   return rows.filter(([, arr]) => Array.isArray(funcs?.[arr])).map(([label, arr, key]) => {
     const list = funcs[arr]

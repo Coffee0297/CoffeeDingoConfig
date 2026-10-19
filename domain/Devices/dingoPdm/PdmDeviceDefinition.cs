@@ -33,5 +33,7 @@ public record PdmDeviceDefinition(
     int NumMath = 8,
     int NumCanMessages = 4,
     // 1-D curves (upstream dingoFW feat/curve-block)
-    int NumCurves = 4
+    int NumCurves = 4,
+    // Latch / Gate blocks (upstream dingoFW feat/latch-gate-block)
+    int NumLatchGates = 8
     );

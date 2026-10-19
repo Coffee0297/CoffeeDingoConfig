@@ -69,6 +69,14 @@ export function sentenceFor(model, n) {
       const k = Math.min(12, Math.max(2, r.points | 0)), pts = Array.from({ length: k }, (_, i) => `${+r.x?.[i] || 0} → ${+r.y?.[i] || 0}`).join(', ')
       return [self(n), T('follows'), srcTok(model, r.input, 'input'), T('along the curve'), val(pts, 'points'), T(', in a straight line between points and held beyond the ends.')]
     }
+    case 'latchgate': {
+      if (r.type === 1) return [self(n), T('follows'), srcTok(model, r.input, 'input'), T('while'), srcTok(model, r.controlInput, 'controlInput'), T('is on, and holds its last value while it is off.')]
+      const segs = [self(n), T('turns on when'), srcTok(model, r.input, 'input'), T('turns on')]
+      if (r.controlInput) segs.push(T(', off when'), srcTok(model, r.controlInput, 'controlInput'), T('turns on (reset wins)'))
+      if (r.timeMs > 0) segs.push(T(r.controlInput ? ', or' : ', and off'), val(secs(r.timeMs), 'timeMs'), T('after it was set'))
+      segs.push(T('.'))
+      return segs
+    }
     case 'canoutput':
       if (r.kind === 1) return [T('Send a rolling counter on CAN ID'), val(hexId(r.id) + (r.ide ? ' ext' : ''), 'id'), T('at bit'), val(`${r.startBit ?? 0}+${r.bitLength ?? 0}`, 'startBit'), T(', one up each frame, every'), val((r.interval ?? 0) + ' ms', 'interval'), T('.')]
       if (r.kind >= 2) return [T('Send a'), val(COUT_KINDS[r.kind] ?? '?', 'kind'), T('of the frame on CAN ID'), val(hexId(r.id) + (r.ide ? ' ext' : ''), 'id'), T('in byte'), val(Math.floor((r.startBit ?? 0) / 8), 'startBit'), T(', every'), val((r.interval ?? 0) + ' ms', 'interval'), T('.')]
@@ -135,6 +143,6 @@ export function sentenceFor(model, n) {
 
 /** Card heading for the sentence view: family · kind. */
 export function cardKind(n) {
-  const k = { virtualinput: 'COMBINE', condition: 'COMPARE', timer: 'TIMER · ' + (TIMER_MODES[n.row?.mode ?? 0] ?? '').toUpperCase(), flasher: 'FLASHER', counter: 'COUNTER', table: 'TABLE', canoutput: 'CAN OUTPUT', caninput: 'CAN INPUT', math: 'MATH', curve: 'CURVE', canmsg: 'CAN MESSAGE', comfortblink: 'COMFORT BLINK', output: 'OUTPUT', digitaloutput: 'OUTPUT' }[n.kind] ?? n.kindLabel.toUpperCase()
+  const k = { virtualinput: 'COMBINE', condition: 'COMPARE', timer: 'TIMER · ' + (TIMER_MODES[n.row?.mode ?? 0] ?? '').toUpperCase(), flasher: 'FLASHER', counter: 'COUNTER', table: 'TABLE', canoutput: 'CAN OUTPUT', caninput: 'CAN INPUT', math: 'MATH', curve: 'CURVE', canmsg: 'CAN MESSAGE', comfortblink: 'COMFORT BLINK', latchgate: n.row?.type === 1 ? 'GATE' : 'LATCH', output: 'OUTPUT', digitaloutput: 'OUTPUT' }[n.kind] ?? n.kindLabel.toUpperCase()
   return k
 }
