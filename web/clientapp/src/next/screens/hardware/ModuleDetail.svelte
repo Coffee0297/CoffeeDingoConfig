@@ -75,6 +75,11 @@
       <div class="stat"><span class="nx-label">Reported state</span><span class="v">{d.state || (d.connected ? 'Running' : '–')}</span></div>
     </div>
 
+    {#if d.lock?.locked}
+      <Banner tone="warn" title={`${d.name} is locked by its installer`} data-testid="locked-banner">{d.lock.contact ? `Contact: ${d.lock.contact}. ` : ''}It runs as configured, but refuses reads and changes until it is unlocked.
+        {#snippet actions()}<Button size="sm" onclick={() => (current = 'settings')}>Unlock…</Button>{/snippet}
+      </Banner>
+    {/if}
     {#if !d.connected}
       <Banner tone="warn" title={live.connected ? `${d.name} is not answering` : 'Not connected'}>Values below are from the project, not from the module. {live.connected ? 'Check power, wiring, base ID and speed.' : 'Connect to see live values.'}</Banner>
     {/if}

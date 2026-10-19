@@ -331,6 +331,11 @@ public class DeviceManager(ILogger<DeviceManager> logger, ILoggerFactory loggerF
         ui.CheckAskedAt = DateTime.UtcNow; ui.CheckRetries = 0;
         var msg = deviceConfigurable.GetCheckMsg();
         QueueMessage(msg);
+        // Upstream: is it locked? A Read of the lock password is refused (58) only while locked; a module without the
+        // lock answers "not found", an unlocked one 0. One frame per connect; the reply sets Lock.Locked.
+        if (deviceConfigurable.Family == domain.Common.FwFamily.Upstream && (!deviceConfigurable.ParamSet.Known || deviceConfigurable.ParamSet.Contains(domain.Devices.Functions.ConfigLock.BaseIndex, 0)))
+            QueueMessage(new DeviceCanFrame { SendOnly = true, DeviceBaseId = device.BaseId, Name = "Lock probe",
+                Frame = new CanFrame(device.BaseId + PdmDevice.ConfigTxOffset, 8, [(byte)domain.Enums.MessageCommand.Read, 0x00, 0x02, 0, 0, 0, 0, 0]) });
     }
 
     /// <summary>
@@ -393,6 +398,16 @@ public class DeviceManager(ILogger<DeviceManager> logger, ILoggerFactory loggerF
             ok = device is IDeviceConfigurable { ConfigMismatch: false };    // ParamProtocol cleared it on a CRC match
         }
         else if (cmd == domain.Enums.MessageCommand.BurnParams) ok = frame.Payload[4] == 1;
+        else if (cmd is domain.Enums.MessageCommand.Unlock or domain.Enums.MessageCommand.FactoryReset or domain.Enums.MessageCommand.Restart)
+            ok = frame.Payload[cmd == domain.Enums.MessageCommand.Restart ? 6 : 1] == 1;
+        // config lock: a refused WriteAll gets no WriteAllComplete; end the wait now instead of after 30 s
+        else if (cmd == domain.Enums.MessageCommand.Locked)
+        {
+            var refused = frame.Payload[4] is (byte)domain.Enums.MessageCommand.WriteAll or (byte)domain.Enums.MessageCommand.WriteAllModified
+                ? domain.Enums.MessageCommand.WriteAllComplete : (domain.Enums.MessageCommand)frame.Payload[4];
+            if (_confirms.TryRemove((device.BaseId, refused), out var lt)) lt.TrySetResult(false);
+            return;
+        }
         else if (cmd == domain.Enums.MessageCommand.Identify) { GetDeviceUiState(device.Guid).HasLed = frame.Payload[2] != 0; ok = true; }
         else if (cmd == domain.Enums.MessageCommand.SleepInfo)
         {
@@ -428,7 +443,7 @@ public class DeviceManager(ILogger<DeviceManager> logger, ILoggerFactory loggerF
             return;
         }
         else { if (cmd == domain.Enums.MessageCommand.Write) GetDeviceUiState(device.Guid).StoredOnModule = false; return; }
-        if (ok && cmd != domain.Enums.MessageCommand.Identify) GetDeviceUiState(device.Guid).StoredOnModule = cmd == domain.Enums.MessageCommand.BurnParams;
+        if (ok && cmd is not (domain.Enums.MessageCommand.Identify or domain.Enums.MessageCommand.Unlock or domain.Enums.MessageCommand.Restart)) GetDeviceUiState(device.Guid).StoredOnModule = cmd == domain.Enums.MessageCommand.BurnParams;
         if (_confirms.TryRemove((device.BaseId, cmd), out var tcs)) tcs.TrySetResult(ok);
     }
 
@@ -531,6 +546,21 @@ public class DeviceManager(ILogger<DeviceManager> logger, ILoggerFactory loggerF
             RequestSleepInfo(device.Guid);
         }
     }
+
+    // ---- config lock (upstream feat/config-lock) ----
+    private Task<bool> SendConfirmed(Guid deviceId, domain.Enums.MessageCommand cmd, Func<int, CanFrame> frame, string name, int ms) => GetDevice(deviceId) is { } d
+        ? Confirmed(d, cmd, () => { QueueMessage(new DeviceCanFrame { SendOnly = true, DeviceBaseId = d.BaseId, Name = name, Frame = frame(d.BaseId + PdmDevice.ConfigTxOffset) }); return true; }, ms)
+        : Task.FromResult(false);
+    /// <summary>Unlock until the module's next restart. False: wrong password, a try within 1 s of a wrong one, or no answer.</summary>
+    public Task<bool> UnlockConfirmed(Guid deviceId, uint password) =>
+        SendConfirmed(deviceId, domain.Enums.MessageCommand.Unlock, id => domain.Devices.Functions.ConfigLock.UnlockFrame(id, password), "Unlock", 2000);
+    /// <summary>Every param to its default except base id and bitrate (password and contact too), applied at once and stored.
+    /// True only when the module reports the defaults stored.</summary>
+    public Task<bool> FactoryResetConfirmed(Guid deviceId) =>
+        SendConfirmed(deviceId, domain.Enums.MessageCommand.FactoryReset, domain.Devices.Functions.ConfigLock.FactoryResetFrame, "Factory reset", 5000);
+    /// <summary>Restart the module (unstored settings are lost; a stored lock takes effect).</summary>
+    public Task<bool> RestartConfirmed(Guid deviceId) =>
+        SendConfirmed(deviceId, domain.Enums.MessageCommand.Restart, domain.Devices.Functions.ConfigLock.RestartFrame, "Restart", 2000);
 
     /// <summary>Burn and wait for the module's burn reply; false if it reported a failure or never answered (10 s).</summary>
     public Task<bool> BurnSettingsConfirmed(Guid deviceId) => GetDevice(deviceId) is { } d

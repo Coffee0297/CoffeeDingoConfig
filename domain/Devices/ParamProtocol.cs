@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using domain.Common;
+using domain.Devices.Functions;
 using domain.Enums;
 using domain.Interfaces;
 using domain.Models;
@@ -140,8 +141,11 @@ internal class ParamProtocol(IDeviceConfigurable device, List<DeviceParameter> @
                 index = data[2] << 8 | data[1];
                 subIndex = data[3];
 
-                matchingParam = _params.FirstOrDefault(p => p.Index == index && p.SubIndex == subIndex);
+                matchingParam = _params.FirstOrDefault(p => p.Index == index && p.SubIndex == subIndex)
+                    // a locked upstream module still answers the contact text, before any Read could teach the list
+                    ?? (index == ConfigLock.BaseIndex ? @params.FirstOrDefault(p => p.Index == index && p.SubIndex == subIndex) : null);
                 if (matchingParam is null) break;
+                if (index != ConfigLock.BaseIndex || subIndex == 0) device.Lock.Locked = false;   // it answered a request a lock refuses (the contact stays open)
 
                 matchingParam.SetValue(DecodeValue(matchingParam, data));
 
@@ -168,6 +172,7 @@ internal class ParamProtocol(IDeviceConfigurable device, List<DeviceParameter> @
                 _readRaw.Clear();
 
                 _readAllCount = 0;
+                device.Lock.Locked = false;   // it started sending its config
                 _readModifiedOnly = (MessageCommand)data[0] == MessageCommand.ReadAllModified;
 
                 _tempParamValues.Clear();
@@ -252,6 +257,7 @@ internal class ParamProtocol(IDeviceConfigurable device, List<DeviceParameter> @
                     foreach (var param in _params)
                     {
                         var paramKey = (param.Index, param.SubIndex);
+                        if (param.WriteOnly) continue;   // reads 0 whatever it holds
                         if (!_readReceived.Contains(paramKey) && _readModifiedOnly)
                         {
                             // Not sent in a modified-only read = the device holds the default.
@@ -459,6 +465,38 @@ internal class ParamProtocol(IDeviceConfigurable device, List<DeviceParameter> @
                     string.Join(", ", _writeMissing.Select(k => $"0x{k.Index:X4}:{k.SubIndex}")));
                 break;
 
+            // Config lock (upstream feat/config-lock): a request refused while locked. [58, idxLo, idxHi, sub, refused cmd].
+            // Drop the pending request (it never gets its own reply), and on the first refusal read the contact text.
+            case MessageCommand.Locked:
+                if (data.Length != 8) return;
+                index = data[2] << 8 | data[1];
+                subIndex = data[3];
+                if (queue.TryRemove((baseId, index, subIndex), out canFrame!)) canFrame.TimeSentTimer?.Dispose();
+                if (!device.Lock.Locked)
+                {
+                    device.Lock.Locked = true;
+                    _logger.LogWarning("{Name} ID: {BaseId}, configuration locked (refused cmd {Cmd})", name, baseId, data[4]);
+                    NotifyError?.Invoke($"{name} is locked by its installer: Unlock it with the password, or Factory reset it (wipes its configuration)");
+                    for (var k = 1; k <= 8; k++)
+                        outgoing.Add(new DeviceCanFrame { DeviceBaseId = baseId, SendOnly = true, Name = $"Read lock contact {k}",
+                            Frame = new CanFrame(txId, 8, [(byte)MessageCommand.Read, ConfigLock.BaseIndex & 0xFF, ConfigLock.BaseIndex >> 8, (byte)k, 0, 0, 0, 0]) });
+                }
+                break;
+
+            case MessageCommand.Unlock:
+                if (data.Length < 2) return;
+                if (data[1] == 1) { device.Lock.Locked = false; NotifySuccess?.Invoke($"{name}: unlocked until its next restart"); }
+                else _logger.LogWarning("{Name} ID: {BaseId}, unlock refused (wrong password, or tried again within 1 s)", name, baseId);
+                break;
+
+            case MessageCommand.FactoryReset:
+                if (data.Length < 2) return;
+                device.Lock.Locked = false;
+                device.ConfigMismatch = true;   // the module holds defaults now, the project still its old config
+                if (data[1] == 1) NotifySuccess?.Invoke($"{name}: factory reset and stored");
+                else NotifyError?.Invoke($"{name}: factory reset, but storing the defaults failed: the old configuration (and password) come back at the next power cycle. Try again.");
+                break;
+
 		    case MessageCommand.BurnParams:
                 if (data.Length != 8) return;
 
@@ -566,13 +604,19 @@ internal class ParamProtocol(IDeviceConfigurable device, List<DeviceParameter> @
 
     // Upstream: every param the module has, in its ReadAll order — the app's value, or for a param this app has no
     // model of, the value the last Read got. null when a value is missing (list from the project file, not read yet).
-    private List<(CanFrame Frame, string Name)>? UpstreamFramesOrNull(int txId)
+    // crc: a write-only param (the lock password) as the module reports it in CheckCrc, 0.
+    private List<(CanFrame Frame, string Name)>? UpstreamFramesOrNull(int txId, bool crc = false)
     {
         var known = @params.Where(p => !p.LocalOnly).GroupBy(p => (p.Index, p.SubIndex)).ToDictionary(g => g.Key, g => g.First());
         var frames = new List<(CanFrame, string)>();
         foreach (var k in device.ParamSet.Order)
         {
-            if (known.TryGetValue(k, out var p)) frames.Add((ParamCodec.ToFrame(MessageCommand.WriteAllVal, p, txId), p.Name));
+            if (known.TryGetValue(k, out var p))
+            {
+                var f = ParamCodec.ToFrame(MessageCommand.WriteAllVal, p, txId);
+                if (crc && p.WriteOnly) Array.Clear(f.Payload, 4, 4);
+                frames.Add((f, p.Name));
+            }
             else if (device.ParamSet.Raw.TryGetValue(k, out var raw))
                 frames.Add((new CanFrame(txId, 8, [(byte)MessageCommand.WriteAllVal, (byte)(k.Index & 0xFF), (byte)(k.Index >> 8), (byte)k.SubIndex, .. BitConverter.GetBytes(raw)]),
                     $"0x{k.Index:X4}:{k.SubIndex}"));
@@ -585,7 +629,7 @@ internal class ParamProtocol(IDeviceConfigurable device, List<DeviceParameter> @
     // Upstream CheckCrc = CalcParamsCrc: CRC-32 of the values in table (= ReadAll) order. null = cannot compute.
     private uint? UpstreamCrc()
     {
-        var frames = UpstreamFramesOrNull(0);
+        var frames = UpstreamFramesOrNull(0, crc: true);
         if (frames is null || frames.Count == 0) return null;
         var c = new CumulativeCrc32();
         foreach (var (f, _) in frames) c.Update(f.Payload.Skip(4).Take(4).ToArray());

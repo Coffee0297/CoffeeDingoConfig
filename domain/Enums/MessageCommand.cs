@@ -27,6 +27,7 @@ public enum MessageCommand
     Bootloader = 33,
     CheckCrc = 34,
     CheckCrcRsp = 35,
+    Restart = 36,           // [36,'R','E','S','E','T'] -> echo with [6] = 1, then the module resets
 
     // Lua program upload (chunked) — matches the firmware's request_msg handler.
     LuaWrite = 40,          // [cmd, offHi, offLo, b0..b4]
@@ -49,4 +50,9 @@ public enum MessageCommand
     SleepInfo = 50,         // [cmd] -> [cmd, wakeReason, wakeSource, wakesLo, wakesHi, countdown s (0xFF none), blockers, 0]
     OvlTime = 51,           // [cmd, idx] -> [cmd, idx, t0..t3] trip time, ms since power-on
     OvlNotice = 52,         // [cmd, idx] -> [cmd, idx, out (0-based), kind 1 warning / 2 open load, t0..t3]
+
+    // upstream dingoFW feat/config-lock
+    Unlock = 56,            // [cmd, pw LE x4] -> [cmd, 1 ok / 0 wrong (every try within 1 s of a wrong one fails)]
+    FactoryReset = 57,      // [cmd, 'W','I','P','E'] -> [cmd, burned ok]: all defaults except base id + bitrate
+    Locked = 58,            // reply to a refused request: [cmd, idxLo, idxHi, sub, refused cmd]
 }

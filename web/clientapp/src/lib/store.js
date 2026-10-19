@@ -100,6 +100,10 @@ export const api = {
   rename: (guid, Name) => j('POST', `/api/devices/${guid}/rename`, { Name }),
   remove: (guid) => j('POST', `/api/devices/${guid}/remove`),
   // firmware 5.6: blink the module's status LEDs for `seconds` -> { ok, hasLed } (the CANBoard has none)
+  // upstream config lock (0x0200): the project's password / contact (sent by the next write), unlock, factory reset ('WIPE')
+  setLock: (guid, body) => j('POST', `/api/devices/${guid}/lock`, body),
+  unlock: (guid, Password) => j('POST', `/api/devices/${guid}/unlock`, { Password }),
+  factoryReset: (guid) => j('POST', `/api/devices/${guid}/factoryreset`, { Confirm: 'WIPE' }, 10000),
   blink: (guid, seconds = 10) => j('POST', `/api/devices/${guid}/identify?seconds=${seconds}`),
   action: (guid, act) => j('POST', `/api/devices/${guid}/${act}`, undefined, 45000),   // write/writeall/burn wait for the module's confirm (server caps 30 s)
   outputConfig: (guid, body) => j('POST', `/api/devices/${guid}/outputconfig`, body),

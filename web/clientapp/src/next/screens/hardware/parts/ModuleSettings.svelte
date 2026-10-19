@@ -12,6 +12,7 @@
   import { postAction, waitRead } from '../../../shell/parts/act.js'
   import { parseId, hexId, clashOf, freeBases, hitsObd, spanText, fwText, busIds } from './ids.js'
   import { deployToUsb } from './deploy.js'
+  import ModuleLock from './ModuleLock.svelte'
   import { loadCar, carLinks } from '../../functions/flow/car.js'
   import { linkRemote } from '../../functions/flow/net.js'
 
@@ -254,6 +255,8 @@
         {#if actMsg}<p role="status" data-testid="act-msg">{actMsg}</p>{/if}
         {#if !d.canBootloader}<p class="muted sm">This module reports no CAN bootloader, so the bootloader restart is off.</p>{/if}
       </section>
+
+      <ModuleLock {guid} />
 
       <section aria-label="Sleep and wake" class="blk">
         <div class="bh"><strong>Sleep and wake</strong></div>
