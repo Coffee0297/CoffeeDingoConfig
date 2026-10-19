@@ -456,4 +456,26 @@ public class UpstreamFamilyTests
         Assert.Equal(225, s.VarMap.Count);
         Assert.DoesNotContain(s.Params, p => p.Index == 0x1200 && p.SubIndex == 5 && FwFamily.Has(s, p));
     }
+
+    // feat/can-output-counter-checksum: CAN output sub 11 = kind (core/param_defs.h CAN_OUTPUT_PARAMS); never on the fork.
+    [Fact]
+    public void CanOutputKind_Sub11_OnlyWhereTheModuleHasIt()
+    {
+        var d = UpstreamPdm();
+        LearnParams(d, [.. Block(0x0000, 1, 9), .. Block(0x2000, 32, 12)]);
+        var kind = d.Params.Single(p => p.Index == 0x2000 && p.SubIndex == 11);
+        Assert.Equal("canOutput[1].kind", kind.Name);
+        Assert.True(FwFamily.Has(d, kind));
+        d.CanOutputs[0].Kind = 4;   // CRC8 SAE J1850
+        Assert.Equal(4, BitConverter.ToInt32(ParamCodec.ToFrame(domain.Enums.MessageCommand.WriteAllVal, kind, 0x681).Payload, 4));
+        d.CanOutputs[0].Kind = 9;
+        Assert.Equal(5, d.CanOutputs[0].Kind);   // clamped to the firmware's range 0-5
+
+        var s = UpstreamPdm();
+        LearnParams(s, [.. Block(0x0000, 1, 9), .. Block(0x2000, 32, 11)]);
+        Assert.False(FwFamily.Has(s, s.Params.Single(p => p.Index == 0x2000 && p.SubIndex == 11)));
+
+        var f = new PdmDevice("PDM", 0x680);
+        Assert.DoesNotContain(f.Params, p => p.Index == 0x2000 && p.SubIndex == 11);
+    }
 }

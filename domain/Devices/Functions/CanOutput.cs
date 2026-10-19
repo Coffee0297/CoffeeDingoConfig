@@ -37,7 +37,13 @@ public class CanOutput : IDeviceFunction
         }
     }
 
+    // Upstream dingoFW feat/can-output-counter-checksum (sub 11): 0 signal, 1 rolling counter, 2 XOR, 3 sum,
+    // 4 CRC8 SAE J1850, 5 CRC8 AUTOSAR. Counters/checksums ignore input, factor, offset and signed.
+    [JsonPropertyName("kind")] public int Kind { get => field; set => field = Math.Clamp(value, 0, 5); }
+
     [JsonIgnore] public List<DeviceParameter> Params { get; }
+    /// <summary>Upstream: the same subs 0-10 plus the kind (sub 11); a module without it drops it by its param list.</summary>
+    [JsonIgnore] public List<DeviceParameter> UpstreamParams { get; }
 
     [JsonConstructor]
     public CanOutput(int number, string name)
@@ -46,6 +52,8 @@ public class CanOutput : IDeviceFunction
         Name = name;
 
         Params = InitParams();
+        UpstreamParams = [.. Params, new DeviceParameter { ParentName = Name, Name = $"canOutput[{Number}].kind", Index = BaseIndex + (Number - 1), SubIndex = 11,
+            GetValue = () => Kind, SetValue = val => Kind = (int)val, ValueType = typeof(int), DefaultValue = 0 }];
     }
 
     private List<DeviceParameter> InitParams()

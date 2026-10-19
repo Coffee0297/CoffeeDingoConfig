@@ -1170,7 +1170,7 @@ public class PdmDevice : IDeviceConfigurable
         allParams.AddRange(ComfortBlink.Params);
         allParams.AddRange(StarterDisable.Params);
         allParams.AddRange(Wipers.Params);
-        foreach (var canOutput in CanOutputs) allParams.AddRange(canOutput.Params);
+        foreach (var canOutput in CanOutputs) allParams.AddRange(Family == FwFamily.Upstream ? canOutput.UpstreamParams : canOutput.Params);
         foreach (var keypad in Keypads) allParams.AddRange(keypad.BaseParams);
         foreach (var keypad in Keypads) allParams.AddRange(keypad.ButtonParams);
         foreach (var keypad in Keypads) allParams.AddRange(keypad.DialParams);

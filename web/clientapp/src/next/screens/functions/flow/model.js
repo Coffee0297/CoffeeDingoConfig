@@ -177,7 +177,7 @@ export function incompleteReasons(kind, row, enabled) {
       if ((row.ySize ?? 1) > 1 && !row.yInput) r.push('needs a Y input (2-D table)')
       break
     }
-    case 'canoutput': if (!row.input) r.push('needs a value to send'); if (!row.id) r.push('needs a CAN ID'); break
+    case 'canoutput': if (!row.input && !(row.kind > 0)) r.push('needs a value to send'); if (!row.id) r.push('needs a CAN ID'); break
     case 'caninput': if (!row.id) r.push('needs a CAN ID'); if (!row.bitLength) r.push('needs a bit length'); break
     case 'math': if (!row.inputA) r.push('needs an A input'); break
     case 'comfortblink': if (!row.leftInput || !row.rightInput) r.push('needs both lever inputs'); if (!row.clockInput) r.push('needs the indicator clock'); break

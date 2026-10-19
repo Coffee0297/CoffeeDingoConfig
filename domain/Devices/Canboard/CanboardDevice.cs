@@ -826,7 +826,7 @@ public class CanboardDevice : IDeviceConfigurable
         foreach (var m in CanMessages) allParams.AddRange(m.Params);
         allParams.AddRange(Ignition.Params);
         allParams.AddRange(ComfortBlink.Params);
-        foreach (var canOutput in CanOutputs) allParams.AddRange(canOutput.Params);
+        foreach (var canOutput in CanOutputs) allParams.AddRange(Family == FwFamily.Upstream ? canOutput.UpstreamParams : canOutput.Params);
         foreach (var digitalOutput in DigitalOutputs) allParams.AddRange(digitalOutput.Params);
         foreach (var analogInput in AnalogInputs) allParams.AddRange(Family == FwFamily.Upstream ? analogInput.UpstreamParams : analogInput.Params);
         
