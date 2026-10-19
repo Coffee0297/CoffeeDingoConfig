@@ -6,7 +6,8 @@
   import { href } from '../../../router.svelte.js'
 
   // varFreq: the firmware has "frequency follows a signal" (output subs 21-23; upstream by its param list); upstream clamps it to 16-400 Hz
-  let { guid, f = $bindable(), varFreq = true, freqMin = 15 } = $props()
+  // rampDuty: the firmware has "ramp every duty change" (output sub 24)
+  let { guid, f = $bindable(), varFreq = true, freqMin = 15, rampDuty = true } = $props()
   const vf = $derived(varFreq && !!f.variableFreq)
 
   let nums = $state([])
@@ -77,8 +78,8 @@
     <Switch bind:checked={f.softStart} label="Soft start" hint="Ramps up when it turns on." />
     {#if f.softStart}
       <Stepper label="Ramp time" bind:value={f.softStartRamp} min={0} max={10000} step={100} unit="ms" data-testid="ramp" />
-      {#if f.pwmEnabled && f.variableDutyCycle}
-        <Switch bind:checked={f.rampDutyChanges} label="Ramp every duty change" hint="Slews on each change, not only at turn-on." />
+      {#if rampDuty && f.pwmEnabled && f.variableDutyCycle}
+        <Switch bind:checked={f.rampDutyChanges} label="Ramp every duty change" hint={`Slews on each change too, at up to 100 % per ${Number(f.softStartRamp) || 0} ms (the ramp time), not only at turn-on.`} />
       {/if}
     {/if}
   </div>

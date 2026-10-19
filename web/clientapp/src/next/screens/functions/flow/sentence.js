@@ -94,6 +94,9 @@ export function sentenceFor(model, n) {
       // Hz = signal ÷ denominator (the firmware clamps it to its PWM range)
       if (r.pwmEnabled && r.variableFreq) segs.push(T('with a frequency of'), srcTok(model, r.freqInput, 'freqInput'), T('÷'), val(r.freqInputDenom ?? 1, 'freqInputDenom'), T('Hz'))
       segs.push(T('.'))
+      // the firmware ramps only with soft start + a duty from a signal, at 100 % per soft-start ramp time
+      if (r.pwmEnabled && r.variableDutyCycle && r.rampDutyChanges && (r.softStart ?? r.softStartEnabled))
+        segs.push(T('Duty changes ramp at up to 100 % per'), val((r.softStartRamp ?? r.softStartRampTime ?? 0) + ' ms', 'softStartRamp'), T('.'))
       return segs
     }
     default: return null
