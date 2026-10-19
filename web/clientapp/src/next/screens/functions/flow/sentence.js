@@ -2,6 +2,7 @@
 // { t: 'text' } or a token { tok: 'src' | 'val' | 'self' | 'missing', label, node?, field? }.
 // Tokens are buttons in the view; a click opens that block in the inspector.
 import { OP_WORDS, isRelational, secs, hexId, TIMER_MODES } from './model.js'
+import { COUT_KINDS } from './canoutkind.js'
 
 const T = (t) => ({ t })
 const val = (label, field) => ({ tok: 'val', label: String(label), field })
@@ -62,6 +63,8 @@ export function sentenceFor(model, n) {
       return segs
     }
     case 'canoutput':
+      if (r.kind === 1) return [T('Send a rolling counter on CAN ID'), val(hexId(r.id) + (r.ide ? ' ext' : ''), 'id'), T('at bit'), val(`${r.startBit ?? 0}+${r.bitLength ?? 0}`, 'startBit'), T(', one up each frame, every'), val((r.interval ?? 0) + ' ms', 'interval'), T('.')]
+      if (r.kind >= 2) return [T('Send a'), val(COUT_KINDS[r.kind] ?? '?', 'kind'), T('of the frame on CAN ID'), val(hexId(r.id) + (r.ide ? ' ext' : ''), 'id'), T('in byte'), val(Math.floor((r.startBit ?? 0) / 8), 'startBit'), T(', every'), val((r.interval ?? 0) + ' ms', 'interval'), T('.')]
       return [T('Send'), srcTok(model, r.input, 'input'), T('on CAN ID'), val(hexId(r.id) + (r.ide ? ' ext' : ''), 'id'), T('at bit'), val(r.startBit ?? 0, 'startBit'), T(', ×'), val(r.factor ?? 1, 'factor'), T(', every'), val((r.interval ?? 0) + ' ms', 'interval'), T('.')]
     case 'caninput':
       return [self(n), T('reads CAN ID'), val(hexId(r.id) + (r.ide ? ' ext' : ''), 'id'), T(', bits'), val(`${r.startBit}+${r.bitLength}`, 'startBit'), T(', and is on when the value'), T(OP_WORDS[r.operator ?? 0] ?? '?'), val(r.operand ?? 0, 'operand'), T(r.timeoutEnabled ? `(no frame for ${r.timeout} ms → reads ${r.timeoutValue ?? 0}).` : '.')]

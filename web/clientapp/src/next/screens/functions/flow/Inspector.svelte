@@ -12,6 +12,7 @@
   import { fmt } from './livevals.js'
   import { lacks, isUpstream } from '../../hardware/parts/util.js'
   import { remoteItems, isRemoteKey } from '../../../lib/remote.js'
+  import { COUT_KINDS, hasCoutKind, coutKindProblem, snapChecksum, otherChecksums } from './canoutkind.js'
 
   let { model, node, dev, lv, links = [], idMap = null, busy = false, onsave, onremove, onselect, onungroup, onopenlink, unsaved = $bindable(false) } = $props()
 
@@ -28,7 +29,7 @@
     flasher: ['name', 'input', 'onTime', 'offTime', 'single'],
     counter: ['name', 'incInput', 'decInput', 'resetInput', 'incEdge', 'decEdge', 'resetEdge', 'minCount', 'maxCount', 'wrapAround', 'holdToReset', 'resetTime'],
     table: ['name', 'xInput', 'yInput', 'xSize', 'ySize', 'xAxis', 'yAxis', 'cells'],
-    canoutput: ['name', 'input', 'id', 'ide', 'startBit', 'bitLength', 'byteOrder', 'factor', 'offset', 'signed', 'interval'],
+    canoutput: ['name', 'input', 'id', 'ide', 'startBit', 'bitLength', 'byteOrder', 'factor', 'offset', 'signed', 'interval', 'kind'],
     caninput: ['name', 'id', 'ide', 'startBit', 'bitLength', 'factor', 'offset', 'operator', 'operand', 'mode', 'timeoutEnabled', 'timeout', 'timeoutValue'],
     math: ['name', 'inputA', 'inputB', 'op', 'constB', 'factor', 'offset'],
     canmsg: ['name', 'input', 'id', 'ide', 'dlc', 'data', 'mode', 'intervalMs'],
@@ -98,6 +99,7 @@
     if (k === 'flasher' && (draft.onTime < 0 || draft.onTime > 5000 || draft.offTime < 0 || draft.offTime > 5000)) return 'On and off times must be 0 to 5000 ms.'
     if (k === 'timer' && isUpstream(dev) && (draft.preset < 0 || draft.preset > 600000)) return 'Time must be 0 to 10 minutes.'
     if (k === 'timer' && (draft.preset < 0 || draft.preset > 3600000)) return 'Time must be 0 to 1 hour.'
+    if (k === 'canoutput' && coutKindProblem(draft)) return coutKindProblem(draft)
     if ((k === 'canoutput' || k === 'caninput') && (draft.startBit < 0 || draft.startBit > 63 || draft.bitLength < 1 || draft.bitLength > 64 - draft.startBit)) return `Start bit 0–63 and length 1–${64 - (draft.startBit | 0)}.`
     if (k === 'sys' && (draft.forceSleepInput === 1 || draft.muteTxInput === 1)) return '"Always on" would keep the module asleep or muted for good. Pick a real signal.'
     if (k === 'table') {
@@ -135,7 +137,11 @@
   })
   const remoteFor = (accepts) => (accepts === 'bool' ? remote.bool : [...remote.num, ...remote.bool.filter((i) => !i.value.startsWith('d:'))])
   const optsFor = (accepts) => [...sourceOptions(model, accepts, node?.id), ...remoteFor(accepts)]
-  const inputRows = $derived((node?.ins ?? []).filter((p) => fields.includes(p.id)))
+  // a counter / checksum output sends no input value
+  const inputRows = $derived((node?.ins ?? []).filter((p) => fields.includes(p.id) && !(node.kind === 'canoutput' && draft.kind > 0 && p.id === 'input')))
+  const kindOk = $derived(node?.kind === 'canoutput' && hasCoutKind(dev))
+  const sharedSums = $derived(node?.kind === 'canoutput' && draft.kind >= 2
+    ? otherChecksums([...model.nodes.values()].filter((x) => x.kind === 'canoutput' && x.id !== node.id).map((x) => x.row ?? {}), { ...draft, id: parseInt(String(idText).replace(/^0x/i, ''), 16), enabled: true }) : [])
   const typeOfIdx = (idx) => (model.byIdx.get(Number(idx))?.type === 'bool' ? 'bool' : 'num')
   const fromLabel = (idx) => optsFor('num').find((o) => o.value === String(idx))?.label ?? (idx ? '#' + idx : 'not connected')
 
@@ -333,6 +339,11 @@
       </div>
       <p class="hint">X points (and Y points) must increase. Between points the module interpolates; outside it holds the edge value.</p>
     {:else if node.kind === 'canoutput' || node.kind === 'caninput'}
+      {#if kindOk}
+        <Select label="Sends" items={COUT_KINDS.map((l, i) => ({ value: String(i), label: l }))} bind:value={() => String(draft.kind ?? 0), (v) => (draft = snapChecksum({ ...draft, kind: Number(v) }))} data-testid="cout-kind" />
+        {#if draft.kind === 1}<p class="hint">Counts up by one each frame and wraps at the field's length (4 bits: 0–15).</p>
+        {:else if draft.kind >= 2}<p class="hint">One byte, worked out over the frame's other bytes. Put it in a byte no other output on this ID uses.{sharedSums.length ? ' ▲ This frame already has a checksum; the later one also covers the earlier one’s byte. One per frame is usual.' : ''}</p>{/if}
+      {/if}
       <span class="sec">Frame</span>
       <div class="two">
         <Field label="CAN ID (hex)" mono bind:value={idText} error={idError} />
@@ -340,15 +351,17 @@
       </div>
       <div class="two">
         <Field label="Start bit" type="number" min="0" max="63" bind:value={() => draft.startBit ?? 0, (v) => (draft.startBit = toNum(v))} />
-        <Field label="Length (bits)" type="number" min="1" max="64" bind:value={() => draft.bitLength ?? 0, (v) => (draft.bitLength = toNum(v))} />
+        <Field label="Length (bits)" type="number" min="1" max="64" disabled={node.kind === 'canoutput' && draft.kind >= 2} bind:value={() => draft.bitLength ?? 0, (v) => (draft.bitLength = toNum(v))} />
       </div>
+      {#if !(node.kind === 'canoutput' && draft.kind > 0)}
       <div class="two">
         <Field label="× Factor" type="number" step="any" bind:value={() => draft.factor ?? 0, (v) => (draft.factor = toNum(v))} />
         <Field label="+ Offset" type="number" step="any" bind:value={() => draft.offset ?? 0, (v) => (draft.offset = toNum(v))} />
       </div>
+      {/if}
       {#if node.kind === 'canoutput'}
         <div class="two">
-          {@render seg('Byte order', [{ value: '0', label: 'Little' }, { value: '1', label: 'Big' }], String(draft.byteOrder ?? 0), (v) => (draft.byteOrder = Number(v)), false)}
+          {@render seg('Byte order', [{ value: '0', label: 'Little' }, { value: '1', label: 'Big' }], String(draft.byteOrder ?? 0), (v) => (draft = snapChecksum({ ...draft, byteOrder: Number(v) })), false)}
           <Field label="Every" type="number" min="0" unit="ms" bind:value={() => draft.interval ?? 0, (v) => (draft.interval = toNum(v))} />
         </div>
         {#if idOwners}

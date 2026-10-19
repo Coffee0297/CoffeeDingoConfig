@@ -18,7 +18,7 @@ public class UpstreamFamilyTests
     private static ConcurrentDictionary<(int BaseId, int Index, int SubIndex), DeviceCanFrame> Q() => new();
     private static readonly byte[] UpstreamVersion = [31, 0, 0, 0, 0, 6, 0, 3];   // v0.6.3, no board id
 
-    private static PdmDevice UpstreamPdm()
+    internal static PdmDevice UpstreamPdm()
     {
         var d = new PdmDevice("PDM", 0x680);
         d.SetLogger(NullLogger<PdmDevice>.Instance);
@@ -162,5 +162,37 @@ public class UpstreamFamilyTests
         Assert.False(t.FromModule);   // a saved list still needs a Read before Apply
         Assert.True(t.HasBlock(0x1800));
         Assert.False(t.HasBlock(0x1C00));
+    }
+    // A full ReadAll of these (index, sub) keys (values 0) from an upstream module: the app learns them as its list.
+    internal static void LearnParams(PdmDevice d, IEnumerable<(int Index, int Sub)> keys)
+    {
+        var q = Q(); var crc = new CumulativeCrc32(); var n = 0;
+        d.Read(0x680, [10, 0, 0, 0, 0, 0, 0, 0], ref q, []);
+        foreach (var (i, s) in keys) { crc.Update([0, 0, 0, 0]); n++; d.Read(0x680, [11, (byte)i, (byte)(i >> 8), (byte)s, 0, 0, 0, 0], ref q, []); }
+        d.Read(0x680, [12, (byte)n, (byte)(n >> 8), 0, .. BitConverter.GetBytes(crc.Final)], ref q, []);
+    }
+    internal static IEnumerable<(int, int)> Block(int b, int count, int subs) =>
+        Enumerable.Range(0, count).SelectMany(k => Enumerable.Range(0, subs).Select(s => (b + k, s)));
+
+    // feat/can-output-counter-checksum: CAN output sub 11 = kind (core/param_defs.h CAN_OUTPUT_PARAMS); never on the fork.
+    [Fact]
+    public void CanOutputKind_Sub11_OnlyWhereTheModuleHasIt()
+    {
+        var d = UpstreamPdm();
+        LearnParams(d, [.. Block(0x0000, 1, 9), .. Block(0x2000, 32, 12)]);
+        var kind = d.Params.Single(p => p.Index == 0x2000 && p.SubIndex == 11);
+        Assert.Equal("canOutput[1].kind", kind.Name);
+        Assert.True(FwFamily.Has(d, kind));
+        d.CanOutputs[0].Kind = 4;   // CRC8 SAE J1850
+        Assert.Equal(4, BitConverter.ToInt32(ParamCodec.ToFrame(domain.Enums.MessageCommand.WriteAllVal, kind, 0x681).Payload, 4));
+        d.CanOutputs[0].Kind = 9;
+        Assert.Equal(5, d.CanOutputs[0].Kind);   // clamped to the firmware's range 0-5
+
+        var s = UpstreamPdm();
+        LearnParams(s, [.. Block(0x0000, 1, 9), .. Block(0x2000, 32, 11)]);
+        Assert.False(FwFamily.Has(s, s.Params.Single(p => p.Index == 0x2000 && p.SubIndex == 11)));
+
+        var f = new PdmDevice("PDM", 0x680);
+        Assert.DoesNotContain(f.Params, p => p.Index == 0x2000 && p.SubIndex == 11);
     }
 }
