@@ -16,6 +16,10 @@ export const TIMEOUT_MAX_S = 60
 
 /** True when the module's firmware can sleep (false on a CANBoard built without CAN_SLEEP). */
 export const canSleep = (d) => d?.canSleep !== false
+/** Why a module can't sleep, in words (only meaningful when !canSleep(d)). */
+export const noSleepWhy = (d) => isUpstream(d) ? 'its sleep settings show once the module has been read (upstream dingoFW)' : 'its firmware is older than 5.5.111'
+/** What still wakes a module whose wake sources are all off: USB on a PDM, only a power cycle on a CANBoard (no USB). */
+export const lastWake = (d) => (isPdm(d) ? 'USB' : 'a power cycle')
 
 /** Digital inputs a module has (wake matrix columns). */
 export function digCount(d) {

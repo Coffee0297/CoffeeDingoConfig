@@ -36,8 +36,10 @@ public class CanboardDevice : IDeviceConfigurable
     // Firmware 5.5.111 put the CANBoard to sleep (STOP) like the PDM; older firmware only goes quiet (mute TX).
     // Version not read yet: assumed able, like a PDM, so the sleep settings do not vanish until it answers.
     [JsonIgnore] public static readonly Version SleepSince = new(5, 5, 111);
-    // Upstream dingoFW: the CANBoard build has no CAN_SLEEP.
-    [JsonIgnore] public bool CanSleep => !VersionReceived || (Family == FwFamily.Fork && domain.Common.Firmware.Has(Version, SleepSince));
+    // Upstream dingoFW: stock CANBoards are built without CAN_SLEEP; feat/canboard-sleep turns it on.
+    // shortcut: a stock upstream CANBoard lists 0x0000 sub 2 too (shared device params) and just never sleeps; no
+    // param or version tells the two apart, upgrade once the firmware reports its features.
+    [JsonIgnore] public bool CanSleep => !VersionReceived || (Family == FwFamily.Fork ? domain.Common.Firmware.Has(Version, SleepSince) : ParamSet.Contains(BaseIndex, 2));
     [JsonPropertyName("canBootloader")] public bool CanBootloader { get; } = true;   // OpenBLT XCP-over-CAN bootloader
 
     [JsonIgnore] public const int BaseIndex = 0x0000;
@@ -1126,10 +1128,14 @@ public class CanboardDevice : IDeviceConfigurable
         };
     }
 
-    public DeviceCanFrame? GetSleepMsg()
-    {
-        return null;
-    }
+    // Upstream with sleep: the same Sleep request as the PDM ([32,'QUIT']). Fork CANBoards: unchanged (none).
+    public DeviceCanFrame? GetSleepMsg() => Family == FwFamily.Upstream && CanSleep
+        ? new DeviceCanFrame
+        {
+            SendOnly = true, DeviceBaseId = BaseId, Name = "Sleep",
+            Frame = new CanFrame(Id: BaseId + ConfigTxOffset, Len: 8, Payload: [Convert.ToByte(MessageCommand.Sleep), (byte)'Q', (byte)'U', (byte)'I', (byte)'T', 0, 0, 0])
+        }
+        : null;
     
     public DeviceCanFrame GetVersionMsg()
     {
