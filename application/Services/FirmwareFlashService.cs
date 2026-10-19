@@ -126,6 +126,8 @@ public partial class FirmwareFlashService(
                      || (code == 0 && outp.Contains("Download", StringComparison.OrdinalIgnoreCase));
             Set(ok ? "Done" : "Failed", ok ? 100 : _percent);
             log.AppendLine(ok ? "✓ Flash complete — device rebooting." : $"✗ Flash failed (exit {code}).");
+            // upstream: a relocated app only starts behind the OpenBLT bootloader; a full image overwrote sector 0
+            if (ok && dev is domain.Devices.dingoPdm.PdmDevice { Family: domain.Common.FwFamily.Upstream } up) up.OpenBlt = flashAddr == DfuImage.AppBase;
             logger.LogInformation("Firmware flash {Result} ({Len} bytes)", ok ? "ok" : "failed", binary.Length);
             return new(ok, log.ToString());
         }

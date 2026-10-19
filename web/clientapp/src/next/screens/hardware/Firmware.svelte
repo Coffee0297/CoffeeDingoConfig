@@ -1,11 +1,12 @@
 <script>
   // Firmware: version per module, update one or all over CAN, update the link module over USB,
   // flash a new board over DFU. Flashing always asks first and says what happens if it goes wrong.
-  import { Page, PageHeader, Card, Button, Banner, Chip, StateDot, Select } from '../../ui/index.js'
+  import { Page, PageHeader, Card, Button, Banner, Chip, StateDot, Select, Checkbox } from '../../ui/index.js'
   import { live, api, toast, hex } from '../../lib/live.svelte.js'
   import Confirm from '../power/parts/Confirm.svelte'
   import FlashNewBoard from './parts/firmware/FlashNewBoard.svelte'
-  import { boardOf, boardOfFile, fileVersion, cleanVersion, flashPath, pathLabel, extFor, checkFile, lastLine, cmpVersion, relationTo, relationLabel } from './parts/firmware/firmwareLogic.js'
+  import { boardOf, boardOfFile, fileVersion, cleanVersion, flashPath, pathLabel, extFor, fitsPath, checkFile, lastLine, cmpVersion, relationTo, relationLabel } from './parts/firmware/firmwareLogic.js'
+  import { isUpstream } from './parts/util.js'
   let props = $props()
 
   const mods = $derived(live.devices.filter((d) => /pdm|canboard/i.test(d.type ?? '')))
@@ -17,7 +18,15 @@
   let newBoard = $state(false), fileInput, reading = $state(false)
 
   const pathOf = (d) => flashPath(d, live.connected)
-  const fileFor = (d) => { const p = pathOf(d); return p ? files.find((f) => boardOfFile(f.name)?.key === boardOf(d).key && f.name.toLowerCase().endsWith(extFor(p))) ?? null : null }
+  // over CAN only an image built for the bootloader (the pre-flight check reads where it starts; .srec/.hex)
+  const fileFor = (d) => { const p = pathOf(d); return p ? files.find((f) => boardOfFile(f.name)?.key === boardOf(d).key && fitsPath(f.name, p) && (p !== 'can' || checks[f.name]?.relocated !== false)) ?? null : null }
+  // upstream dingoFW PDM: the operator says whether it has the OpenBLT bootloader (nothing on the bus can tell)
+  async function markBootloader(d, on) {
+    try {
+      const r = await fetch(`/api/devices/${d.guid}/openblt?on=${on}`, { method: 'POST' })
+      if (!r.ok) throw new Error((await r.json().catch(() => null))?.error ?? 'HTTP ' + r.status)
+    } catch (e) { toast(`${d.name}: ${e?.message ?? e}`, 'error', 8000) }
+  }
   // the version the image carries (5.6.4 on, read by the pre-flight check), else what the file name says
   const verOf = (f) => checks[f.name]?.version ?? fileVersion(f.name)
   const upToDate = (d, f) => !!f && !!verOf(f) && cleanVersion(d.version) === verOf(f)
@@ -206,7 +215,7 @@
         </div>
       {/if}
     {:else}<p class="muted note" role="status">{rel.error || 'No releases found.'} Pick the files yourself instead.</p>{/if}
-    <input bind:this={fileInput} type="file" multiple accept=".srec,.bin" class="sr-only" onchange={onFiles} data-testid="fw-files" aria-label="Release files" />
+    <input bind:this={fileInput} type="file" multiple accept=".srec,.hex,.bin" class="sr-only" onchange={onFiles} data-testid="fw-files" aria-label="Release files" />
     <div class="row">
       <Button size="sm" onclick={() => fileInput.click()} disabled={busy}>Or choose files…</Button>
       {#if anyFile}<Chip tone="ok" symbol="✓">{files.length} file{files.length === 1 ? '' : 's'}</Chip>{/if}
@@ -215,12 +224,12 @@
       <ul class="files mono" data-testid="fw-file-list">
         {#each files as f (f.name)}
           {@const c = checks[f.name]}
-          <li>{f.name} <span class="muted">· {c?.board ?? boardOfFile(f.name)?.label ?? 'board not in the name'}{verOf(f) ? ' · ' + verOf(f) : ''}{c ? ` · fits ${c.modules.length ? c.modules.map((m) => m.name).join(', ') : 'no module in this project'}` : ''}</span>
+          <li>{f.name} <span class="muted">· {c?.board ?? boardOfFile(f.name)?.label ?? 'board not in the name'}{verOf(f) ? ' · ' + verOf(f) : ''}{c?.address ? ` · starts at ${c.address}${c.relocated ? ' (for the CAN bootloader)' : ' (full image)'}` : ''}{c ? ` · fits ${c.modules.length ? c.modules.map((m) => m.name).join(', ') : 'no module in this project'}` : ''}</span>
             {#each c?.problems ?? [] as p (p)}<br /><span class="warnT" data-testid="fw-check-problem">▲ {p}</span>{/each}</li>
         {/each}
       </ul>
     {/if}
-    <p class="muted note">A .srec per board goes over CAN (CANBoard, dingoPDM, dingoPDM-Max) and a .bin to the link module over USB. Each file is checked for the board it was built for.</p>
+    <p class="muted note">A .srec per board goes over CAN (CANBoard, dingoPDM, dingoPDM-Max) and a .bin to the link module over USB. Upstream dingoFW ships a .hex: it goes over CAN when it is built for the bootloader (starts at 0x08004000). Each file is checked for the board it was built for.</p>
   </Card>
 
   <Card title="2. Modules" aria-label="Modules">
@@ -236,7 +245,10 @@
               <td data-label="Module"><strong>{d.name}</strong> <span class="muted mono">{hex(d.baseId)}</span></td>
               <td data-label="Board">{boardOf(d).label}</td>
               <td class="mono" data-label="Now" data-testid={`fw-version-${d.name}`}>{d.connected ? (cleanVersion(d.version) || 'unknown') : d.inBootloader ? 'in bootloader' : 'not seen'}</td>
-              <td data-label="Path">{pathLabel(p)}</td>
+              <td data-label="Path">{pathLabel(p)}
+                {#if isUpstream(d) && /pdm/i.test(d.type ?? '')}
+                  <Checkbox label="Has the CAN bootloader" hint="Upstream dingoFW: tick once OpenBLT is programmed on it. Without it a CAN update sends the module to USB-DFU." checked={!!d.canBootloader} disabled={busy} onchange={(v) => markBootloader(d, v)} data-testid={`fw-openblt-${d.name}`} />
+                {/if}</td>
               <td class="pc">
                 <div class="prog"><div class="bar" role="progressbar" aria-label={`${d.name} progress`} aria-valuenow={c.pct} aria-valuemin="0" aria-valuemax="100"><span style="width: {c.pct}%" class:bad={c.state === 'failed'} class:ok={c.state === 'done'}></span></div>
                   <span class:fault={c.state === 'failed'} data-testid={`fw-status-${d.name}`}>{c.state === 'failed' ? '■ ' : ''}{c.text}</span></div>

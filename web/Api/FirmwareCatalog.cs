@@ -25,9 +25,10 @@ public static partial class FirmwareCatalog
     public record Release(string Tag, string Version, string? Name, bool Prerelease, string? Published, string Notes, List<Image> Images);
 
     // release asset name -> board, kind: dingopdm_v7_FW_v5-5-112.srec, dingopdmmax_v1_FW_v5-5-112.bin, canboard_v2_FW_...
-    [GeneratedRegex(@"^(dingopdm_v7|dingopdmmax_v1|canboard_v2)_FW_v(\d+)-(\d+)-(\d+)\.(srec|bin)$", RegexOptions.IgnoreCase)]
+    // .hex: upstream dingoFW releases (no .srec); it goes over CAN like a .srec when it starts at 0x08004000
+    [GeneratedRegex(@"^(dingopdm_v7|dingopdmmax_v1|canboard_v2)_FW_v(\d+)-(\d+)-(\d+)\.(srec|bin|hex)$", RegexOptions.IgnoreCase)]
     private static partial Regex AssetName();
-    [GeneratedRegex(@"v(\d+)[.-](\d+)[.-](\d+)\.(srec|s19|bin)$", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"v(\d+)[.-](\d+)[.-](\d+)\.(srec|s19|bin|hex)$", RegexOptions.IgnoreCase)]
     private static partial Regex NameVersion();
     static string BoardOf(string prefix) => prefix.ToLowerInvariant() switch
     {
@@ -89,12 +90,24 @@ public static partial class FirmwareCatalog
     {
         var problems = new List<string>();
         var isSrec = name.EndsWith(".srec", StringComparison.OrdinalIgnoreCase) || name.EndsWith(".s19", StringComparison.OrdinalIgnoreCase);
+        var isHex = name.EndsWith(".hex", StringComparison.OrdinalIgnoreCase);
         IEnumerable<byte[]> blocks = [data];
-        if (isSrec)
+        // where the image starts: 0x08004000 = an app built for the OpenBLT bootloader, 0x08000000 = a full image. With
+        // no DINGO_FW marker (upstream dingoFW) this is what tells a CAN-flashable image from one for USB only.
+        uint? address = isSrec || isHex ? null : DfuImage.FlashAddress(data);
+        if (isSrec || isHex)
         {
-            try { blocks = SRecordImage.ParseText(System.Text.Encoding.ASCII.GetString(data)).Segments.Select(s => s.Data).ToList(); }
-            catch (InvalidDataException) { problems.Add("Not an S-record image: it has no data records."); blocks = []; }
+            try
+            {
+                var img = SRecordImage.ParseText(System.Text.Encoding.ASCII.GetString(data));
+                blocks = img.Segments.Select(s => s.Data).ToList();
+                address = img.MinAddress;
+            }
+            catch (InvalidDataException) { problems.Add($"Not {(isHex ? "an Intel HEX" : "an S-record")} image: it has no data records."); blocks = []; }
         }
+        var relocated = address == DfuImage.AppBase;
+        if ((isSrec || isHex) && address is uint a && !relocated)
+            problems.Add($"It starts at 0x{a:X8}, not 0x{DfuImage.AppBase:X8}: not built for the CAN bootloader, so it cannot go over CAN (and over USB it would replace the bootloader).");
         var marker = SRecordImage.BoardName(SRecordImage.Marker(blocks, "DINGO_BOARD="));
         var imageVersion = SRecordImage.Marker(blocks, "DINGO_FW=");
         var m = AssetName().Match(name);
@@ -105,12 +118,13 @@ public static partial class FirmwareCatalog
         var version = imageVersion ?? nameVersion;
         if (imageVersion is not null && nameVersion is not null && imageVersion != nameVersion) problems.Add($"The file name says {nameVersion}, but the image is {imageVersion}.");
         var board = marker is null ? nameBoard : Regex.Replace(marker, @"\s+v\d+$", "");
-        if (marker is null) problems.Add("The image carries no board marker (firmware before 5.5.109): only the file name says which board it is for.");
+        if (marker is null) problems.Add("The image carries no board marker (upstream dingoFW, or firmware before 5.5.109): only the file name says which board it is for.");
         else if (nameBoard is not null && !SRecordImage.BoardMatches(marker, nameBoard)) problems.Add($"The file name says {nameBoard}, but the image is built for {board}.");
         if (version is null) problems.Add("Neither the image nor the file name gives a version.");
         var modules = board is null ? [] : devices.Where(d => SRecordImage.BoardMatches(board, d.Type))
             .Select(d => new { guid = d.Guid, name = d.Name, current = CurrentVersion(d) }).ToList<object>();
-        return new { name, kind = isSrec ? "srec" : "bin", size = data.Length, board, marker, version, modules, problems };
+        return new { name, kind = isSrec ? "srec" : isHex ? "hex" : "bin", size = data.Length, board, marker, version, modules, problems,
+            address = address is uint ad ? $"0x{ad:X8}" : null, relocated };
     }
 
     static string? CurrentVersion(IDevice d) => d switch

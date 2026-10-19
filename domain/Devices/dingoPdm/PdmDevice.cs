@@ -37,7 +37,11 @@ public class PdmDevice : IDeviceConfigurable
     [JsonIgnore] protected const int LuaOutputSlots = 32;  // matches firmware NUM_LUA_OUTPUTS
 
     [JsonIgnore] public bool CanSleep { get; } = true;
-    [JsonPropertyName("canBootloader")] public bool CanBootloader { get; } = true;
+    // Upstream dingoFW (feat/openblt-can-bootloader): no command tells whether the OpenBLT bootloader is in sector 0, and a
+    // plain upstream app answers a CAN-update request by jumping to USB-DFU. So only a module known to have it (the
+    // operator says so, it answered as a bootloader, or a CAN update of it worked) is offered a CAN update.
+    [JsonPropertyName("canBootloader")] public bool CanBootloader => Family != FwFamily.Upstream || OpenBlt == true;
+    [JsonPropertyName("openBlt"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public bool? OpenBlt { get; set; }
 
     [JsonIgnore] public const int BaseIndex = 0x0000;
     [JsonPropertyName("pdmType")] public int PdmType { get; set; }

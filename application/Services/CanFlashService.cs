@@ -33,23 +33,26 @@ public sealed class CanFlashService(
     {
         var log = new StringBuilder();
 
-        // 1. Parse the S-record.
+        // 1. Parse the S-record (or the Intel HEX that upstream dingoFW releases ship).
         SRecordImage image;
         try { image = SRecordImage.ParseText(Encoding.ASCII.GetString(srec)); }
-        catch (Exception ex) { return new(false, $"Not a valid S-record (.srec) file: {ex.Message}"); }
+        catch (Exception ex) { return new(false, $"Not a valid .srec / .hex file: {ex.Message}"); }
         log.AppendLine($"Parsed {image.TotalBytes} bytes in {image.Segments.Count} segment(s), base 0x{image.MinAddress:X8}.");
 
         // 2. Wrong-board / sanity guard. Any board carrying the OpenBLT CAN bootloader can be
         // flashed over CAN (CANBoard, dingoPDM, dingoPDM-Max); they all relocate the app to 0x08004000.
         var dev = dm.GetDevice(deviceId);
         if (dev is null) return new(false, "Device is not on the bus — connect and discover it first.");
+        bool upstream = dev is IDeviceConfigurable { Family: domain.Common.FwFamily.Upstream };
         if (dev is not IDeviceConfigurable cfg || !cfg.CanBootloader)
-            return new(false, $"'{dev.Type}' does not have the OpenBLT CAN bootloader — it can't be flashed over CAN.");
+            return new(false, upstream
+                ? $"Refused: {dev.Name} runs upstream dingoFW and is not known to have the OpenBLT CAN bootloader. Plain upstream firmware answers a CAN update by going to USB-DFU. Program the bootloader once (SWD or USB), then mark it on the Firmware page."
+                : $"'{dev.Type}' does not have the OpenBLT CAN bootloader — it can't be flashed over CAN.");
         if (image.MinAddress != AppBase)
             return new(false, $"Firmware base 0x{image.MinAddress:X8} does not match the relocated application base 0x{AppBase:X8} — wrong firmware (or not a bootloader-relocated build) for this module?");
-        // CANBoard app region is 46 KB; the F446 PDMs are 368 KB (sectors 1–6).
+        // CANBoard app region is 46 KB; the F446 PDMs are 368 KB (sectors 1–6), upstream 496 KB (sectors 1–7).
         bool isCanboard = string.Equals(dev.Type, "CANBoard", StringComparison.OrdinalIgnoreCase);
-        int maxBytes = (isCanboard ? 46 : 368) * 1024;
+        int maxBytes = (isCanboard ? 46 : upstream ? 496 : 368) * 1024;
         if (image.TotalBytes < 1024 || image.TotalBytes > maxBytes)
             return new(false, $"Refused: image size {image.TotalBytes} bytes is outside the {dev.Type} app range (1 KB–{maxBytes / 1024} KB).");
         // A v7 and a -Max share the MCU and app base, so only the marker tells their images apart.
@@ -91,7 +94,13 @@ public sealed class CanFlashService(
             // 4. Connect (retry while the bootloader comes up). IDs derived from the base ID.
             Set("Connecting", 5);
             if (!await xcp.ConnectAsync(retries: 25, token))
-                return Fail(log, $"No XCP response on 0x{xcp.RespId:X3}. The bootloader did not come up (is it SWD-flashed? is the bus quiet?).");
+            {
+                // upstream: it answered no bootloader, so it isn't offered a CAN update again until someone says it has one
+                if (dm.GetDevice(deviceId) is domain.Devices.dingoPdm.PdmDevice { Family: domain.Common.FwFamily.Upstream } up) up.OpenBlt = false;
+                return Fail(log, $"No XCP response on 0x{xcp.RespId:X3}. The bootloader did not come up (is it SWD-flashed? is the bus quiet?)."
+                    + (upstream ? " Plain upstream firmware goes to USB-DFU instead: power-cycle the module to get it back." : ""));
+            }
+            if (dm.GetDevice(deviceId) is domain.Devices.dingoPdm.PdmDevice { Family: domain.Common.FwFamily.Upstream } seen) seen.OpenBlt = true;
             log.AppendLine($"XCP connected (cmd 0x{xcp.CmdId:X3} / resp 0x{xcp.RespId:X3}, maxCto {xcp.MaxCto}).");
             await xcp.GetStatusAsync(token);
             if (!await xcp.ProgramStartAsync(token))

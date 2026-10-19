@@ -163,4 +163,21 @@ public class UpstreamFamilyTests
         Assert.True(t.HasBlock(0x1800));
         Assert.False(t.HasBlock(0x1C00));
     }
+
+    [Fact]
+    public void CanBootloader_UpstreamOnlyWhenKnown()
+    {
+        // upstream: a plain app answers a CAN-update request by jumping to USB-DFU, so only a PDM known to have
+        // OpenBLT is offered one; no upstream CANBoard port. The fork: always.
+        var d = UpstreamPdm();
+        Assert.False(d.CanBootloader);
+        d.OpenBlt = true;
+        Assert.True(d.CanBootloader);
+        var cb = new CanboardDevice("CB", 0x660);
+        cb.SetLogger(NullLogger<CanboardDevice>.Instance);
+        var q = Q();
+        cb.Read(0x660, UpstreamVersion, ref q, []);
+        Assert.False(cb.CanBootloader);
+        Assert.True(new PdmDevice("PDM", 0x680).CanBootloader);   // fork
+    }
 }

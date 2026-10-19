@@ -1142,6 +1142,7 @@ public static class LiveApi
                 if (d.Connected) { ui.InBootloader = false; continue; }
                 using var xcp = new application.Services.XcpCanMaster(adapters, d.BaseId);
                 ui.InBootloader = await xcp.ConnectAsync(2, CancellationToken.None);
+                if (ui.InBootloader && d is domain.Devices.dingoPdm.PdmDevice up) up.OpenBlt = true;
                 if (ui.InBootloader) await xcp.DisconnectAsync(CancellationToken.None);
                 found.Add(new { guid = d.Guid, name = d.Name, inBootloader = ui.InBootloader });
             }
@@ -1178,6 +1179,16 @@ public static class LiveApi
             var ok = await dm.IdentifyConfirmed(g, seconds ?? 10);
             return ok ? Results.Ok(new { ok, hasLed = dm.GetDeviceUiState(g).HasLed })
                       : Results.Json(new { ok, error = "The module did not answer." }, statusCode: 409);
+        });
+
+        // Upstream dingoFW: the operator says whether this PDM has the OpenBLT CAN bootloader (no command can tell, and a
+        // plain upstream app answers a CAN-update request by jumping to USB-DFU). Saved in the project.
+        api.MapPost("/devices/{guid}/openblt", (string guid, bool on, DeviceManager dm) =>
+        {
+            if (!Guid.TryParse(guid, out var g) || dm.GetDevice(g) is not PdmDevice { Family: domain.Common.FwFamily.Upstream } p)
+                return Results.BadRequest(new { ok = false, error = "Only an upstream dingoFW PDM is marked by hand." });
+            p.OpenBlt = on;
+            return Results.Ok(new { ok = true, canBootloader = p.CanBootloader });
         });
 
         api.MapPost("/devices/{guid}/flash-can", async (string guid, HttpRequest req, CanFlashService flasher) =>

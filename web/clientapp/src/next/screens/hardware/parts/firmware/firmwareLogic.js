@@ -34,13 +34,16 @@ export function flashPath(d, busConnected) {
   return d.isGateway ? 'usb' : 'can'
 }
 export const pathLabel = (p) => (p === 'can' ? 'CAN' : p === 'usb' ? 'USB (link module)' : 'not flashable here')
-export const extFor = (path) => (path === 'can' ? '.srec' : '.bin')
+// over CAN: a .srec, or the .hex upstream dingoFW releases ship (built for the bootloader: it starts at 0x08004000)
+export const extsFor = (path) => (path === 'can' ? ['.srec', '.hex'] : ['.bin'])
+export const extFor = (path) => extsFor(path).join(' or ')
+/** Is the file name of a kind this path takes? */
+export const fitsPath = (name, path) => extsFor(path).some((x) => (name ?? '').toLowerCase().endsWith(x))
 
 /** Does this file fit this module? { ok, reason } */
 export function checkFile(d, file, path) {
   if (!file) return { ok: false, reason: 'Choose a file first.' }
-  const ext = extFor(path)
-  if (!file.name.toLowerCase().endsWith(ext)) return { ok: false, reason: `A ${pathLabel(path)} update needs a ${ext} file.` }
+  if (!fitsPath(file.name, path)) return { ok: false, reason: `A ${pathLabel(path)} update needs a ${extFor(path)} file.` }
   const guess = boardOfFile(file.name)
   if (guess && guess.key !== boardOf(d).key) return { ok: false, reason: `${file.name} is for a ${guess.label}, but ${d.name} is a ${boardOf(d).label}.` }
   return { ok: true, reason: guess ? '' : 'The file name does not say which board it is for. The module checks the image itself and refuses a wrong one.' }

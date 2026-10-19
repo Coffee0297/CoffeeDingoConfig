@@ -38,7 +38,8 @@ public class CanboardDevice : IDeviceConfigurable
     [JsonIgnore] public static readonly Version SleepSince = new(5, 5, 111);
     // Upstream dingoFW: the CANBoard build has no CAN_SLEEP.
     [JsonIgnore] public bool CanSleep => !VersionReceived || (Family == FwFamily.Fork && domain.Common.Firmware.Has(Version, SleepSince));
-    [JsonPropertyName("canBootloader")] public bool CanBootloader { get; } = true;   // OpenBLT XCP-over-CAN bootloader
+    // OpenBLT XCP-over-CAN bootloader; upstream dingoFW has no CANBoard port of it (the -O0 app does not fit behind it)
+    [JsonPropertyName("canBootloader")] public bool CanBootloader => Family != FwFamily.Upstream;
 
     [JsonIgnore] public const int BaseIndex = 0x0000;
     [JsonPropertyName("canboardType")] public int CanboardType { get; set; }

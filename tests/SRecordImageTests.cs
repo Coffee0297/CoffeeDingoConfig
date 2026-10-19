@@ -102,4 +102,30 @@ public class SRecordImageTests
         Assert.Equal("5.6.4", SRecordImage.Marker([bytes], "DINGO_FW="));   // a .bin is one block
         Assert.Null(SRecordImage.ParseText(S3(0x08004000, 1, 2, 3)).VersionMarker());
     }
+
+    [Fact]
+    public void IntelHex_ExtendedLinearAddress_GivesTheRelocatedBase()
+    {
+        // upstream dingoFW releases ship .hex: 04 = upper 16 address bits, 00 = data, 01 = end
+        static string Rec(int len, int off, int type, params byte[] data)
+        {
+            var b = new List<byte> { (byte)len, (byte)(off >> 8), (byte)off, (byte)type };
+            b.AddRange(data);
+            var sum = (byte)(-b.Sum(x => x) & 0xFF);
+            return ":" + string.Concat(b.Select(x => x.ToString("X2"))) + sum.ToString("X2");
+        }
+        var text = string.Join(Environment.NewLine,
+            Rec(2, 0, 4, 0x08, 0x00),
+            Rec(4, 0x4000, 0, 1, 2, 3, 4),
+            Rec(4, 0x4004, 0, 5, 6, 7, 8),
+            Rec(2, 0x4100, 0, 9, 10),
+            Rec(0, 0, 1));
+        var img = SRecordImage.ParseText(text);
+        Assert.Equal(0x08004000u, img.MinAddress);
+        Assert.Equal(2, img.Segments.Count);
+        Assert.Equal(new byte[] { 1, 2, 3, 4, 5, 6, 7, 8 }, img.Segments[0].Data);
+        Assert.Equal(0x08004100u, img.Segments[1].Address);
+        Assert.Equal(10, img.TotalBytes);
+        Assert.Throws<InvalidDataException>(() => SRecordImage.ParseText(Rec(0, 0, 1)));   // no data
+    }
 }
