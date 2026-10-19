@@ -110,11 +110,16 @@ export function sentenceFor(model, n) {
       if (r.pwmEnabled && r.softStart && r.softStartTimeout > 0) segs.push(T('Its soft start waits while the current is above'), val((r.inrushLimit ?? 0) + ' A', 'inrushLimit'), T('and it trips if not at full duty after'), val(r.softStartTimeout + ' ms', 'softStartTimeout'), T('.'))
       // upstream soft stop (output sub 31)
       if (r.pwmEnabled && r.softStopTime > 0) segs.push(T('When it turns off, its duty ramps down over'), val(r.softStopTime + ' ms', 'softStopTime'), T('first.'))
+      if (r.shed) segs.push(T('It switches off while the module sheds loads.'))
       return segs
     }
-    case 'sys':
-      // upstream fault clear: only the retry-all signal makes a sentence (sleep / mute have their own screen)
-      return r.retryAllInput ? [T('Each time'), srcTok(model, r.retryAllInput, 'retryAllInput'), T('turns on, every tripped output on'), self(n), T('tries again (at most once every 2 s).')] : null
+    case 'sys': {
+      // upstream fault clear / load shedding: only the retry-all and shed inputs make a sentence (sleep / mute have their own screen)
+      const segs = []
+      if (r.retryAllInput) segs.push(...[T('Each time'), srcTok(model, r.retryAllInput, 'retryAllInput'), T('turns on, every tripped output on'), self(n), T('tries again (at most once every 2 s).')])
+      if (r.shedInput) segs.push(...[T('While'), srcTok(model, r.shedInput, 'shedInput'), T('is on,'), self(n), T('holds every output set to shed off (load shedding).')])
+      return segs.length ? segs : null
+    }
     default: return null
   }
 }

@@ -127,6 +127,7 @@ export function consumersOf(idxs, funcs, outputs, moduleName, dev) {
   }
   if (dev && (set.has(dev.forceSleepInput) || set.has(dev.muteTxInput))) add('Car sleep', moduleName)
   if (dev && set.has(dev.retryAllInput)) add('Retry all faults', moduleName)
+  if (dev && set.has(dev.shedInput)) add('Load shedding', moduleName)
   return hits
 }
 

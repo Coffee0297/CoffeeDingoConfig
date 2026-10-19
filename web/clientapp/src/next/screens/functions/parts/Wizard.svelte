@@ -8,7 +8,7 @@
   import { live, api, project, toast, deviceDefs } from '../../../lib/live.svelte.js'
   import { go, href } from '../../../router.svelte.js'
   import { templateInstances, addCanInputFromDbc } from '../../../../lib/store.js'
-  import { defaults, validate, previewTemplate, logicModule, shortfalls, freedBy, isInput, blank, OPS } from '../../../../lib/templates.js'
+  import { defaults, validate, previewTemplate, logicModule, shortfalls, freedBy, isInput, blank, OPS, shedCaps } from '../../../../lib/templates.js'
   import { isMod, numOut, loadOutputOptions, loadInputOptions, applyTemplate, remoteShortfalls, undoTemplate } from '../../../../lib/apply.js'
   import SearchPick from './SearchPick.svelte'
   import PreviewAside from './PreviewAside.svelte'
@@ -93,7 +93,8 @@
   let preview = $state(null), previewErr = $state('')
   $effect(() => {
     const s = { ...sel }
-    previewTemplate(tpl, s, outName).then((p) => { preview = p; previewErr = '' }).catch((e) => { preview = null; previewErr = e.message })
+    // untracked: the device list updates 10 times a second
+    previewTemplate(tpl, s, outName, untrack(() => shedCaps(mods))).then((p) => { preview = p; previewErr = '' }).catch((e) => { preview = null; previewErr = e.message })
   })
   const freed = $derived(freedBy(editing))
   const short = $derived(preview && logicGuid ? shortfalls(preview.need, funcs[logicGuid], freed[logicGuid]) : [])
@@ -103,9 +104,10 @@
 
   // ---- steps
   const fOut = $derived(tpl.fields.filter((f) => f.t === 'out'))
-  // a module pick (a template that sets a module setting, not an output): PDMs that have the setting
+  // a module pick: with outputs, the module the logic runs on and whose outputs it uses (the project's PDMs); without,
+  // a template that sets a module setting (retry all): PDMs that have the setting
   const fMod = $derived(tpl.fields.filter((f) => f.t === 'module'))
-  const modOpts = $derived(mods.filter((d) => d.retryAllInput != null).map((d) => ({ value: d.guid, label: d.name })))
+  const modOpts = $derived(mods.filter((d) => (fOut.length ? !/can.?board/i.test(d.type ?? '') : d.retryAllInput != null)).map((d) => ({ value: d.guid, label: d.name })))
   const fIn = $derived(tpl.fields.filter(isInput))
   const fSet = $derived(tpl.fields.filter((f) => f.t === 'number' || f.t === 'op' || f.t === 'check'))
   const steps = $derived([
@@ -167,7 +169,7 @@
     applyErr = ''
     const issue = applyIssues(); if (issue) { applyErr = issue; return }
     const mine = (editing?.wired ?? []).map((w) => (/^\d+$/.test(String(w)) ? `${editing.guid}:${w}` : String(w)))
-    const taken = fOut.filter((f) => outOpt(f.k)?.used && !mine.includes(sel[f.k]))
+    const taken = fOut.filter((f) => !tpl.keepsRule && outOpt(f.k)?.used && !mine.includes(sel[f.k]))
     if (taken.length && !force) { confirmTake = true; return }
     busy = true
     const others = get(templateInstances).filter((i) => i.id !== editing?.id)
@@ -269,7 +271,7 @@
         {#each fMod as f (f.k)}
           <div class="fld" data-field={f.k}>
             <Select label={f.label} items={modOpts} value={String(sel[f.k] ?? '')} onchange={(v) => (sel[f.k] = v)} data-testid={'pick-' + f.k} />
-            {#if !modOpts.length}<span class="muted">No PDM in the project has this setting: it needs dingoFW with fault clear.</span>{/if}
+            {#if !modOpts.length}<span class="muted">{fOut.length ? 'There is no PDM in the project.' : 'No PDM in the project has this setting: it needs dingoFW with fault clear.'}</span>{/if}
           </div>
         {/each}
         {#if fOut.length}<p class="muted relay-note" data-testid="relay-note"><b>Via relay?</b> {RELAY_WHY}</p>{/if}

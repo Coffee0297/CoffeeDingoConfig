@@ -36,7 +36,7 @@
     input: ['name', 'invert', 'mode', 'debounceTime'],
     digitaloutput: ['name', 'input'],
     output: ['name', 'input', 'dutyCycleInput'],
-    sys: ['forceSleepInput', 'muteTxInput', 'retryAllInput'],
+    sys: ['forceSleepInput', 'muteTxInput', 'retryAllInput', 'shedInput'],
   }
   const fields = $derived(EDIT[node?.kind] ?? [])
   function seed() {
@@ -100,6 +100,7 @@
     if (k === 'timer' && (draft.preset < 0 || draft.preset > 3600000)) return 'Time must be 0 to 1 hour.'
     if ((k === 'canoutput' || k === 'caninput') && (draft.startBit < 0 || draft.startBit > 63 || draft.bitLength < 1 || draft.bitLength > 64 - draft.startBit)) return `Start bit 0–63 and length 1–${64 - (draft.startBit | 0)}.`
     if (k === 'sys' && (draft.forceSleepInput === 1 || draft.muteTxInput === 1)) return '"Always on" would keep the module asleep or muted for good. Pick a real signal.'
+    if (k === 'sys' && draft.shedInput > 0 && model?.byIdx?.get(draft.shedInput)?.kind === 'sys') return 'A module signal is never off: as the shed input it would keep the opted-in loads off for good. Pick a condition, e.g. battery below a voltage.'
     if (k === 'table') {
       for (let i = 1; i < draft.xSize; i++) if (!(draft.xAxis[i] > draft.xAxis[i - 1])) return `X point ${i + 1} must be above X point ${i}.`
       if (draft.ySize > 1) for (let i = 1; i < draft.ySize; i++) if (!(draft.yAxis[i] > draft.yAxis[i - 1])) return `Y point ${i + 1} must be above Y point ${i}.`

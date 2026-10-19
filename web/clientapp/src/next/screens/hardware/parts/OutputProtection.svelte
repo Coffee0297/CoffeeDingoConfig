@@ -6,7 +6,8 @@
   // canClear: the module has "clear on re-assert" (upstream fault clear); retryAll: it has a retry-all signal wired
   // hardShort: the firmware has the hard short limit (upstream output sub 32)
   // ssTarget: a current-limited soft start is set (the inrush limit is then the soft start's current target)
-  let { f = $bindable(), rating = null, warn = true, openLoad = true, under = false, canClear = false, retryAll = false, hardShort = false, ssTarget = false } = $props()
+  // canShed: the module has load shedding (upstream feat/load-shed: device 0x0000:13 + output sub 26); shedWired: its shed input is set
+  let { f = $bindable(), rating = null, warn = true, openLoad = true, under = false, canClear = false, retryAll = false, hardShort = false, ssTarget = false, canShed = false, shedWired = false } = $props()
   const UNDER = [{ value: '0', label: 'Report only' }, { value: '1', label: 'Switch the output off' }]
 
   const RESET = [{ value: '0', label: 'Stay off (latch)' }, { value: '1', label: 'Retry a few times' }, { value: '2', label: 'Retry for ever' }]
@@ -70,11 +71,15 @@
         <span class="hint" class:bad={num(f.hardShortLimit) > 0 && num(f.hardShortLimit) <= num(f.inrushLimit)}>{num(f.hardShortLimit) > 0 && num(f.hardShortLimit) <= num(f.inrushLimit) ? '■ at or below the inrush allowed: a healthy load can latch off at switch-on' : 'latches off at once, even during inrush; no retry. Well above the inrush, below where the current reading tops out. 0 = off'}</span>
       </div>
     {/if}
+    {#if canShed}
+      <Switch label="Switch off while load shedding" hint={shedWired ? 'Held off while the module’s shed input is on (e.g. battery low); back on by itself after.' : 'The module has no shed input set yet: set it on the Power screen or with the Load shed function.'} bind:checked={f.shed} data-testid="shed" />
+    {/if}
   </div>
   <p class="sum" data-testid="protection-summary">
     Trips above <strong>{f.currentLimit} A</strong>{#if num(f.inrushTime) > 0}, or <strong>{f.inrushLimit} A</strong> during the first <strong>{f.inrushTime} ms</strong>{/if}; {afterTrip}.
     {#if hardShort && num(f.hardShortLimit) > 0}Above <strong>{f.hardShortLimit} A</strong> (a dead short) it latches off at once, also during inrush, without retrying.{/if}
     {#if warn}{#if num(f.warnLimit) > 0}Warns at <strong>{f.warnLimit} A</strong>.{:else}No early warning.{/if}{/if}
+    {#if canShed && f.shed}Switches off while the module sheds loads.{/if}
     {#if openLoad}{#if num(f.openLoadLimit) > 0}Reports "load missing?" below <strong>{f.openLoadLimit} A</strong> for <strong>{f.openLoadTime} ms</strong>.{:else}Missing load is not checked.{/if}{/if}
     {#if under && num(f.underLimit) > 0}Below <strong>{f.underLimit} A</strong> for <strong>{f.underTime} ms</strong> it {f.underTrip ? 'switches off and latches Fault' : 'reports Undercurrent'}.{/if}
   </p>

@@ -2,7 +2,7 @@
 // backend's template runner (MCP list/preview/apply/remove_template, run in Jint from template-runtime.js)
 // do exactly the same thing. `api` is store.js's api, or the backend's loopback twin with the same methods
 // (functions, inputs, setFunction, outputConfig, broadcastSignals).
-import { previewTemplate, liveCtx, outputOptions, logicModule, shortfalls, freedBy, validate, isInput, blank } from './templates.js'
+import { previewTemplate, liveCtx, outputOptions, logicModule, shortfalls, freedBy, validate, isInput, blank, shedCaps } from './templates.js'
 import { pinFor, ioTag } from './pinmap.js'
 import { busInputOptions, isDefaultName } from './businputs.js'
 
@@ -42,6 +42,7 @@ export const binBody = (o, input, enabled = true) => {
     HardShortLimit: o.hardShortLimit ?? 0,   // upstream output sub 32: carried so a re-wire keeps it
     SoftStartTimeout: o.softStartTimeout ?? 0,   // upstream output sub 30: carried so a re-wire keeps it
     SoftStopTime: o.softStopTime ?? 0,   // upstream output sub 31: carried so a re-wire keeps it
+    Shed: o.shed ?? false,   // upstream load shedding: carried so a re-wire never drops the opt-in
   }
 }
 
@@ -192,7 +193,7 @@ export async function undoTemplate(api0, devices, inst, keep = []) {
     const k = key(w), [g, n] = k.split(':'), d = devOf(g)
     if (!snaps[k] && d) await step(`${name(g)} output ${n}`, () => wireOut(api, d, +n, inst.prev?.[k] ?? inst.prev?.[w] ?? 0))
   }
-  if (inst.device) await step(`${name(inst.guid)} retry-all signal`, () => api.deviceInputs(inst.guid, inst.device))   // module settings it set
+  if (inst.device) await step(`${name(inst.guid)} module settings`, () => api.deviceInputs(inst.guid, inst.device))   // module settings it set (retry-all / shed input)
   for (const [k, s] of Object.entries(snaps)) { const g = k.split(':')[0], d = devOf(g); if (s && d) await step(`${name(g)} output ${s.number}`, () => restoreOutput(api, d, s)) }
   for (const c of [...(inst.created ?? [])].reverse()) {
     const g = c.guid ?? inst.guid, k = `${g}|${c.number}`
@@ -295,7 +296,7 @@ export async function applyTemplate(api0, { devices, tpl, sel, relays, name, id,
       if (s[f.k] == null) throw new Error(`${f.label}: created the CAN input but couldn't resolve its signal`)
     }
     const was = (v) => oldOf(old?.prev, v) ?? outOpts.find((o) => o.value === v)?.input ?? 0
-    ctx = await liveCtx({ api, guid: dev.guid, isCanboard: isCb(dev), outName, wireOutput: (v, idx) => {
+    ctx = await liveCtx({ api, guid: dev.guid, isCanboard: isCb(dev), outName, inputOf: was, ...shedCaps(devices), wireOutput: (v, idx) => {
       prev[v] ??= was(v)
       const [g, n] = String(v).split(':')
       return g === dev.guid ? wireOut(api, dev, +n, idx) : wireRemote(devOf(g), +n, idx)
@@ -348,7 +349,7 @@ export async function planTemplate(api, { devices, defs, templates, req, old = n
     if (o.error) errors.push(`${f.label}: ${o.error}`); else { sel[f.k] = o.value; resolved[f.k] = o.label }
   }
   for (const f of tpl.fields.filter((f) => f.t === 'module' && !blank(picks[f.k]))) {
-    const d = mods.find((x) => x.name.toLowerCase() === String(picks[f.k]).trim().toLowerCase())
+    const d = mods.find((x) => x.guid === picks[f.k] || x.name.toLowerCase() === String(picks[f.k]).trim().toLowerCase())   // a name, or the guid an edit keeps
     if (!d) errors.push(`${f.label}: no module called “${picks[f.k]}”`); else { sel[f.k] = d.guid; resolved[f.k] = d.name }
   }
   const lm = logicModule(tpl, sel)
@@ -363,12 +364,12 @@ export async function planTemplate(api, { devices, defs, templates, req, old = n
   const v = validate(tpl, sel); if (v) errors.push(v)
   let preview = null
   try {
-    preview = await previewTemplate(tpl, { ...sel }, (o) => outOpts.find((x) => x.value === o)?.name || 'output ' + numOut(o))
+    preview = await previewTemplate(tpl, { ...sel }, (o) => outOpts.find((x) => x.value === o)?.name || 'output ' + numOut(o), shedCaps(devices))
     const freed = freedBy(old)
     const short = shortfalls(preview.need, funcs[lm.guid], freed[lm.guid]); if (short.length) errors.push(`Not enough free slots on ${dev?.name}: ${short.join(', ')}`)
     const rs = remoteShortfalls(tpl, sel, lm.guid, funcs, devices, freed); if (rs.length) errors.push(`Outputs on other modules follow the logic over CAN — not enough free CAN inputs on ${rs.join(', ')}`)
   } catch (e) { errors.push(e.message) }
-  const taken = tpl.fields.filter((f) => f.t === 'out' && outOpts.find((o) => o.value === sel[f.k])?.used).map((f) => resolved[f.k])
+  const taken = tpl.fields.filter((f) => f.t === 'out' && !tpl.keepsRule && outOpts.find((o) => o.value === sel[f.k])?.used).map((f) => resolved[f.k])
   return { tpl, sel, relays, resolved, logic: dev ? { guid: dev.guid, name: dev.name } : null, preview, errors, taken,
     inOpt: (k) => (inOpts[k] ?? []).find((o) => o.value === sel[k] && o.value !== ''), outOpts }
 }

@@ -189,13 +189,16 @@ export function createSim(model, snapshot) {
 
   function evalOutputs() {
     const retry = retryEdge(), retryWired = !!model.nodes.get('sys')?.row?.retryAllInput
+    // upstream load shedding: while the module's shed input is on, outputs with Shed are held off (like starter disable)
+    const shedIdx = model.nodes.get('sys')?.row?.shedInput, shedding = !!shedIdx && truthy(val(shedIdx))
     for (const n of model.nodes.values()) {
       const r = n.row ?? {}
       if (n.kind === 'output' || n.kind === 'digitaloutput') {
         const onIdx = port(n, n.kind === 'output' ? 'On' : 'State'), curIdx = port(n, 'Current'), ocIdx = port(n, 'Overcurrent'), fIdx = port(n, 'Fault')
         const wIdx = port(n, 'Warning'), olIdx = port(n, 'Open Load'), ucIdx = port(n, 'Undercurrent')   // upstream state signals, 1 only while reported
         const src = n.kind === 'output' ? r.inputVal : r.input
-        const want = !!r.enabled && truthy(val(src))
+        const shedNow = n.kind === 'output' && shedding && !!r.shed
+        const want = !!r.enabled && truthy(val(src)) && !shedNow
         const f = faults[n.id]
         const nominal = mem[n.id]?.amps
         const s = m(n.id), until = latchClears(r, retryWired)
@@ -254,6 +257,7 @@ export function createSim(model, snapshot) {
           m(n.id).openAt = undefined; m(n.id).underAt = undefined
           status[n.id] = want && r.warnLimit > 0 && nominal > r.warnLimit
             ? { text: 'WARNING', tone: 'warn', why: `It draws ${nominal.toFixed(1)} A, above its ${r.warnLimit} A warning limit. It keeps running; the module only reports it.` }
+            : shedNow && r.enabled && truthy(val(src)) ? { text: 'SHED', tone: 'warn', why: 'Its input is on, but the module is shedding loads: it comes back when the shed input goes off.' }
             : { text: want ? 'ON' : 'OFF', tone: want ? 'on' : 'off', why: !r.enabled ? 'The output is disabled.' : !src ? 'It has no input, so it never switches.' : want ? 'Its input is on.' : f ? 'It is off, so the fault has nothing to act on yet.' : 'Its input is off.' }
         }
         if (wIdx) vals[wIdx] = status[n.id]?.text === 'WARNING'

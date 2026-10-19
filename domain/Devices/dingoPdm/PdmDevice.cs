@@ -172,6 +172,10 @@ public class PdmDevice : IDeviceConfigurable
     [JsonPropertyName("retryAllInput")] public int RetryAllInput { get; set; }
     /// <summary>The module has the retry-all input: upstream, and in its param list (or that list not read yet).</summary>
     [JsonIgnore] public bool HasRetryAll => Upstream && (!ParamSet.Known || ParamSet.Contains(BaseIndex, 12));
+    // upstream feat/load-shed (0x0000:13): while this signal is on, outputs with Shed set are held off
+    [JsonPropertyName("shedInput")] public int ShedInput { get; set; }
+    /// <summary>The module has the load-shed input: upstream, and in its param list (or that list not read yet).</summary>
+    [JsonIgnore] public bool HasShed => Upstream && (!ParamSet.Known || ParamSet.Contains(BaseIndex, 13));
     [JsonPropertyName("wakeDigInputMask")] public int WakeDigInputMask { get; set; } = 0xFF;
     [JsonPropertyName("wakeOnCan")] public bool WakeOnCan { get; set; } = true;
     [JsonPropertyName("filtersEnabled")] public bool CanFiltersEnabled { get; set; }
@@ -1166,6 +1170,8 @@ public class PdmDevice : IDeviceConfigurable
             GetValue = () => ForceSleepInput, SetValue = val => ForceSleepInput = (int)val, ValueType = typeof(int), DefaultValue = 0 },
         new() { ParentName = Name, Name = "device.retryAllInput", Index = BaseIndex, SubIndex = 12,
             GetValue = () => RetryAllInput, SetValue = val => RetryAllInput = (int)val, ValueType = typeof(int), DefaultValue = 0 },
+        new() { ParentName = Name, Name = "device.shedInput", Index = BaseIndex, SubIndex = 13,
+            GetValue = () => ShedInput, SetValue = val => ShedInput = (int)val, ValueType = typeof(int), DefaultValue = 0 },
     ];
 
     private void Clear()

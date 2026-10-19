@@ -219,7 +219,8 @@ export function buildModel(dev, funcs, vmap) {
   // target fields of every candidate (enabled blocks only — a disabled block's fields don't run)
   const targetsOf = (c) => {
     // upstream fault clear: the module's retry-all signal (null on a module that has none)
-    if (c.kind === 'sys') return c.row?.retryAllInput != null ? [...KINDS.sys.ins, ['retryAllInput', 'Retry all faults', 'bool']] : KINDS.sys.ins
+    // upstream load shedding: the module's shed input (null on a module that has none)
+    if (c.kind === 'sys') return [...KINDS.sys.ins, ...(c.row?.retryAllInput != null ? [['retryAllInput', 'Retry all faults', 'bool']] : []), ...(c.row?.shedInput != null ? [['shedInput', 'Shed loads', 'bool']] : [])]
     if (!c.enabled && c.kind !== 'output') return []   // a switched-off PDM output still shows (and keeps) its input
     let ins = KINDS[c.kind]?.ins ?? []
     if (c.kind === 'table' && (c.row?.ySize ?? 1) <= 1) ins = ins.filter(([f]) => f !== 'yInput')

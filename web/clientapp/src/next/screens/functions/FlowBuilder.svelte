@@ -66,7 +66,7 @@
   $effect(() => { if (live.devices.length && !car) untrack(reloadCar) })
 
   // PDM output config lives in telemetry; rebuild the model only when that config changes, not on every value tick
-  const outSig = $derived(JSON.stringify((dev?.outputs ?? []).map((o) => [o.number, o.name, o.enabled, o.inputVal, o.variableDutyCycle, o.dutyCycleInput, o.variableFreq, o.freqInput, o.currentLimit, o.pwmEnabled, o.resetMode, o.resetTime, o.resetCountLimit])))
+  const outSig = $derived(JSON.stringify((dev?.outputs ?? []).map((o) => [o.number, o.name, o.enabled, o.inputVal, o.variableDutyCycle, o.dutyCycleInput, o.variableFreq, o.freqInput, o.currentLimit, o.pwmEnabled, o.resetMode, o.resetTime, o.resetCountLimit, o.shed])))
   const hasDev = $derived(!!dev)
   const model = $derived.by(() => { outSig; const f = funcs, v = vmap; return f && hasDev ? untrack(() => buildModel(dev, f, v)) : null })
 
