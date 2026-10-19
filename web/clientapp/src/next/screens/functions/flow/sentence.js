@@ -100,6 +100,9 @@ export function sentenceFor(model, n) {
       if (r.warnLimit > 0) segs.push(T('It reports a warning above'), val(r.warnLimit + ' A', 'warnLimit'), T('.'))
       if (r.openLoadLimit > 0) segs.push(T('It reports a missing load below'), val(r.openLoadLimit + ' A', 'openLoadLimit'), T('for'), val((r.openLoadTime ?? 1000) + ' ms', 'openLoadTime'), T('.'))
       if (r.underLimit > 0) segs.push(T(r.underTrip ? 'It switches off and latches a fault below' : 'It reports too little current below'), val(r.underLimit + ' A', 'underLimit'), T('for'), val((r.underTime ?? 1000) + ' ms', 'underTime'), T('.'))
+      // the firmware ramps only with soft start + a duty from a signal, at 100 % per soft-start ramp time
+      if (r.pwmEnabled && r.variableDutyCycle && r.rampDutyChanges && (r.softStart ?? r.softStartEnabled))
+        segs.push(T('Duty changes ramp at up to 100 % per'), val((r.softStartRamp ?? r.softStartRampTime ?? 0) + ' ms', 'softStartRamp'), T('.'))
       return segs
     }
     default: return null

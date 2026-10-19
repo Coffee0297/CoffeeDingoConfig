@@ -64,6 +64,7 @@
   const rating = $derived(!isCb && dev ? outputRatingA(defs, dev.type, n) : null)
   // PWM frequency from a signal (output subs 21-23): on upstream only where the module has it
   const varFreq = $derived(isCb || has(dev, 0x1000 + n - 1, 21))
+  const rampDuty = $derived(isCb || has(dev, 0x1000 + n - 1, 24))
   const overRating = $derived(rating != null && Number(f?.currentLimit) > rating)
 
   function validate() {
@@ -212,7 +213,7 @@
         {:else}
           <Card title="Protection"><p class="muted">The CANBoard switches this load to ground and cannot measure or limit current. Put a fuse in the load wire.</p></Card>
         {/if}
-        <OutputDrive {guid} bind:f upstream={isUpstream(dev)} {varFreq} />
+        <OutputDrive {guid} bind:f upstream={isUpstream(dev)} {varFreq} {rampDuty} />
       </div>
       <div class="col">
         <OutputBench {bench} {blocker} modName={dev.name} limit={isCb ? 0 : Number(f.currentLimit) || 0} inrush={Number(f.inrushLimit) || 0} inrushTime={Number(f.inrushTime) || 0} />

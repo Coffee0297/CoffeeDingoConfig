@@ -267,6 +267,13 @@ public class UpstreamFamilyTests
 
         d.ParamSet.Learn(Enumerable.Range(0, 18).Select(s => (0x1000, s)).ToList(), new());   // stock upstream: none of them
         Assert.DoesNotContain(d.Params.Where(p => p.Index == 0x1000 && p.SubIndex is >= 21 and <= 23), p => FwFamily.Has(d, p));
+
+        // feat/pwm-ramp-duty-changes: sub 24 after them
+        var ramp = d.Params.Single(p => p.Index == 0x1000 && p.SubIndex == 24);
+        Assert.Equal("output[1].rampDutyChanges", ramp.Name);
+        Assert.False(FwFamily.Has(d, ramp));
+        d.ParamSet.Learn(Enumerable.Range(0, 25).Select(s => (0x1000, s)).ToList(), new());
+        Assert.True(FwFamily.Has(d, ramp));
     }
 
     [Fact]

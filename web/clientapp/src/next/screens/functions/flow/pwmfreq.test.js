@@ -18,3 +18,12 @@ assert.equal(txt(), 'When Pump switch is on → turn on Pump at 50 % .')
 out.variableFreq = true; out.freqInput = 0
 assert.ok(sentenceFor(model, nodes.get('output:1')).some((s) => s.tok === 'missing' && s.field === 'freqInput'))
 console.log('pwmfreq.test OK')
+
+// feat/pwm-ramp-duty-changes (sub 24): only with soft start and a duty from a signal
+Object.assign(out, { freqInput: 6, variableFreq: false, variableDutyCycle: true, dutyCycleInput: 6, rampDutyChanges: true, softStart: true, softStartRamp: 2000 })
+assert.match(txt(), /\. Duty changes ramp at up to 100 % per 2000 ms \.$/)
+out.softStart = false
+assert.doesNotMatch(txt(), /ramp/)
+out.softStart = true; out.variableDutyCycle = false
+assert.doesNotMatch(txt(), /ramp/)
+console.log('pwmramp OK')
