@@ -179,11 +179,18 @@ export function createSim(model, snapshot) {
             : 'Low-side output tripped (simulated).' }
         } else if (f === 'open' && want) {
           if (onIdx) vals[onIdx] = true; if (ocIdx) vals[ocIdx] = false; if (fIdx) vals[fIdx] = false; if (curIdx) vals[curIdx] = 0
-          status[n.id] = { text: 'OPEN LOAD', tone: 'warn', why: 'The module drives the output but reads almost no current. Check the plug and the fuse.' }
+          // a PDM output reports Open load only with a "load missing below" limit, once the load has been missing that long
+          const s = m(n.id); s.openAt ??= t
+          if (n.kind === 'output' && !(r.openLoadLimit > 0)) status[n.id] = { text: 'ON', tone: 'on', why: 'It reads almost no current, but no "load missing below" limit is set, so the module reports it as on.' }
+          else if (n.kind === 'output' && t - s.openAt < (r.openLoadTime ?? 1000)) status[n.id] = { text: 'ON', tone: 'on', why: `Almost no current: reported as Open load after ${r.openLoadTime ?? 1000} ms.` }
+          else status[n.id] = { text: 'OPEN LOAD', tone: 'warn', why: 'The module drives the output but reads almost no current. Check the plug and the fuse.' }
         } else {
           if (onIdx) vals[onIdx] = want; if (ocIdx) vals[ocIdx] = false; if (fIdx) vals[fIdx] = false
           if (curIdx) vals[curIdx] = want ? (nominal ?? null) : 0
-          status[n.id] = { text: want ? 'ON' : 'OFF', tone: want ? 'on' : 'off', why: !r.enabled ? 'The output is disabled.' : !src ? 'It has no input, so it never switches.' : want ? 'Its input is on.' : f ? 'It is off, so the fault has nothing to act on yet.' : 'Its input is off.' }
+          m(n.id).openAt = undefined
+          status[n.id] = want && r.warnLimit > 0 && nominal > r.warnLimit
+            ? { text: 'WARNING', tone: 'warn', why: `It draws ${nominal.toFixed(1)} A, above its ${r.warnLimit} A warning limit. It keeps running; the module only reports it.` }
+            : { text: want ? 'ON' : 'OFF', tone: want ? 'on' : 'off', why: !r.enabled ? 'The output is disabled.' : !src ? 'It has no input, so it never switches.' : want ? 'Its input is on.' : f ? 'It is off, so the fault has nothing to act on yet.' : 'Its input is off.' }
         }
       } else if (n.kind === 'canoutput' && n.enabled) {
         status[n.id] = r.input ? { text: 'SENDS ' + fmt(val(r.input)), tone: 'on', why: `Sends ${fmt(val(r.input))} on ${'0x' + Number(r.id ?? 0).toString(16).toUpperCase()} every ${r.interval} ms (simulated, nothing is sent).` }

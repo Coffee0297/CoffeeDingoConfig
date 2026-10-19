@@ -1,6 +1,7 @@
 <script>
   import { Card, Stepper, Select } from '../../../ui/index.js'
-  let { f = $bindable(), rating = null } = $props()
+  // warn / openLoad: the firmware has the warning / open-load limits (output subs 18-20; on upstream by its param list)
+  let { f = $bindable(), rating = null, warn = true, openLoad = true } = $props()
 
   const RESET = [{ value: '0', label: 'Stay off (latch)' }, { value: '1', label: 'Retry a few times' }, { value: '2', label: 'Retry for ever' }]
   let rm = $state('0')
@@ -27,20 +28,24 @@
     <Select label="After a trip" items={RESET} bind:value={rm} onchange={(v) => (f.resetMode = Number(v))} data-testid="reset-mode" />
     <Stepper label="Retries" bind:value={f.resetCountLimit} min={0} max={100} step={1} disabled={num(f.resetMode) !== 1} />
     <Stepper label="Wait between retries" bind:value={f.resetTime} min={0} max={60000} step={100} unit="ms" disabled={num(f.resetMode) === 0} />
-    <div>
-      <Stepper label="Warn at" bind:value={f.warnLimit} min={0} max={100} step={0.5} decimals={1} unit="A" data-testid="warn" />
-      <span class="hint">reported, keeps running. 0 = off</span>
-    </div>
-    <div>
-      <Stepper label="Load missing below" bind:value={f.openLoadLimit} min={0} max={100} step={0.1} decimals={1} unit="A" data-testid="openload" />
-      <span class="hint">open load. 0 = off</span>
-    </div>
-    <Stepper label="Load missing for" bind:value={f.openLoadTime} min={0} max={10000} step={100} unit="ms" disabled={!num(f.openLoadLimit)} />
+    {#if warn}
+      <div>
+        <Stepper label="Warn at" bind:value={f.warnLimit} min={0} max={100} step={0.5} decimals={1} unit="A" data-testid="warn" />
+        <span class="hint">reported, keeps running. 0 = off</span>
+      </div>
+    {/if}
+    {#if openLoad}
+      <div>
+        <Stepper label="Load missing below" bind:value={f.openLoadLimit} min={0} max={100} step={0.1} decimals={1} unit="A" data-testid="openload" />
+        <span class="hint">open load. 0 = off</span>
+      </div>
+      <Stepper label="Load missing for" bind:value={f.openLoadTime} min={0} max={10000} step={100} unit="ms" disabled={!num(f.openLoadLimit)} />
+    {/if}
   </div>
   <p class="sum" data-testid="protection-summary">
     Trips above <strong>{f.currentLimit} A</strong>{#if num(f.inrushTime) > 0}, or <strong>{f.inrushLimit} A</strong> during the first <strong>{f.inrushTime} ms</strong>{/if}; {afterTrip}.
-    {#if num(f.warnLimit) > 0}Warns at <strong>{f.warnLimit} A</strong>.{:else}No early warning.{/if}
-    {#if num(f.openLoadLimit) > 0}Reports "load missing?" below <strong>{f.openLoadLimit} A</strong> for <strong>{f.openLoadTime} ms</strong>.{:else}Missing load is not checked.{/if}
+    {#if warn}{#if num(f.warnLimit) > 0}Warns at <strong>{f.warnLimit} A</strong>.{:else}No early warning.{/if}{/if}
+    {#if openLoad}{#if num(f.openLoadLimit) > 0}Reports "load missing?" below <strong>{f.openLoadLimit} A</strong> for <strong>{f.openLoadTime} ms</strong>.{:else}Missing load is not checked.{/if}{/if}
   </p>
 </Card>
 
