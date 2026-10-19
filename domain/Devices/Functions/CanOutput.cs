@@ -37,7 +37,13 @@ public class CanOutput : IDeviceFunction
         }
     }
 
+    // Upstream dingoFW feat/can-output-trigger (sub 12): a var; 0 = send on the interval. Set, the frame is sent once on each
+    // rising edge of that var (with every output packed in it) and not on the interval.
+    [JsonPropertyName("triggerInput")] public int TriggerInput { get; set; }
+
     [JsonIgnore] public List<DeviceParameter> Params { get; }
+    /// <summary>Upstream: subs 0-10, then the trigger (sub 12); a module without it drops it by its param list.</summary>
+    [JsonIgnore] public List<DeviceParameter> UpstreamParams { get; }
 
     [JsonConstructor]
     public CanOutput(int number, string name)
@@ -46,6 +52,8 @@ public class CanOutput : IDeviceFunction
         Name = name;
 
         Params = InitParams();
+        UpstreamParams = [.. Params, new DeviceParameter { ParentName = Name, Name = $"canOutput[{Number}].triggerInput", Index = BaseIndex + (Number - 1), SubIndex = 12,
+            GetValue = () => TriggerInput, SetValue = val => TriggerInput = (int)val, ValueType = typeof(int), DefaultValue = 0 }];
     }
 
     private List<DeviceParameter> InitParams()

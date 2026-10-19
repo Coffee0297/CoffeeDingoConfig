@@ -186,7 +186,7 @@ export function createSim(model, snapshot) {
           status[n.id] = { text: want ? 'ON' : 'OFF', tone: want ? 'on' : 'off', why: !r.enabled ? 'The output is disabled.' : !src ? 'It has no input, so it never switches.' : want ? 'Its input is on.' : f ? 'It is off, so the fault has nothing to act on yet.' : 'Its input is off.' }
         }
       } else if (n.kind === 'canoutput' && n.enabled) {
-        status[n.id] = r.input ? { text: 'SENDS ' + fmt(val(r.input)), tone: 'on', why: `Sends ${fmt(val(r.input))} on ${'0x' + Number(r.id ?? 0).toString(16).toUpperCase()} every ${r.interval} ms (simulated, nothing is sent).` }
+        status[n.id] = r.input ? { text: 'SENDS ' + fmt(val(r.input)), tone: 'on', why: `Sends ${fmt(val(r.input))} on ${'0x' + Number(r.id ?? 0).toString(16).toUpperCase()} ${r.triggerInput ? 'each time its trigger turns on' : `every ${r.interval} ms`} (simulated, nothing is sent).` }
           : { text: 'NOTHING', tone: 'warn', why: 'No value to send.' }
       }
     }

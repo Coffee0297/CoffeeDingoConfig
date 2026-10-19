@@ -7,7 +7,7 @@
   import { untrack } from 'svelte'
   import { Button, Chip, Field, Select, Segmented, Checkbox, Banner } from '../../../ui/index.js'
   import { href } from '../../../router.svelte.js'
-  import { FAM_COLOR, FAM_NAME, OPS, OP_WORDS, JOIN, TIMER_MODES, EDGES, MATH_OPS, isRelational, sourceOptions, canWire, hexId, parseId } from './model.js'
+  import { FAM_COLOR, FAM_NAME, OPS, OP_WORDS, JOIN, TIMER_MODES, EDGES, MATH_OPS, isRelational, framePeers, sourceOptions, canWire, hexId, parseId } from './model.js'
   import { sentenceFor } from './sentence.js'
   import { fmt } from './livevals.js'
   import { lacks, isUpstream } from '../../hardware/parts/util.js'
@@ -28,7 +28,7 @@
     flasher: ['name', 'input', 'onTime', 'offTime', 'single'],
     counter: ['name', 'incInput', 'decInput', 'resetInput', 'incEdge', 'decEdge', 'resetEdge', 'minCount', 'maxCount', 'wrapAround', 'holdToReset', 'resetTime'],
     table: ['name', 'xInput', 'yInput', 'xSize', 'ySize', 'xAxis', 'yAxis', 'cells'],
-    canoutput: ['name', 'input', 'id', 'ide', 'startBit', 'bitLength', 'byteOrder', 'factor', 'offset', 'signed', 'interval'],
+    canoutput: ['name', 'input', 'id', 'ide', 'startBit', 'bitLength', 'byteOrder', 'factor', 'offset', 'signed', 'interval', 'triggerInput'],
     caninput: ['name', 'id', 'ide', 'startBit', 'bitLength', 'factor', 'offset', 'operator', 'operand', 'mode', 'timeoutEnabled', 'timeout', 'timeoutValue'],
     math: ['name', 'inputA', 'inputB', 'op', 'constB', 'factor', 'offset'],
     canmsg: ['name', 'input', 'id', 'ide', 'dlc', 'data', 'mode', 'intervalMs'],
@@ -117,7 +117,7 @@
     err = validate()
     if (err) return
     const body = { ...dirtyBody }
-    for (const k of Object.keys(body)) if (!isRemoteKey(body[k]) && (typeof base[k] === 'number' || ['input', 'var0', 'var1', 'var2', 'xInput', 'yInput', 'incInput', 'decInput', 'resetInput', 'inputA', 'inputB', 'leftInput', 'rightInput', 'clockInput'].includes(k))) body[k] = Number(body[k])
+    for (const k of Object.keys(body)) if (!isRemoteKey(body[k]) && (typeof base[k] === 'number' || ['input', 'var0', 'var1', 'var2', 'xInput', 'yInput', 'incInput', 'decInput', 'resetInput', 'inputA', 'inputB', 'leftInput', 'rightInput', 'clockInput', 'triggerInput'].includes(k))) body[k] = Number(body[k])
     await onsave?.(node.id, body, `${node.title}: ${Object.keys(body).join(', ')}`)
   }
 
@@ -347,10 +347,18 @@
         <Field label="+ Offset" type="number" step="any" bind:value={() => draft.offset ?? 0, (v) => (draft.offset = toNum(v))} />
       </div>
       {#if node.kind === 'canoutput'}
+        {@const peers = framePeers(model, node.id, { id: parseInt(String(idText).replace(/^0x/i, ''), 16), ide: draft.ide })}
+        {@const onTrigger = !!draft.triggerInput || peers.triggered.length > 0}
         <div class="two">
           {@render seg('Byte order', [{ value: '0', label: 'Little' }, { value: '1', label: 'Big' }], String(draft.byteOrder ?? 0), (v) => (draft.byteOrder = Number(v)), false)}
-          <Field label="Every" type="number" min="0" unit="ms" bind:value={() => draft.interval ?? 0, (v) => (draft.interval = toNum(v))} />
+          <Field label="Every" type="number" min="0" unit="ms" disabled={onTrigger} hint={onTrigger ? 'Ignored: sent on trigger' : ''} bind:value={() => draft.interval ?? 0, (v) => (draft.interval = toNum(v))} />
         </div>
+        {#if draft.triggerInput}
+          <p class="hint">Sent once each time the trigger turns on, with the value at that moment; nothing while it stays on or off. A lost frame is not repeated: if it must arrive, send a cyclic copy too.</p>
+          {#if peers.untriggered.length}<p class="hint bad" role="status">▲ {peers.untriggered.join(', ')} share{peers.untriggered.length > 1 ? '' : 's'} this frame and {peers.untriggered.length > 1 ? 'have' : 'has'} no trigger: this frame is sent only on triggers, so {peers.untriggered.length > 1 ? 'they go' : 'it goes'} out only then.</p>{/if}
+        {:else if peers.triggered.length}
+          <p class="hint bad" role="status">▲ {peers.triggered.join(', ')} in the same frame {peers.triggered.length > 1 ? 'have' : 'has'} a trigger: this frame is sent only on triggers, so this one goes out only then.</p>
+        {/if}
         {#if idOwners}
           <p class="hint" class:bad={idOwners.length} role="status">{idOwners.length ? '▲ ' + idText + ' is already sent by ' + idOwners.join(', ') + '. Two senders on one ID collide.' : '● ' + idText + ' is free (checked against every module and the CAN ID map).'}</p>
         {/if}
