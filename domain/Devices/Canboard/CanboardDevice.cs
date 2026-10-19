@@ -802,7 +802,7 @@ public class CanboardDevice : IDeviceConfigurable
         foreach (var input in DigitalInputs) allParams.AddRange(input.Params);
         foreach (var canInput in CanInputs) allParams.AddRange(canInput.Params);
         foreach (var virtualInput in VirtualInputs) allParams.AddRange(virtualInput.Params);
-        foreach (var condition in Conditions) allParams.AddRange(condition.Params);
+        foreach (var condition in Conditions) allParams.AddRange(Family == FwFamily.Upstream ? condition.UpstreamParams : condition.Params);
         foreach (var counter in Counters) allParams.AddRange(counter.Params);
         foreach (var flasher in Flashers) allParams.AddRange(flasher.Params);
         foreach (var timer in Timers) allParams.AddRange(Family == FwFamily.Upstream ? timer.UpstreamParams : timer.Params);

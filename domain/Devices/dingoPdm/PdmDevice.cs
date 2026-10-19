@@ -1092,7 +1092,7 @@ public class PdmDevice : IDeviceConfigurable
         foreach (var input in Inputs) allParams.AddRange(input.Params);
         foreach (var canInput in CanInputs) allParams.AddRange(canInput.Params);
         foreach (var virtualInput in VirtualInputs) allParams.AddRange(virtualInput.Params);
-        foreach (var condition in Conditions) allParams.AddRange(condition.Params);
+        foreach (var condition in Conditions) allParams.AddRange(Family == FwFamily.Upstream ? condition.UpstreamParams : condition.Params);
         foreach (var counter in Counters) allParams.AddRange(counter.Params);
         foreach (var flasher in Flashers) allParams.AddRange(flasher.Params);
         if (Family == FwFamily.Fork) foreach (var table in Tables) allParams.AddRange(table.Params);   // upstream 0x1A00 is the timer
