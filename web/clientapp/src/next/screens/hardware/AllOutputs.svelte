@@ -5,6 +5,7 @@
   import { live, api, toast, isPdm, isCanboard } from '../../lib/live.svelte.js'
   import { href, go } from '../../router.svelte.js'
   import { pinFor } from '../../../lib/pinmap.js'
+  import { esc, printHtml } from '../../../lib/setupsheet.js'
   import { signalFeed } from './parts/feeds.svelte.js'
 
   // ---- CANBoard outputs and the names of their drivers ----
@@ -80,16 +81,12 @@
   }
 
   const GROUPS = [{ value: 'module', label: 'Module' }, { value: 'state', label: 'State' }, { value: 'none', label: 'Load name (A to Z)' }]
-  const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]))
   function printList() {
     const body = shown.map((r) => `<tr><td>${esc(r.mod)}</td><td>${esc(r.label)}</td><td>${esc(r.pin)}</td><td>${esc(r.name)}</td><td>${esc(r.limit)}</td>`
       + `<td>${r.wire ? esc([r.wire.color, r.wire.stripe && '/ ' + r.wire.stripe].filter(Boolean).join(' ')) : ''}</td><td>${r.wire?.mm2 ? esc(r.wire.mm2 + ' mm²') : ''}</td><td>${r.wire?.len ? esc(r.wire.len + ' m') : ''}</td></tr>`).join('')
     const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Wiring list</title><style>body{font-family:sans-serif}table{border-collapse:collapse;width:100%}th,td{border:1px solid;padding:4px 8px;text-align:left;font-size:12px}</style></head>`
       + `<body><h1>Wiring list</h1><p>${shown.length} outputs on ${nMods} modules. ${new Date().toLocaleDateString()}</p><table><thead><tr><th>Module</th><th>Out</th><th>Pin</th><th>Load</th><th>Limit</th><th>Wire colour</th><th>Gauge</th><th>Length</th></tr></thead><tbody>${body}</tbody></table>\x3cscript>window.onload=function(){window.print()}\x3c/script></body></html>`
-    const url = URL.createObjectURL(new Blob([html], { type: 'text/html' }))
-    const w = window.open(url, '_blank')
-    if (!w) { toast('The browser blocked the print window. Allow pop-ups for this page and try again.', 'error', 8000); return }
-    setTimeout(() => URL.revokeObjectURL(url), 60000)
+    if (!printHtml(html)) toast('The browser blocked the print window. Allow pop-ups for this page and try again.', 'error', 8000)
   }
 </script>
 
