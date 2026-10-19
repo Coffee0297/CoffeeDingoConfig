@@ -8,7 +8,7 @@
   import { autoTolerance, decodePoints, NO_POS, nodeVoltageMv, recommendPullup, resistorForMv, nearestStandard } from '../../../../lib/ladder.js'
   import { inputModel } from './input.svelte.js'
   import { signalFeed, ring } from './feeds.svelte.js'
-  import { resample, isUpstream, lacks } from './util.js'
+  import { resample, isUpstream, lacks, has } from './util.js'
   import SaveBar from './SaveBar.svelte'
   import UsedBy from './UsedBy.svelte'
   import LadderDesigner from './LadderDesigner.svelte'
@@ -22,17 +22,22 @@
   // feat/analog-linear-scaling (0x2200 sub 10, known after a Read)
   const up = $derived(isUpstream(dev))
   const scaleOk = $derived(!up || !lacks(dev, [0, 0, 0], 0x2200, 10))
+  // feat/analog-calibrated-switch: measured voltage per position (0x2200 sub 13, known after a Read); the CANBoard
+  // holds 8 positions (no sub 20 = positions 9-10)
+  const calOk = $derived(up && !lacks(dev, [0, 0, 0], 0x2200, 13))
+  const maxCal = $derived(up && !has(dev, 0x2200, 20) ? 8 : 10)
 
   // ---- form ----
   const VSUP = 5000, OPTS = { vsupMv: VSUP, rpu: recommendPullup({ vsupMv: VSUP }) }
   let f = $state(null), snap = $state('')
   function seed(r) {
-    const mode = r.rotary?.enabled ? (isUpstream(M.dev) ? 'uniform' : 'ladder') : r.scale?.enabled ? 'linear' : 'threshold'
+    const mode = r.rotary?.enabled ? (isUpstream(M.dev) && r.rotary.mode !== 1 ? 'uniform' : 'ladder') : r.scale?.enabled ? 'linear' : 'threshold'
     const sc = r.scale ?? {}, sw = r.switch ?? {}, ro = r.rotary ?? {}
-    const np = ro.enabled && ro.numPos >= 2 ? ro.numPos : 5
+    const cal = ro.enabled && (!isUpstream(M.dev) || ro.mode === 1)   // the module holds calibrated points
+    const np = cal && ro.numPos >= 2 ? ro.numPos : 5
     const names = ro.positionNames ?? []
     const rows = Array.from({ length: np }, (_, i) => {
-      const mv = ro.enabled ? (ro.points?.[i] ?? 0) : null
+      const mv = cal ? (ro.points?.[i] ?? 0) : null
       const DEF = ['Off', 'Park', 'Low', 'High', 'Show']
       const base = { name: names[i] || DEF[i] || 'Position ' + i }
       if (mv == null) { const rr = [220, 470, 1000, 2200, 4700][i]; return { ...base, r: rr, mv: Math.round(nodeVoltageMv(rr, OPTS)) } }
@@ -43,7 +48,7 @@
       thr: (sw.threshold ?? 2000) / 1000, swMode: sw.mode ?? 0, swInvert: !!sw.invert,
       sp: 'custom', unit: sc.units ?? '', lowV: (sc.inLowMv ?? 500) / 1000, lowX: sc.outLow ?? 0, highV: (sc.inHighMv ?? 4500) / 1000, highX: sc.outHigh ?? 100,
       uni: { offsetMv: ro.offsetMv ?? 0, stepMv: ro.stepMv ?? 100, maxPos: ro.maxPos ?? 10, invert: !!ro.invert },
-      rot: { n: np, tolAuto: !ro.enabled, tol: ro.tolerance > 0 ? ro.tolerance : 200, invert: !!ro.invert, rows },
+      rot: { n: np, tolAuto: !cal, tol: ro.tolerance > 0 ? ro.tolerance : 200, invert: !!ro.invert, rows },
     }
   }
   $effect(() => { if (!f && row) { f = seed(row); snap = JSON.stringify(f) } })
@@ -62,6 +67,7 @@
     if (f.mode === 'ladder' && !ascending) return 'The position voltages must go up with the position number.'
     if (f.mode === 'uniform' && !(Number(f.uni.stepMv) > 0)) return 'The step must be above 0 mV.'
     if (f.mode === 'linear' && !(Math.abs(gain) <= 1e9 && Math.abs(offs) <= 1e9)) return 'The two points give a scale the module cannot hold (above 1e9).'
+    if (up && f.mode === 'ladder' && f.rot.rows.length > maxCal) return `This module holds at most ${maxCal} positions.`
     return ''
   })
   async function save() {
@@ -75,7 +81,9 @@
     }
     if (up) {
       if (!scaleOk) delete body.scale
-      body.rotary = { enabled: f.mode === 'uniform', invert: f.uni.invert, offsetMv: Number(f.uni.offsetMv), stepMv: Number(f.uni.stepMv), maxPos: Number(f.uni.maxPos) }
+      const cal = f.mode === 'ladder'
+      body.rotary = { enabled: f.mode === 'uniform' || cal, invert: cal ? f.rot.invert : f.uni.invert, offsetMv: Number(f.uni.offsetMv), stepMv: Number(f.uni.stepMv), maxPos: Number(f.uni.maxPos),
+        ...(calOk ? { mode: cal ? 1 : 0, numPos: f.rot.rows.length, tolerance: Math.round(tol), points: pts, positionNames: names } : {}) }
     }
     if (await M.save(body)) snap = JSON.stringify(f)
   }
@@ -83,6 +91,7 @@
   // ---- live reading ----
   const aSig = $derived(row ? feed.get('Analog input', row.name) : undefined)
   const swSig = $derived(row ? feed.get('Analog switch', row.name + ' Switch') : undefined)
+  const posSig = $derived(row ? feed.get('Rotary position', row.name + ' Pos') : undefined)
   const mv = $derived(aSig && M.connected ? Number(aSig.value) : null)
   const hist = ring(10_000)
   let tick = $state(0), mvTick = $state(0), recent = []
@@ -113,7 +122,12 @@
       const dp = Math.abs(f.highX - f.lowX) >= 20 ? 0 : 1
       return out ? { kind: 'fault', text: 'Out of range · ' + V.toFixed(2) + ' V', v: V, out: true } : { kind: 'on', text: x.toFixed(dp) + ' ' + f.unit + ' · ' + V.toFixed(2) + ' V', v: V, val: x.toFixed(dp) }
     }
-    if (f.mode === 'uniform') return { kind: 'on', text: V.toFixed(2) + ' V', v: V }   // the module works the position out
+    if (up && (f.mode === 'uniform' || f.mode === 'ladder')) {   // the module works the position out; 15 = none
+      const mp = posSig ? Number(posSig.value) : null
+      if (mp == null) return { kind: 'on', text: V.toFixed(2) + ' V', v: V }
+      return mp === NO_POS ? { kind: 'off', text: 'No position · ' + V.toFixed(2) + ' V', v: V }
+        : { kind: 'on', text: `Position ${mp}${f.mode === 'ladder' ? ' · ' + (f.rot.rows[f.rot.invert ? f.rot.rows.length - 1 - mp : mp]?.name ?? '') : ''} · ${V.toFixed(2)} V`, v: V }
+    }
     const pts = f.rot.rows.map((r) => r.mv)
     const p = ascending ? decodePoints(mv, pts, tol) : NO_POS
     const pos = p === NO_POS ? null : (f.rot.invert ? pts.length - 1 - p : p)
@@ -125,8 +139,9 @@
   const SENS = [{ value: 'fuel', label: 'Fuel level 0–100 %' }, { value: 'oil', label: 'Oil pressure 0–10 bar' }, { value: 'custom', label: 'Custom' }]
   const PRE = { fuel: [0.5, 0, 4.5, 100, '%'], oil: [0.5, 0, 4.5, 10, 'bar'] }
   function applySensor(id) { const p = PRE[id]; if (p) { f.lowV = p[0]; f.lowX = p[1]; f.highV = p[2]; f.highX = p[3]; f.unit = p[4] } f.sp = id }
-  let useVal = $state('threshold'), swVal = $state('0'), spVal = $state('custom')
-  $effect(() => { if (f) { useVal = f.mode; swVal = String(f.swMode); spVal = f.sp } })
+  let useVal = $state('threshold'), swVal = $state('0'), spVal = $state('custom'), rotVal = $state('uniform')
+  // upstream: Uniform and Calibrated are both "Multi-position switch" at the top, picked below it
+  $effect(() => { if (f) { useVal = up && f.mode === 'ladder' ? 'uniform' : f.mode; swVal = String(f.swMode); spVal = f.sp; rotVal = f.mode } })
   const title = $derived(f?.name?.trim() || `Analog input ${n}`)
   const outRange = $derived(!!live2?.out)
 </script>
@@ -168,6 +183,10 @@
 
     <Field label="Name" bind:value={f.name} data-testid="name" />
 
+    {#if calOk && (f.mode === 'uniform' || f.mode === 'ladder')}
+      <Segmented label="Switch positions" items={[{ value: 'uniform', label: 'Evenly spaced' }, { value: 'ladder', label: 'Calibrated (measured voltages)' }]} bind:value={rotVal}
+        onchange={(v) => (f.mode = v)} data-testid="rotary-mode" />
+    {/if}
     {#if f.mode === 'uniform'}
       <Card title="Evenly spaced positions" subtitle="upstream dingoFW: position = (voltage − offset) ÷ step" aria-label="Rotary switch">
         <Field label="Offset" type="number" step="1" unit="mV" bind:value={f.uni.offsetMv} data-testid="uni-offset" />
@@ -178,7 +197,7 @@
     {:else if f.mode === 'ladder'}
       <div class="cols one">
         <div class="col">
-          <LadderDesigner bind:rot={f.rot} liveMv={mv} {online} {steady} />
+          <LadderDesigner bind:rot={f.rot} liveMv={mv} {online} {steady} maxPos={up ? maxCal : 10} />
           <UsedBy {guid} items={M.usedBy} hint={'Each position is also its own on / off signal, for example "' + (f.name || 'Switch') + ' is ' + (f.rot.rows[2]?.name ?? 'Low') + '".'} />
         </div>
       </div>

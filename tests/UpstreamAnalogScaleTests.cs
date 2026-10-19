@@ -54,7 +54,7 @@ public class UpstreamAnalogScaleTests
         }));
         Assert.Equal(Enumerable.Range(0, 80), d.VarMap.Select(v => v.VariableIndex));
 
-        var ai1 = d.Params.Where(p => p.Index == AnalogInput.BaseIndex && p.SubIndex >= 10).OrderBy(p => p.SubIndex).ToList();
+        var ai1 = d.Params.Where(p => p.Index == AnalogInput.BaseIndex && p.SubIndex is >= 10 and <= 12).OrderBy(p => p.SubIndex).ToList();
         Assert.Equal(["analogScale[1].enabled", "analogScale[1].gain", "analogScale[1].offset"], ai1.Select(p => p.Name));
         Assert.Equal([10, 11, 12], ai1.Select(p => p.SubIndex));
         Assert.Equal(1.0, ai1[1].DefaultValue);
