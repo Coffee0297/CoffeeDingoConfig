@@ -54,14 +54,14 @@ export function lacks(dev, min, base, sub) {
 /** The /functions array that holds a given function kind (PDM calls digital inputs `inputs`, CANBoard `digitalIn`). */
 export function funcArray(funcs, kind) {
   const m = { input: funcs?.inputs ?? funcs?.digitalIn, analoginput: funcs?.analogIn, caninput: funcs?.canInputs, virtualinput: funcs?.virtualInputs,
-    condition: funcs?.conditions, counter: funcs?.counters, flasher: funcs?.flashers, timer: funcs?.timers, table: funcs?.tables, digitaloutput: funcs?.digitalOut, canoutput: funcs?.canOutputs }
+    condition: funcs?.conditions, counter: funcs?.counters, flasher: funcs?.flashers, timer: funcs?.timers, table: funcs?.tables, curve: funcs?.curves, digitaloutput: funcs?.digitalOut, canoutput: funcs?.canOutputs }
   return m[kind] ?? []
 }
 
 // Upstream input fields of every function kind that reads other signals.
 export const UPSTREAM = {
   condition: ['input'], virtualinput: ['var0', 'var1', 'var2'], flasher: ['input'], timer: ['input'],
-  table: ['xInput', 'yInput'], counter: ['incInput', 'decInput', 'resetInput'], canoutput: ['input'],
+  table: ['xInput', 'yInput'], curve: ['input'], counter: ['incInput', 'decInput', 'resetInput'], canoutput: ['input'],
   digitaloutput: ['input', 'dutyCycleInput', 'freqInput'],
 }
 
@@ -75,6 +75,7 @@ export const BLOCK = {
   flasher: { label: 'FLASHER', fam: 'var(--color-block-time)' },
   timer: { label: 'TIMER', fam: 'var(--color-block-time)' },
   table: { label: 'TABLE', fam: 'var(--color-block-time)' },
+  curve: { label: 'CURVE', fam: 'var(--color-block-logic)' },
   counter: { label: 'COUNTER', fam: 'var(--color-block-time)' },
   sys: { label: 'SYSTEM', fam: 'var(--color-block-code)' },
   lua: { label: 'LUA', fam: 'var(--color-block-code)' },
@@ -113,7 +114,7 @@ export function consumersOf(idxs, funcs, outputs, moduleName, dev) {
   if (!set.size) return []
   const hits = []
   const add = (name, where) => { if (!hits.some((h) => h.name === name && h.where === where)) hits.push({ name, where }) }
-  const SCAN = { conditions: ['input'], flashers: ['input'], timers: ['input'], tables: ['xInput', 'yInput'], virtualInputs: ['var0', 'var1', 'var2'],
+  const SCAN = { conditions: ['input'], flashers: ['input'], timers: ['input'], tables: ['xInput', 'yInput'], curves: ['input'], virtualInputs: ['var0', 'var1', 'var2'],
     counters: ['incInput', 'decInput', 'resetInput'], canOutputs: ['input'], digitalOut: ['input', 'dutyCycleInput', 'freqInput'] }
   for (const [arr, fields] of Object.entries(SCAN)) {
     for (const x of funcs?.[arr] ?? []) {

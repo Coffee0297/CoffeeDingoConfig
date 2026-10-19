@@ -37,6 +37,7 @@ public class PdmDevice : IDeviceConfigurable
     /// with feat/more-tables). Fork: the definition's count.</summary>
     [JsonIgnore] public int TableCount => !Upstream ? NumTables : Math.Min(Tables.Count, ParamSet.Order
         .Where(k => k.Index >= LookupTable.UpstreamBaseIndex && k.Index < LookupTable.UpstreamBaseIndex + 0x100).Select(k => k.Index).Distinct().Count());
+    [JsonIgnore] protected int NumCurves { get; private set; } = 4;
     [JsonIgnore] protected int NumKeypads { get; private set; } = 2;
     [JsonIgnore] protected const int LuaOutputSlots = 32;  // matches firmware NUM_LUA_OUTPUTS
 
@@ -210,6 +211,8 @@ public class PdmDevice : IDeviceConfigurable
     [JsonPropertyName("ignition")] public Ignition Ignition { get; set; } = null!;
     [JsonPropertyName("comfortBlink")] public ComfortBlink ComfortBlink { get; set; } = null!;   // 5.6.1
     [JsonPropertyName("tables")] public List<LookupTable> Tables { get; init; } = [];
+    // upstream dingoFW feat/curve-block (0x2400); the fork has none
+    [JsonPropertyName("curves")] public List<CurveFunction> Curves { get; init; } = [];
     [JsonPropertyName("keypads")] public List<KeypadMaster> Keypads { get; init; } = [];
     
     [JsonIgnore] private DateTime LastRxTime { get; set; }
@@ -271,6 +274,7 @@ public class PdmDevice : IDeviceConfigurable
         NumMath = definition.NumMath;
         NumCanMessages = definition.NumCanMessages;
         NumTables = definition.NumTables;
+        NumCurves = definition.NumCurves;
         NumKeypads = definition.NumKeypads;
         InitFunctions();
         ApplyDefinition(definition);
@@ -303,6 +307,7 @@ public class PdmDevice : IDeviceConfigurable
         NumMath = Maths.Count;
         NumCanMessages = CanMessages.Count;
         NumTables = Math.Min(Tables.Count, definition.NumTables);   // an upstream project may hold more (TableCount)
+        NumCurves = Curves.Count;
         NumKeypads = Keypads.Count;
         // The JsonConstructor sizes the starter-disable for the default 8 outputs before the saved
         // output list is known, and the firmware only has 0x1800:2..(2+NumOutputs-1) — a surplus
@@ -351,6 +356,8 @@ public class PdmDevice : IDeviceConfigurable
 
         for (var i = 0; i < NumTables; i++)
             Tables.Add(new LookupTable(i + 1, "table" + (i + 1)));
+        for (var i = 0; i < NumCurves; i++)
+            Curves.Add(new CurveFunction(i + 1, "curve" + (i + 1)));
 
         StarterDisable = new StarterDisable("starterDisable", NumOutputs);
 
@@ -1094,6 +1101,14 @@ public class PdmDevice : IDeviceConfigurable
             VarMap.Add(new DeviceVariable { GetName = () => Tables[num].Name, OwnerKind = "table", OwnerNumber = num + 1,
                 PropertyName = "Value", DataType = "float", VariableIndex = index++, SingleVariable = false });
         }
+        // feat/curve-block (canonical place: after pid, before latch-gate): one value per curve
+        if (FwFamily.HasBlock(this, CurveFunction.BaseIndex, false))
+            for (var i = 0; i < NumCurves; i++)
+            {
+                var num = i;
+                VarMap.Add(new DeviceVariable { GetName = () => Curves[num].Name, OwnerKind = "curve", OwnerNumber = num + 1,
+                    PropertyName = "Value", DataType = "float", VariableIndex = index++, SingleVariable = false });
+            }
     }
 
     private void InitParams()
@@ -1190,6 +1205,7 @@ public class PdmDevice : IDeviceConfigurable
         // upstream: 0x1B00 (its 0x1A00 is the timer), every table it may have; the fork: the definition's count
         foreach (var table in Upstream ? Tables : Tables.Take(NumTables)) allParams.AddRange(Upstream ? table.UpstreamParams : table.Params);
         foreach (var timer in Timers) allParams.AddRange(Family == FwFamily.Upstream ? timer.UpstreamParams : timer.Params);
+        if (Upstream) foreach (var c in Curves) allParams.AddRange(c.Params);   // fork firmware has no curve block
         foreach (var m in Maths) allParams.AddRange(m.Params);
         foreach (var m in CanMessages) allParams.AddRange(Family == FwFamily.Upstream ? m.UpstreamParams : m.Params);
         allParams.AddRange(Ignition.Params);

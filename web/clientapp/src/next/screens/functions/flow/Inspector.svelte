@@ -10,6 +10,7 @@
   import { FAM_COLOR, FAM_NAME, OPS, OP_WORDS, JOIN, TIMER_MODES, EDGES, MATH_OPS, isRelational, hystBand, sourceOptions, canWire, hexId, parseId, framePeers } from './model.js'
   import { sentenceFor } from './sentence.js'
   import { MSG_CHECKSUMS, NO_COUNTER, hasMsgChecksum, msgChecksumWarnings } from './canmsgcheck.js'
+  import { curveProblem, curvePlot, curveAt, CURVE_MAX } from './curve.js'
   import { fmt } from './livevals.js'
   import { lacks, isUpstream, has } from '../../hardware/parts/util.js'
   import { remoteItems, isRemoteKey } from '../../../lib/remote.js'
@@ -35,6 +36,7 @@
     math: ['name', 'inputA', 'inputB', 'op', 'constB', 'factor', 'offset'],
     canmsg: ['name', 'input', 'id', 'ide', 'dlc', 'data', 'mode', 'intervalMs', 'checksum', 'checksumByte', 'counterByte'],
     comfortblink: ['name', 'leftInput', 'rightInput', 'clockInput', 'tapMs', 'blinks'],
+    curve: ['name', 'input', 'points', 'x', 'y'],
     input: ['name', 'invert', 'mode', 'debounceTime'],
     digitaloutput: ['name', 'input'],
     output: ['name', 'input', 'dutyCycleInput'],
@@ -51,6 +53,10 @@
       b.xAxis = Array.from({ length: 8 }, (_, k) => +(r.xAxis?.[k] ?? 0)); b.yAxis = Array.from({ length: 8 }, (_, k) => +(r.yAxis?.[k] ?? 0))
       b.cells = Array.from({ length: 64 }, (_, k) => +(r.cells?.[k] ?? 0))
       b.xSize = Math.min(8, Math.max(1, +r.xSize || 2)); b.ySize = Math.min(8, Math.max(1, +r.ySize || 1))
+    }
+    if (node?.kind === 'curve') {
+      b.x = Array.from({ length: CURVE_MAX }, (_, k) => +(r.x?.[k] ?? 0)); b.y = Array.from({ length: CURVE_MAX }, (_, k) => +(r.y?.[k] ?? 0))
+      b.points = Math.min(CURVE_MAX, Math.max(2, +r.points || 2))
     }
     base = JSON.parse(JSON.stringify(b))
     draft = JSON.parse(JSON.stringify(b))
@@ -112,6 +118,7 @@
       return [2, 4].includes(draft.operator) ? 'Off again at must be below the value.' : 'Off again at must be above the value.'
     if (k === 'condition' && [draft.delayOn, draft.delayOff].some((x) => !(x >= 0 && x <= 60000))) return 'Delays must be 0 to 60 s.'
     if (k === 'counter' && draft.maxCount <= draft.minCount) return 'Max must be above min.'
+    if (k === 'curve') { const p = curveProblem(draft); if (p) return p[0].toUpperCase() + p.slice(1) + '.' }
     if (k === 'canmsg' && (draft.dlc < 0 || draft.dlc > 8)) return 'Length must be 0 to 8 bytes.'
     if (k === 'comfortblink' && (draft.tapMs < 100 || draft.tapMs > 5000)) return 'The tap time must be 0.1 to 5 s.'
     if (k === 'comfortblink' && (!Number.isInteger(draft.blinks) || draft.blinks < 1 || draft.blinks > 10)) return 'Blinks must be 1 to 10.'
@@ -360,6 +367,25 @@
         {/each}
       </div>
       <p class="hint">X points (and Y points) must increase. Between points the module interpolates; outside it holds the edge value.</p>
+    {:else if node.kind === 'curve'}
+      {@const plot = curvePlot(draft, 200, 80)}
+      {@const inV = lv.v[draft.input]}
+      <span class="sec">Points</span>
+      <Field label="Points (2–12)" type="number" min="2" max="12" bind:value={() => draft.points ?? 2, (v) => (draft.points = Math.min(CURVE_MAX, Math.max(2, Math.round(toNum(v)) || 2)))} />
+      <div class="tgrid" style="grid-template-columns: 54px 1fr 1fr">
+        <span class="th muted">#</span><span class="th muted">X (input)</span><span class="th muted">Y (value)</span>
+        {#each Array.from({ length: draft.points ?? 2 }) as _, i (i)}
+          <span class="th muted">{i + 1}</span>
+          <input class="nx-input mono cell" type="number" step="any" aria-label={'X of point ' + (i + 1)} bind:value={() => draft.x?.[i] ?? 0, (v) => (draft.x[i] = toNum(v))} />
+          <input class="nx-input mono cell" type="number" step="any" aria-label={'Y of point ' + (i + 1)} bind:value={() => draft.y?.[i] ?? 0, (v) => (draft.y[i] = toNum(v))} />
+        {/each}
+      </div>
+      <svg class="cplot" viewBox="-6 -6 212 92" role="img" aria-label={`Curve from X ${plot.x0} to ${plot.x1}, Y ${plot.y0} to ${plot.y1}`}>
+        <rect x="0" y="0" width="200" height="80" fill="none" stroke="var(--color-line)" />
+        <polyline points={plot.pts} fill="none" stroke="var(--color-block-logic)" stroke-width="2" />
+        {#each plot.pts.split(' ') as p, i (i)}<circle cx={p.split(',')[0]} cy={p.split(',')[1]} r="3" fill="var(--color-block-logic)" />{/each}
+      </svg>
+      <p class="hint">X must rise from point to point. Between points the module draws a straight line; below the first and above the last it holds the end value.{typeof inV === 'number' ? ` Now: input ${fmt(inV)} → ${fmt(curveAt(draft.points, draft.x, draft.y, inV))}.` : ''} To drive a fan or pump: on the output's screen pick "PWM, duty from a signal" and "Use a duty curve".</p>
     {:else if node.kind === 'canoutput' || node.kind === 'caninput'}
       {#if kindOk}
         <Select label="Sends" items={COUT_KINDS.map((l, i) => ({ value: String(i), label: l }))} bind:value={() => String(draft.kind ?? 0), (v) => (draft = snapChecksum({ ...draft, kind: Number(v) }))} data-testid="cout-kind" />
@@ -467,6 +493,7 @@
   .sec { font-size: 12px; font-weight: 600; color: var(--color-text-muted); margin-top: 4px; }
   .sg { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
   .tgrid { display: grid; gap: 4px; align-items: center; }
+  .cplot { width: 100%; max-width: 320px; height: auto; }
   .cell { min-height: 36px; padding: 0 6px; font-size: 12px; }
   .th { font-size: 11px; font-weight: 700; text-align: center; }
   .two { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-2); align-items: end; }

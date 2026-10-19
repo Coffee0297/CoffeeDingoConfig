@@ -6,6 +6,7 @@
    */
   import { Dialog, FwBadge, Button } from '../../../ui/index.js'
   import { FAM_COLOR } from './model.js'
+  import { DUTY_CURVE } from './curve.js'
   import { olderThan } from '../../hardware/parts/util.js'
 
   let { open = $bindable(false), funcs, cb = false, slots = [], version = '', onadd, onremote, hardwareHref } = $props()
@@ -22,6 +23,8 @@
       { label: 'Combine AND / OR / NOR', sub: 'up to 3 signals, NOT per input', kind: 'virtualinput', arr: 'virtualInputs' },
       { label: 'Push-button toggle', sub: 'press on, press off (a counter 0–1)', kind: 'counter', arr: 'counters', body: { minCount: 0, maxCount: 1, wrapAround: true, incEdge: 0 } },
       { label: 'Math', sub: 'A + − × ÷ B, then scale', kind: 'math', arr: 'maths', fw: '5.6', body: { op: 0, factor: 1, offset: 0 } },
+      // only on a module whose firmware has the curve block (upstream dingoFW, param 0x2400): hidden elsewhere
+      { label: 'Curve', sub: 'a value from up to 12 points: fan duty from temperature', kind: 'curve', arr: 'curves', onlyIfPresent: true, body: DUTY_CURVE },
     ] },
     { name: 'TIME & STATE', fam: 'time', items: [
       { label: 'On-delay', sub: 'on after a time', kind: 'timer', arr: 'timers', body: { mode: 0, preset: 2000 } },
@@ -46,7 +49,7 @@
     <div class="grp">
       <span class="gn" style="color: {FAM_COLOR[g.fam]}">{g.name}</span>
       <div class="items">
-        {#each g.items as it (it.label)}
+        {#each g.items.filter((x) => !x.onlyIfPresent || has(x.arr)) as it (it.label)}
           {@const old = !!it.fw && olderThan(version, it.fw.split('.').map(Number))}
           {@const avail = old ? false : it.hw ? true : has(it.arr) && free(it.arr) > 0}
           {@const absent = it.arr && !has(it.arr)}

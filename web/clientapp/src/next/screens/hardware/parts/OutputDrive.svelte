@@ -1,9 +1,10 @@
 <script>
   import { untrack } from 'svelte'
-  import { Card, Segmented, Switch, Stepper, Select, Field } from '../../../ui/index.js'
+  import { Card, Segmented, Switch, Stepper, Select, Field, Button } from '../../../ui/index.js'
   import { api, toast } from '../../../lib/live.svelte.js'
   import { remoteItems, resolveRemote, isRemoteKey } from '../../../lib/remote.js'
   import { href } from '../../../router.svelte.js'
+  import { pickDutyCurve, DUTY_CURVE } from '../../functions/flow/curve.js'
 
   // upstream: 16-400 Hz, 0 = keep (its timers cannot make 1-15 Hz); varFreq: the firmware has "frequency follows a signal" (output subs 21-23; upstream by its param list)
   // rampDuty: the firmware has "ramp every duty change" (output sub 24)
@@ -53,6 +54,22 @@
   const setDutyFull = (v) => { f.dutyCycleDenom = Math.max(1, Math.round((Number(v) || 0) / 100)) }
   const setFreqFull = (v) => { f.freqInputDenom = Math.max(1, Math.round((Number(v) || 0) / 400)) }
 
+  // Duty curve (upstream dingoFW with the curve block, PDMs): a curve on this module drives the duty, 0–100 % (denominator 1)
+  let curves = $state(null)
+  $effect(() => { const g = guid; untrack(() => api.functions(g)).then((x) => { if (g === guid) curves = x?.curves ?? null }).catch(() => (curves = null)) })
+  async function useCurve() {
+    linking = true
+    try {
+      const vars = await api.inputs(guid)
+      const c = pickDutyCurve(curves, vars, f.dutyCycleInput)
+      if (!c) { toast('Every curve on this module is in use. Free one in the flow builder.', 'error', 8000); return }
+      if (c.fresh) await api.setFunction(guid, 'curve', c.number, { ...DUTY_CURVE, enabled: true, name: `${f.name || 'Output'} duty` }); curves = (await api.functions(guid))?.curves ?? curves
+      f.dutyCycleInput = c.index; f.dutyCycleDenom = 1; dutySrc = String(c.index)
+      const [a, b] = await Promise.all([api.inputs(guid, 'float'), api.inputs(guid, 'int')]); nums = [...(a ?? []), ...(b ?? [])]
+      toast(`Curve ${c.number} drives the duty (Y = duty %). Save, then set its input and points in the flow builder.`, 'info', 6000)
+    } catch (e) { toast(e?.message ?? String(e), 'error', 8000) } finally { linking = false }
+  }
+
   const MODES = [{ value: 'onoff', label: 'On / off' }, { value: 'fixed', label: 'PWM, fixed duty' }, { value: 'signal', label: 'PWM, duty from a signal' }]
 </script>
 
@@ -63,6 +80,10 @@
       {#if f.variableDutyCycle}
         <Select label="Duty comes from" items={items} bind:value={dutySrc} onchange={(v) => pickSrc('dutyCycleInput', v)} disabled={linking} data-testid="duty-source" />
         <Field label="Signal value at 100 % duty" type="number" bind:value={dutyFull} min={100} step={100} onchange={setDutyFull} hint={'duty % = signal ÷ ' + (f.dutyCycleDenom || 1)} />
+        {#if curves}
+          <div class="curve"><Button size="sm" onclick={useCurve} disabled={linking} data-testid="duty-curve">Use a duty curve</Button>
+            <span class="muted note">Duty from up to 12 points against any signal (e.g. a fan against coolant temperature). <a href={href('functions', 'flow')}>Flow builder</a></span></div>
+        {/if}
       {:else}
         <Stepper label="Duty" bind:value={f.fixedDuty} min={0} max={100} step={5} unit="%" data-testid="duty" />
       {/if}
@@ -108,4 +129,5 @@
   .soft { display: flex; flex-direction: column; gap: var(--space-2); max-width: 520px; }
   .crank { display: flex; flex-direction: column; gap: var(--space-2); padding-top: var(--space-3); border-top: 1px solid var(--color-line); }
   .note { font-size: var(--text-xs); }
+  .curve { display: flex; flex-direction: column; gap: var(--space-1); }
 </style>

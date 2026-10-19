@@ -128,6 +128,7 @@ public static class FunctionMap
                 "table" or "tbl"      => (p.Tables.FirstOrDefault(x => x.Number == number), LookupTable.BaseFor(p.Family) + n),
                 "math"                => (p.Maths.FirstOrDefault(x => x.Number == number), MathFunction.BaseIndex + n),
                 "canmsg"              => (p.CanMessages.FirstOrDefault(x => x.Number == number), CanMessage.BaseIndex + n),
+                "curve"               => (p.Curves.FirstOrDefault(x => x.Number == number), CurveFunction.BaseIndex + n),
                 "ignition"            => (p.Ignition, Ignition.BaseIndex),
                 "comfortblink"        => (p.ComfortBlink, ComfortBlink.BaseIndex),
                 "canoutput" or "cout" => (p.CanOutputs.FirstOrDefault(x => x.Number == number), CanOutput.BaseIndex + n),
@@ -952,6 +953,7 @@ public static class LiveApi
                     timers = Has(p, TimerFunction.BaseFor(p.Family), true) ? p.Timers : null,
                     tables = Has(p, LookupTable.BaseFor(p.Family)) ? p.Tables.Take(p.TableCount).ToList() : null,
                     maths = Has(p, MathFunction.BaseIndex) ? p.Maths : null, canMessages = Has(p, CanMessage.BaseIndex) ? p.CanMessages : null,
+                    curves = p.Family == domain.Common.FwFamily.Upstream && Has(p, CurveFunction.BaseIndex) ? p.Curves : null,   // upstream feat/curve-block only
                     ignition = p.Ignition,   // firmware 5.6
                     comfortBlinks = Has(p, ComfortBlink.BaseIndex) ? new[] { p.ComfortBlink } : null,   // 5.6.1 (one; an array for the flow builder)
                     canOutputs = p.CanOutputs, wiper = p.Wipers, starterDisable = p.StarterDisable,
@@ -2110,7 +2112,7 @@ public static class LiveApi
     {
         ["input"] = "Input", ["pin"] = "Input", ["caninput"] = "CAN input", ["can"] = "CAN input", ["virtualinput"] = "Logic", ["cmb"] = "Logic",
         ["condition"] = "Condition", ["cmp"] = "Condition", ["counter"] = "Counter", ["cnt"] = "Counter", ["flasher"] = "Flasher", ["fl"] = "Flasher",
-        ["timer"] = "Timer", ["tmr"] = "Timer", ["table"] = "Table", ["tbl"] = "Table", ["math"] = "Math", ["canmsg"] = "CAN message",
+        ["timer"] = "Timer", ["tmr"] = "Timer", ["table"] = "Table", ["tbl"] = "Table", ["math"] = "Math", ["curve"] = "Curve", ["canmsg"] = "CAN message",
         ["ignition"] = "Ignition", ["comfortblink"] = "Comfort blink", ["canoutput"] = "CAN output", ["cout"] = "CAN output",
         ["wiper"] = "Wiper", ["wip"] = "Wiper", ["starterdisable"] = "Starter disable", ["std"] = "Starter disable", ["keypad"] = "Keypad",
         ["keypadbutton"] = "Keypad button", ["keypaddial"] = "Keypad dial", ["digitaloutput"] = "Output", ["dout"] = "Output",
@@ -2270,6 +2272,7 @@ public static class LiveApi
                 "flasher" => p.GetFlashers().FirstOrDefault(x => x.Number == n)?.Enabled ?? true,
                 "timer" => p.GetTimers().FirstOrDefault(x => x.Number == n)?.Enabled ?? true,
                 "table" => p.GetTables().FirstOrDefault(x => x.Number == n)?.Enabled ?? true,
+                "curve" => p.Curves.FirstOrDefault(x => x.Number == n)?.Enabled ?? true,
                 "output" => p.GetOutputs().FirstOrDefault(x => x.Number == n)?.Enabled ?? true,
                 "wiper" => p.GetWipers()?.Enabled ?? false,
                 "keypad" => p.GetKeypads().FirstOrDefault(x => x.Number == n)?.Enabled ?? true,

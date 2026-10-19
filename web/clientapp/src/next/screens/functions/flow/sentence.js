@@ -65,6 +65,10 @@ export function sentenceFor(model, n) {
       segs.push(T('in a'), val(`${r.xSize}${(r.ySize ?? 1) > 1 ? ' × ' + r.ySize : ''} point`, 'xSize'), T('table, in between it interpolates.'))
       return segs
     }
+    case 'curve': {
+      const k = Math.min(12, Math.max(2, r.points | 0)), pts = Array.from({ length: k }, (_, i) => `${+r.x?.[i] || 0} → ${+r.y?.[i] || 0}`).join(', ')
+      return [self(n), T('follows'), srcTok(model, r.input, 'input'), T('along the curve'), val(pts, 'points'), T(', in a straight line between points and held beyond the ends.')]
+    }
     case 'canoutput':
       if (r.kind === 1) return [T('Send a rolling counter on CAN ID'), val(hexId(r.id) + (r.ide ? ' ext' : ''), 'id'), T('at bit'), val(`${r.startBit ?? 0}+${r.bitLength ?? 0}`, 'startBit'), T(', one up each frame, every'), val((r.interval ?? 0) + ' ms', 'interval'), T('.')]
       if (r.kind >= 2) return [T('Send a'), val(COUT_KINDS[r.kind] ?? '?', 'kind'), T('of the frame on CAN ID'), val(hexId(r.id) + (r.ide ? ' ext' : ''), 'id'), T('in byte'), val(Math.floor((r.startBit ?? 0) / 8), 'startBit'), T(', every'), val((r.interval ?? 0) + ' ms', 'interval'), T('.')]
@@ -131,6 +135,6 @@ export function sentenceFor(model, n) {
 
 /** Card heading for the sentence view: family · kind. */
 export function cardKind(n) {
-  const k = { virtualinput: 'COMBINE', condition: 'COMPARE', timer: 'TIMER · ' + (TIMER_MODES[n.row?.mode ?? 0] ?? '').toUpperCase(), flasher: 'FLASHER', counter: 'COUNTER', table: 'TABLE', canoutput: 'CAN OUTPUT', caninput: 'CAN INPUT', math: 'MATH', canmsg: 'CAN MESSAGE', comfortblink: 'COMFORT BLINK', output: 'OUTPUT', digitaloutput: 'OUTPUT' }[n.kind] ?? n.kindLabel.toUpperCase()
+  const k = { virtualinput: 'COMBINE', condition: 'COMPARE', timer: 'TIMER · ' + (TIMER_MODES[n.row?.mode ?? 0] ?? '').toUpperCase(), flasher: 'FLASHER', counter: 'COUNTER', table: 'TABLE', canoutput: 'CAN OUTPUT', caninput: 'CAN INPUT', math: 'MATH', curve: 'CURVE', canmsg: 'CAN MESSAGE', comfortblink: 'COMFORT BLINK', output: 'OUTPUT', digitaloutput: 'OUTPUT' }[n.kind] ?? n.kindLabel.toUpperCase()
   return k
 }
