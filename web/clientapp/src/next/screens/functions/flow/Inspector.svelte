@@ -29,7 +29,7 @@
     counter: ['name', 'incInput', 'decInput', 'resetInput', 'incEdge', 'decEdge', 'resetEdge', 'minCount', 'maxCount', 'wrapAround', 'holdToReset', 'resetTime'],
     table: ['name', 'xInput', 'yInput', 'xSize', 'ySize', 'xAxis', 'yAxis', 'cells'],
     canoutput: ['name', 'input', 'id', 'ide', 'startBit', 'bitLength', 'byteOrder', 'factor', 'offset', 'signed', 'interval'],
-    caninput: ['name', 'id', 'ide', 'startBit', 'bitLength', 'factor', 'offset', 'operator', 'operand', 'mode', 'timeoutEnabled', 'timeout', 'timeoutValue'],
+    caninput: ['name', 'id', 'ide', 'startBit', 'bitLength', 'factor', 'offset', 'operator', 'operand', 'mode', 'timeoutEnabled', 'timeout', 'timeoutValue', 'timeoutUseValue'],
     math: ['name', 'inputA', 'inputB', 'op', 'constB', 'factor', 'offset'],
     canmsg: ['name', 'input', 'id', 'ide', 'dlc', 'data', 'mode', 'intervalMs'],
     comfortblink: ['name', 'leftInput', 'rightInput', 'clockInput', 'tapMs', 'blinks'],
@@ -42,7 +42,7 @@
   function seed() {
     const r = node?.row ?? {}
     const b = {}
-    for (const f of EDIT[node?.kind] ?? []) b[f] = node.kind === 'output' && f === 'input' ? r.inputVal ?? 0 : r[f] ?? (f === 'argOff' ? r.arg : f.startsWith('not') || ['ide', 'single', 'wrapAround', 'holdToReset', 'signed', 'invert', 'timeoutEnabled'].includes(f) ? false : 0)
+    for (const f of EDIT[node?.kind] ?? []) b[f] = node.kind === 'output' && f === 'input' ? r.inputVal ?? 0 : r[f] ?? (f === 'argOff' ? r.arg : f.startsWith('not') || ['ide', 'single', 'wrapAround', 'holdToReset', 'signed', 'invert', 'timeoutEnabled', 'timeoutUseValue'].includes(f) ? false : 0)
     if (node?.kind === 'canmsg') b.data = Array.from({ length: 8 }, (_, k) => +(r.data?.[k] ?? 0))
     if (node?.kind === 'table') {
       // fixed-size arrays (8 / 8 / 64); a fresh slot is all zero, which is not an ascending axis
@@ -372,11 +372,13 @@
         <Checkbox label="Off when no frame arrives (timeout)" bind:checked={() => !!draft.timeoutEnabled, (v) => (draft.timeoutEnabled = v)} />
         {#if draft.timeoutEnabled}
           {@const oldFw = lacks(dev, [5, 6, 0], 0x1300, 14)}
+          {@const flag = isUpstream(dev) && !oldFw && has(dev, 0x1300 + node.n - 1, 15)}
           <div class="two">
             <Field label="Timeout" type="number" unit="ms" bind:value={() => draft.timeout ?? 0, (v) => (draft.timeout = toNum(v))} />
-            <Field label="Then the value is" type="number" step="any" disabled={oldFw} bind:value={() => draft.timeoutValue ?? 0, (v) => (draft.timeoutValue = toNum(v))}
-              hint={oldFw ? `Reads 0: ${dev?.name} 's firmware has no other value.` : 'Used while the frame is missing.'} />
+            <Field label="Then the value is" type="number" step="any" disabled={oldFw || (flag && !draft.timeoutUseValue)} bind:value={() => draft.timeoutValue ?? 0, (v) => (draft.timeoutValue = toNum(v))}
+              hint={oldFw ? `Reads 0: ${dev?.name} 's firmware has no other value.` : flag && !draft.timeoutUseValue ? 'Reads 0 and off.' : 'Used while the frame is missing.'} />
           </div>
+          {#if flag}<Checkbox label="Use this value instead of 0" hint="Pick the value that makes the result safe, e.g. 120 for a coolant > 95 fan." bind:checked={() => !!draft.timeoutUseValue, (v) => (draft.timeoutUseValue = v)} />{/if}
         {/if}
       {/if}
     {:else if node.kind === 'input'}

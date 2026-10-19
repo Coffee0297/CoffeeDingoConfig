@@ -9,7 +9,7 @@
   import { inputModel } from './input.svelte.js'
   import { linkRemote } from '../../functions/flow/net.js'
   import { signalFeed, ring } from './feeds.svelte.js'
-  import { resample, lacks } from './util.js'
+  import { resample, lacks, has, isUpstream } from './util.js'
   import SaveBar from './SaveBar.svelte'
   import UsedBy from './UsedBy.svelte'
   import LearnSwitch from './LearnSwitch.svelte'
@@ -23,7 +23,7 @@
   // ---- form ----
   let f = $state(null), snap = $state(''), learnedNote = $state(false)
   const seed = (r) => ({ name: r.name ?? '', enabled: !!r.enabled, id: r.id ?? 0, ide: !!r.ide, startBit: r.startBit ?? 0, bitLength: r.bitLength ?? 8, byteOrder: r.byteOrder ?? 0, signed: !!r.signed,
-    factor: r.factor ?? 1, offset: r.offset ?? 0, operator: r.operator ?? 0, operand: r.operand ?? 0, timeoutEnabled: !!r.timeoutEnabled, timeout: r.timeout ?? 1000, timeoutValue: r.timeoutValue ?? 0, idText: hex(r.id ?? 0) })
+    factor: r.factor ?? 1, offset: r.offset ?? 0, operator: r.operator ?? 0, operand: r.operand ?? 0, timeoutEnabled: !!r.timeoutEnabled, timeout: r.timeout ?? 1000, timeoutValue: r.timeoutValue ?? 0, timeoutUseValue: !!r.timeoutUseValue, idText: hex(r.id ?? 0) })
   $effect(() => { if (!f && row) { f = seed(row); snap = JSON.stringify(f) } })
   const dirty = $derived(!!f && JSON.stringify(f) !== snap)
   function revert() { if (row) { f = seed(row); snap = JSON.stringify(f); M.state.saveErr = ''; learnedNote = false } }
@@ -45,7 +45,7 @@
     const body = { name: String(f.name).trim(), enabled: f.enabled, id: parsedId, ide: f.ide, startBit: Math.trunc(Number(f.startBit)), bitLength: Math.trunc(Number(f.bitLength)),
       byteOrder: Number(f.byteOrder), signed: f.signed, factor: Number(f.factor), offset: Number(f.offset), operator: Number(f.operator), operand: Number(f.operand),
       timeoutEnabled: f.timeoutEnabled, timeout: Math.max(0, Math.round(Number(f.timeout) || 0)),
-      ...(firmwareOld ? {} : { timeoutValue: Number(f.timeoutValue) || 0 }) }
+      ...(firmwareOld ? {} : { timeoutValue: Number(f.timeoutValue) || 0 }), ...(useFlag ? { timeoutUseValue: f.timeoutUseValue } : {}) }
     if (await M.save(body)) { snap = JSON.stringify(f); learnedNote = false }
   }
 
@@ -199,6 +199,8 @@
   $effect(() => { modSel = modGuid; dbcSel = dbcGuid })
   const title = $derived(f?.name?.trim() || `CAN input ${n}`)
   const firmwareOld = $derived(lacks(dev, [5, 6, 0], 0x1300, 14))   // value-on-timeout: firmware 5.6 (0x1300 sub 14)
+  // upstream dingoFW (feat/can-input-timeout-value) also has the flag (sub 15); without it the input reads 0. The fork has none.
+  const useFlag = $derived(!firmwareOld && isUpstream(dev) && has(dev, 0x1300 + (row?.number ?? 1) - 1, 15))
 </script>
 
 <Page>
@@ -323,7 +325,8 @@
             <input id="tval" class="nx-input" disabled value="0" />
             <span class="muted small">{dev.name} runs {dev.version && dev.version !== 'v0.0.0' ? dev.version.replace(/^v/, '') : 'its current firmware'}. Until it has firmware 5.6 the input reads 0 after a timeout. <a href={href('hardware', 'firmware')}>Update firmware</a></span>
             {:else}
-            <input id="tval" class="nx-input" type="number" step="any" bind:value={f.timeoutValue} disabled={!f.timeoutEnabled} data-testid="timeout-value" />
+            {#if useFlag}<Checkbox bind:checked={f.timeoutUseValue} label="Use a value instead of 0" hint="Off: the input reads 0 and off, as before." disabled={!f.timeoutEnabled} data-testid="timeout-use-value" />{/if}
+            <input id="tval" class="nx-input" type="number" step="any" bind:value={f.timeoutValue} disabled={!f.timeoutEnabled || (useFlag && !f.timeoutUseValue)} data-testid="timeout-value" />
             <span class="muted small">What the input reads while the frame is missing, for example 0 for "off" or a safe temperature. The on/off result follows the same test.</span>
             {/if}
           </div>
