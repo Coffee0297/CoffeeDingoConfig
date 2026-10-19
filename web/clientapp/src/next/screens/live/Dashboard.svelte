@@ -9,6 +9,7 @@
   import LiveTabs from './parts/LiveTabs.svelte'
   import Tile from './parts/Tile.svelte'
   import { wireLoad, wireLoadText } from '../hardware/parts/wireload.js'
+  import ForceCan from './parts/ForceCan.svelte'
 
   // temperature as a share of the all-off limit (G18), so the bar fills toward the shutdown
   const tempBar = (d, lim) => (lim ? { pct: (d.temp / lim.crit) * 100 } : {})
@@ -193,6 +194,7 @@
         {/if}
       </section>
     {/each}
+    <ForceCan {devs} />
   {/if}
 </Page>
 
