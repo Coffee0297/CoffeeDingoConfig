@@ -4,25 +4,12 @@
 // on the module at once and is stored with Apply to car.
 import { api, project, toast, defs, isPdm } from '../../../lib/live.svelte.js'
 import { spanAfter } from '../../../../lib/canids.js'
-import { isUpstream } from '../../hardware/parts/util.js'
+import { upstreamWrite } from './sleepParams.js'
 
-export const SUB = { enabled: 2, timeout: 5, ignoreAlwaysOn: 9, forceSleep: 10, muteTx: 11, wakeMask: 12, wakeCan: 13 }
-// Upstream dingoFW numbers its device params differently and has bools where the fork has a wake mask; it has no
-// sleep time (fixed 30 s) and no ignore-always-on. [fork sub, value] -> [upstream sub, value], or null = not there.
-export function upstreamWrite(sub, value) {
-  switch (sub) {
-    case SUB.enabled: return [2, value]
-    case SUB.muteTx: return [7, value]
-    case SUB.forceSleep: return [8, value]
-    case SUB.wakeMask: return [4, value ? 0 : 1]   // bDisableDigInWake: all digital inputs wake, or none
-    case SUB.wakeCan: return [5, value ? 0 : 1]    // bDisableCanWake
-    default: return null
-  }
-}
-/** Write one device param (index 0) given by its fork sub; upstream modules get theirs. */
+export { SUB, upstreamWrite, upSub } from './sleepParams.js'
+/** Write one device param (index 0) given by its fork sub; upstream modules get theirs (none if they lack it). */
 export async function writeDeviceParam(d, sub, value) {
-  const w = isUpstream(d) ? upstreamWrite(sub, value) : [sub, value]
-  if (w) await api.writeParam(d.guid, 0, w[0], w[1])
+  for (const [s, v] of upstreamWrite(d, sub, value)) await api.writeParam(d.guid, 0, s, v)
 }
 export const TIMEOUT_MIN_S = 1
 export const TIMEOUT_MAX_S = 60

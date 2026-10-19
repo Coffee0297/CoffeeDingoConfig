@@ -2,7 +2,7 @@
   // "Automatic sleep" card: the three simple switches, written to every module that can sleep.
   import { Card, Chip, Switch, Stepper, FwBadge } from '../../../ui/index.js'
   import { live, toast } from '../../../lib/live.svelte.js'
-  import { SUB, canSleep, writeParams, TIMEOUT_MIN_S, TIMEOUT_MAX_S, secs } from './sleepLogic.js'
+  import { SUB, upSub, canSleep, writeParams, TIMEOUT_MIN_S, TIMEOUT_MAX_S, secs } from './sleepLogic.js'
   import { isUpstream } from '../../hardware/parts/util.js'
 
   const mods = $derived(live.devices.filter((d) => /pdm|canboard/i.test(d.type ?? '') && canSleep(d)))
@@ -13,8 +13,8 @@
   const ignoreOn = $derived(all((d) => d.sleepIgnoreAlwaysOn))
   const timeoutS = $derived(mods.length ? Math.round(mods[0].sleepTimeoutMs / 1000) : 30)
   const mixed = $derived(mods.length > 1 && (some((d) => d.sleepEnabled !== mods[0].sleepEnabled) || some((d) => d.sleepTimeoutMs !== mods[0].sleepTimeoutMs) || some((d) => d.sleepIgnoreAlwaysOn !== mods[0].sleepIgnoreAlwaysOn)))
-  // upstream dingoFW: sleep time fixed at 30 s, no ignore-always-on setting
-  const allUp = $derived(all(isUpstream))
+  // upstream dingoFW: sleep time fixed at 30 s, no ignore-always-on setting, unless it has feat/sleep-config (sub 9, 10)
+  const allUp = $derived(all((d) => isUpstream(d) && !upSub(d, 9)))
   const noWake = (d) => (d.wakeDigInputMask ?? 0) === 0 && d.wakeOnCan === false
 
   let draftS = $state(30), editing = $state(false)

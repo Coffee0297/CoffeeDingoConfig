@@ -841,7 +841,7 @@ public class CanboardDevice : IDeviceConfigurable
         };
     }
 
-    // Upstream dingoFW device params (0x0000 sub 0-8). The wake bools map onto the fork's wake mask / wake-on-CAN
+    // Upstream dingoFW device params (0x0000 sub 0-8, 9-11 with feat/sleep-config). The wake bools map onto the fork's wake mask / wake-on-CAN
     // and the mute / force-sleep inputs keep their names, so the same UI drives both families.
     private List<DeviceParameter> UpstreamDeviceParams() =>
     [
@@ -863,6 +863,16 @@ public class CanboardDevice : IDeviceConfigurable
             GetValue = () => MuteTxInput, SetValue = val => MuteTxInput = (int)val, ValueType = typeof(int), DefaultValue = 0 },
         new() { ParentName = Name, Name = "device.forceSleepInput", Index = BaseIndex, SubIndex = 8,
             GetValue = () => ForceSleepInput, SetValue = val => ForceSleepInput = (int)val, ValueType = typeof(int), DefaultValue = 0 },
+        // feat/sleep-config (only sent when the module has them): timeout, ignore always-on, per-pin wake mask. Sub 4
+        // stays the master switch: mask 0 = sub 4 set; sub 11 comes after sub 4 in a ReadAll, so it must not undo it.
+        new() { ParentName = Name, Name = "device.sleepTimeoutMs", Index = BaseIndex, SubIndex = 9,
+            GetValue = () => SleepTimeoutMs, SetValue = val => SleepTimeoutMs = (int)val, ValueType = typeof(int), DefaultValue = 30000 },
+        new() { ParentName = Name, Name = "device.sleepIgnoreAlwaysOn", Index = BaseIndex, SubIndex = 10,
+            GetValue = () => SleepIgnoreAlwaysOn, SetValue = val => SleepIgnoreAlwaysOn = (bool)val, ValueType = typeof(bool), DefaultValue = false },
+        new() { ParentName = Name, Name = "device.wakeDigInputMask", Index = BaseIndex, SubIndex = 11,
+            GetValue = () => WakeDigInputMask == 0 ? (1 << NumDigitalInputs) - 1 : WakeDigInputMask,
+            SetValue = val => { if (WakeDigInputMask != 0) WakeDigInputMask = (int)val & ((1 << NumDigitalInputs) - 1); },
+            ValueType = typeof(int), DefaultValue = (1 << NumDigitalInputs) - 1 },
     ];
 
     private void Clear()
