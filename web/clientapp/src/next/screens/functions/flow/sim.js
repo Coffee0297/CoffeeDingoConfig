@@ -167,6 +167,7 @@ export function createSim(model, snapshot) {
       const r = n.row ?? {}
       if (n.kind === 'output' || n.kind === 'digitaloutput') {
         const onIdx = port(n, n.kind === 'output' ? 'On' : 'State'), curIdx = port(n, 'Current'), ocIdx = port(n, 'Overcurrent'), fIdx = port(n, 'Fault')
+        const wIdx = port(n, 'Warning'), olIdx = port(n, 'Open Load')   // upstream state signals, 1 only while reported
         const src = n.kind === 'output' ? r.inputVal : r.input
         const want = !!r.enabled && truthy(val(src))
         const f = faults[n.id]
@@ -192,6 +193,8 @@ export function createSim(model, snapshot) {
             ? { text: 'WARNING', tone: 'warn', why: `It draws ${nominal.toFixed(1)} A, above its ${r.warnLimit} A warning limit. It keeps running; the module only reports it.` }
             : { text: want ? 'ON' : 'OFF', tone: want ? 'on' : 'off', why: !r.enabled ? 'The output is disabled.' : !src ? 'It has no input, so it never switches.' : want ? 'Its input is on.' : f ? 'It is off, so the fault has nothing to act on yet.' : 'Its input is off.' }
         }
+        if (wIdx) vals[wIdx] = status[n.id]?.text === 'WARNING'
+        if (olIdx) vals[olIdx] = status[n.id]?.text === 'OPEN LOAD'
       } else if (n.kind === 'canoutput' && n.enabled) {
         status[n.id] = r.input ? { text: 'SENDS ' + fmt(val(r.input)), tone: 'on', why: `Sends ${fmt(val(r.input))} on ${'0x' + Number(r.id ?? 0).toString(16).toUpperCase()} every ${r.interval} ms (simulated, nothing is sent).` }
           : { text: 'NOTHING', tone: 'warn', why: 'No value to send.' }

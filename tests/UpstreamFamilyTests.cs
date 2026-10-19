@@ -170,6 +170,39 @@ public class UpstreamFamilyTests
         Assert.Equal(domain.Enums.dingoPdm.OutState.OpenLoad, d.Outputs[2].State);
     }
 
+    private static PdmDevice ReadAllFrom(List<(int, int)> keys)
+    {
+        var d = UpstreamPdm();
+        var q = Q();
+        var crc = new CumulativeCrc32();
+        d.Read(0x680, [10, 0, 0, 0, 0, 0, 0, 0], ref q, []);
+        foreach (var (i, s) in keys)
+        {
+            byte[] v = [0, 0, 0, 0];
+            crc.Update(v);
+            d.Read(0x680, [11, (byte)i, (byte)(i >> 8), (byte)s, .. v], ref q, []);
+        }
+        d.Read(0x680, [12, (byte)keys.Count, (byte)(keys.Count >> 8), 0, .. BitConverter.GetBytes(crc.Final)], ref q, []);
+        return d;
+    }
+
+    // feat/output-state-signals: a module with the warn/open-load subs (18-20) gets Warning, Open Load per output after
+    // the timers (nm dingopdm_v7.elf of feat/output-state-signals: pVarMap 0x3c4 bytes = 241)
+    [Fact]
+    public void OutputStateSignals_AfterTimers_WhenWarnListed()
+    {
+        List<(int, int)> outs(int subs) => Enumerable.Range(0, 8).SelectMany(o => Enumerable.Range(0, subs).Select(s => (0x1000 + o, s))).ToList();
+        var timer = new List<(int, int)> { (0x1A00, 0) };
+        Assert.Equal(225, ReadAllFrom([.. outs(18), .. timer]).VarMap.Count);
+        var d = ReadAllFrom([.. outs(21), .. timer]);
+        Assert.Equal(241, d.VarMap.Count);
+        Assert.Equal("timer", d.VarMap[224].OwnerKind);
+        Assert.Equal(("output", 1, "Warning"), (d.VarMap[225].OwnerKind, d.VarMap[225].OwnerNumber, d.VarMap[225].PropertyName));
+        Assert.Equal(("output", 2, "Open Load"), (d.VarMap[228].OwnerKind, d.VarMap[228].OwnerNumber, d.VarMap[228].PropertyName));
+        Assert.Equal(("output", 8, "Open Load"), (d.VarMap[240].OwnerKind, d.VarMap[240].OwnerNumber, d.VarMap[240].PropertyName));
+        Assert.Equal(Enumerable.Range(0, 241), d.VarMap.Select(v => v.VariableIndex));
+    }
+
     [Fact]
     public void ParamRuns_RoundTrip_KeepOrder()
     {

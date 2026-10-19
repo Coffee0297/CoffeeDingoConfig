@@ -66,6 +66,15 @@ export const TEMPLATES = [
   { key: 'simple', group: 'accessories', name: 'Simple switched circuit', icon: '🔌', desc: 'One input drives one output directly.',
     fields: [{ k: 'input', t: 'bool', label: 'Driven by' }, { k: 'output', t: 'out', load: 'load', label: 'Output' }],
     build: async (ctx, s) => { await ctx.wireOutput(s.output, +s.input) } },
+  { key: 'backuppump', group: 'accessories', name: 'Backup pump', icon: '⛽', logicOn: 'main',
+    desc: 'The main pump runs from its switch. When it loses its load (open load: dry, unplugged, blown fuse) or faults, the backup pump runs instead while the switch is on. Set a "load missing below" limit on the main pump (Output page, Protection) so the module can see a missing load. The main pump must be a dingoPDM output.',
+    fields: [{ k: 'run', t: 'bool', label: 'Pump switch / demand' }, { k: 'main', t: 'out', load: 'pump', label: 'Main pump' }, { k: 'backup', t: 'out', load: 'pump', label: 'Backup pump' }],
+    build: async (ctx, s) => {
+      const lost = [await ctx.outSignal(s.main, 'Open Load'), await ctx.outSignal(s.main, 'Fault')]
+      if (!lost.some((x) => x > 0)) throw new Error('The main pump needs a dingoPDM output (it reports Open load / Fault)')
+      await ctx.wireOutput(s.main, +s.run)
+      await ctx.wireOutput(s.backup, await ctx.allOf([+s.run, await ctx.anyOf(lost, 'TP MainPumpLost')], 'TP BackupPump'))
+    } },
   { key: 'analog', group: 'accessories', name: 'Analog triggered switch', icon: '📈', desc: 'Output turns on when an analog signal crosses a threshold (creates a Condition).',
     fields: [{ k: 'analog', t: 'num', label: 'Analog signal' }, { k: 'op', t: 'op', label: 'Turn on when it is', def: 2 }, { k: 'thr', t: 'number', label: 'Threshold', def: 0 }, { k: 'output', t: 'out', load: 'load', label: 'Output' }],
     build: async (ctx, s) => { const c = await ctx.condition(+s.analog, +s.op, +s.thr, 'TP ' + ctx.outName(s.output)); await ctx.wireOutput(s.output, c) } },
@@ -299,9 +308,10 @@ const withAnyOf = (ctx) => Object.assign(ctx, {
 // ---- Preview: run build without touching a module. Every signal is a token (a fake index > 0); every
 // block it would create becomes an op {id, op, name, ins: [node ids], detail}; every output wire a {out, src}.
 // Node ids: 'in:<field>' for a template input, 'on' for Always On, 'op<n>' for a created block.
-const TOK_OP = 100000, TOK_IN = 200000
+const TOK_OP = 100000, TOK_IN = 200000, TOK_SIG = 300000
 export async function previewTemplate(tpl, sel, outName = (o) => 'output ' + o) {
   const ops = [], wires = [], node = new Map([[1, 'on']])
+  let sigs = 0
   const s = { ...sel }
   tpl.fields.forEach((f, i) => { if (isInput(f) && !blank(sel[f.k])) { s[f.k] = TOK_IN + i; node.set(TOK_IN + i, 'in:' + f.k) } })
   const ids = (...xs) => xs.filter((x) => x > 0).map((x) => node.get(x) ?? '?')
@@ -317,6 +327,7 @@ export async function previewTemplate(tpl, sel, outName = (o) => 'output ' + o) 
     timer: async (input, mode, preset, name) => op('timer', name, ids(input), `${['on-delay', 'off-delay', 'pulse'][mode]} ${ms(preset, 3600000)} ms`),
     virtual: async (c, name) => op('virtual', name, ids(c.v0, c.v1, c.v2), virtualText(c)),
     wireOutput: async (o, src) => { wires.push({ out: o, src: ids(src)[0] ?? null }) },
+    outSignal: async (o) => { const t = TOK_SIG + ++sigs; node.set(t, 'out:' + o); return t },
     setOutputPwm: async (o, { source }) => { wires.push({ out: o, src: ids(source)[0] ?? null, pwm: true }) },
     wiper: async (cfg) => {
       const id = op('wiper', 'Wiper block', ids(cfg.slowInput, cfg.fastInput, cfg.interInput, cfg.parkInput, cfg.washInput), `${cfg.washWipeCycles} wipes after wash`)
@@ -389,6 +400,11 @@ export async function liveCtx(env) {
     timer: (input, mode, preset, name) => make('timer', 'timers', 'State', { input, mode, edge: 0, preset: ms(preset, 3600000), name }),
     virtual: (c, name) => make('virtualinput', 'virtualInputs', 'State', { not0: !!c.not0, var0: c.v0 ?? 0, cond0: c.op0 ?? And, not1: !!c.not1, var1: c.v1 ?? 0, cond1: c.op1 ?? And, not2: !!c.not2, var2: c.v2 ?? 0, mode: 0, name }),
     wireOutput: async (o, src) => { await env.wireOutput(o, src); wired.push(o) },
+    // An output's own signal ('Open Load', 'Fault', ...) on this module; 0 when the module has none.
+    outSignal: async (o, prop) => {
+      const [g, n] = String(o).includes(':') ? String(o).split(':') : [guid, o]
+      return g === guid ? idxOf('output', +n, prop) ?? 0 : 0
+    },
     // Configure a CANBoard digital output for variable-duty PWM from an analog source + soft start.
     setOutputPwm: async (o, { source, full, min, freq, on }) => {
       const [g, n] = String(o).includes(':') ? String(o).split(':') : [guid, o]   // the Circuit Builder passes a bare n

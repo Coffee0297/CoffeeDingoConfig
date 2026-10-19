@@ -1002,6 +1002,18 @@ public class PdmDevice : IDeviceConfigurable
                 VarMap.Add(new DeviceVariable { GetName = () => Timers[num].Name, OwnerKind = "timer", OwnerNumber = num + 1,
                     PropertyName = "State", DataType = "bool", VariableIndex = index++, SingleVariable = false });
             }
+        // feat/output-state-signals: per output Warning, Open Load. No param of its own: it is stacked on
+        // feat/output-warn-openload, so the warning limit (0x1000 sub 18) stands for it.
+        // shortcut: a module with only feat/output-warn-openload gets 16 entries it lacks (it refuses them); add a
+        // marker param if such firmware is ever released.
+        if (ParamSet.Contains(Output.BaseIndex, 18))
+            for (var i = 0; i < NumOutputs; i++)
+            {
+                var num = i;
+                foreach (var prop in new[] { "Warning", "Open Load" })
+                    VarMap.Add(new DeviceVariable { GetName = () => Outputs[num].Name, OwnerKind = "output", OwnerNumber = num + 1,
+                        PropertyName = prop, DataType = "bool", VariableIndex = index++, SingleVariable = false });
+            }
     }
 
     private void InitParams()
