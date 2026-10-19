@@ -1,11 +1,12 @@
 <script>
   import { untrack } from 'svelte'
-  import { Card, Segmented, Switch, Stepper, Select, Field } from '../../../ui/index.js'
+  import { Card, Segmented, Switch, Stepper, Select, Field, FwBadge } from '../../../ui/index.js'
   import { api, toast } from '../../../lib/live.svelte.js'
   import { remoteItems, resolveRemote, isRemoteKey } from '../../../lib/remote.js'
   import { href } from '../../../router.svelte.js'
 
-  let { guid, f = $bindable() } = $props()
+  // caps: what this module's firmware has (util.js driveCaps); fork modules have it all
+  let { guid, f = $bindable(), caps = { pwm: true, varFreq: true, rampChanges: true } } = $props()
 
   let nums = $state([])
   $effect(() => {
@@ -52,8 +53,12 @@
 </script>
 
 <Card title="Drive" aria-label="Drive">
-  <Segmented label="How the output is driven" items={MODES} bind:value={modeVal} onchange={setMode} />
-  {#if f.pwmEnabled}
+  {#if caps.pwm}
+    <Segmented label="How the output is driven" items={MODES} bind:value={modeVal} onchange={setMode} />
+  {:else}
+    <p class="muted note" data-testid="no-pwm">This module's firmware switches the output on and off only (no PWM). <FwBadge upstream /></p>
+  {/if}
+  {#if caps.pwm && f.pwmEnabled}
     <div class="grid">
       {#if f.variableDutyCycle}
         <Select label="Duty comes from" items={items} bind:value={dutySrc} onchange={(v) => pickSrc('dutyCycleInput', v)} disabled={linking} data-testid="duty-source" />
@@ -69,17 +74,19 @@
         <Stepper label="Frequency" bind:value={f.freq} min={15} max={400} step={5} unit="Hz" data-testid="freq" />
       {/if}
     </div>
-    <Switch bind:checked={f.variableFreq} label="Frequency follows a signal" hint="Advanced. 15 to 400 Hz." />
+    {#if caps.varFreq}<Switch bind:checked={f.variableFreq} label="Frequency follows a signal" hint="Advanced. 15 to 400 Hz." />{/if}
   {/if}
+  {#if caps.pwm}
   <div class="soft">
     <Switch bind:checked={f.softStart} label="Soft start" hint="Ramps up when it turns on." />
     {#if f.softStart}
       <Stepper label="Ramp time" bind:value={f.softStartRamp} min={0} max={10000} step={100} unit="ms" data-testid="ramp" />
-      {#if f.pwmEnabled && f.variableDutyCycle}
+      {#if caps.rampChanges && f.pwmEnabled && f.variableDutyCycle}
         <Switch bind:checked={f.rampDutyChanges} label="Ramp every duty change" hint="Slews on each change, not only at turn-on." />
       {/if}
     {/if}
   </div>
+  {/if}
   <div class="crank">
     <strong>While the engine is cranking</strong>
     <span class="muted note">To switch it off while cranking (frees current and battery voltage for the starter), give it the Accessory role: it then follows the ignition and is off while the starter turns. Needs firmware 5.6. <a href={href('power', 'roles')}>Output roles</a></span>
