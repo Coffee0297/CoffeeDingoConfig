@@ -15,7 +15,7 @@
   import SaveBar from './SaveBar.svelte'
   import { createBench } from './bench.svelte.js'
   import { signalFeed, ring } from './feeds.svelte.js'
-  import { resample, olderThan, isUpstream } from './util.js'
+  import { resample, olderThan, isUpstream, has } from './util.js'
 
   let { guid, n } = $props()
 
@@ -53,6 +53,7 @@
       variableDutyCycle: !!o.variableDutyCycle, dutyCycleInput: o.dutyCycleInput ?? 0, dutyCycleDenom: o.dutyCycleDenom ?? 100,
       variableFreq: !!o.variableFreq, freqInput: o.freqInput ?? 0, freqInputDenom: o.freqInputDenom ?? 1, rampDutyChanges: !!o.rampDutyChanges,
       primaryOutput: o.primaryOutput ?? -1, warnLimit: o.warnLimit ?? 0, openLoadLimit: o.openLoadLimit ?? 0, openLoadTime: o.openLoadTime ?? 1000,
+      hardShortLimit: o.hardShortLimit ?? 0,
     }
   }
   // Seed once per output so the 10 Hz telemetry never overwrites an edit in progress.
@@ -107,6 +108,7 @@
           VariableFreq: !!f.variableFreq, FreqInput: Number(f.freqInput) || 0, FreqInputDenom: Math.max(1, Number(f.freqInputDenom) || 1),
           RampDutyChanges: !!f.rampDutyChanges, PrimaryOutput: Number(f.primaryOutput ?? -1),
           WarnLimit: Number(f.warnLimit), OpenLoadLimit: Number(f.openLoadLimit), OpenLoadTime: Math.round(Number(f.openLoadTime)),
+          HardShortLimit: Number(f.hardShortLimit) || 0,
         })
       }
       project.dirty = true
@@ -203,7 +205,7 @@
       <div class="col">
         <OutputChain {guid} {dev} bind:f {feed} {connected} raw={src} />
         {#if !isCb}
-          <OutputProtection bind:f {rating} />
+          <OutputProtection bind:f {rating} hardShort={isUpstream(dev) && has(dev, 0x1000 + n - 1, 32)} />
         {:else}
           <Card title="Protection"><p class="muted">The CANBoard switches this load to ground and cannot measure or limit current. Put a fuse in the load wire.</p></Card>
         {/if}

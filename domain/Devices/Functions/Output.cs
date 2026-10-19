@@ -51,6 +51,8 @@ public class Output : IDeviceFunction
     [JsonPropertyName("warnLimit")] public double WarnLimit { get => field; set => field = Math.Clamp(value, 0.0, 100.0); } = 0.0;        //A, 0 = disabled
     [JsonPropertyName("openLoadLimit")] public double OpenLoadLimit { get => field; set => field = Math.Clamp(value, 0.0, 100.0); } = 0.0; //A, 0 = disabled
     [JsonPropertyName("openLoadTime")] public int OpenLoadTime { get => field; set => field = Math.Clamp(value, 0, 60000); } = 1000;     //ms below floor before flagging
+    // upstream feat/hard-short-trip: A, 0 = off; above it the output latches Fault at once, also inside the inrush time
+    [JsonPropertyName("hardShortLimit")] public double HardShortLimit { get => field; set => field = Math.Clamp(value, 0.0, 100.0); } = 0.0;
     
     [JsonIgnore][Plotable(displayName:"Current", unit:"A")] public double Current { get; set; }
     [JsonIgnore][Plotable(displayName:"State")] public OutState State { get; set; }
@@ -67,6 +69,8 @@ public class Output : IDeviceFunction
     [JsonIgnore][Plotable(displayName:"CalcCurrent", unit:"A")] public double CalculatedCurrent { get; private set; }
 
     [JsonIgnore] public List<DeviceParameter> Params { get; }
+    // Upstream-only subs (free in the fork, whose firmware lacks them): added on upstream modules only.
+    [JsonIgnore] public List<DeviceParameter> UpstreamParams { get; }
 
     [JsonConstructor]
     public Output(int number, string name)
@@ -75,6 +79,15 @@ public class Output : IDeviceFunction
         Name = name;
 
         Params = InitParams();
+        UpstreamParams =
+        [
+            new DeviceParameter
+            {
+                ParentName = Name, Name = $"output[{Number}].hardShortLimit", Index = BaseIndex + (Number - 1), SubIndex = 32,
+                GetValue = () => HardShortLimit, SetValue = val => HardShortLimit = (double)val,
+                ValueType = typeof(double), DefaultValue = 0.0
+            }
+        ];
     }
 
     private List<DeviceParameter> InitParams()

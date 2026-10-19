@@ -92,6 +92,8 @@ export function sentenceFor(model, n) {
       if (r.variableDutyCycle) segs.push(T('at a duty from'), srcTok(model, r.dutyCycleInput, 'dutyCycleInput'))
       else if (r.pwmEnabled) segs.push(T('at'), val((r.fixedDuty ?? r.fixedDutyCycle ?? 100) + ' %', 'pwm'))
       segs.push(T('.'))
+      // upstream hard short limit (output sub 32)
+      if (r.hardShortLimit > 0) segs.push(T('Above'), val(r.hardShortLimit + ' A', 'hardShortLimit'), T('(a dead short) it latches off at once, without retrying.'))
       return segs
     }
     default: return null

@@ -175,7 +175,8 @@ export function createSim(model, snapshot) {
           if (onIdx) vals[onIdx] = false; if (ocIdx) vals[ocIdx] = true; if (fIdx) vals[fIdx] = true; if (curIdx) vals[curIdx] = 0
           const lim = r.currentLimit ?? '?'
           status[n.id] = { text: 'TRIPPED', tone: 'fault', why: n.kind === 'output'
-            ? `Over ${lim} A: the output trips. ${r.resetMode ? `It tries again after ${(r.resetTime ?? 0) / 1000} s, up to ${r.resetCountLimit} times, then stays off.` : 'It stays off until it is reset.'}`
+            ? r.hardShortLimit > 0 ? `Over ${lim} A: the output trips. If it is a dead short (above ${r.hardShortLimit} A) it latches off at once instead, without retrying; a smaller overload ${r.resetMode ? 'retries as set' : 'stays off until it is reset'}.`
+            : `Over ${lim} A: the output trips. ${r.resetMode ? `It tries again after ${(r.resetTime ?? 0) / 1000} s, up to ${r.resetCountLimit} times, then stays off.` : 'It stays off until it is reset.'}`
             : 'Low-side output tripped (simulated).' }
         } else if (f === 'open' && want) {
           if (onIdx) vals[onIdx] = true; if (ocIdx) vals[ocIdx] = false; if (fIdx) vals[fIdx] = false; if (curIdx) vals[curIdx] = 0

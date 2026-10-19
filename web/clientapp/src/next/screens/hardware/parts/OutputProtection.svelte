@@ -1,6 +1,7 @@
 <script>
   import { Card, Stepper, Select } from '../../../ui/index.js'
-  let { f = $bindable(), rating = null } = $props()
+  // hardShort: the firmware has the hard short limit (upstream output sub 32)
+  let { f = $bindable(), rating = null, hardShort = false } = $props()
 
   const RESET = [{ value: '0', label: 'Stay off (latch)' }, { value: '1', label: 'Retry a few times' }, { value: '2', label: 'Retry for ever' }]
   let rm = $state('0')
@@ -36,9 +37,16 @@
       <span class="hint">open load. 0 = off</span>
     </div>
     <Stepper label="Load missing for" bind:value={f.openLoadTime} min={0} max={10000} step={100} unit="ms" disabled={!num(f.openLoadLimit)} />
+    {#if hardShort}
+      <div>
+        <Stepper label="Dead short above" bind:value={f.hardShortLimit} min={0} max={100} step={1} decimals={1} unit="A" data-testid="hard-short" />
+        <span class="hint" class:bad={num(f.hardShortLimit) > 0 && num(f.hardShortLimit) <= num(f.inrushLimit)}>{num(f.hardShortLimit) > 0 && num(f.hardShortLimit) <= num(f.inrushLimit) ? '■ at or below the inrush allowed: a healthy load can latch off at switch-on' : 'latches off at once, even during inrush; no retry. Well above the inrush, below where the current reading tops out. 0 = off'}</span>
+      </div>
+    {/if}
   </div>
   <p class="sum" data-testid="protection-summary">
     Trips above <strong>{f.currentLimit} A</strong>{#if num(f.inrushTime) > 0}, or <strong>{f.inrushLimit} A</strong> during the first <strong>{f.inrushTime} ms</strong>{/if}; {afterTrip}.
+    {#if hardShort && num(f.hardShortLimit) > 0}Above <strong>{f.hardShortLimit} A</strong> (a dead short) it latches off at once, also during inrush, without retrying.{/if}
     {#if num(f.warnLimit) > 0}Warns at <strong>{f.warnLimit} A</strong>.{:else}No early warning.{/if}
     {#if num(f.openLoadLimit) > 0}Reports "load missing?" below <strong>{f.openLoadLimit} A</strong> for <strong>{f.openLoadTime} ms</strong>.{:else}Missing load is not checked.{/if}
   </p>
