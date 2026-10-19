@@ -36,7 +36,7 @@ export const binBody = (o, input, enabled = true) => {
     // Variable-PWM (duty/freq follow a signal) — carry through so a deploy/binburn doesn't reset them.
     VariableDutyCycle: o.variableDutyCycle ?? false, DutyCycleInput: o.dutyCycleInput ?? 0, DutyCycleDenom: o.dutyCycleDenom ?? 100,
     VariableFreq: o.variableFreq ?? false, FreqInput: o.freqInput ?? 0, FreqInputDenom: o.freqInputDenom ?? 1,
-    RampDutyChanges: o.rampDutyChanges ?? false, PrimaryOutput: o.primaryOutput ?? -1,
+    RampDutyChanges: o.rampDutyChanges ?? false, PrimaryOutput: o.primaryOutput ?? -1, StayAlive: o.stayAlive ?? false,
     WarnLimit: o.warnLimit ?? 0, OpenLoadLimit: o.openLoadLimit ?? 0, OpenLoadTime: o.openLoadTime ?? 1000,
   }
 }

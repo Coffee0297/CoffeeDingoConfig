@@ -1,7 +1,7 @@
 <script>
   // One output of one module: PDM smart output (current sensing, limits, wiring) or CANBoard low-side output.
   import { untrack } from 'svelte'
-  import { Page, PageHeader, Card, Button, Chip, StateDot, Banner, Empty, LineChart } from '../../../ui/index.js'
+  import { Page, PageHeader, Card, Button, Chip, StateDot, Banner, Empty, LineChart, Checkbox } from '../../../ui/index.js'
   import { live, defs, api, device, moduleState, isCanboard, project } from '../../../lib/live.svelte.js'
   import { href } from '../../../router.svelte.js'
   import { pinFor, boardOf } from '../../../../lib/pinmap.js'
@@ -15,7 +15,7 @@
   import SaveBar from './SaveBar.svelte'
   import { createBench } from './bench.svelte.js'
   import { signalFeed, ring } from './feeds.svelte.js'
-  import { resample, olderThan, isUpstream } from './util.js'
+  import { resample, olderThan, isUpstream, has } from './util.js'
 
   let { guid, n } = $props()
 
@@ -53,6 +53,7 @@
       variableDutyCycle: !!o.variableDutyCycle, dutyCycleInput: o.dutyCycleInput ?? 0, dutyCycleDenom: o.dutyCycleDenom ?? 100,
       variableFreq: !!o.variableFreq, freqInput: o.freqInput ?? 0, freqInputDenom: o.freqInputDenom ?? 1, rampDutyChanges: !!o.rampDutyChanges,
       primaryOutput: o.primaryOutput ?? -1, warnLimit: o.warnLimit ?? 0, openLoadLimit: o.openLoadLimit ?? 0, openLoadTime: o.openLoadTime ?? 1000,
+      stayAlive: !!o.stayAlive,
     }
   }
   // Seed once per output so the 10 Hz telemetry never overwrites an edit in progress.
@@ -107,6 +108,7 @@
           VariableFreq: !!f.variableFreq, FreqInput: Number(f.freqInput) || 0, FreqInputDenom: Math.max(1, Number(f.freqInputDenom) || 1),
           RampDutyChanges: !!f.rampDutyChanges, PrimaryOutput: Number(f.primaryOutput ?? -1),
           WarnLimit: Number(f.warnLimit), OpenLoadLimit: Number(f.openLoadLimit), OpenLoadTime: Math.round(Number(f.openLoadTime)),
+          StayAlive: !!f.stayAlive,
         })
       }
       project.dirty = true
@@ -204,6 +206,15 @@
         <OutputChain {guid} {dev} bind:f {feed} {connected} raw={src} />
         {#if !isCb}
           <OutputProtection bind:f {rating} />
+          <!-- upstream dingoFW feat/stay-alive-outputs (sub 34) -->
+          {#if isUpstream(dev) && has(dev, 0x1000 + n - 1, 34)}
+            <Card title="While the module sleeps" aria-label="While the module sleeps">
+              <Checkbox label="Stays on while asleep" hint="For an alarm, a tracker or courtesy lights. If it is on when the module goes to sleep it stays on, and it no longer keeps the module awake." bind:checked={f.stayAlive} data-testid="stay-alive" />
+              {#if f.stayAlive}
+                <Banner tone="warn" title="No current protection while asleep.">The module does not measure or trip this output while it sleeps: a short is limited only by the switch's own current limit and the fuse. It runs at 100 % even when set to PWM, and goes off for a moment at every wake. Paired outputs: tick it on both.</Banner>
+              {/if}
+            </Card>
+          {/if}
         {:else}
           <Card title="Protection"><p class="muted">The CANBoard switches this load to ground and cannot measure or limit current. Put a fuse in the load wire.</p></Card>
         {/if}
