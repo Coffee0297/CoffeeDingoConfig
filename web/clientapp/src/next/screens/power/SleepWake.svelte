@@ -4,6 +4,7 @@
   import SleepSimple from './parts/SleepSimple.svelte'
   import SleepCustom from './parts/SleepCustom.svelte'
   import WakeMatrix from './parts/WakeMatrix.svelte'
+  import WakeFrameCard from './parts/WakeFrameCard.svelte'
   import SleepLive from './parts/SleepLive.svelte'
   import WontSleep from './parts/WontSleep.svelte'
   import SleepLog from './parts/SleepLog.svelte'
@@ -18,6 +19,7 @@
       <SleepSimple />
       <SleepCustom />
       <WakeMatrix />
+      <WakeFrameCard />
     </div>
     <div class="col">
       <SleepLive />

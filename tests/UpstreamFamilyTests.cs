@@ -619,4 +619,28 @@ public class UpstreamFamilyTests
         d.Read(0x682, [63 << 2, 0, 0, 0, 0, 0, 0, 0], ref q, []);
         Assert.Null(d.SleepCountdownS);   // not counting
     }
+
+    [Fact]
+    public void WakeFrame_PacksMaskAndValueBytes_LowByteFirst()
+    {
+        // feat/wake-on-frame: 0x0100 subs 4-7 = mask Lo/Hi, value Lo/Hi (UInt32), byte 0 in the low byte of Lo
+        var d = UpstreamPdm();
+        var p = d.Params.Where(x => x.Index == 0x0100).ToDictionary(x => x.SubIndex);
+        Assert.Equal(Enumerable.Range(0, 8), p.Keys.Order());
+        d.ParamSet.Learn(d.Params.Select(x => (x.Index, x.SubIndex)).ToList(), new());   // as after a Read of a module that has it
+        var q = Q();
+        // a module's single-write echo [2, 0x00, 0x01, sub, value LE] updates the model
+        d.Read(0x680, [2, 0x00, 0x01, 4, 0x11, 0x00, 0xAA, 0xFF], ref q, []);
+        d.Read(0x680, [2, 0x00, 0x01, 7, 0x00, 0x00, 0x00, 0xFF], ref q, []);
+        Assert.Equal(new[] { 0x11, 0, 0xAA, 0xFF, 0, 0, 0, 0 }, d.WakeFrame.Mask);
+        Assert.Equal(new[] { 0, 0, 0, 0, 0, 0, 0, 0xFF }, d.WakeFrame.Value);
+        d.WakeFrame.Mask = [0xFF, 0xFF, 0xFF, 0xFF, 1, 2, 3, 4];
+        Assert.Equal(new byte[] { 0xFF, 0xFF, 0xFF, 0xFF }, ParamCodec.ToFrame(domain.Enums.MessageCommand.Write, p[4], 0x681).Payload[4..]);
+        Assert.Equal(new byte[] { 1, 2, 3, 4 }, ParamCodec.ToFrame(domain.Enums.MessageCommand.Write, p[5], 0x681).Payload[4..]);
+
+        var f = new PdmDevice("PDM", 0x680);
+        f.SetLogger(NullLogger<PdmDevice>.Instance);
+        f.Read(0x680, [31, 0, 0, 0, 5, 6, 0, 6], ref q, []);
+        Assert.DoesNotContain(f.Params, x => x.Index == 0x0100);   // the fork has no wake frame
+    }
 }
