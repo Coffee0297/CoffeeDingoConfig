@@ -1002,6 +1002,14 @@ public class PdmDevice : IDeviceConfigurable
                 VarMap.Add(new DeviceVariable { GetName = () => Timers[num].Name, OwnerKind = "timer", OwnerNumber = num + 1,
                     PropertyName = "State", DataType = "bool", VariableIndex = index++, SingleVariable = false });
             }
+        // feat/math-block: one value per math block
+        if (FwFamily.HasBlock(this, MathFunction.BaseIndex, false))
+            for (var i = 0; i < NumMath; i++)
+            {
+                var num = i;
+                VarMap.Add(new DeviceVariable { GetName = () => Maths[num].Name, OwnerKind = "math", OwnerNumber = num + 1,
+                    PropertyName = "Value", DataType = "float", VariableIndex = index++, SingleVariable = false });
+            }
     }
 
     private void InitParams()
