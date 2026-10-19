@@ -22,10 +22,13 @@ export const ID_BEFORE = 1
 // +12/+13 already fall inside that span). At the usual 0x10 / 0x20 spacing both still fit.
 // An upstream-dingoFW PDM with lookup tables (param block 0x1B00) also sends Msg 30 at +32 (tables 1-2) and, with
 // 3-4 tables (feat/more-tables), Msg 31 at +33: pass the device.
-export const spanAfter = (type, dev = null) => (/canboard/i.test(type || '') ? 14 : Math.max(dev?.family === 'upstream' && dev.paramRuns && has(dev, 0x1000, 33) ? 32 : 30, [30, 32, 32, 33, 33][upstreamTables(dev)]))
+// Upstream dingoFW (feat/ignition-block) sends a main module's ignition state at base + 32 (PT-DPDM + 33), past that
+// span: pass the device (`dev`) and an enabled main's state id counts too (its DTO ignition.stateId).
+export const spanAfter = (type, dev = null) => Math.max(/canboard/i.test(type || '') ? 14 : Math.max(dev?.family === 'upstream' && dev.paramRuns && has(dev, 0x1000, 33) ? 32 : 30, [30, 32, 32, 33, 33][upstreamTables(dev)]), ignSpan(dev))
 // number of 0x1B00 table blocks in the upstream module's param list (0 for the fork / unread)
 const upstreamTables = (dev) => dev?.family !== 'upstream' ? 0
   : Math.min(4, new Set((dev.paramRuns ?? []).flatMap((r) => Array.from({ length: r[1] }, (_, k) => r[0] + k)).filter((i) => i >= 0x1b00 && i < 0x1c00)).size)
+const ignSpan = (d) => (d?.ignition?.enabled && d.ignition.role === 'main' && d.ignition.stateId > d.baseId ? d.ignition.stateId - d.baseId : 0)
 export const isModule = (type) => /pdm|canboard/i.test(type || '')
 
 export function nextPow2(n) {

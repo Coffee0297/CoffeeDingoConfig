@@ -6,7 +6,7 @@
   import { Page, PageHeader, Banner, Button, Card, FwBadge, Select, Checkbox, Stepper, Chip } from '../../ui/index.js'
   import { href } from '../../router.svelte.js'
   import { live, api, toast, project, isCanboard } from '../../lib/live.svelte.js'
-  import { olderThan, parseVersion, lacks } from '../hardware/parts/util.js'
+  import { olderThan, parseVersion, lacks, isUpstream } from '../hardware/parts/util.js'
   import { remoteItems } from '../../lib/remote.js'
   import SignalRule from './parts/SignalRule.svelte'
   import { decodeRule, compileRule, ruleSet } from './parts/signalRule.js'
@@ -42,7 +42,8 @@
   const capable = $derived(mods.filter((d) => !lacks(d, [5, 6, 0], 0x1E00)))
   const ready = $derived(capable.length > 0)
   const oldText = $derived([...new Set(known.filter((d) => olderThan(d.version, [5, 6, 0])).map((d) => d.version.replace(/^v/, '')))].join(', '))
-  const stateIdOf = (d) => d.baseId + (isCanboard(d) ? 14 : 30)
+  // the module's own state-frame id (fork: base + 30, CANBoard + 14; upstream dingoFW: + 32, PT-DPDM + 33)
+  const stateIdOf = (d) => d.ignition?.stateId ?? d.baseId + (isCanboard(d) ? 14 : 30)
 
   // ---- the setup, seeded from the module that is main today (or the first PDM) ----
   let mainGuid = $state(''), f = $state(null), follow = $state(true), busy = $state(false), err = $state('')
@@ -155,6 +156,7 @@
       <Select label="Main module" items={capable.map((d) => ({ value: d.guid, label: d.name }))} value={mainGuid} onchange={pick} disabled={!ready || busy} data-testid="ign-main" />
       <Checkbox label="The other modules follow it" hint={followers.length ? followers.map((d) => d.name).join(', ') : 'no other module with firmware 5.6'} bind:checked={follow} disabled={!ready || busy || !followers.length} data-testid="ign-follow" />
     </div>
+    {#if follow && followers.some(isUpstream)}<p class="muted">If the main module goes quiet, a follower on upstream dingoFW keeps Ignition, Accessory, Running and Dash, drops Cranking after 0.5 s, and its Link OK turns off.</p>{/if}
   </Card>
 
   <fieldset class="modes" disabled={!ready || busy} aria-label="How is the car started?">

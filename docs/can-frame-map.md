@@ -66,6 +66,9 @@ Upstream with lookup tables (params 0x1B00, feat/lookup-tables) adds Msg 30 (`ba
 sent while a table is enabled, so such a PDM spans `base+32` and no longer fits a 0x20 spacing. With 4 tables
 (feat/more-tables) Msg 31 (`base+33`) carries tables 3-4 the same way, sent while table 3 or 4 is enabled.
 The upstream CANBoard has no DO duty frame and no timers; its other frames match the fork's.
+With `feat/ignition-block`, an enabled *main* module sends the ignition state as Msg 30 = base + 32 (PT-DPDM Msg 31 =
+base + 33), `['I', state, flags]` as on the fork; at 0x20 spacing that is the next module's base id, so space an
+upstream main at least 0x30 below its neighbour (the Modules page flags the clash).
 
 ---
 
