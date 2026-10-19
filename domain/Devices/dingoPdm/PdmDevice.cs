@@ -163,6 +163,12 @@ public class PdmDevice : IDeviceConfigurable
     [JsonPropertyName("paramRuns"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public int[][]? ParamRuns { get => Family == FwFamily.Upstream ? ParamSet.Runs : null; set => ParamSet.Runs = value; }
     private bool Upstream => Family == FwFamily.Upstream;
+    // Upstream: the module answered a Lua command (feat/lua-scripting firmware has no param to show it). Saved so the
+    // project reloads with the Lua var-map slots; null = not seen (no Lua slots, no Lua commands sent).
+    [JsonPropertyName("hasLua"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public bool? HasLua { get => Upstream ? field : null; set; }
+    /// <summary>Runs Lua: the fork always; upstream once it answered a Lua command.</summary>
+    [JsonIgnore] public bool RunsLua => !Upstream || HasLua == true;
     public event Action<string>? SuccessNotification;
     public event Action<string>? ErrorNotification;
     public event Action? WriteAllIncomplete;
@@ -1069,7 +1075,7 @@ public class PdmDevice : IDeviceConfigurable
     }
 
     // Upstream dingoFW var map: same order as the fork's up to here (InitVarMap in core/device.cpp), then the timers
-    // LAST (if the module has the 0x1A00 timer block), no Lua slots.
+    // (if the module has the 0x1A00 timer block); the 32 Lua slots come last of all (feat/lua-scripting).
     // FEATURE BRANCHES: append your block's entries below the timers, in the canonical upstream order, each guarded
     // by FwFamily.HasBlock(this, <your param base>, false) so a module without the block keeps its indices.
     private void AddUpstreamTail(ref int index)
@@ -1171,6 +1177,15 @@ public class PdmDevice : IDeviceConfigurable
             foreach (var role in new[] { "Ignition", "Accessory", "Cranking", "Running", "Ready", "Dash", "Link OK" })
                 VarMap.Add(new DeviceVariable { GetName = () => "Ignition", OwnerKind = "ignition", OwnerNumber = 1,
                     PropertyName = role, DataType = "bool", VariableIndex = index++, SingleVariable = false });
+
+        // Lua slots: always the last block of the canonical order (status/integration-order.txt); keep them last.
+        if (HasLua == true)
+            for (var i = 0; i < LuaOutputSlots; i++)
+            {
+                var slot = i;
+                VarMap.Add(new DeviceVariable { GetName = () => $"Lua Out {slot + 1}", OwnerKind = "lua", OwnerNumber = slot + 1,
+                    PropertyName = "Value", DataType = "float", VariableIndex = index++, SingleVariable = true });
+            }
     }
 
     private void InitParams()
@@ -1411,7 +1426,19 @@ public class PdmDevice : IDeviceConfigurable
                 ReadInfoWarnErrorMessage(data);
 
                 if (((MessageCommand)data[0]) == MessageCommand.Version)
+                {
                     ReadVersion(BaseId, Name, data, queue);
+                    // upstream: ask for the Lua error text once per Version reply until the module answers one
+                    if (Upstream && HasLua != true) outgoing.Add(GetLuaErrMsg(0));
+                }
+
+                // any Lua reply from an upstream module: it runs Lua, its var map has the 32 Lua slots
+                if (Upstream && HasLua != true && data.Length >= 3 && (MessageCommand)data[0] is MessageCommand.LuaWrite
+                        or MessageCommand.LuaWriteComplete or MessageCommand.LuaRead or MessageCommand.LuaErr)
+                {
+                    HasLua = true;
+                    InitVarMap();
+                }
 
                 // Lua read-back: reply carries [cmd, offHi, offLo, b0..b4]
                 if (((MessageCommand)data[0]) == MessageCommand.LuaRead && data.Length >= 8)
@@ -1748,8 +1775,12 @@ public class PdmDevice : IDeviceConfigurable
         Logger.LogInformation("{Name} FW version received: {Version}", name, version);
 
         var family = FwFamily.Of(data[4]);
-        if (family != Family) { Family = family; ParamSet.Forget(); Rebuild(); }
-        else if (VersionReceived && version != Version) ParamSet.Stale();   // reflashed: read its param list again
+        if (family != Family) { Family = family; ParamSet.Forget(); HasLua = null; Rebuild(); }
+        else if (VersionReceived && version != Version)
+        {
+            ParamSet.Stale();   // reflashed: read its param list again
+            if (HasLua == true) { HasLua = null; InitVarMap(); }   // and ask again whether it runs Lua
+        }
         Version = version;
         VersionReceived = true;
     }

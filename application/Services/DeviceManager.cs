@@ -1374,14 +1374,16 @@ public class DeviceManager(ILogger<DeviceManager> logger, ILoggerFactory loggerF
         // Only the PDMs run an embedded Lua engine (firmware HAS_LUA). A CANBoard / DBC / keypad
         // has none — refuse here so no path (cross-module deploy, drawer, MCP) can ever push Lua
         // frames to a device that would silently ignore or mis-parse them.
-        if (device is not PdmDevice)
+        // Upstream dingoFW: only once the module answered a Lua command (feat/lua-scripting firmware).
+        if (device is not PdmDevice { RunsLua: true } pdm)
         {
             logger.LogWarning("UploadLua refused: {Name} ({Type}) has no Lua engine", device.Name, device.Type);
             return null;
         }
 
         var bytes = System.Text.Encoding.ASCII.GetBytes(source ?? string.Empty);
-        if (bytes.Length > 4096) return null;   // matches firmware LUA_SCRIPT_MAX
+        // firmware LUA_SCRIPT_MAX; upstream stores at most 4095 bytes (it clamps the length)
+        if (bytes.Length > (pdm.Family == domain.Common.FwFamily.Upstream ? 4095 : 4096)) return null;
         int txId = device.BaseId + 1;             // ConfigTxOffset — device RX channel
 
         logger.LogInformation("UploadLua starting: {Len} bytes to {Name} (txId 0x{TxId:X})", bytes.Length, device.Name, txId);

@@ -58,7 +58,9 @@ public record DeviceDto(string Guid, string Name, string Type, int BaseId, bool 
     // upstream feat/wake-on-frame: the wake frame, when the module's Read listed 0x0100 (null otherwise)
     domain.Devices.Functions.WakeFrame? WakeFrame = null,
     // upstream feat/config-lock (null: no lock in this firmware, or not known yet)
-    LockDto? Lock = null);
+    LockDto? Lock = null,
+    // runs Lua: a PDM on the fork, or an upstream PDM that answered a Lua command (feat/lua-scripting)
+    bool HasLua = false);
 // Has: the module has the lock (its Read listed 0x0200, or it refused a request as locked). PasswordSet: the
 // project holds a password, sent on every write. The password itself never goes to the UI.
 public record LockDto(bool Has, bool Locked, string Contact, bool PasswordSet);
@@ -377,7 +379,7 @@ public static class DingoMap
                 HasLed: ui?.HasLed, Asleep: ui?.Asleep == true && !p.Connected, LastWake: Wake(ui), SleepCountdownS: p.SleepCountdownS,
                 SleepBlockers: ui?.SleepBlockers, Ignition: Ign(p.Ignition, p.BaseId + (p.IgnitionStateOffset ?? domain.Devices.Functions.Ignition.StateOffsetFor(p.Type, p.Family, p.PdmType))),
                 Family: p.Family, ParamsRead: p.ParamSet.FromModule, ParamRuns: p.ParamRuns, RetryAllInput: p.HasRetryAll ? p.RetryAllInput : null, ShedInput: p.HasShed ? p.ShedInput : null,
-                WakeFrame: p.ParamSet.Contains(domain.Devices.Functions.WakeFrame.Index, 0) ? p.WakeFrame : null, Lock: LockOf(p));
+                WakeFrame: p.ParamSet.Contains(domain.Devices.Functions.WakeFrame.Index, 0) ? p.WakeFrame : null, Lock: LockOf(p), HasLua: p.RunsLua);
         }
         if (d is domain.Devices.Canboard.CanboardDevice cb)
             // CANBoard has no battery/total-current sensing (those are PDM smart-output features) — leave
@@ -1103,7 +1105,7 @@ public static class LiveApi
             // Store on the device record (persists in the project JSON, offline-safe), then push over
             // CAN only when the module is live — same model as output/function params. Push it later
             // with device_action "uploadlua" once the module is online.
-            if (ForkOnly(dm.GetDevice(g), "Lua") is { } fo) return fo;
+            if (await NoLuaAsync(g, dm, adapters) is { } nl) return nl;
             dm.StoreLua(g, r.Source ?? "");
             var live = await IsLiveModuleAsync(g, dm, adapters);
             if (live)
@@ -1129,7 +1131,7 @@ public static class LiveApi
             if (stored == true) return Results.Ok(new { source = dm.GetStoredLua(g), live = false });
             // Live: read the running program off the device. Offline: return the stored program from
             // the project record (so cross-module / authored Lua is visible without a live module).
-            if (dm.GetDevice(g) is not IDeviceConfigurable { Family: domain.Common.FwFamily.Upstream } && await IsLiveModuleAsync(g, dm, adapters))
+            if (dm.GetDevice(g) is PdmDevice { RunsLua: true } && await IsLiveModuleAsync(g, dm, adapters))
                 return Results.Ok(new { source = await dm.ReadLua(g), live = true });
             return Results.Ok(new { source = dm.GetStoredLua(g), live = false });
         });
@@ -1138,8 +1140,8 @@ public static class LiveApi
         api.MapGet("/devices/{guid}/luaerror", async (string guid, DeviceManager dm, ICommsAdapterManager adapters) =>
         {
             if (!Guid.TryParse(guid, out var g)) return Results.BadRequest();
-            if (ForkOnly(dm.GetDevice(g), "Lua") is { } fo) return fo;
             if (await RequireLiveModuleAsync(g, dm, adapters, "read the error state from") is { } bad) return bad;
+            if (await NoLuaAsync(g, dm, adapters) is { } nl) return nl;
             var error = await dm.ReadLuaError(g);
             return Results.Ok(new { error });
         });
@@ -1714,6 +1716,7 @@ public static class LiveApi
             {
                 if (!Guid.TryParse(gs, out var g) || dm.GetDevice(g) is not { } dev) { Fail(gs, "device not in project"); continue; }
                 if (dev is not PdmDevice pdm) { Fail(dev.Name, $"{dev.Name} has no Lua engine — only dingoPDM/-Max run Lua. Use link_remote_signal for a CANBoard target."); continue; }
+                if (!pdm.RunsLua) { Fail(dev.Name, $"{dev.Name} runs upstream dingoFW without Lua (it never answered a Lua command)."); continue; }
                 try
                 {
                     // Offline-safe: store Lua + bindings on the device record (persists in the project),
@@ -2027,7 +2030,7 @@ public static class LiveApi
                             ? "The module is locked by its installer: Unlock it first. Nothing was written."
                             : "The module didn't confirm the write (see Logs) — it keeps its previous config" }, statusCode: 409);
                     // the project's Lua belongs to the config: send it unless this app already saw it on the module
-                    if (dm.GetDevice(g) is PdmDevice { Family: domain.Common.FwFamily.Fork } && dm.GetDeviceUiState(g).LuaOnModule != dm.GetStoredLua(g)
+                    if (dm.GetDevice(g) is PdmDevice { RunsLua: true } && dm.GetDeviceUiState(g).LuaOnModule != dm.GetStoredLua(g)
                         && !await dm.UploadLuaAsync(g, dm.GetStoredLua(g)))
                         return Results.Json(new { ok = false, error = "Settings written, but the Lua program didn't verify on the module (see Logs) — it keeps its previous program" }, statusCode: 409);
                     break;
@@ -2063,11 +2066,14 @@ public static class LiveApi
     // short-circuit with, or null when it's safe to proceed. Mirrors the /{action} guard so every
     // CAN-commit path fails loud and consistent instead of "succeeding" against an empty bus.
     // (Base-ID/rename are offline-safe and firmware/DFU runs over USB — neither uses this.)
-    // Fork-only commands (Lua): plain upstream dingoFW has none of them. A feature branch
-    // that ports one to upstream swaps this guard for a detection (FwFamily.HasBlock, or a probe of the command).
-    private static IResult? ForkOnly(IDevice? d, string what) => d is IDeviceConfigurable { Family: domain.Common.FwFamily.Upstream }
-        ? Results.Json(new { ok = false, error = $"This module runs upstream dingoFW, which has no {what}." }, statusCode: 409) : null;
-
+    // Upstream dingoFW runs Lua only with feat/lua-scripting, which no param shows: a live module that has not answered a
+    // Lua command yet is asked once (the reply sets HasLua and adds the Lua slots to its var map).
+    private static async Task<IResult?> NoLuaAsync(Guid g, DeviceManager dm, ICommsAdapterManager adapters)
+    {
+        if (dm.GetDevice(g) is not PdmDevice { Family: domain.Common.FwFamily.Upstream } p || p.RunsLua) return null;
+        if (await IsLiveModuleAsync(g, dm, adapters)) await dm.ReadLuaError(g);
+        return p.RunsLua ? null : Results.Json(new { ok = false, error = "This module runs upstream dingoFW without Lua (it did not answer a Lua command)." }, statusCode: 409);
+    }
     private static async Task<IResult?> RequireLiveModuleAsync(Guid g, DeviceManager dm, ICommsAdapterManager adapters, string verb)
     {
         if (!adapters.GetStatus().isConnected)
