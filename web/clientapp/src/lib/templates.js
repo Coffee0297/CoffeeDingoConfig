@@ -298,6 +298,22 @@ TEMPLATES.push(
       const warn = await ctx.allOf([+s.lights, { v: +s.ign, not: true }, +s.door || 0], 'TP LightsOn')
       await ctx.wireOutput(s.output, await ctx.flasher(warn, 300, 300, 'TP Chime'))
     } },
+  // A PI loop on a fixed setpoint (the target): Kp = 100 / (full − target), so P alone gives 100 % at "full";
+  // Ki = Kp / 20 (a slow 20 s integral time, coolant lags) removes the steady error. I is 0..100, no windup at 0 / 100 %.
+  { key: 'pidfan', group: 'cooling', name: 'Fan by coolant temperature (PID)', icon: '🌀', logicOn: 'output',
+    desc: 'The fan speed (PWM duty) holds the coolant at the target temperature: it speeds up as the coolant goes above the target and is at 100 % by the full-speed temperature. If the temperature signal is lost (a CAN frame that stops reads 0) or out of range, the fan runs at 100 %. Needs a dingoPDM whose firmware has the PID block, and a fan output on that module.',
+    fields: [{ k: 'temp', t: 'num', label: 'Coolant temperature signal' },
+      { k: 'target', t: 'number', label: 'Hold the coolant at', def: 90 }, { k: 'full', t: 'number', label: 'Full speed at', def: 100 },
+      { k: 'ign', t: 'bool', label: 'Ignition (fan only with it on)', opt: true },
+      { k: 'output', t: 'out', load: 'fan', label: 'Fan output (PWM)' }],
+    build: async (ctx, s) => {
+      if (+s.full <= +s.target) throw new Error('“Full speed at” must be above “Hold the coolant at”')
+      const kp = 100 / (+s.full - +s.target)
+      const pid = await ctx.pid({ setpointInput: 0, setpoint: +s.target, processInput: +s.temp, activateInput: ctx.alwaysOn(), feedForward: 0, feedFwdInput: 0,
+        kp, ki: kp / 20, kd: 0, iMin: 0, iMax: 100, outMin: 0, outMax: 100, invert: true, spRate: 0, deadband: 0,
+        pvMin: 1, pvMax: 200, fallback: 100, periodMs: 100 }, 'TP Fan PID', `hold ${s.target}, 100 % by ${s.full}`)
+      await ctx.outputDuty(s.output, pid, +s.ign || ctx.alwaysOn())
+    } },
 )
 
 export const OPS = [{ v: 2, t: 'greater than' }, { v: 3, t: 'less than' }, { v: 4, t: '≥' }, { v: 5, t: '≤' }, { v: 0, t: 'equals' }]
@@ -372,6 +388,8 @@ export async function previewTemplate(tpl, sel, outName = (o) => 'output ' + o, 
     outSignal: async (o) => { const t = TOK_SIG + ++sigs; node.set(t, 'out:' + o); return t },
     setOutputPwm: async (o, { source }) => { wires.push({ out: o, src: ids(source)[0] ?? null, pwm: true }) },
     retryAll: async (src) => { op('retryall', 'Retry all tripped outputs', ids(src), 'module setting') },
+    pid: async (c, name, detail) => op('pid', name, ids(c.processInput, c.setpointInput), detail ?? 'PID'),
+    outputDuty: async (o, duty) => { wires.push({ out: o, src: ids(duty)[0] ?? null, pwm: true }) },
     wiper: async (cfg) => {
       const id = op('wiper', 'Wiper block', ids(cfg.slowInput, cfg.fastInput, cfg.interInput, cfg.parkInput, cfg.washInput), `${cfg.washWipeCycles} wipes after wash`)
       return { slow: id, fast: id, park: id, inter: id, wash: id, swipe: id }
@@ -385,7 +403,7 @@ const virtualText = (c) => {
   const parts = [t(c.v0, c.not0), t(c.v1, c.not1), t(c.v2, c.not2)].filter(Boolean)
   return parts.length > 1 ? (c.op0 === Or ? 'any of ' : 'all of ') + parts.length : 'pass'
 }
-const ARR = { condition: 'conditions', flasher: 'flashers', timer: 'timers', virtual: 'virtualInputs', counter: 'counters' }
+const ARR = { condition: 'conditions', flasher: 'flashers', timer: 'timers', virtual: 'virtualInputs', counter: 'counters', pid: 'pids' }
 const countNeeds = (ops) => ops.reduce((m, o) => { const a = ARR[o.op]; if (a) m[a] = (m[a] ?? 0) + 1; return m }, {})
 
 // Free-slot shortfalls on the logic module for a preview, e.g. ['2 timers (1 free)']. freed = {arr: n} slots an
@@ -401,7 +419,7 @@ export function shortfalls(need, funcs, freed = {}) {
 
 // Slots an applied instance holds, per module: {guid: {virtualInputs: 2, canInputs: 1, …}} — an edit frees them
 // before it rebuilds, so its preview counts them as free.
-const SLOT_ARR = { virtualinput: 'virtualInputs', condition: 'conditions', flasher: 'flashers', timer: 'timers', counter: 'counters', caninput: 'canInputs' }
+const SLOT_ARR = { virtualinput: 'virtualInputs', condition: 'conditions', flasher: 'flashers', timer: 'timers', counter: 'counters', caninput: 'canInputs', pid: 'pids' }
 export function freedBy(inst) {
   const m = {}
   for (const c of inst?.created ?? []) { const a = SLOT_ARR[c.kind], g = c.guid ?? inst.guid; if (a) { m[g] ??= {}; m[g][a] = (m[g][a] ?? 0) + 1 } }
@@ -475,6 +493,18 @@ export async function liveCtx(env) {
       if (funcs?.device?.retryAllInput == null) throw new Error("This module's firmware has no retry-all input (dingoFW with fault clear, PDMs only)")
       ctx.device = { retryAllInput: funcs.device.retryAllInput }
       await api.deviceInputs(guid, { retryAllInput: src })
+    },
+    // A PID block (upstream dingoFW with the PID feature, PDMs only); returns its Output signal.
+    pid: (c, name) => {
+      if (!funcs?.pids) throw new Error('This module has no PID block: it needs a dingoPDM whose firmware has the PID feature')
+      return make('pid', 'pids', 'Output', { ...c, name })
+    },
+    // A PDM output on this module: on from `on`, PWM with its duty from `duty` (a 0–100 % signal, denominator 1).
+    outputDuty: async (o, duty, on) => {
+      const [g] = String(o).split(':')
+      if (env.isCanboard || g !== guid || !env.outputDuty) throw new Error('The fan output must be a dingoPDM output on the module that runs the PID')
+      await env.outputDuty(o, duty, on)
+      wired.push(o)
     },
     // The native wiper block (a singleton, PDM only).
     wiper: async (cfg) => {

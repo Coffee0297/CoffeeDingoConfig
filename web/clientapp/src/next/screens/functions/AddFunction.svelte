@@ -11,7 +11,7 @@
   import { untrack } from 'svelte'
 
   // Templates added in the latest batch (git: "9 more templates", 2026-10-12). The templates carry no date.
-  const NEW_KEYS = ['washwipe', 'pwmfan', 'relaywipe', 'interior', 'reverse', 'brake', 'radfan', 'starter', 'drl', 'toggle', 'reminder']
+  const NEW_KEYS = ['washwipe', 'pwmfan', 'relaywipe', 'interior', 'reverse', 'brake', 'radfan', 'starter', 'drl', 'toggle', 'reminder', 'pidfan']
 
   let q = $state(''), chip = $state('all'), opened = $state({}), clipped = $state({})
   // marks a description the 3-line clamp cuts, so only those get a More toggle

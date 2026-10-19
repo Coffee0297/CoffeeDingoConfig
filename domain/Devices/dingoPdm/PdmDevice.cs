@@ -31,6 +31,7 @@ public class PdmDevice : IDeviceConfigurable
     [JsonIgnore] protected int NumConditions { get; private set; } = 32;
     [JsonIgnore] protected int NumTimers { get; private set; } = 8;
     [JsonIgnore] protected int NumMath { get; private set; } = 8;
+    [JsonIgnore] protected int NumPids { get; private set; } = 4;
     [JsonIgnore] protected int NumCanMessages { get; private set; } = 4;
     [JsonIgnore] protected int NumTables { get; private set; } = 2;
     /// <summary>Tables the module runs. Upstream: its 0x1B00 blocks from the param list (none while unknown; 2, or 4
@@ -211,6 +212,7 @@ public class PdmDevice : IDeviceConfigurable
     [JsonPropertyName("canMessages")] public List<CanMessage> CanMessages { get; init; } = [];
     [JsonPropertyName("ignition")] public Ignition Ignition { get; set; } = null!;
     [JsonPropertyName("comfortBlink")] public ComfortBlink ComfortBlink { get; set; } = null!;   // 5.6.1
+    [JsonPropertyName("pids")] public List<PidFunction> Pids { get; init; } = [];   // upstream feat/pid only
     [JsonPropertyName("tables")] public List<LookupTable> Tables { get; init; } = [];
     // upstream dingoFW feat/curve-block (0x2400); the fork has none
     [JsonPropertyName("curves")] public List<CurveFunction> Curves { get; init; } = [];
@@ -275,6 +277,7 @@ public class PdmDevice : IDeviceConfigurable
         NumConditions = definition.NumConditions;
         NumTimers = definition.NumTimers;
         NumMath = definition.NumMath;
+        NumPids = definition.NumPids;
         NumCanMessages = definition.NumCanMessages;
         NumTables = definition.NumTables;
         NumCurves = definition.NumCurves;
@@ -309,6 +312,7 @@ public class PdmDevice : IDeviceConfigurable
         NumConditions = Conditions.Count;
         NumTimers = Timers.Count;
         NumMath = Maths.Count;
+        NumPids = Pids.Count;
         NumCanMessages = CanMessages.Count;
         NumTables = Math.Min(Tables.Count, definition.NumTables);   // an upstream project may hold more (TableCount)
         NumCurves = Curves.Count;
@@ -358,6 +362,8 @@ public class PdmDevice : IDeviceConfigurable
             CanMessages.Add(new CanMessage(i + 1, "canMessage" + (i + 1)));
         Ignition = new Ignition("ignition");
         ComfortBlink = new ComfortBlink("Comfort blink");
+        for (var i = 0; i < NumPids; i++)
+            Pids.Add(new PidFunction(i + 1, "pid" + (i + 1)));
 
         for (var i = 0; i < NumTables; i++)
             Tables.Add(new LookupTable(i + 1, "table" + (i + 1)));
@@ -615,6 +621,20 @@ public class PdmDevice : IDeviceConfigurable
                 StatusSigs[off].Add((new DbcSignal { Name = $"Table{index + 1}.Value", StartBit = i % 2 * 32, Length = 32, IsSigned = true, IsFloat = true },
                     val => Tables[index].Value = val));
                 MaxCyclicId = off;
+            }
+            // feat/pid: Msg 30 (+32; PT-DPDM Msg 31, +33) = PID 1-4 outputs, int16 LE ×10. Only on a module that has
+            // the block: +32 is the base id of a module 0x20 above, which this one must not claim.
+            if (FwFamily.HasBlock(this, PidFunction.BaseIndex, false))
+            {
+                var pidOff = cyclicIndex + (PdmType == 2 ? 4 : 3);
+                StatusSigs[pidOff] = [];
+                for (var i = 0; i < NumPids && i < 4; i++)
+                {
+                    var index = i;
+                    StatusSigs[pidOff].Add((new DbcSignal { Name = $"Pid{index + 1}.Output", StartBit = i * 16, Length = 16, IsSigned = true, Factor = 0.1 },
+                        val => Pids[index].Value = val));
+                }
+                MaxCyclicId = pidOff;
             }
             return;
         }
@@ -1124,6 +1144,16 @@ public class PdmDevice : IDeviceConfigurable
                 VarMap.Add(new DeviceVariable { GetName = () => LatchGates[num].Name, OwnerKind = "latchgate", OwnerNumber = num + 1,
                     PropertyName = "Value", DataType = "float", VariableIndex = index++, SingleVariable = false });
             }
+        // feat/pid. Canonical upstream order after the timers: DI PWM, analog scaling, math, CAN message, tables,
+        // ignition, comfort blink, PID, curve, … — blocks before the PID go above this, each by its own branch.
+        if (FwFamily.HasBlock(this, PidFunction.BaseIndex, false))
+            for (var i = 0; i < NumPids; i++)
+            {
+                var num = i;
+                foreach (var prop in new[] { "Output", "P", "I", "D" })
+                    VarMap.Add(new DeviceVariable { GetName = () => Pids[num].Name, OwnerKind = "pid", OwnerNumber = num + 1,
+                        PropertyName = prop, DataType = "float", VariableIndex = index++, SingleVariable = false });
+            }
     }
 
     private void InitParams()
@@ -1226,6 +1256,7 @@ public class PdmDevice : IDeviceConfigurable
         foreach (var m in CanMessages) allParams.AddRange(Family == FwFamily.Upstream ? m.UpstreamParams : m.Params);
         allParams.AddRange(Ignition.Params);
         allParams.AddRange(ComfortBlink.Params);
+        if (Family == FwFamily.Upstream) foreach (var pid in Pids) allParams.AddRange(pid.Params);   // the fork has no PID
         allParams.AddRange(StarterDisable.Params);
         allParams.AddRange(Wipers.Params);
         foreach (var canOutput in CanOutputs) allParams.AddRange(Family == FwFamily.Upstream ? canOutput.UpstreamParams : canOutput.Params);

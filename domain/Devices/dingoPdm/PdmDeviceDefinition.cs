@@ -35,5 +35,7 @@ public record PdmDeviceDefinition(
     // 1-D curves (upstream dingoFW feat/curve-block)
     int NumCurves = 4,
     // Latch / Gate blocks (upstream dingoFW feat/latch-gate-block)
-    int NumLatchGates = 8
+    int NumLatchGates = 8,
+    // PID controllers (upstream dingoFW feat/pid, NUM_PIDS 4 on every PDM board; the CANBoard has none)
+    int NumPids = 4
     );
