@@ -21,6 +21,11 @@ public class Condition : IDeviceFunction
     [JsonPropertyName("argOff")] public double ArgOff { get => _argOff ?? Arg; set => _argOff = value; }
     private double? _argOff;
 
+    // Upstream dingoFW feat/condition-delay (subs 5/6, ms 0-60000): the result turns on only after the compare has been
+    // true that long, and off only after it has been false that long. 0 = at once. The fork has neither.
+    [JsonPropertyName("delayOn")] public int DelayOn { get; set; }
+    [JsonPropertyName("delayOff")] public int DelayOff { get; set; }
+
     [JsonIgnore][Plotable(displayName:"State")] public int Value {get; set;}
 
     [JsonIgnore] public List<DeviceParameter> Params { get; }
@@ -56,6 +61,8 @@ public class Condition : IDeviceFunction
                 ParentName = Name, Name = $"condition[{Number}].hyst", Index = BaseIndex + (Number - 1), SubIndex = 4,
                 GetValue = () => HystBand, SetValue = val => SetHystBand((double)val), ValueType = typeof(double), DefaultValue = 0.0
             },
+            new() { ParentName = Name, Name = $"condition[{Number}].delayOn", Index = BaseIndex + (Number - 1), SubIndex = 5, GetValue = () => DelayOn, SetValue = v => DelayOn = (int)v, ValueType = typeof(int), DefaultValue = 0 },
+            new() { ParentName = Name, Name = $"condition[{Number}].delayOff", Index = BaseIndex + (Number - 1), SubIndex = 6, GetValue = () => DelayOff, SetValue = v => DelayOff = (int)v, ValueType = typeof(int), DefaultValue = 0 },
         ];
     }
 

@@ -1,7 +1,7 @@
 // Client-side simulator of one module's blocks. Nothing is sent to the car.
 // Mirrors the firmware (functions/*.cpp): Condition hysteresis, VirtualInput AND/OR/NOR (a real NOR from
 // firmware 5.6.6; before it was NAND) with NOT per input and momentary/latching, Timer on-delay/off-delay/pulse, Flasher,
-// Counter edges, Table interpolation, CAN input operator + timeout, outputs with injected faults.
+// Condition on / off delay (upstream feat/condition-delay), Counter edges, Table interpolation, CAN input operator + timeout, outputs with injected faults.
 import { interpolate } from '../../../../lib/table.js'
 import { fmt } from './livevals.js'
 import { upstreamArgOff } from './model.js'
@@ -89,6 +89,15 @@ export function createSim(model, snapshot) {
           case 4: v = hyst ? (was ? x >= lo : x >= hi) : x >= set; break
           case 5: v = hyst ? (was ? x <= hi : x <= lo) : x <= set; break
           default: v = cmp(r.operator, x, set)
+        }
+        // upstream feat/condition-delay (firmware Condition::Update): the result follows the compare only once it
+        // has differed for Delay on (turning on) / Delay off (turning off); a flip back in between restarts it
+        const dOn = +r.delayOn || 0, dOff = +r.delayOff || 0
+        if (dOn || dOff) {
+          const s = m(n.id), c = !!v
+          s.same ??= t
+          if (c === s.out || t - s.same >= (c ? dOn : dOff)) { s.out = c; s.same = t }
+          v = s.out
         }
         vals[out] = v
       } else if (n.kind === 'table') {
