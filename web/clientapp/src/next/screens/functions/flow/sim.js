@@ -1,6 +1,6 @@
 // Client-side simulator of one module's blocks. Nothing is sent to the car.
-// Mirrors the firmware (functions/*.cpp): Condition hysteresis, VirtualInput AND/OR/"NOR" (the firmware's
-// Nor is !a || !b) with NOT per input and momentary/latching, Timer on-delay/off-delay/pulse, Flasher,
+// Mirrors the firmware (functions/*.cpp): Condition hysteresis, VirtualInput AND/OR/NOR (a real NOR from
+// firmware 5.6.6; before it was NAND) with NOT per input and momentary/latching, Timer on-delay/off-delay/pulse, Flasher,
 // Counter edges, Table interpolation, CAN input operator + timeout, outputs with injected faults.
 import { interpolate } from '../../../../lib/table.js'
 import { fmt } from './livevals.js'
@@ -72,7 +72,7 @@ export function createSim(model, snapshot) {
         const out = port(n, 'State'); if (!out) continue
         if (!r.var0 || !r.var1) continue          // firmware: keeps its value until both are set
         const b = (i) => { const x = truthy(val(r['var' + i])); return r['not' + i] ? !x : x }
-        const j = (c, a, bb) => (Number(c) === 0 ? a && bb : Number(c) === 1 ? a || bb : !a || !bb)
+        const j = (c, a, bb) => (Number(c) === 0 ? a && bb : Number(c) === 1 ? a || bb : !(a || bb))
         let res = j(r.cond0, b(0), b(1))
         if (r.var2) res = j(r.cond1, res, b(2))
         vals[out] = check(m(n.id), r.mode ?? 0, res)

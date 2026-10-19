@@ -215,7 +215,7 @@
         {@render seg('Second join', segItems(JOIN), String(draft.cond1 ?? 0), (v) => (draft.cond1 = Number(v)), !Number(draft.var2))}
       </div>
       {@render seg('Mode', [{ value: '0', label: 'Follows' }, { value: '1', label: 'Push on / push off' }], String(draft.mode ?? 0), (v) => (draft.mode = Number(v)), false)}
-      <p class="hint">NOR here is the firmware's: on unless both are on (not A, or not B).</p>
+      <p class="hint">NOR: on only when none are on. Firmware older than 5.6.6 treats it as NAND (on unless both are on).</p>
     {/if}
 
     {#if inputRows.length}
