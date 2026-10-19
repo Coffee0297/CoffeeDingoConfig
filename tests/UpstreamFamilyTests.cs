@@ -203,6 +203,32 @@ public class UpstreamFamilyTests
         Assert.Equal(Enumerable.Range(0, 241), d.VarMap.Select(v => v.VariableIndex));
     }
 
+    // feat/undercurrent-trip: output subs 27-29 on upstream only; a module listing them gets Undercurrent per output after
+    // the state signals (nm dingopdm_v7.elf of feat/undercurrent-trip: pVarMap 0x3e4 bytes = 249); Msg 3 state 6
+    [Fact]
+    public void Undercurrent_SubsVarMapAndState()
+    {
+        var keys = Enumerable.Range(0, 8).SelectMany(o => Enumerable.Range(0, 21).Concat([27, 28, 29]).Select(s => (0x1000 + o, s))).ToList();
+        var d = ReadAllFrom([.. keys, (0x1A00, 0)]);
+        Assert.Equal(249, d.VarMap.Count);
+        Assert.Equal(("output", 2, "Open Load"), (d.VarMap[228].OwnerKind, d.VarMap[228].OwnerNumber, d.VarMap[228].PropertyName));
+        Assert.Equal(("output", 1, "Undercurrent"), (d.VarMap[241].OwnerKind, d.VarMap[241].OwnerNumber, d.VarMap[241].PropertyName));
+        Assert.Equal(("output", 8, "Undercurrent"), (d.VarMap[248].OwnerKind, d.VarMap[248].OwnerNumber, d.VarMap[248].PropertyName));
+        var sub = (int s) => d.Params.Single(p => p.Index == 0x1001 && p.SubIndex == s);
+        d.Outputs[1].UnderLimit = 101; d.Outputs[1].UnderTime = 60001; d.Outputs[1].UnderTrip = true;
+        Assert.Equal((100.0, 60000, true), ((double)sub(27).GetValue(), (int)sub(28).GetValue(), (bool)sub(29).GetValue()));
+        Assert.True(FwFamily.Has(d, sub(27)));
+
+        var q = Q();
+        d.Read(0x680 + 5, [0x61, 0, 0, 0, 0, 0, 0, 0], ref q, []);   // output 1 On, 2 Undercurrent
+        Assert.Equal(domain.Enums.dingoPdm.OutState.Undercurrent, d.Outputs[1].State);
+
+        var f = new PdmDevice("PDM", 0x680);
+        f.SetLogger(NullLogger<PdmDevice>.Instance);
+        f.Read(0x680, [31, 0, 0, 0, 5, 6, 0, 6], ref q, []);
+        Assert.DoesNotContain(f.Params, p => p.Index == 0x1000 && p.SubIndex == 27);   // fork: not sent
+    }
+
     [Fact]
     public void ParamRuns_RoundTrip_KeepOrder()
     {

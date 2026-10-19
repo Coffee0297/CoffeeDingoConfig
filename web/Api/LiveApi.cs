@@ -24,7 +24,7 @@ public record OutputDto(int Number, string Name, string State, double Current, i
     double WarnLimit, double OpenLoadLimit, int OpenLoadTime, string WireColor, string WireStripe, double WireLength, double WireGaugeMm2,
     bool VariableDutyCycle = false, int DutyCycleInput = 0, int DutyCycleDenom = 100,
     bool VariableFreq = false, int FreqInput = 0, int FreqInputDenom = 1, bool RampDutyChanges = false,
-    int PrimaryOutput = -1);
+    int PrimaryOutput = -1, double UnderLimit = 0, int UnderTime = 1000, bool UnderTrip = false);
 public record DeviceDto(string Guid, string Name, string Type, int BaseId, bool Connected,
     double Battery, double Current, double Temp, string State, string Version, string Bitrate, OutputDto[] Outputs,
     bool Reading, int ReadDone, int ReadTotal, bool SleepEnabled, int SleepTimeoutMs,
@@ -85,7 +85,7 @@ public record OutputConfigReq(int Number, bool? Enabled = null, int? Input = nul
     string? WireColor = null, string? WireStripe = null, double? WireLength = null, double? WireGaugeMm2 = null,
     bool? VariableDutyCycle = null, int? DutyCycleInput = null, int? DutyCycleDenom = null,
     bool? VariableFreq = null, int? FreqInput = null, int? FreqInputDenom = null, bool? RampDutyChanges = null,
-    int? PrimaryOutput = null);
+    int? PrimaryOutput = null, double? UnderLimit = null, int? UnderTime = null, bool? UnderTrip = null);
 public record ApplyProfileReq(string Source);
 public record RenameReq(string Name);
 public record ReadParamReq(int Index, int Sub);
@@ -348,7 +348,7 @@ public static class DingoMap
                 o.PwmEnabled, o.Frequency, o.FixedDutyCycle, o.MinDutyCycle, o.SoftStartEnabled, o.SoftStartRampTime,
                 o.WarnLimit, o.OpenLoadLimit, o.OpenLoadTime, o.WireColor, o.WireStripe, o.WireLength, o.WireGaugeMm2,
                 o.VariableDutyCycle, o.DutyCycleInput, o.DutyCycleDenominator, o.VariableFreq, o.FreqInput, o.FreqInputDenom, o.RampDutyChanges,
-                o.PrimaryOutput)).ToArray();
+                o.PrimaryOutput, o.UnderLimit, o.UnderTime, o.UnderTrip)).ToArray();
             return new DeviceDto(p.Guid.ToString(), p.Name, p.Type, p.BaseId, p.Connected,
                 p.BatteryVoltage, p.TotalCurrent, p.BoardTempC, p.DeviceState.ToString(),
                 p.Version, BitrateLabel(p.BitRate), outs, reading, readDone, readTotal,
@@ -862,6 +862,9 @@ public static class LiveApi
             if (r.WarnLimit is { } wl) o.WarnLimit = wl;
             if (r.OpenLoadLimit is { } oll) o.OpenLoadLimit = oll;
             if (r.OpenLoadTime is { } olt) o.OpenLoadTime = olt;
+            if (r.UnderLimit is { } ul) o.UnderLimit = ul;
+            if (r.UnderTime is { } ut) o.UnderTime = ut;
+            if (r.UnderTrip is { } utr) o.UnderTrip = utr;
             // The record edit above always persists (offline config authoring). Only push to the
             // module over CAN when it is actually live; report which happened so the UI can say
             // "written to device" vs "saved to project".

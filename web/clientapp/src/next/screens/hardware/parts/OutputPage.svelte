@@ -53,6 +53,7 @@
       variableDutyCycle: !!o.variableDutyCycle, dutyCycleInput: o.dutyCycleInput ?? 0, dutyCycleDenom: o.dutyCycleDenom ?? 100,
       variableFreq: !!o.variableFreq, freqInput: o.freqInput ?? 0, freqInputDenom: o.freqInputDenom ?? 1, rampDutyChanges: !!o.rampDutyChanges,
       primaryOutput: o.primaryOutput ?? -1, warnLimit: o.warnLimit ?? 0, openLoadLimit: o.openLoadLimit ?? 0, openLoadTime: o.openLoadTime ?? 1000,
+      underLimit: o.underLimit ?? 0, underTime: o.underTime ?? 1000, underTrip: !!o.underTrip,
     }
   }
   // Seed once per output so the 10 Hz telemetry never overwrites an edit in progress.
@@ -107,6 +108,7 @@
           VariableFreq: !!f.variableFreq, FreqInput: Number(f.freqInput) || 0, FreqInputDenom: Math.max(1, Number(f.freqInputDenom) || 1),
           RampDutyChanges: !!f.rampDutyChanges, PrimaryOutput: Number(f.primaryOutput ?? -1),
           WarnLimit: Number(f.warnLimit), OpenLoadLimit: Number(f.openLoadLimit), OpenLoadTime: Math.round(Number(f.openLoadTime)),
+          UnderLimit: Number(f.underLimit) || 0, UnderTime: Math.round(Number(f.underTime) || 0), UnderTrip: !!f.underTrip,
         })
       }
       project.dirty = true
@@ -129,7 +131,7 @@
   // a steady scale: up to the limit (or the peak, if higher), so the limit line shows and the chart does not rescale every update
   const yMax = $derived(Math.max(Number(f?.currentLimit) || 0, peak, 1) * 1.1)
   const series = $derived.by(() => { tick; return resample(hist.samples(), 60_000, 150, Date.now(), 'max') })   // peak per bin: spikes stay visible
-  const tone = $derived(state === 'On' ? 'on' : state === 'Fault' || state === 'Overcurrent' ? 'fault' : state === 'Warning' || state === 'OpenLoad' ? 'warn' : 'off')
+  const tone = $derived(state === 'On' ? 'on' : state === 'Fault' || state === 'Overcurrent' ? 'fault' : state === 'Warning' || state === 'OpenLoad' || state === 'Undercurrent' ? 'warn' : 'off')
 
   // ---- bench test ----
   const bench = createBench({ guid: () => guid, n: () => n, connected: () => connected, current: () => (isCb ? 0 : pdmOut?.current ?? 0) })
@@ -203,7 +205,7 @@
       <div class="col">
         <OutputChain {guid} {dev} bind:f {feed} {connected} raw={src} />
         {#if !isCb}
-          <OutputProtection bind:f {rating} warn={has(dev, 0x1000 + n - 1, 18)} openLoad={has(dev, 0x1000 + n - 1, 19)} />
+          <OutputProtection bind:f {rating} warn={has(dev, 0x1000 + n - 1, 18)} openLoad={has(dev, 0x1000 + n - 1, 19)} under={isUpstream(dev) && has(dev, 0x1000 + n - 1, 27)} />
         {:else}
           <Card title="Protection"><p class="muted">The CANBoard switches this load to ground and cannot measure or limit current. Put a fuse in the load wire.</p></Card>
         {/if}

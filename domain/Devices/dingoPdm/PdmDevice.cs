@@ -1014,6 +1014,14 @@ public class PdmDevice : IDeviceConfigurable
                     VarMap.Add(new DeviceVariable { GetName = () => Outputs[num].Name, OwnerKind = "output", OwnerNumber = num + 1,
                         PropertyName = prop, DataType = "bool", VariableIndex = index++, SingleVariable = false });
             }
+        // feat/undercurrent-trip (0x1000 sub 27): per output Undercurrent
+        if (ParamSet.Contains(Output.BaseIndex, 27))
+            for (var i = 0; i < NumOutputs; i++)
+            {
+                var num = i;
+                VarMap.Add(new DeviceVariable { GetName = () => Outputs[num].Name, OwnerKind = "output", OwnerNumber = num + 1,
+                    PropertyName = "Undercurrent", DataType = "bool", VariableIndex = index++, SingleVariable = false });
+            }
     }
 
     private void InitParams()
@@ -1100,7 +1108,7 @@ public class PdmDevice : IDeviceConfigurable
         // The firmware default = "every digital input wakes"; clamp a fresh/legacy record to the real pin count.
         WakeDigInputMask &= (1 << NumDigitalInputs) - 1;
 
-        foreach (var output in Outputs) allParams.AddRange(output.Params);
+        foreach (var output in Outputs) allParams.AddRange(Upstream ? output.Params.Concat(output.UpstreamParams) : output.Params);
         foreach (var input in Inputs) allParams.AddRange(input.Params);
         foreach (var canInput in CanInputs) allParams.AddRange(canInput.Params);
         foreach (var virtualInput in VirtualInputs) allParams.AddRange(virtualInput.Params);
