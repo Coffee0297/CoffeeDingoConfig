@@ -108,6 +108,16 @@ public class Fw57MigrationTests
         Assert.Equal(7.4, d.TotalCurrent, 3);
     }
 
+    [Fact]
+    public void CanBootloader_57LineAlways_PlainUpstreamOnlyWhenTicked()
+    {
+        Assert.True(Pdm(5, 7, 0).CanBootloader);   // 5.7 apps are linked behind OpenBLT
+        Assert.True(Cb(5, 7, 0).CanBootloader);
+        Assert.True(Pdm(5, 6, 6).CanBootloader);
+        Assert.False(Pdm(0, 6, 3).CanBootloader);   // plain upstream: the operator ticks it (OpenBlt)
+        Assert.False(Cb(0, 6, 3).CanBootloader);
+    }
+
     // ---- CANBoard 5.7 -----------------------------------------------------------------------------
 
     internal static List<(int, int)> Cb57Keys() =>
@@ -343,6 +353,18 @@ public class Fw57MigrationTests
         Assert.True(Has(main, "warn", "CAN ids overlap"));
         Assert.True(Has(main, "warn", "move PDM-6A0 to 0x6B0"));
         Assert.Equal(FwFamily.Fork, cb.Family);
+    }
+
+    [Fact]
+    public void Migrate_DefaultSyncIdInsideAModulesRange_Warns()
+    {
+        var a = ForkPdm(0x680); a.Ignition.Enabled = true;
+        var b = ForkPdm(0x6E0); b.Ignition.Enabled = true; b.Ignition.Role = IgnitionRole.Follower;   // 0x6E0..0x704 holds 0x6F1
+        Fw57Migration.Migrate([a, b], [a, b]);
+        Assert.True(Has(a, "warn", "sync id 0x6F1 is one of PDM-6E0's frames"));
+        var c = ForkPdm(0x680); c.Ignition.Enabled = true;
+        Fw57Migration.Migrate([c], [c]);
+        Assert.False(Has(c, "warn", "sync id"));
     }
 
     [Fact]

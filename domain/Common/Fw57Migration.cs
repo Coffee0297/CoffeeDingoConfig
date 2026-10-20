@@ -63,6 +63,10 @@ public static class Fw57Migration
         foreach (var s in snaps) CrossModule(all, s);
         var said = new HashSet<string>();   // an overlap concerns two modules: say it once
         foreach (var s in snaps) s.Dev.Migration!.AddRange(Overlaps(all, s.Dev).Where(n => said.Add(n.Text)));
+        // the default sync id may be a frame of a module of this car (e.g. a PDM at 0x6E0 sends 0x6E0..0x704): say so once
+        if (snaps.Select(s => s.Dev).FirstOrDefault(d => IgnitionMain.Ign(d) is { Enabled: true }) is { } ig
+            && all.Where(x => x is PdmDevice or CanboardDevice).FirstOrDefault(x => Ignition.DefaultSyncId >= x.BaseId && Ignition.DefaultSyncId <= x.BaseId + Span(x)) is { } hit)
+            ig.Migration!.Add(new("warn", $"Ignition sync id 0x{Ignition.DefaultSyncId:X3} is one of {hit.Name}'s frames (0x{hit.BaseId:X3}..0x{hit.BaseId + Span(hit):X3}). Fix: on the Ignition page pick a free id (or an offset from the main module's base) and use it on all followers."));
         foreach (var s in snaps)
             s.Dev.Migration!.Add(new("info", $"{s.Dev.Name}: next, Read the module (it learns the module's list and keeps this project), then Apply to car and Store."));
     }
