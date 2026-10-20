@@ -25,9 +25,9 @@ export default async function globalSetup() {
   // setting and "restores" the fixture's value then leaves a mix (CB-2 muted by its own ignition input, silent for good)
   for (const d of (await apiJson('GET', '/api/devices')).filter((x) => /pdm|canboard/i.test(x.type))) {
     for (const a of ['writeall', ...(/pdm/i.test(d.type) ? ['uploadlua'] : []), 'burn']) {
-      // a burn takes ~0.1 s on the module but ~3 s of wall time in a 7-module Sim: its reply can miss the app's wait, try again
+      // a burn or a Lua store takes ~0.1 s on the module but seconds of wall time in a busy Sim: its reply can miss the app's wait, try again
       let r
-      for (let i = 0; i < (a === 'burn' ? 3 : 1); i++) if ((r = await fetch(`${API}/api/devices/${d.guid}/${a}`, { method: 'POST' })).ok) break
+      for (let i = 0; i < 3; i++) if ((r = await fetch(`${API}/api/devices/${d.guid}/${a}`, { method: 'POST' })).ok) break
       if (!r.ok) throw new Error(`${d.name} ${a}: ${await r.text()}`)
     }
   }

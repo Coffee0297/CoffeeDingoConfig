@@ -304,18 +304,18 @@ test('spare output o2: wire its input from the inspector and by dragging on the 
     const brake = (await apiJson('GET', `/api/devices/${pdm4.guid}/inputs`)).find((v) => v.name === 'Brake'), brakeIdx = brake.index
     await page.getByRole('button', { name: 'Tidy' }).click()
     const src = page.locator(`.svelte-flow__node[data-id="caninput:${brake.number}"] .svelte-flow__handle[data-handleid="v${brakeIdx}"]`)
-    // the 5.7 Ranchero's PDM-04 has more blocks: after Tidy the CAN input can sit left of the canvas, under the side rail;
-    // pan the canvas right (drag on its empty bottom edge) until the handle is inside it
-    const pane = page.getByTestId('canvas')
-    for (let i = 0; i < 6; i++) {
-      const hb = await src.boundingBox(), cb = await pane.boundingBox()
-      if (!hb || !cb || hb.x > cb.x + 40) break
-      const x = cb.x + cb.width / 2, y = cb.y + cb.height - 12
-      await page.mouse.move(x, y); await page.mouse.down(); await page.mouse.move(x + 300, y, { steps: 6 }); await page.mouse.up()
-    }
     const dst = page.locator('.svelte-flow__node[data-id="output:2"] .svelte-flow__handle[data-handleid="input"]')
-    await src.scrollIntoViewIfNeeded()
-    await src.dragTo(dst)
+    // the drag flake: after Tidy the 5.7 Ranchero's PDM-04 is wider than the canvas next to the open inspector, so a handle sat
+    // under the side rail or the inspector (Playwright: "intercepts pointer events"). Close the inspector, Fit, and drag by
+    // hand once both handles are inside the canvas.
+    await page.keyboard.press('Escape')
+    await expect(insp(page)).toHaveCount(0)
+    const pane = page.getByTestId('canvas')
+    const inside = async (h) => { const b = await h.boundingBox(), c = await pane.boundingBox(); return b && c && b.x > c.x && b.x + b.width < c.x + c.width && b.y > c.y && b.y + b.height < c.y + c.height }
+    await expect.poll(async () => { await page.getByRole('button', { name: 'Fit' }).click(); return (await inside(src)) && (await inside(dst)) }, { timeout: 15_000 }).toBe(true)
+    const a = await src.boundingBox(), b = await dst.boundingBox()
+    await page.mouse.move(a.x + a.width / 2, a.y + a.height / 2); await page.mouse.down()
+    await page.mouse.move(b.x + b.width / 2, b.y + b.height / 2, { steps: 12 }); await page.mouse.up()
     await settle(page)
     await waitFor(async () => (await deviceByName('PDM-04')).outputs.find((o) => o.number === 2).inputVal === brakeIdx, 15_000, 'o2 wired by drag')
     await page.keyboard.press('Control+z')
