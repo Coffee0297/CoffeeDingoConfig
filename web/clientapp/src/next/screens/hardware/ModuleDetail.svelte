@@ -131,18 +131,18 @@
             {#if !outputs.length}
               <p class="muted">{isPdm ? 'This module reports no outputs.' : signals ? 'This module has no outputs.' : 'Reading the outputs…'}</p>
             {:else}
-              <table class="nx-table" aria-label="Outputs">
+              <table class="nx-table table-cards" aria-label="Outputs">
                 <thead><tr><th>#</th><th>Name</th><th>State</th>{#if isPdm}<th>Current</th><th>Limit</th><th>Driven by</th>{/if}<th><span class="sr-only">Open</span></th></tr></thead>
                 <tbody>
                   {#each outputs as o (o.n)}
                     <tr class:unused={!o.enabled} data-testid={'out-' + o.n}>
-                      <td class="mono">{o.n}</td>
-                      <td>{o.name}{#if !o.enabled} <Chip dashed>Unused</Chip>{/if}</td>
-                      <td>{#if o.enabled}<StateDot tone={stateTone(o)} shape={stateShape(o)} label={stateWord(o)} />{:else}<span class="muted">–</span>{/if}</td>
+                      <td class="mono" data-label="#">{o.n}</td>
+                      <td data-label="Name">{o.name}{#if !o.enabled} <Chip dashed>Unused</Chip>{/if}</td>
+                      <td data-label="State">{#if o.enabled}<StateDot tone={stateTone(o)} shape={stateShape(o)} label={stateWord(o)} />{:else}<span class="muted">–</span>{/if}</td>
                       {#if isPdm}
-                        <td class="mono">{o.enabled && d.connected ? fmt1(num(o.current)) + ' A' : '–'}</td>
-                        <td class="mono">{o.enabled ? fmt1(num(o.limit)) + ' A' : '–'}</td>
-                        <td class="muted">{o.enabled ? (o.input || 'nothing') : '–'}</td>
+                        <td class="mono" data-label="Current">{o.enabled && d.connected ? fmt1(num(o.current)) + ' A' : '–'}</td>
+                        <td class="mono" data-label="Limit">{o.enabled ? fmt1(num(o.limit)) + ' A' : '–'}</td>
+                        <td class="muted" data-label="Driven by">{o.enabled ? (o.input || 'nothing') : '–'}</td>
                       {/if}
                       <td><Button size="sm" href={href('hardware', 'module', guid, 'output', o.n)} aria-label={`Open output ${o.n}, ${o.name}`}>Open</Button></td>
                     </tr>
@@ -159,14 +159,14 @@
               {@const used = all.filter((s) => s.enabled)}
               {@const unused = all.length - used.length}
               <Card title={g.title} subtitle={`${used.length} in use, ${unused} unused`}>
-                <table class="nx-table" aria-label={g.title}>
+                <table class="nx-table table-cards" aria-label={g.title}>
                   <thead><tr><th>#</th><th>Name</th><th>Now</th><th><span class="sr-only">Open</span></th></tr></thead>
                   <tbody>
                     {#each (showUnused[g.kind] ? all : used) as s (s.n)}
                       <tr class:unused={!s.enabled} data-testid={'in-' + g.route + '-' + s.n}>
-                        <td class="mono">{s.n}</td>
-                        <td>{s.name}{#if !s.enabled} <Chip dashed>Unused</Chip>{/if}</td>
-                        <td><StateDot tone={!d.connected ? 'stale' : s.on ? 'on' : 'off'} shape={s.on && d.connected ? 'dot' : 'ring'} label={d.connected ? (g.unit ? `${s.value} ${g.unit}` : /^(on|off)$/.test(s.value) ? s.value[0].toUpperCase() + s.value.slice(1) : s.value) : 'No data'} /></td>
+                        <td class="mono" data-label="#">{s.n}</td>
+                        <td data-label="Name">{s.name}{#if !s.enabled} <Chip dashed>Unused</Chip>{/if}</td>
+                        <td data-label="Now"><StateDot tone={!d.connected ? 'stale' : s.on ? 'on' : 'off'} shape={s.on && d.connected ? 'dot' : 'ring'} label={d.connected ? (g.unit ? `${s.value} ${g.unit}` : /^(on|off)$/.test(s.value) ? s.value[0].toUpperCase() + s.value.slice(1) : s.value) : 'No data'} /></td>
                         <td><Button size="sm" href={href('hardware', 'module', guid, 'input', g.route, s.n)} aria-label={`Open ${g.title.toLowerCase().replace(/s$/, '')} ${s.n}, ${s.name}`}>Open</Button></td>
                       </tr>
                     {:else}
