@@ -4,9 +4,7 @@ import { test, expect } from '@playwright/test'
 import { open, watchErrors } from './helpers.js'
 import { apiJson, deviceByName, waitFor } from './api.js'
 
-// the dev server's font files come from the main checkout's node_modules (a junction): 403 there, not an app error
-const appErrors = (errors) => errors.filter((e) => !/Failed to load resource: the server responded with a status of 403/.test(e))
-const fn = async (name) => (await apiJson('GET', `/api/devices/${(await deviceByName(name)).guid}/functions`)).ignition
+import { appErrors, fn, modParam } from './ui-ign-helpers.js'
 
 test.describe.configure({ mode: 'serial' })
 
@@ -103,33 +101,6 @@ test('standalone hides the sync card and the followers; the status frame card st
   await expect(page.getByTestId('ign-status-id-PDM-03')).toHaveCount(0)   // followers are not part of a standalone setup
   expect(appErrors(errors)).toEqual([])
 })
-
-// ---- read a setting straight from the module over the Sim's SLCAN bridge (SIM_PORT): the module really has it
-import net from 'node:net'
-async function modParam(base, index, sub) {
-  const [host, port] = (process.env.SIM_PORT ?? '').replace('tcp://', '').split(':')
-  const s = net.connect(Number(port), host)
-  await new Promise((res, rej) => { s.once('connect', res); s.once('error', rej) })
-  const hx = (n, w) => n.toString(16).toUpperCase().padStart(w, '0')
-  try {
-    return await new Promise((res, rej) => {
-      let buf = ''
-      const t = setTimeout(() => rej(new Error(`no reply 0x${hx(base, 3)} ${hx(index, 4)}.${sub}`)), 8000)
-      s.on('data', (d) => {
-        buf += d.toString('latin1')
-        for (const line of buf.split('\r').slice(0, -1)) {
-          const b = (i) => parseInt(line.slice(5 + 2 * i, 7 + 2 * i), 16)
-          if (line[0] === 't' && parseInt(line.slice(1, 4), 16) === base && b(1) === (index & 0xff) && b(2) === index >> 8 && b(3) === sub && b(0) === 1) {
-            clearTimeout(t); res((b(4) | b(5) << 8 | b(6) << 16 | b(7) << 24) >>> 0)
-          }
-        }
-        buf = buf.slice(buf.lastIndexOf('\r') + 1)
-      })
-      s.write('O\r')
-      s.write(`t${hx(base + 1, 3)}8${[1, index & 0xff, index >> 8, sub, 0, 0, 0, 0].map((v) => hx(v, 2)).join('')}\r`)
-    })
-  } finally { s.destroy() }
-}
 
 async function pickOpt(page, testid, name) {
   await page.getByTestId(testid).click()

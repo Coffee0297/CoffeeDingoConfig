@@ -1,29 +1,12 @@
 // Ignition live in the Sim (Ranchero scene: key switch CB-1 DI3, PDM-02 main on sync 0x740): on / off on the Ignition
 // page and the dashboard tile, followers' link when the main goes quiet. The main is silenced by turning its Ignition
-// block off on the module alone (RAM, over the Sim's SLCAN bridge) and back on: the project is not touched.
+// block off on the module (RAM, over the Sim's SLCAN bridge; the app hears the reply too) and back on.
 import { test, expect } from '@playwright/test'
-import net from 'node:net'
 import { open, watchErrors } from './helpers.js'
-import { SIM_MCP, deviceByName, waitFor } from './api.js'
+import { deviceByName, waitFor } from './api.js'
+import { appErrors, sim, modWrite } from './ui-ign-helpers.js'
 
-const appErrors = (errors) => errors.filter((e) => !/Failed to load resource: the server responded with a status of 403/.test(e))
-async function sim(name, args) {
-  const r = await fetch(SIM_MCP, { method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'application/json, text/event-stream' },
-    body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name, arguments: args } }) })
-  return (await r.json()).result
-}
 const key = (on) => sim('sim_switch', { node: 'CB-1.di3', state: on })
-/** Write one param on the module only (cmd 2, not stored): the project keeps its value. */
-async function modWrite(base, index, sub, value) {
-  const [host, port] = (process.env.SIM_PORT ?? '').replace('tcp://', '').split(':')
-  const s = net.connect(Number(port), host)
-  await new Promise((res, rej) => { s.once('connect', res); s.once('error', rej) })
-  const hx = (n, w) => n.toString(16).toUpperCase().padStart(w, '0')
-  s.write('O\r')
-  s.write(`t${hx(base + 1, 3)}8${[2, index & 0xff, index >> 8, sub, value & 0xff, 0, 0, 0].map((v) => hx(v, 2)).join('')}\r`)
-  await new Promise((r) => setTimeout(r, 1500))
-  s.destroy()
-}
 const tile = (page) => page.locator('a, div').filter({ has: page.getByText('Ignition', { exact: true }) }).filter({ hasText: /from PDM-02|not sending|Not set up/ }).last()
 
 test.describe.configure({ mode: 'serial' })
