@@ -448,6 +448,7 @@ public class DeviceManager(ILogger<DeviceManager> logger, ILoggerFactory loggerF
                 1 => "nothing kept it awake (no CAN traffic, no output on) for its sleep delay",
                 2 => "its force-sleep input is on",
                 3 => "it was asked to sleep (Sleep now)",
+                4 => "the car sleeps with the ignition (ignition, door and dash off for the sleep delay)",   // firmware 5.7
                 _ => "reason not given",
             };
             ui.LogSleep("sleep", why);
