@@ -342,6 +342,7 @@ export function slotUsage(dev, funcs, defs) {
     ['Flashers', 'flashers', 'numFlashers'], ['Counters', 'counters', 'numCounters'], ['Tables', 'tables', 'numTables'],
     ['CAN inputs', 'canInputs', 'numCanInputs'], ['CAN outputs', 'canOutputs', 'numCanOutputs'],
     ...(olderThan(dev?.version, [5, 6, 0]) ? [] : [['Math', 'maths', 'numMath'], ['CAN messages', 'canMessages', 'numCanMessages']]),
+    ...(olderThan(dev?.version, [5, 6, 1]) ? [] : [['Comfort blink', 'comfortBlinks', 'numComfortBlinks']]),
   ]
   return rows.filter(([, arr]) => Array.isArray(funcs?.[arr])).map(([label, arr, key]) => {
     const list = funcs[arr]
