@@ -6,7 +6,7 @@
   import { DropdownMenu } from 'bits-ui'
   import { Page, PageHeader, Card, Button, Chip, StateDot, Empty } from '../../ui/index.js'
   import Confirm from '../../shell/parts/Confirm.svelte'
-  import { live, api, mutate, moduleState, hex, blinkModule, modulesOf } from '../../lib/live.svelte.js'
+  import { live, api, mutate, moduleState, hex, blinkModule, modulesOf, toast } from '../../lib/live.svelte.js'
   import { lacks, isUpstream } from './parts/util.js'
   import { href } from '../../router.svelte.js'
   import { ui } from '../../shell/ui.svelte.js'
@@ -17,6 +17,17 @@
   import { spanAfter, ID_BEFORE } from '../../../lib/canids.js'
 
   let { query } = $props()
+
+  // firmware 5.7 (the operator's new 5.x line) uses the upstream layout: convert the fork-5.x records of this project
+  const forkMods = $derived(mods.filter((d) => d.family === 'fork'))
+  let askMigrate = $state(false)
+  async function migrate() {
+    askMigrate = false
+    const r = await mutate(() => api.migrate57())
+    if (!r) return
+    const warn = r.reduce((n, m) => n + (m.migration ?? []).filter((x) => x.level === 'warn').length, 0)
+    toast(`${r.length} module${r.length === 1 ? '' : 's'} converted to firmware 5.7${warn ? `, ${warn} warning${warn === 1 ? '' : 's'}` : ''}. Open each module for its report.`, warn ? 'warn' : 'info', 8000)
+  }
 
   // an ECU described by a DBC file is not a module (no firmware, base ID or settings): it gets its own list
   const mods = $derived(modulesOf(live.devices).sort((a, b) => a.baseId - b.baseId))
@@ -78,6 +89,7 @@
 <Page wide>
   <PageHeader crumbs={[{ label: 'Hardware' }, { label: 'Modules' }]} title="Modules" subtitle={`${mods.length} in this project${ecus.length ? ` · ${ecus.length} ECU${ecus.length === 1 ? '' : 's'} from a DBC` : ''}`}>
     {#snippet actions()}
+      {#if forkMods.length}<Button onclick={() => (askMigrate = true)} data-testid="migrate57">Migrate project to firmware 5.7…</Button>{/if}
       <Button onclick={() => (ui.addModule = true)} data-testid="find-modules">Find modules</Button>
       <Button variant="primary" onclick={() => { addLike.guid = null; ui.addModule = true }} data-testid="add-module">Add module</Button>
     {/snippet}
@@ -181,6 +193,15 @@
   {#snippet footer()}
     <Button onclick={() => (rm = null)} data-testid="rm-keep">Keep it</Button>
     <Button variant="danger" disabled={!rmArmed} onclick={doRemove} data-testid="rm-yes">Remove from project</Button>
+  {/snippet}
+</Confirm>
+
+<Confirm bind:open={askMigrate} title="Migrate project to firmware 5.7?" width={560}>
+  <p>Firmware 5.7 numbers its settings and signals like upstream dingoFW. This converts {forkMods.map((d) => d.name).join(', ')} to that layout: signal choices, Lua readVar numbers, timers, CAN timeouts, other modules' CAN inputs and ignition followers. Each module then shows a report of what changed and what could not be carried over.</p>
+  <p>Save the project under a new name afterwards (keep the 5.6 file). A module still on 5.6 refuses Read and Apply until it runs 5.7. After flashing, Read each module (it keeps this project), then Apply to car and Store.</p>
+  {#snippet footer()}
+    <Button onclick={() => (askMigrate = false)}>Cancel</Button>
+    <Button variant="primary" onclick={migrate} data-testid="migrate57-yes">Migrate {forkMods.length} module{forkMods.length === 1 ? '' : 's'}</Button>
   {/snippet}
 </Confirm>
 

@@ -61,8 +61,10 @@ public sealed class SRecordImage
         Regex.Replace(marker, @"\s+v\d+$|(?<=^PT-DPDM)\d+$", "").Equals(deviceType, StringComparison.OrdinalIgnoreCase);
 
     /// <summary>Firmware line of a version like "0.6.1" (upstream dingoFW, major 0) or "5.6.6" (the fork); null if unknown.</summary>
-    public static string? FamilyOf(string? version) => version is null || !int.TryParse(version.TrimStart('v').Split('.')[0], out var major) ? null
-        : major == 0 ? "upstream" : "fork";
+    // the param layout: upstream dingoFW 0.x and the 5.7+ line share it (domain.Common.FwFamily.Of)
+    public static string? FamilyOf(string? version) => version is null || version.TrimStart('v').Split('.') is not [var a, var b, ..]
+        || !int.TryParse(a, out var major) || !int.TryParse(b, out var minor) ? null
+        : domain.Common.FwFamily.Of(major, minor);
 
     public static SRecordImage ParseText(string text) => Parse(text.Split('\n'));
 

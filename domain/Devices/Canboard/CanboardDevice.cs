@@ -736,6 +736,11 @@ public class CanboardDevice : IDeviceConfigurable
                 VarMap.Add(new DeviceVariable { GetName = () => Maths[num].Name, OwnerKind = "math", OwnerNumber = num + 1,
                     PropertyName = "Value", DataType = "float", VariableIndex = index++, SingleVariable = false });
             }
+        // integration 5.7 (integrate: ignition on the canboard): the seven ignition roles, after math
+        if (FwFamily.HasBlock(this, Functions.Ignition.BaseIndex, false))
+            foreach (var role in new[] { "Ignition", "Accessory", "Cranking", "Running", "Ready", "Dash", "Link OK" })
+                VarMap.Add(new DeviceVariable { GetName = () => "Ignition", OwnerKind = "ignition", OwnerNumber = 1,
+                    PropertyName = role, DataType = "bool", VariableIndex = index++, SingleVariable = false });
         // feat/comfort-blink: "indicator on" per side
         if (FwFamily.HasBlock(this, Functions.ComfortBlink.BaseIndex, false))
             foreach (var side in new[] { "Left", "Right" })
@@ -848,7 +853,9 @@ public class CanboardDevice : IDeviceConfigurable
             NotifySuccess = msg => SuccessNotification?.Invoke(msg),
             NotifyError = msg => ErrorNotification?.Invoke(msg),
             WriteAllFailed = () => { var h = WriteAllIncomplete; h?.Invoke(); return h != null; },
-            ParamSetLearned = InitVarMap   // upstream: which blocks the module has decides the var map tail
+            // upstream: which blocks the module has decides the var map tail (and the ignition frame); after a 5.7
+            // migration the project's bindings move from the assumed layout to the learned one
+            ParamSetLearned = () => { var before = KeepValuesOnRead ? VarMap.ToList() : null; InitVarMap(); InitStatusSigs(); if (before != null) Fw57Migration.Relearned(this, before); }
         };
     }
 
@@ -918,10 +925,15 @@ public class CanboardDevice : IDeviceConfigurable
         return Connected & !lastConnected;
     }
 
+    /// <summary>The ignition state frame's offset: fork + 14; the 5.7 line Msg 10 = + 12 (a module whose list has the
+    /// 0x1E00 block; none on stock upstream).</summary>
+    [JsonIgnore] public int? IgnitionStateOffset => Family == FwFamily.Fork ? Functions.Ignition.StateOffsetFor(Type)
+        : FwFamily.HasBlock(this, Functions.Ignition.BaseIndex, false) ? 12 : null;
+
     public bool InIdRange(int id)
     {
         // + the ignition state frame (firmware 5.6), the first id after the module's own range
-        return (id >= BaseId) && (id <= MaxCyclicId + BaseId || id == BaseId + Functions.Ignition.StateOffsetFor(Type));
+        return (id >= BaseId) && (id <= MaxCyclicId + BaseId || id == BaseId + IgnitionStateOffset);
     }
 
     public void Read(int id, byte[] data, 
@@ -931,7 +943,7 @@ public class CanboardDevice : IDeviceConfigurable
         var offset = id - BaseId;
 
         // Ignition state frame (firmware 5.6), sent by a main module: ['I', state, flags]
-        if (Family == FwFamily.Fork && offset == Functions.Ignition.StateOffsetFor(Type) && data.Length >= 3 && data[0] == 'I')
+        if (offset == IgnitionStateOffset && data.Length >= 3 && data[0] == 'I')
         {
             Ignition.State = (Functions.IgnitionState)data[1];
             Ignition.Dash = (data[2] & 0x10) != 0;
@@ -1208,11 +1220,28 @@ public class CanboardDevice : IDeviceConfigurable
 
         Logger.LogInformation("{Name} FW version received: {Version}", name, version);
 
-        var family = FwFamily.Of(data[4]);
-        if (family != Family) { Family = family; ParamSet.Forget(); Rebuild(); }
-        else if (VersionReceived && version != Version) ParamSet.Stale();   // reflashed: read its param list again
+        var family = FwFamily.Of(data[4], data[5]);
+        var was = Version;
         Version = version;
+        if (family != Family && Family == FwFamily.Fork && data[4] != 0 && Fw57Migration.Configured(this))
+            Migrate57Pending = true;   // a fork project on a 5.7+ module: DeviceManager converts it after this frame
+        else if (family != Family && family == FwFamily.Fork && Migration != null)
+            ErrorNotification?.Invoke($"{Name} runs {version}, but this project was converted for firmware 5.7: flash 5.7 first (Read and Apply are refused).");
+        else if (family != Family) UseFamily(family, false);
+        else if (VersionReceived && version != was) ParamSet.Stale();   // reflashed: read its param list again
         VersionReceived = true;
+    }
+
+    [JsonIgnore] public bool Migrate57Pending { get; set; }
+    [JsonPropertyName("keepValuesOnRead")] public bool KeepValuesOnRead { get; set; }
+    [JsonPropertyName("migration")] public List<MigrationNote>? Migration { get; set; }
+
+    public void UseFamily(string family, bool assumeAll)
+    {
+        Family = family; ParamSet.Forget(); Rebuild();
+        if (!assumeAll || family != FwFamily.Upstream) return;
+        ParamSet.Assume(Params.Select(p => (p.Index, p.SubIndex)));
+        Rebuild();
     }
 
     // The family changed: rebuild everything that has a per-family layout (values stay on the function objects).

@@ -12,8 +12,12 @@ public static class FwFamily
     public const string Fork = "fork";
     public const string Upstream = "upstream";
 
-    /// <summary>The family a Version reply's major number means.</summary>
-    public static string Of(int major) => major == 0 ? Upstream : Fork;
+    /// <summary>The family a Version reply means: upstream dingoFW (0.x) and the fork line rebuilt on it (5.7 and later,
+    /// firmware integration/all-features) share the upstream layout; fork 5.0-5.6 keep the fork's.</summary>
+    public static string Of(int major, int minor) => major == 0 || major > 5 || (major == 5 && minor >= 7) ? Upstream : Fork;
+
+    /// <summary>Status-frame currents in 0.1 A (fork, and the 5.7+ line); plain upstream 0.x sends whole amps.</summary>
+    public static bool TenthAmps(IDeviceConfigurable d) => d.Family != Upstream || Firmware.Of(d.Version).Major != 0;
 
     /// <summary>Does the module have param <paramref name="p"/>? Upstream: in the list it returned on Read (none
     /// while unknown). Fork: by its firmware version (<see cref="DeviceParameter.MinFirmware"/>).</summary>
@@ -55,6 +59,12 @@ public class DeviceParamSet
     public void Learn(List<(int Index, int SubIndex)> order, Dictionary<(int Index, int SubIndex), uint> raw)
     {
         _order = order; _set = order.ToHashSet(); Raw = raw; FromModule = true;
+    }
+    /// <summary>Taken as the module's list without asking it (a project migrated to 5.7 offline): gives the layout,
+    /// but Apply still waits for a Read.</summary>
+    public void Assume(IEnumerable<(int Index, int SubIndex)> keys)
+    {
+        _order = keys.Distinct().ToList(); _set = _order.ToHashSet(); Raw = new(); FromModule = false;
     }
     public void Forget() { _order = null; _set = []; Raw = new(); FromModule = false; }
     /// <summary>The module reports another firmware version: its list may have changed, read it again before Apply.</summary>

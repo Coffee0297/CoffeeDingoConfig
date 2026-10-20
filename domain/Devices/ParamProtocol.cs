@@ -277,30 +277,42 @@ internal class ParamProtocol(IDeviceConfigurable device, List<DeviceParameter> @
                     diff.AddRange(_deviceOnly);
                     device.LastConfigDiff = diff;
 
-                    // End of params, apply all temporary values to actual properties
-                    foreach (var param in _params)
+                    // After a 5.7 migration the project is what counts: learn the list (above), keep the values, Apply them next.
+                    if (device.KeepValuesOnRead && Upstream && !_readModifiedOnly)
                     {
-                        var paramKey = (param.Index, param.SubIndex);
-                        if (_tempParamValues.TryGetValue(paramKey, out var value))
-                        {
-                            param.SetValue(value);
-                        }
+                        device.KeepValuesOnRead = false;
+                        _tempParamValues.Clear();
+                        device.ConfigMismatch = diff.Any(d => d.Kind == "value");
+                        _logger.LogInformation("{Name} ID: {BaseId}, Read learned the param list and kept the migrated project ({n} difference(s) to Apply)", name, baseId, diff.Count);
+                        NotifySuccess?.Invoke($"{name}: Read the module's settings list and kept the migrated project. Apply to car, then Store.");
                     }
-
-                    _tempParamValues.Clear();
-                    // The app now holds the device's config — they're in sync. Remaining entries are
-                    // param-set/version differences, kept for display but no longer a content mismatch.
-                    device.ConfigMismatch = false;
-                    if (diff.Count == 0)
-                        _logger.LogInformation("{Name} ID: {BaseId}, Read complete — config matches ({readAllCount} params)", name, baseId, readAllCount);
                     else
                     {
-                        var v = diff.Count(d => d.Kind == "value"); var a = diff.Count(d => d.Kind == "appOnly"); var dz = diff.Count(d => d.Kind == "deviceOnly");
-                        _logger.LogWarning("{Name} ID: {BaseId}, Read complete — {n} config difference(s): {v} value, {a} app-only, {d} device-only", name, baseId, diff.Count, v, a, dz);
-                        foreach (var d in diff.Take(40))
-                            _logger.LogWarning("{Name}: config diff [{kind}] {param} (0x{idx:X4}:{sub}) app='{app}' device='{dev}'", name, d.Kind, d.Name, d.Index, d.SubIndex, d.AppValue ?? "—", d.DeviceValue ?? "—");
+                        // End of params, apply all temporary values to actual properties
+                        foreach (var param in _params)
+                        {
+                            var paramKey = (param.Index, param.SubIndex);
+                            if (_tempParamValues.TryGetValue(paramKey, out var value))
+                            {
+                                param.SetValue(value);
+                            }
+                        }
+
+                        _tempParamValues.Clear();
+                        // The app now holds the device's config — they're in sync. Remaining entries are
+                        // param-set/version differences, kept for display but no longer a content mismatch.
+                        device.ConfigMismatch = false;
+                        if (diff.Count == 0)
+                            _logger.LogInformation("{Name} ID: {BaseId}, Read complete — config matches ({readAllCount} params)", name, baseId, readAllCount);
+                        else
+                        {
+                            var v = diff.Count(d => d.Kind == "value"); var a = diff.Count(d => d.Kind == "appOnly"); var dz = diff.Count(d => d.Kind == "deviceOnly");
+                            _logger.LogWarning("{Name} ID: {BaseId}, Read complete — {n} config difference(s): {v} value, {a} app-only, {d} device-only", name, baseId, diff.Count, v, a, dz);
+                            foreach (var d in diff.Take(40))
+                                _logger.LogWarning("{Name}: config diff [{kind}] {param} (0x{idx:X4}:{sub}) app='{app}' device='{dev}'", name, d.Kind, d.Name, d.Index, d.SubIndex, d.AppValue ?? "—", d.DeviceValue ?? "—");
+                        }
+                        NotifySuccess?.Invoke(diff.Count == 0 ? $"{name}: Read Successful — config matches" : $"{name}: Read Successful — {diff.Count} difference(s), see Logs");
                     }
-                    NotifySuccess?.Invoke(diff.Count == 0 ? $"{name}: Read Successful — config matches" : $"{name}: Read Successful — {diff.Count} difference(s), see Logs");
                 }
                 else
                 {

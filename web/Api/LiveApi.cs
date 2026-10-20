@@ -60,7 +60,9 @@ public record DeviceDto(string Guid, string Name, string Type, int BaseId, bool 
     // upstream feat/config-lock (null: no lock in this firmware, or not known yet)
     LockDto? Lock = null,
     // runs Lua: a PDM on the fork, or an upstream PDM that answered a Lua command (feat/lua-scripting)
-    bool HasLua = false);
+    bool HasLua = false,
+    // the firmware 5.7 migration report (null: never migrated); KeepValuesOnRead: the next Read keeps the project
+    List<domain.Common.MigrationNote>? Migration = null, bool KeepValuesOnRead = false);
 // Has: the module has the lock (its Read listed 0x0200, or it refused a request as locked). PasswordSet: the
 // project holds a password, sent on every write. The password itself never goes to the UI.
 public record LockDto(bool Has, bool Locked, string Contact, bool PasswordSet);
@@ -380,7 +382,7 @@ public static class DingoMap
                 HasLed: ui?.HasLed, Asleep: ui?.Asleep == true && !p.Connected, LastWake: Wake(ui), SleepCountdownS: p.SleepCountdownS,
                 SleepBlockers: ui?.SleepBlockers, Ignition: Ign(p.Ignition, p.BaseId + (p.IgnitionStateOffset ?? domain.Devices.Functions.Ignition.StateOffsetFor(p.Type, p.Family, p.PdmType))),
                 Family: p.Family, ParamsRead: p.ParamSet.FromModule, ParamRuns: p.ParamRuns, RetryAllInput: p.HasRetryAll ? p.RetryAllInput : null, ShedInput: p.HasShed ? p.ShedInput : null,
-                WakeFrame: p.ParamSet.Contains(domain.Devices.Functions.WakeFrame.Index, 0) ? p.WakeFrame : null, Lock: LockOf(p), HasLua: p.RunsLua);
+                WakeFrame: p.ParamSet.Contains(domain.Devices.Functions.WakeFrame.Index, 0) ? p.WakeFrame : null, Lock: LockOf(p), HasLua: p.RunsLua, Migration: p.Migration, KeepValuesOnRead: p.KeepValuesOnRead);
         }
         if (d is domain.Devices.Canboard.CanboardDevice cb)
             // CANBoard has no battery/total-current sensing (those are PDM smart-output features) — leave
@@ -392,9 +394,9 @@ public static class DingoMap
                 cb.SleepEnabled, cb.SleepTimeoutMs, cb.SleepIgnoreAlwaysOn, cb.ForceSleepInput, cb.MuteTxInput, cb.WakeDigInputMask, cb.WakeOnCan,
                 cb.CanBootloader, cb.Connected && cb.ConfigMismatch, cb.LastConfigDiff.Count, CanSleep: cb.CanSleep, StoredOnModule: ui?.StoredOnModule, InBootloader: !cb.Connected && ui?.InBootloader == true, PendingEdits: cb.ConfigMismatch ? ui?.PendingEdits ?? 0 : 0,
                 HasLed: ui?.HasLed, Asleep: ui?.Asleep == true && !cb.Connected, LastWake: Wake(ui), SleepCountdownS: cb.SleepCountdownS,
-                SleepBlockers: cb.SleepCountdownS != null ? cb.SleepBlockersRaw : ui?.SleepBlockers, Ignition: Ign(cb.Ignition, cb.BaseId + domain.Devices.Functions.Ignition.StateOffsetFor(cb.Type)),
+                SleepBlockers: cb.SleepCountdownS != null ? cb.SleepBlockersRaw : ui?.SleepBlockers, Ignition: Ign(cb.Ignition, cb.BaseId + (cb.IgnitionStateOffset ?? domain.Devices.Functions.Ignition.StateOffsetFor(cb.Type))),
                 DigitalOut: cb.DigitalOutputs.Select(o => new DigitalOutDto(o.Number, o.Name, o.Enabled, o.State, o.Input)).ToArray(),
-                Family: cb.Family, ParamsRead: cb.ParamSet.FromModule, ParamRuns: cb.ParamRuns, Lock: LockOf(cb));
+                Family: cb.Family, ParamsRead: cb.ParamSet.FromModule, ParamRuns: cb.ParamRuns, Lock: LockOf(cb), Migration: cb.Migration, KeepValuesOnRead: cb.KeepValuesOnRead);
         return new DeviceDto(d.Guid.ToString(), d.Name, d.Type, d.BaseId, d.Connected,
             0, 0, 0, "", "", "", Array.Empty<OutputDto>(), reading, readDone, readTotal, false, 30000, true, 0, 0, 0, true,
             (d as IDeviceConfigurable)?.CanBootloader ?? false, CanSleep: false);   // an ECU (DBC) or other device: nothing to put to sleep
@@ -1897,6 +1899,15 @@ public static class LiveApi
             }
         });
 
+        // Convert every fork-5.x module record of the project to the firmware 5.7 layout (Fw57Migration); the report is
+        // on each device (DTO migration). Save the project afterwards (a copy is safest).
+        api.MapPost("/project/migrate57", (DeviceManager dm) =>
+        {
+            var targets = dm.GetAllDevices().OfType<IDeviceConfigurable>().Where(d => d.Family == domain.Common.FwFamily.Fork).ToList();
+            dm.MigrateTo57(targets);
+            return Results.Ok(targets.Select(d => new { guid = d.Guid, name = d.Name, migration = d.Migration }));
+        });
+
         api.MapPost("/project/new", (ConfigFileManager cfg, DeviceManager dm, CrossModuleStore xmod) =>
         {
             dm.ClearDevices(); xmod.Clear(); cfg.NewFile(); cfg.ClientState = null; TemplateApi.LoadInstances(null); GroupApi.Load(null); MarkClean(cfg, dm); return Results.Ok(new { ok = true });
@@ -2041,6 +2052,8 @@ public static class LiveApi
             string[] liveActions = ["read", "readall", "write", "writeall", "burn", "sleep", "bootloader", "version", "uploadlua", "restart"];
             if (liveActions.Contains(action) && await RequireLiveModuleAsync(g, dm, adapters, action) is { } bad) return bad;
             // Wake up is for a module that is NOT answering (asleep, or woken by CAN and still quiet): only the adapter must be there
+            if (action is "read" or "readall" or "write" or "writeall" && dm.GetDevice(g) is IDeviceConfigurable od && DeviceManager.OlderLine(od))
+                return Results.Json(new { ok = false, error = $"{od.Name} runs {od.Version}, but this project was converted for firmware 5.7. Flash 5.7 first. Nothing was read or written." }, statusCode: 409);
             if (action == "wakeup" && !adapters.GetStatus().isConnected) return Results.Text("Not connected to a CAN adapter — connect first.", "text/plain", null, 400);
 
             switch (action)

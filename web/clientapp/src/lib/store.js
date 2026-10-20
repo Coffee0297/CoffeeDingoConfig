@@ -201,6 +201,7 @@ export const api = {
   projSave: (FileName, Client) => j('POST', '/api/project/save', { FileName, Client }),
   projOpen: (FileName) => j('POST', '/api/project/open', { FileName }),
   projNew: () => j('POST', '/api/project/new'),
+  migrate57: () => j('POST', '/api/project/migrate57'),   // fork 5.x records -> the firmware 5.7 layout (report on each device)
   projDownload: () => j('GET', '/api/project/download'),
   // function / helper block groups per module (G16): { groups: [...], dismissed: [...] }
   groups: (guid) => j('GET', `/api/groups/${guid}`),

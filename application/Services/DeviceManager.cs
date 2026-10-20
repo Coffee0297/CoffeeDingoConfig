@@ -367,6 +367,7 @@ public class DeviceManager(ILogger<DeviceManager> logger, ILoggerFactory loggerF
             {
                 var outgoing = new List<DeviceCanFrame>();
                 device.Read(frame.Id, frame.Payload, ref _requestQueue, outgoing);
+                if (device is IDeviceConfigurable { Migrate57Pending: true } mc) MigrateTo57([mc]);
                 if (outgoing.Count > 0)
                     _batchTransmitCallback?.Invoke(outgoing);
                 if (frame.Id == device.BaseId) RecordConfirm(device, frame, outgoing);
@@ -479,7 +480,28 @@ public class DeviceManager(ILogger<DeviceManager> logger, ILoggerFactory loggerF
     public static bool VersionKnown(IDevice d) => d is IDeviceConfigurable { VersionReceived: true };
 
     /// <summary>Upstream firmware: Apply needs the module's own param list (from a Read this session). Fork: always.</summary>
-    public static bool ParamsKnown(IDevice d) => d is not IDeviceConfigurable c || c.Family != domain.Common.FwFamily.Upstream || c.ParamSet.FromModule;
+    public static bool ParamsKnown(IDevice d) => d is not IDeviceConfigurable c || c.Family != domain.Common.FwFamily.Upstream || (c.ParamSet.FromModule && !OlderLine(d));
+
+    /// <summary>The record has the 5.7 layout (migrated) but the module reports fork 5.0-5.6: neither Read nor Apply fits.</summary>
+    public static bool OlderLine(IDevice d) => d is IDeviceConfigurable { VersionReceived: true } c && c.Family == domain.Common.FwFamily.Upstream
+        && domain.Common.Firmware.Of(c.Version) is var v && domain.Common.FwFamily.Of(v.Major, v.Minor) == domain.Common.FwFamily.Fork;
+
+    /// <summary>Convert fork-5.x records to the 5.7 layout (domain.Common.Fw57Migration): automatically when a configured fork
+    /// record's module reports 5.7+, or on demand. The report lands on each device (Migration).</summary>
+    public void MigrateTo57(IEnumerable<IDeviceConfigurable> targets)
+    {
+        var list = targets.Where(t => t.Family == domain.Common.FwFamily.Fork).ToList();
+        if (list.Count == 0) return;
+        domain.Common.Fw57Migration.Migrate(_devices.Values.ToList(), list);
+        foreach (var d in list)
+        {
+            var warn = d.Migration?.Count(n => n.Level == "warn") ?? 0;
+            logger.LogWarning("{Name}: project converted to the firmware 5.7 layout ({Warn} warning(s))", d.Name, warn);
+            foreach (var n in d.Migration ?? []) logger.LogInformation("{Name} migration [{Level}] {Text}", d.Name, n.Level, n.Text);
+            systemLogger.Notify(d.Name, $"Project converted to firmware 5.7{(warn > 0 ? $", {warn} warning(s)" : "")}: see the module's migration report. Read it, then Apply to car and Store.",
+                warn > 0 ? application.Models.LogLevel.Warning : application.Models.LogLevel.Info);
+        }
+    }
 
     /// <summary>Ask for the firmware version unless it is known, and wait up to <paramref name="ms"/> for it.</summary>
     public async Task<bool> EnsureVersionAsync(IDevice d, int ms = 4000)

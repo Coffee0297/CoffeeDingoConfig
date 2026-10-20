@@ -15,6 +15,16 @@ public interface IDeviceConfigurable : IDevice
     string Family { get; }
     /// <summary>Upstream family: the params the module has (from its ReadAll). Unused on fork modules.</summary>
     domain.Common.DeviceParamSet ParamSet { get; }
+    /// <summary>A configured fork-5.x record met a module reporting 5.7+: <see cref="domain.Common.Fw57Migration"/> converts it
+    /// (DeviceManager, right after the Version reply).</summary>
+    bool Migrate57Pending { get; set; }
+    /// <summary>After a migration: the next Read learns the module's param list but keeps the project's values (Apply them).</summary>
+    bool KeepValuesOnRead { get; set; }
+    /// <summary>What the last 5.7 migration changed or could not map; saved with the project.</summary>
+    List<domain.Common.MigrationNote>? Migration { get; set; }
+    /// <summary>Switch the record to <paramref name="family"/>'s layout; <paramref name="assumeAll"/>: take every param the
+    /// app models for it as the module's list (the 5.7 integration firmware has them all) until a Read tells.</summary>
+    void UseFamily(string family, bool assumeAll);
     /// <summary>Per-param differences captured on the last Read — explains *why* the config didn't match.</summary>
     List<ConfigDiffEntry> LastConfigDiff { get; set; }
     /// <summary>Config lock (upstream feat/config-lock, 0x0200): the app's copy of the password + contact, and Locked.</summary>

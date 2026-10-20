@@ -406,8 +406,8 @@ public class PdmDevice : IDeviceConfigurable
         if (Upstream) while (Tables.Count < LookupTable.UpstreamMax) Tables.Add(new LookupTable(Tables.Count + 1, "table" + (Tables.Count + 1)));
 
         var cyclicIndex = CyclicRxOffset;
-        // upstream dingoFW sends currents in whole amps, the fork in 0.1 A
-        var amps = Upstream ? 1.0 : 0.1;
+        // upstream dingoFW 0.x sends currents in whole amps, the fork and the 5.7 line in 0.1 A
+        var amps = FwFamily.TenthAmps(this) ? 0.1 : 1.0;
 
         // Message 0: System status
         StatusSigs[cyclicIndex] = new List<(DbcSignal, Action<double>)>();
@@ -1303,7 +1303,9 @@ public class PdmDevice : IDeviceConfigurable
             NotifySuccess = msg => SuccessNotification?.Invoke(msg),
             NotifyError = msg => ErrorNotification?.Invoke(msg),
             WriteAllFailed = () => { var h = WriteAllIncomplete; h?.Invoke(); return h != null; },
-            ParamSetLearned = () => { InitVarMap(); InitStatusSigs(); }   // upstream: which params the module has decides the var map tail and extra frames
+            // upstream: which params the module has decides the var map tail and extra frames; after a 5.7 migration the
+            // project's bindings move from the assumed layout to the learned one
+            ParamSetLearned = () => { var before = KeepValuesOnRead ? VarMap.ToList() : null; InitVarMap(); InitStatusSigs(); if (before != null) Fw57Migration.Relearned(this, before); }
         };
     }
 
@@ -1789,15 +1791,37 @@ public class PdmDevice : IDeviceConfigurable
 
         Logger.LogInformation("{Name} FW version received: {Version}", name, version);
 
-        var family = FwFamily.Of(data[4]);
-        if (family != Family) { Family = family; ParamSet.Forget(); HasLua = null; Rebuild(); }
-        else if (VersionReceived && version != Version)
+        var family = FwFamily.Of(data[4], data[5]);
+        var was = Version;
+        Version = version;   // first: the status frames' current scale follows it
+        if (family != Family && Family == FwFamily.Fork && data[4] != 0 && Fw57Migration.Configured(this))
+            Migrate57Pending = true;   // a fork project on a 5.7+ module: DeviceManager converts it after this frame
+        else if (family != Family && family == FwFamily.Fork && Migration != null)
+            ErrorNotification?.Invoke($"{Name} runs {version}, but this project was converted for firmware 5.7: flash 5.7 first (Read and Apply are refused).");
+        else if (family != Family) UseFamily(family, false);
+        else if (version != was)
         {
-            ParamSet.Stale();   // reflashed: read its param list again
-            if (HasLua == true) { HasLua = null; InitVarMap(); }   // and ask again whether it runs Lua
+            InitStatusSigs();   // 0.x vs 5.7: whole amps vs 0.1 A
+            if (VersionReceived)
+            {
+                ParamSet.Stale();   // reflashed: read its param list again
+                if (HasLua == true) { HasLua = null; InitVarMap(); }   // and ask again whether it runs Lua
+            }
         }
-        Version = version;
         VersionReceived = true;
+    }
+
+    [JsonIgnore] public bool Migrate57Pending { get; set; }
+    [JsonPropertyName("keepValuesOnRead")] public bool KeepValuesOnRead { get; set; }
+    [JsonPropertyName("migration")] public List<MigrationNote>? Migration { get; set; }
+
+    public void UseFamily(string family, bool assumeAll)
+    {
+        Family = family; ParamSet.Forget(); HasLua = null; Rebuild();
+        if (!assumeAll || family != FwFamily.Upstream) return;
+        HasLua = true;   // the 5.7 line runs Lua
+        ParamSet.Assume(Params.Select(p => (p.Index, p.SubIndex)));
+        Rebuild();
     }
 
     // The family changed: rebuild everything that has a per-family layout (values stay on the function objects).

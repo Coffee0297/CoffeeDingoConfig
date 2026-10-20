@@ -105,6 +105,15 @@
         {#snippet actions()}<Button size="sm" onclick={() => (current = 'settings')}>Unlock…</Button>{/snippet}
       </Banner>
     {/if}
+    {#if d.migration?.length}
+      {@const warns = d.migration.filter((n) => n.level === 'warn')}
+      <Banner tone={warns.length ? 'warn' : 'info'} title={`Converted to firmware 5.7${warns.length ? `: ${warns.length} thing${warns.length === 1 ? '' : 's'} to check` : ''}`} data-testid="migration-report">
+        {d.keepValuesOnRead ? "The next Read learns the module's list of settings and keeps this project; then Apply to car and Store." : 'Apply to car and Store to put the converted project on the module.'}
+        <details><summary>Migration report ({d.migration.length})</summary>
+          <ul class="mig">{#each d.migration as n, i (i)}<li class:warn={n.level === 'warn'}>{n.level === 'warn' ? '▲ ' : ''}{n.text}</li>{/each}</ul>
+        </details>
+      </Banner>
+    {/if}
     {#if !d.connected}
       <Banner tone="warn" title={live.connected ? `${d.name} is not answering` : 'Not connected'}>Values below are from the project, not from the module. {live.connected ? 'Check power, wiring, base ID and speed.' : 'Connect to see live values.'}</Banner>
     {/if}
@@ -182,6 +191,8 @@
 
 <style>
   .stats { display: flex; gap: var(--space-4); flex-wrap: wrap; }
+  .mig { margin: var(--space-2) 0 0; padding-left: var(--space-4); display: flex; flex-direction: column; gap: var(--space-1); }
+  .mig .warn { font-weight: 600; }
   .sub { font-size: var(--text-xs); }
   .stat { display: flex; flex-direction: column; gap: 2px; min-width: 140px; padding: var(--space-3) var(--space-4); border: 1px solid var(--color-line); border-radius: var(--radius-md); background: var(--color-surface); }
   .v { font-size: var(--text-lg); font-weight: 600; }
