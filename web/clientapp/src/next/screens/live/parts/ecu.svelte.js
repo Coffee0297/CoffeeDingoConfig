@@ -4,6 +4,7 @@
 // sources; only those are polled.
 import { live, api } from '../../../lib/live.svelte.js'
 import { feed, watchSignals } from './feed.svelte.js'
+import { untrack } from 'svelte'
 
 const RPM = /rpm|engine.?speed/i
 const NOT_A_VALUE = /[<>=]|above|below|over|under|running|ok$/i   // threshold flags such as "RPM > 400"
@@ -22,10 +23,11 @@ export function useEcu() {
     let alive = true
     ;(async () => {
       const next = { rpm: null, gear: null, coolant: null }
-      for (const d of live.devices) {
-        let list
-        try { list = (await api.signals(d.guid)) ?? [] } catch { continue }
-        for (const s of list.filter(isSource)) {
+      // keyed on the guids only: reading live.devices here re-ran the scan on every telemetry update and it rarely finished
+      const devs = untrack(() => live.devices)
+      const lists = await Promise.all(devs.map((d) => api.signals(d.guid).then((l) => l ?? [], () => [])))
+      for (const [i, d] of devs.entries()) {
+        for (const s of lists[i].filter(isSource)) {
           if (!next.rpm && RPM.test(s.name) && !NOT_A_VALUE.test(s.name)) next.rpm = { guid: d.guid, name: s.name, dev: d.name }
           if (!next.gear && GEAR.test(s.name)) next.gear = { guid: d.guid, name: s.name, dev: d.name }
           if (!next.coolant && COOLANT.test(s.name)) next.coolant = { guid: d.guid, name: s.name, dev: d.name }
