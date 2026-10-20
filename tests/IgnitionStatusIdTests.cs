@@ -37,6 +37,19 @@ public class IgnitionStatusIdTests
     }
 
     [Fact]
+    public void Pdm_StatusSlot_IgnoresTheNextPdmsFrame()
+    {
+        var d = IntegrationLayoutTestsAccess.IntegrationPdm();
+        d.BaseId = 0x6A0;
+        d.Ignition.Enabled = true;
+        var q = new ConcurrentDictionary<(int BaseId, int Index, int SubIndex), DeviceCanFrame>();
+        d.Read(0x6A0 + 36, [0x0D, 0x05, 0x40, 0x12, 0, 0, 0, 0], ref q, []);   // PDM-03's base + 4 at 0x6C0: state 13 is no status
+        Assert.Null(d.Ignition.Status);
+        d.Read(0x6A0 + 36, Status, ref q, []);
+        Assert.Equal(IgnitionState.On, d.Ignition.State);
+    }
+
+    [Fact]
     public void Canboard_StatusFrame_DecodedAtTheCustomId()
     {
         var d = Fw57MigrationTests.Cb(5, 7, 0);

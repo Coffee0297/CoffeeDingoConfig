@@ -74,7 +74,7 @@ public class Ignition : IDeviceFunction
     public bool ReadFrame(byte[] d)
     {
         if (d.Length >= 3 && d[0] == 'I') { State = (IgnitionState)d[1]; Dash = (d[2] & 0x10) != 0; }
-        else if (d.Length >= 8) { Status = IgnitionStatus.From(d); State = Status.State; Dash = (d[6] & 0x04) != 0; }
+        else if (d.Length >= 8 && IgnitionStatus.Valid(d)) { Status = IgnitionStatus.From(d); State = Status.State; Dash = (d[6] & 0x04) != 0; }
         else return false;
         LastStateFrame = DateTime.UtcNow;
         return true;
@@ -149,4 +149,7 @@ public record IgnitionStatus(IgnitionState State, int Role, int Dash, int Sleep,
 {
     public static IgnitionStatus From(byte[] d) =>
         new((IgnitionState)(d[0] & 0x0F), d[0] >> 4, d[1], d[2], d[3], d[4] | d[5] << 8, d[6], d[7]);
+    /// <summary>Every field in its range: another module's frame on the same id (a status slot inside the next PDM's
+    /// range, 0x20 apart) decodes to states like 13 and must not count as the ignition status.</summary>
+    public static bool Valid(byte[] d) => (d[0] & 0x0F) <= 3 && d[0] >> 4 <= 2 && d[1] <= 4 && d[2] <= 7 && d[3] <= 3;
 }

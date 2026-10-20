@@ -1549,9 +1549,11 @@ public static class LiveApi
                 foreach (var (mid, sig) in d.GetStatusSigs())
                     if (d is not (PdmDevice or CanboardDevice) || mid - d.BaseId <= domain.Common.Fw57Migration.Span(d))   // a 5.7 frame whose feature is off is not sent
                     Claim(mid, sig.IsExtended, $"{d.Name}: {(isDbc ? "ECU " + (string.IsNullOrEmpty(sig.MessageName) ? "msg" : sig.MessageName) : "broadcast")}");
-                // a 5.7 ignition status frame moved off its slot (0x1E00 sub 23) is sent outside the module's range
-                if (d is IDeviceConfigurable ic && domain.Common.IgnitionMain.Ign(ic) is { StatusId: > 0 } sg && domain.Common.Fw57Migration.IgnFrame(ic))
-                    Claim(sg.StatusId, false, $"{d.Name}: ignition status");
+                // the ignition status frame: on its slot (not a status signal, so claimed here: the next PDM 0x20 up has
+                // its base+4 there) or moved off it (0x1E00 sub 23)
+                if (d is IDeviceConfigurable ic && domain.Common.IgnitionMain.Ign(ic) is { } sg && domain.Common.Fw57Migration.IgnFrame(ic)
+                    && sg.FrameId(d.BaseId, d switch { PdmDevice p => p.IgnitionStateOffset, CanboardDevice c => c.IgnitionStateOffset, _ => null }) is { } sid)
+                    Claim(sid, false, $"{d.Name}: ignition status");
                 var couts = d switch { PdmDevice p => p.CanOutputs, CanboardDevice c => c.CanOutputs, _ => (IEnumerable<domain.Devices.Functions.CanOutput>?)null };
                 if (couts != null)
                     foreach (var co in couts.Where(x => x.Enabled))
