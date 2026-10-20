@@ -20,8 +20,8 @@ public sealed class CanFlashService(
     public record FlashResult(bool Ok, string Log, string? Version = null);
     public record FlashStatus(bool Busy, int Percent, string Phase);
 
-    // Every OpenBLT board relocates its application above the 16 KB bootloader to sector 1.
-    private const uint AppBase = 0x08004000;
+    // OpenBLT PDMs relocate the app above the 16 KB bootloader to sector 1 (CANBoards from 5.7: DfuImage.CanboardAppBase).
+    private const uint AppBase = DfuImage.AppBase;
 
     private volatile int _percent;
     private volatile string _phase = "idle";
@@ -48,11 +48,16 @@ public sealed class CanFlashService(
             return new(false, upstream
                 ? $"Refused: {dev.Name} runs upstream dingoFW and is not known to have the OpenBLT CAN bootloader. Plain upstream firmware answers a CAN update by going to USB-DFU. Program the bootloader once (SWD or USB), then mark it on the Firmware page."
                 : $"'{dev.Type}' does not have the OpenBLT CAN bootloader — it can't be flashed over CAN.");
-        if (image.MinAddress != AppBase)
-            return new(false, $"Firmware base 0x{image.MinAddress:X8} does not match the relocated application base 0x{AppBase:X8} — wrong firmware (or not a bootloader-relocated build) for this module?");
-        // CANBoard app region is 46 KB; the F446 PDMs are 368 KB (sectors 1–6), upstream 496 KB (sectors 1–7).
+        // The app starts where the .srec says: PDMs 0x08004000; a CANBoard 0x08002000 (5.7, 8 KB bootloader) or 0x08004000 (5.x).
         bool isCanboard = string.Equals(dev.Type, "CANBoard", StringComparison.OrdinalIgnoreCase);
-        int maxBytes = (isCanboard ? 46 : upstream ? 496 : 368) * 1024;
+        if (!DfuImage.IsAppBase(image.MinAddress, isCanboard))
+            return new(false, $"Firmware base 0x{image.MinAddress:X8} does not match the relocated application base 0x{AppBase:X8}{(isCanboard ? $" or 0x{DfuImage.CanboardAppBase:X8}" : "")} — wrong firmware (or not a bootloader-relocated build) for this module?");
+        bool newCbLoader = isCanboard && image.MinAddress == DfuImage.CanboardAppBase;
+        if (newCbLoader)
+            log.AppendLine("CANBoard image at 0x08002000: needs the 8 KB CANBoard bootloader (programmed once over SWD). With the old 16 KB one the erase fails and the module stays in its bootloader.");
+        // CANBoard app region: 54 KB behind the 8 KB bootloader, 46 KB behind the old 16 KB one; the F446 PDMs are 368 KB
+        // (sectors 1–6), upstream 496 KB (sectors 1–7).
+        int maxBytes = (isCanboard ? (newCbLoader ? 54 : 46) : upstream ? 496 : 368) * 1024;
         if (image.TotalBytes < 1024 || image.TotalBytes > maxBytes)
             return new(false, $"Refused: image size {image.TotalBytes} bytes is outside the {dev.Type} app range (1 KB–{maxBytes / 1024} KB).");
         // A v7 and a -Max share the MCU and app base, so only the marker tells their images apart.
@@ -112,7 +117,7 @@ public sealed class CanFlashService(
             {
                 Set("Erasing", 8);
                 if (!await xcp.ClearMemoryAsync(seg.Address, (uint)seg.Data.Length, token))
-                    return Fail(log, $"Erase failed at 0x{seg.Address:X8}.");
+                    return Fail(log, $"Erase failed at 0x{seg.Address:X8}." + (newCbLoader ? " This CANBoard probably still has the old 16 KB bootloader: program the 8 KB one over SWD once." : ""));
                 if (!await xcp.WriteDataAsync(seg.Address, seg.Data, n =>
                         Set("Writing", 10 + (int)(55L * (written + n) / Math.Max(total, 1))), token))
                     return Fail(log, $"Programming failed in segment at 0x{seg.Address:X8}.");

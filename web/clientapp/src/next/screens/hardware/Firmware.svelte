@@ -229,7 +229,7 @@
         {/each}
       </ul>
     {/if}
-    <p class="muted note">A .srec per board goes over CAN (CANBoard, dingoPDM, dingoPDM-Max) and a .bin to the link module over USB. Upstream dingoFW ships a .hex: it goes over CAN when it is built for the bootloader (starts at 0x08004000). Each file is checked for the board it was built for.</p>
+    <p class="muted note">A .srec per board goes over CAN (CANBoard, dingoPDM, dingoPDM-Max) and a .bin to the link module over USB. Upstream dingoFW ships a .hex: it goes over CAN when it is built for the bootloader (starts at 0x08004000). From firmware 5.7 a CANBoard image starts at 0x08002000 and needs the new 8 KB CANBoard bootloader, programmed once over SWD. Each file is checked for the board it was built for.</p>
   </Card>
 
   <Card title="2. Modules" aria-label="Modules">

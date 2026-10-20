@@ -105,9 +105,6 @@ public static partial class FirmwareCatalog
             }
             catch (InvalidDataException) { problems.Add($"Not {(isHex ? "an Intel HEX" : "an S-record")} image: it has no data records."); blocks = []; }
         }
-        var relocated = address == DfuImage.AppBase;
-        if ((isSrec || isHex) && address is uint a && !relocated)
-            problems.Add($"It starts at 0x{a:X8}, not 0x{DfuImage.AppBase:X8}: not built for the CAN bootloader, so it cannot go over CAN (and over USB it would replace the bootloader).");
         var marker = SRecordImage.BoardName(SRecordImage.Marker(blocks, "DINGO_BOARD="));
         var imageVersion = SRecordImage.Marker(blocks, "DINGO_FW=");
         var m = AssetName().Match(name);
@@ -121,13 +118,21 @@ public static partial class FirmwareCatalog
         if (marker is null) problems.Add("The image carries no board marker (stock upstream dingoFW, or older firmware): only the file name says which board it is for.");
         else if (nameBoard is not null && !SRecordImage.BoardMatches(marker, nameBoard)) problems.Add($"The file name says {nameBoard}, but the image is built for {board}.");
         if (version is null) problems.Add("Neither the image nor the file name gives a version.");
+        var cb = board is not null && board.Contains("CANBoard", StringComparison.OrdinalIgnoreCase);
+        var relocated = address is uint ra && DfuImage.IsAppBase(ra, cb);
+        if ((isSrec || isHex) && address is uint a && !relocated)
+            problems.Add($"It starts at 0x{a:X8}, not 0x{DfuImage.AppBase:X8}{(cb ? $" or 0x{DfuImage.CanboardAppBase:X8}" : "")}: not built for the CAN bootloader, so it cannot go over CAN (and over USB it would replace the bootloader).");
+        if (cb && address == DfuImage.CanboardAppBase)
+            problems.Add("Built for the new 8 KB CANBoard bootloader (app at 0x08002000, firmware 5.7). Each CANBoard needs that bootloader programmed once over SWD first: with the old 16 KB one the update fails and the module stays in its bootloader.");
         var fits = board is null ? [] : devices.Where(d => SRecordImage.BoardMatches(board, d.Type)).ToList();
         var modules = fits.Select(d => new { guid = d.Guid, name = d.Name, current = CurrentVersion(d) }).ToList<object>();
         // upstream dingoFW (0.x) <-> the fork (5.x): another param layout, the module starts from its defaults
         var imageFamily = SRecordImage.FamilyOf(version);
         var switching = fits.Where(d => SRecordImage.FamilyOf(CurrentVersion(d)) is { } f && imageFamily is not null && f != imageFamily && CurrentVersion(d) != "v0.0.0").Select(d => d.Name).ToList();
         if (switching.Count > 0)
-            problems.Add($"This is {(imageFamily == "upstream" ? "upstream dingoFW" : "the dingoFW fork")} {version}; {string.Join(", ", switching)} run{(switching.Count == 1 ? "s" : "")} the {(imageFamily == "upstream" ? "fork" : "upstream firmware")}. Its settings do not carry over: after the update Read the module, then Apply and Store the project again.");
+            problems.Add(SRecordImage.FamilyOf(version) == "upstream" && !version!.TrimStart('v').StartsWith("0.")
+                ? $"This is {version}, the 5.7 line (new settings layout); {string.Join(", ", switching)} run{(switching.Count == 1 ? "s" : "")} fork 5.x. The module starts from its defaults: when it reports {version} the app converts this project to the 5.7 layout (see the module's migration report). Then Read, Apply to car and Store."
+                : $"This is {(imageFamily == "upstream" ? "upstream dingoFW" : "the dingoFW fork")} {version}; {string.Join(", ", switching)} run{(switching.Count == 1 ? "s" : "")} the {(imageFamily == "upstream" ? "fork" : "upstream firmware")}. Its settings do not carry over: after the update Read the module, then Apply and Store the project again.");
         return new { name, kind = isSrec ? "srec" : isHex ? "hex" : "bin", size = data.Length, board, marker, version, modules, problems,
             address = address is uint ad ? $"0x{ad:X8}" : null, relocated };
     }
