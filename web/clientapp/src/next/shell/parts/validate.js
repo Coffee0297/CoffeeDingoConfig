@@ -52,7 +52,7 @@ export function checkModule({ dev, funcs, vmap, def, claimed }) {
     const id = `output:${o.number}`, t = String(o.name ?? '').trim() || `Output ${o.number}`
     const r = ratings[o.number - 1]
     if (r != null && Number(o.currentLimit) > r) add('error', id, t, `trips above ${o.currentLimit} A, more than the ${r} A this pin is rated for`)
-    if (Number(o.inrushTime) > 0 && Number(o.inrushLimit) < Number(o.currentLimit)) add('warn', id, t, `inrush allowed (${o.inrushLimit} A) is below the trip current (${o.currentLimit} A), so it has no effect`)
+    if (Number(o.inrushTime) > 0 && Number(o.inrushLimit) < Number(o.currentLimit)) add('warn', id, t, `inrush allowed (${o.inrushLimit} A) is below the trip current (${o.currentLimit} A), so it trips at less during the first ${o.inrushTime} ms`)
   }
   return out
 }

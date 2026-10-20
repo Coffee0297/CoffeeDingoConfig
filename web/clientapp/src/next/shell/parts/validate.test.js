@@ -45,7 +45,7 @@ const has = (level, node, re) => r.some((i) => i.level === level && i.node === n
 assert.ok(has('error', 'output:1', /more than the 14 A/), 'limit above the pin rating is an error')
 assert.ok(!r.some((i) => i.node === 'output:2' && /rated/.test(i.why)), 'limit within the rating is fine')
 assert.ok(!r.some((i) => i.node === 'output:3'), 'a switched-off output is not checked')
-assert.ok(has('warn', 'output:2', /no effect/), 'inrush below the trip current')
+assert.ok(has('warn', 'output:2', /trips at less during the first 200 ms/), 'inrush below the trip current')
 assert.ok(has('warn', 'condition:2', /needs an input/), 'unbound input is a warning')
 assert.ok(has('warn', 'condition:2', /nothing on this module uses it/), 'unused enabled block')
 assert.ok(has('error', 'condition:3', /does not have \(#99\)/), 'missing source is an error')
