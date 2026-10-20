@@ -471,10 +471,13 @@
         <Field label="Length (bits)" type="number" min="1" max="64" disabled={node.kind === 'canoutput' && draft.kind >= 2} bind:value={() => draft.bitLength ?? 0, (v) => (draft.bitLength = toNum(v))} />
       </div>
       {#if !(node.kind === 'canoutput' && draft.kind > 0)}
+      <!-- a DBC scale both ways: a CAN input reads raw × factor + offset, a CAN output sends (value − offset) ÷ factor -->
+      {@const out = node.kind === 'canoutput'}
       <div class="two">
-        <Field label="× Factor" type="number" step="any" bind:value={() => draft.factor ?? 0, (v) => (draft.factor = toNum(v))} />
-        <Field label="+ Offset" type="number" step="any" bind:value={() => draft.offset ?? 0, (v) => (draft.offset = toNum(v))} />
+        <Field label={out ? '÷ Factor' : '× Factor'} type="number" step="any" bind:value={() => draft.factor ?? 0, (v) => (draft.factor = toNum(v))} />
+        <Field label={out ? '− Offset' : '+ Offset'} type="number" step="any" bind:value={() => draft.offset ?? 0, (v) => (draft.offset = toNum(v))} />
       </div>
+      {#if node.kind === 'canoutput'}<p class="hint">The frame holds (value − offset) ÷ factor, as a DBC scale: factor 0.1 sends 12.5 V as 125.</p>{/if}
       {/if}
       {#if node.kind === 'canoutput'}
         {@const peers = framePeers(model, node.id, { id: parseInt(String(idText).replace(/^0x/i, ''), 16), ide: draft.ide })}
