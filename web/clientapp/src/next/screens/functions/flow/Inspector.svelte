@@ -7,7 +7,7 @@
   import { untrack } from 'svelte'
   import { Button, Chip, Field, Select, Segmented, Checkbox, Banner } from '../../../ui/index.js'
   import { href } from '../../../router.svelte.js'
-  import { FAM_COLOR, FAM_NAME, OPS, OP_WORDS, JOIN, TIMER_MODES, EDGES, MATH_OPS, isRelational, hystBand, sourceOptions, canWire, hexId, parseId, framePeers, pidProblem } from './model.js'
+  import { FAM_COLOR, FAM_NAME, OPS, OP_WORDS, JOIN, timerMode, EDGES, MATH_OPS, isRelational, hystBand, sourceOptions, canWire, hexId, parseId, framePeers, pidProblem } from './model.js'
   import { sentenceFor } from './sentence.js'
   import { MSG_CHECKSUMS, NO_COUNTER, hasMsgChecksum, msgChecksumWarnings } from './canmsgcheck.js'
   import { curveProblem, curvePlot, curveAt, CURVE_MAX } from './curve.js'
@@ -291,7 +291,7 @@
     {:else if node.kind === 'timer'}
       <span class="sec">Settings</span>
       {@const up = isUpstream(dev)}
-      {@render seg('Kind', [{ value: '0', label: 'On-delay' }, { value: '1', label: 'Keep on after' }, { value: '2', label: up ? 'Pulse, restarts' : 'Pulse' }, ...(up ? [{ value: '3', label: 'One pulse' }] : [])], String(draft.mode ?? 0), (v) => (draft.mode = Number(v)), false)}
+      {@render seg('Kind', [0, 1, 2, ...(up ? [3] : [])].map((m) => ({ value: String(m), label: timerMode(m, up) })), String(draft.mode ?? 0), (v) => (draft.mode = Number(v)), false)}
       <div class="two">
         <Field label="Time" type="number" step="0.1" min="0" max={up ? 600 : 3600} unit="s" bind:value={() => (draft.preset ?? 0) / 1000, (v) => (draft.preset = Math.round(toNum(v) * 1000))} />
         <!-- upstream dingoFW: no input level choice; a Reset input instead (a port above) -->

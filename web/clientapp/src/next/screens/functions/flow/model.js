@@ -55,7 +55,9 @@ export const OPS = ['=', '≠', '>', '<', '≥', '≤', '&', '!&']
 export const OP_WORDS = ['equals', 'is not', 'is above', 'is below', 'is at least', 'is at most', 'has bits', 'has not bits']
 export const JOIN = ['AND', 'OR', 'NOR']
 // mode 3 (one pulse, edges ignored while it runs) and the reset input exist on upstream dingoFW only
-export const TIMER_MODES = ['On-delay', 'Off-delay', 'Pulse', 'One pulse']
+export const TIMER_MODES = ['On-delay', 'Keep on after', 'Pulse', 'One pulse']
+/** The inspector's names everywhere (canvas, sentence view); on upstream dingoFW mode 2 restarts on every new edge. */
+export const timerMode = (mode, up) => (up && +mode === 2 ? 'Pulse, restarts' : TIMER_MODES[mode ?? 0])
 export const EDGES = ['Rising', 'Falling', 'Both']
 /** The firmware (feat/can-output-trigger) gives one frame (same ID and ID type) one schedule: a trigger on any output
  *  packed in it makes the whole frame sent on triggers only. This module's other enabled outputs in `row`'s frame,
@@ -135,7 +137,7 @@ function subline(kind, n, row, dev) {
       return `Combine · ${a} then ${b}`
     }
     case 'condition': return `Compare ${OPS[row?.operator ?? 0]} ${row?.arg ?? 0}` + (isRelational(row?.operator) && row?.argOff !== row?.arg ? ` · off at ${row.argOff}` : '')
-    case 'timer': return `${TIMER_MODES[row?.mode ?? 0]} · ${secs(row?.preset)}`
+    case 'timer': return `${timerMode(row?.mode, isUpstream(dev))} · ${secs(row?.preset)}`
     case 'flasher': return `Flasher · ${row?.onTime ?? 0} / ${row?.offTime ?? 0} ms` + (row?.single ? ' · once' : '')
     case 'counter': return `Counter · ${row?.minCount ?? 0} to ${row?.maxCount ?? 0}` + (row?.wrapAround ? ' · wraps' : '')
     case 'table': return `Table · ${row?.xSize ?? 1}${(row?.ySize ?? 1) > 1 ? ' × ' + row.ySize : ''} points`

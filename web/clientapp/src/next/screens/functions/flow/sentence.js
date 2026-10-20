@@ -2,7 +2,7 @@
 // { t: 'text' } or a token { tok: 'src' | 'val' | 'self' | 'missing', label, node?, field? }.
 // Tokens are buttons in the view; a click opens that block in the inspector.
 import { msgChecksumWords } from './canmsgcheck.js'
-import { OP_WORDS, isRelational, secs, hexId, TIMER_MODES } from './model.js'
+import { OP_WORDS, isRelational, secs, hexId, timerMode } from './model.js'
 import { COUT_KINDS } from './canoutkind.js'
 
 const T = (t) => ({ t })
@@ -156,7 +156,7 @@ export function sentenceFor(model, n) {
 }
 
 /** Card heading for the sentence view: family · kind. */
-export function cardKind(n) {
-  const k = { virtualinput: 'COMBINE', condition: 'COMPARE', timer: 'TIMER · ' + (TIMER_MODES[n.row?.mode ?? 0] ?? '').toUpperCase(), flasher: 'FLASHER', counter: 'COUNTER', table: 'TABLE', canoutput: 'CAN OUTPUT', caninput: 'CAN INPUT', math: 'MATH', curve: 'CURVE', canmsg: 'CAN MESSAGE', pid: 'PID', comfortblink: 'COMFORT BLINK', latchgate: n.row?.type === 1 ? 'GATE' : 'LATCH', output: 'OUTPUT', digitaloutput: 'OUTPUT' }[n.kind] ?? n.kindLabel.toUpperCase()
+export function cardKind(n, up = false) {
+  const k = { virtualinput: 'COMBINE', condition: 'COMPARE', timer: 'TIMER · ' + (timerMode(n.row?.mode, up) ?? '').toUpperCase(), flasher: 'FLASHER', counter: 'COUNTER', table: 'TABLE', canoutput: 'CAN OUTPUT', caninput: 'CAN INPUT', math: 'MATH', curve: 'CURVE', canmsg: 'CAN MESSAGE', pid: 'PID', comfortblink: 'COMFORT BLINK', latchgate: n.row?.type === 1 ? 'GATE' : 'LATCH', output: 'OUTPUT', digitaloutput: 'OUTPUT' }[n.kind] ?? n.kindLabel.toUpperCase()
   return k
 }
