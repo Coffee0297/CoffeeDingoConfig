@@ -203,7 +203,7 @@
     </Banner>
   {:else}
     <Banner tone={isOn ? 'ok' : 'info'} title={isOn ? `${main?.name} runs the ignition` : 'Ignition is not set up'} data-testid="ignition-banner">
-      {isOn ? `State: ${STATE_WORD[main?.ignition?.state] ?? 'not heard yet'}${main?.ignition?.status ? ` · ${statusWords(main.ignition.status)}` : ''}. Outputs follow it through their roles.` : 'Pick the module the switch and button are wired to, then the signals. Outputs get their roles on the next page.'}
+      {isOn ? `State: ${main?.ignition?.live ? `${STATE_WORD[main.ignition.state] ?? main.ignition.state}${main.ignition.status ? ` · ${statusWords(main.ignition.status)}` : ''}` : `${main?.name} is not sending it`}. Outputs follow it through their roles.` : 'Pick the module the switch and button are wired to, then the signals. Outputs get their roles on the next page.'}
       {#if capable.length < mods.length} {mods.length - capable.length} module{mods.length - capable.length === 1 ? '' : 's'} without firmware 5.6 cannot follow it.{/if}
     </Banner>
   {/if}
@@ -211,7 +211,7 @@
   <Card title="Main module" subtitle="reads the switch and button, tells the others">
     <div class="two">
       <Select label="Main module" items={capable.map((d) => ({ value: d.guid, label: d.name }))} value={mainGuid} onchange={pick} disabled={!ready || busy} data-testid="ign-main" />
-      <Checkbox label="The other modules follow it" hint={followers.length ? followers.map((d) => d.name + (d.ignition?.status ? ` (${statusWords(d.ignition.status)})` : '')).join(', ') : 'no other module with firmware 5.6'} bind:checked={follow} disabled={!ready || busy || !followers.length || f?.role === 2} data-testid="ign-follow" />
+      <Checkbox label="The other modules follow it" hint={followers.length ? followers.map((d) => d.name + (d.ignition?.live && d.ignition.status ? ` (${statusWords(d.ignition.status)})` : d.ignition?.enabled ? ' (not heard)' : '')).join(', ') : 'no other module with firmware 5.6'} bind:checked={follow} disabled={!ready || busy || !followers.length || f?.role === 2} data-testid="ign-follow" />
     </div>
     {#if syncFw}
       <Select label="This module" items={[{ value: '0', label: 'Main: runs the ignition and tells the others' }, { value: '2', label: 'Standalone: runs the ignition, tells nobody' }]}
