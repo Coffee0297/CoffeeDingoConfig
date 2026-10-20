@@ -164,7 +164,8 @@
       if (stop) break
       progress = { ...progress, name: d.name }
       session[d.guid] = { ...(stOf(d) ?? {}), name: d.name, state: 'working', step: act, error: '', rejected: [] }
-      const r = await postAction(d.guid, act)
+      // a write also sends the project's Lua and waits for its read-back (server: 30 s write + 90 s Lua): not 45 s
+      const r = await postAction(d.guid, act, act === 'write' ? 130_000 : undefined)
       const prev = session[d.guid]
       if (r.ok) {
         if (act === 'write') session[d.guid] = { ...prev, state: 'written', written: true }
