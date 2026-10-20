@@ -25,7 +25,7 @@ public class Fw57MigrationTests
 {
     internal static byte[] Ver(int maj, int min, int build) => [31, 0, 0, 0, (byte)maj, (byte)min, (byte)(build >> 8), (byte)build];
 
-    private static PdmDevice Pdm(int maj, int min, int build, int baseId = 0x680)
+    internal static PdmDevice Pdm(int maj, int min, int build, int baseId = 0x680)
     {
         var d = new PdmDevice("PDM", baseId);
         d.SetLogger(NullLogger<PdmDevice>.Instance);
@@ -34,7 +34,7 @@ public class Fw57MigrationTests
         return d;
     }
 
-    private static CanboardDevice Cb(int maj, int min, int build, int baseId = 0x660)
+    internal static CanboardDevice Cb(int maj, int min, int build, int baseId = 0x660)
     {
         var d = new CanboardDevice("CB", baseId);
         d.SetLogger(NullLogger<CanboardDevice>.Instance);
@@ -43,7 +43,7 @@ public class Fw57MigrationTests
         return d;
     }
 
-    private static int Idx(IDeviceConfigurable d, string kind, int n, string prop) =>
+    internal static int Idx(IDeviceConfigurable d, string kind, int n, string prop) =>
         d.VarMap.Single(v => v.OwnerKind == kind && v.OwnerNumber == n && v.PropertyName == prop).VariableIndex;
     private static DeviceVariable At(IDeviceConfigurable d, int i) => d.VarMap.Single(v => v.VariableIndex == i);
 

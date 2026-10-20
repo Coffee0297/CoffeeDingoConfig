@@ -9,7 +9,7 @@ using domain.Models;
 namespace domain.Common;
 
 /// <summary>One line of a migration report. Level "info" (changed as planned) or "warn" (check it / could not map).</summary>
-public record MigrationNote(string Level, string Text);
+public record MigrationNote(string Level, string Text, string? Fix = null);
 
 /// <summary>
 /// Carries a project made for fork 5.x modules over to the 5.7 line (firmware integration/all-features: upstream
@@ -32,10 +32,10 @@ public static class Fw57Migration
     private record Snapshot(IDeviceConfigurable Dev, List<DeviceVariable> Map, List<DeviceParameter> Params,
         List<(int Off, string Name, int Start, int Len)> Sigs, int IgnOff);
 
-    private static List<(int Off, string Name, int Start, int Len)> Sigs(IDeviceConfigurable d) =>
+    internal static List<(int Off, string Name, int Start, int Len)> Sigs(IDeviceConfigurable d) =>
         [.. d.GetStatusSigs().Select(s => (s.MessageId - d.BaseId, s.Signal.Name, s.Signal.StartBit, s.Signal.Length))];
 
-    private static int? IgnOffset(IDeviceConfigurable d) => d switch
+    internal static int? IgnOffset(IDeviceConfigurable d) => d switch
     {
         PdmDevice p => p.IgnitionStateOffset,
         CanboardDevice c => c.IgnitionStateOffset,
@@ -101,7 +101,7 @@ public static class Fw57Migration
     }
 
     // a CAN input's rule on value v (the fork pushed the timeout value through it)
-    private static bool RuleAt(CanInput c, double v) => c.Operator switch
+    internal static bool RuleAt(CanInput c, double v) => c.Operator switch
     {
         Operator.Equal => v == c.Operand,
         Operator.NotEqual => v != c.Operand,
@@ -114,10 +114,10 @@ public static class Fw57Migration
         _ => false,
     };
 
-    private static List<CanInput> CanInputs(IDevice d) => d switch { PdmDevice x => x.CanInputs, CanboardDevice x => x.CanInputs, _ => [] };
+    internal static List<CanInput> CanInputs(IDevice d) => d switch { PdmDevice x => x.CanInputs, CanboardDevice x => x.CanInputs, _ => [] };
 
-    private static (string, int, string) Key(DeviceVariable v) => (v.OwnerKind, v.OwnerNumber, v.PropertyName);
-    private static string Label(DeviceVariable v) => $"{v.GetName?.Invoke() ?? v.OwnerKind} {v.PropertyName}".Trim();
+    internal static (string, int, string) Key(DeviceVariable v) => (v.OwnerKind, v.OwnerNumber, v.PropertyName);
+    internal static string Label(DeviceVariable v) => $"{v.GetName?.Invoke() ?? v.OwnerKind} {v.PropertyName}".Trim();
 
     /// <summary>Each binding param's var index from <paramref name="before"/> to the same signal in the device's current
     /// var map. A signal the new layout lacks becomes 0 (none) and is reported.</summary>
@@ -182,20 +182,27 @@ public static class Fw57Migration
             notes.Add(new("info", $"{d.Name} {t.Name}: pulse mode is \"pulse, restarts on a new edge\" on 5.7."));
         if (t.Edge != InputEdge.Falling) return;
         // fork Falling = runs while the input is off. 5.7 runs on the input being on: put NOT in front.
-        var used = d.Params.Where(IsBinding).Select(p => (int)p.GetValue()).ToHashSet();
-        var free = vis.FirstOrDefault(v => !v.Enabled && v.Var0 == 0 && v.Var1 == 0 && v.Var2 == 0
-            && d.VarMap.FirstOrDefault(m => m.OwnerKind == "virtualinput" && m.OwnerNumber == v.Number) is { } mv && !used.Contains(mv.VariableIndex));
-        var src = d.VarMap.FirstOrDefault(m => m.VariableIndex == t.Input);
-        if (free is null)
+        if (NotVi(d, vis, t.Input) is not { } free)
         {
             notes.Add(new("warn", $"{d.Name} {t.Name}: ran while its input was OFF; 5.7 timers run on the input being ON and no virtual input is free for a NOT. Add a NOT virtual input in front of it."));
             return;
         }
-        free.Enabled = true; free.Name = $"NOT {src?.GetName?.Invoke() ?? "input"}";
-        free.Var0 = t.Input; free.Not0 = true; free.Var1 = 0; free.Not1 = false; free.Cond0 = Conditional.Or; free.Var2 = 0; free.Mode = InputMode.Momentary;
         t.Input = d.VarMap.First(m => m.OwnerKind == "virtualinput" && m.OwnerNumber == free.Number && m.PropertyName == "State").VariableIndex;
         t.Edge = InputEdge.Rising;
         notes.Add(new("info", $"{d.Name} {t.Name}: ran while its input was OFF; now fed by virtual input {free.Number} \"{free.Name}\" (NOT of the input)."));
+    }
+
+    /// <summary>Turn a free virtual input (off, empty, nothing reads it) into NOT <paramref name="input"/>; null when none is free.</summary>
+    internal static VirtualInput? NotVi(IDeviceConfigurable d, List<VirtualInput> vis, int input)
+    {
+        var used = d.Params.Where(IsBinding).Select(p => (int)p.GetValue()).ToHashSet();
+        var free = vis.FirstOrDefault(v => !v.Enabled && v.Var0 == 0 && v.Var1 == 0 && v.Var2 == 0
+            && d.VarMap.FirstOrDefault(m => m.OwnerKind == "virtualinput" && m.OwnerNumber == v.Number) is { } mv && !used.Contains(mv.VariableIndex));
+        if (free is null) return null;
+        var src = d.VarMap.FirstOrDefault(m => m.VariableIndex == input);
+        free.Enabled = true; free.Name = $"NOT {src?.GetName?.Invoke() ?? "input"}";
+        free.Var0 = input; free.Not0 = true; free.Var1 = 0; free.Not1 = false; free.Cond0 = Conditional.Or; free.Var2 = 0; free.Mode = InputMode.Momentary;
+        return free;
     }
 
     // other modules' CAN inputs that decode a target's status frames, and ignition followers of a target main
@@ -256,8 +263,11 @@ public static class Fw57Migration
             var why = lo is PdmDevice p && p.Family == FwFamily.Upstream
                 ? $"{lo.Name} sends up to 0x{end:X3} on 5.7 (wire load, tables, PID and ignition-main frames sit at base+32..+36)"
                 : $"{lo.Name} sends up to 0x{end:X3}";
+            // the ignition main's frame is the one that sticks out: a CANBoard can take the role (its frame stays in its range)
+            var cb = lo is not CanboardDevice && lo is IDeviceConfigurable lc && IgnitionMain.Current(all) == lc && IgnOffset(lc) == Span(lo)
+                ? IgnitionMain.Suggest(all, lc) : null;
             yield return new("warn", $"CAN ids overlap: {why}, into {hi.Name}'s range from 0x{hi.BaseId:X3}. Fix: move {hi.Name} to 0x{free:X3} or higher (space PDMs 0x30 apart), "
-                + "or make a CANBoard the ignition main, or turn off the feature that sends the highest frame.");
+                + $"or make {cb?.Name ?? "a CANBoard"} the ignition main, or turn off the feature that sends the highest frame.", cb is null ? null : $"ignition-main:{cb.Guid}");
         }
     }
 

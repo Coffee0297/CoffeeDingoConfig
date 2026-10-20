@@ -4,13 +4,15 @@
   // The main module reads the switch / button and runs the state machine; the others follow its state frame.
   // Backed by GET /devices/{id}/functions (ignition), /inputs?type=bool and POST /function/ignition/1.
   import { Page, PageHeader, Banner, Button, Card, FwBadge, Select, Checkbox, Stepper, Chip } from '../../ui/index.js'
-  import { href } from '../../router.svelte.js'
+  import { href, route } from '../../router.svelte.js'
   import { live, api, toast, project, isCanboard } from '../../lib/live.svelte.js'
   import { olderThan, parseVersion, lacks, isUpstream } from '../hardware/parts/util.js'
   import { remoteItems } from '../../lib/remote.js'
   import SignalRule from './parts/SignalRule.svelte'
   import { decodeRule, compileRule, ruleSet } from './parts/signalRule.js'
   import { ignitionBlocksHref, ignitionToLua } from './parts/ignitionSelf.js'
+  import { ignitionMain } from './parts/ignition.js'
+  import MakeMain from './parts/MakeMain.svelte'
 
   const MODES = [
     { value: 0, name: 'Ignition switch + start button', what: 'A switch (or key with only ON) powers the ignition. The button only cranks, and only while the ignition is on.' },
@@ -201,6 +203,8 @@
     </ul>
     <Checkbox checked label="No cranking with the engine running" hint="always on in the firmware: protects the starter if the button is pressed by mistake" disabled />
   </Card>
+
+  <MakeMain devices={live.devices} main={ignitionMain(live.devices)} initial={route.query.main ?? ''} onchange={(g) => Promise.all(capable.map(load)).then(() => g && pick(g))} />
 
   {#if err}<p class="err" role="alert">■ {err}</p>{/if}
   <div class="foot">

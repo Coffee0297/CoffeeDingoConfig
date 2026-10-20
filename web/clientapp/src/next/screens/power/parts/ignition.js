@@ -16,3 +16,11 @@ export function ignitionTile(devices) {
   if (m) return m.ignition.live ? { value: IGN_WORD[m.ignition.state] ?? m.ignition.state, sub: `from ${m.name}` } : { value: '—', sub: `${m.name} is not sending its state` }
   return devices.some(has56) ? { value: 'Not set up', sub: 'pick the switch and button' } : null
 }
+
+/** The CANBoard a migration-report fix names ("ignition-main:<guid>"), or null. */
+export const fixMain = (fix) => /^ignition-main:(.+)$/.exec(fix ?? '')?.[1] ?? null
+
+/** CANBoards that can take the main role from `main`: they have the ignition block (or are a converted 5.7 record not
+ *  read yet: the backend checks) and are not it. */
+export const mainCandidates = (devices, main) =>
+  devices.filter((d) => /canboard/i.test(d.type ?? '') && (has56(d) || (isUpstream(d) && !d.paramRuns)) && d.guid !== main?.guid)

@@ -496,6 +496,8 @@ public static class LiveApi
         var (connected, active, _) = m.GetStatus();
         return connected && string.Equals(active, "Sim", StringComparison.OrdinalIgnoreCase);
     }
+    static readonly object IgnUndoLock = new();
+    static domain.Common.ValuesSnapshot? _ignUndo;   // the last "make … the ignition main", for its Undo
     // G20: module count per project file, keyed by path + write time so the 5 s poll reads each file once.
     static readonly System.Collections.Concurrent.ConcurrentDictionary<string, (DateTime At, int? Count)> _fileCounts = new();
     static int? ModuleCount(FileInfo f) => _fileCounts.AddOrUpdate(f.FullName,
@@ -1908,7 +1910,34 @@ public static class LiveApi
             return Results.Ok(targets.Select(d => new { guid = d.Guid, name = d.Name, migration = d.Migration }));
         });
 
-        api.MapPost("/project/new", (ConfigFileManager cfg, DeviceManager dm, CrossModuleStore xmod) =>
+        // Make a CANBoard the ignition main (domain.Common.IgnitionMain): ?preview=true reports what would change and
+        // changes nothing; otherwise it is done and /ignition/main/undo puts every setting back (one step).
+        api.MapPost("/ignition/main/undo", () =>
+        {
+            lock (IgnUndoLock)
+            {
+                if (_ignUndo is null) return Results.NotFound(new { error = "Nothing to undo." });
+                _ignUndo.Restore(); _ignUndo = null;
+                return Results.Ok(new { ok = true });
+            }
+        });
+        api.MapPost("/ignition/main/{guid:guid}", (Guid guid, bool? preview, DeviceManager dm) =>
+        {
+            lock (IgnUndoLock)
+            {
+                var all = dm.GetAllDevices().ToList();
+                if (all.FirstOrDefault(d => d.Guid == guid) is not domain.Devices.Canboard.CanboardDevice cb)
+                    return Results.NotFound(new { error = "No such CANBoard in the project." });
+                var snap = new domain.Common.ValuesSnapshot(all);
+                var r = domain.Common.IgnitionMain.MoveTo(all, cb);
+                var changes = snap.Changes();
+                if (preview == true || !r.Ok) snap.Restore();
+                else _ignUndo = snap;
+                return Results.Ok(new { ok = r.Ok, error = r.Error, notes = r.Notes, changes, done = r.Ok && preview != true });
+            }
+        });
+
+        api.MapPost("/project/new",(ConfigFileManager cfg, DeviceManager dm, CrossModuleStore xmod) =>
         {
             dm.ClearDevices(); xmod.Clear(); cfg.NewFile(); cfg.ClientState = null; TemplateApi.LoadInstances(null); GroupApi.Load(null); MarkClean(cfg, dm); return Results.Ok(new { ok = true });
         });
