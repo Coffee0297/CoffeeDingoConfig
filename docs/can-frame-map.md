@@ -76,6 +76,10 @@ lacks (its param list) takes none. integration/all-features (dingopdm_v7 / -Max)
 tables 3-4 +34, PID +35, ignition +36 (pt-dpdm4 one higher), so a follower's main state id there is the main's
 base + 36. The app derives the offsets the same way (PdmDevice.UpstreamFrames, canids.js spanAfter).
 
+Firmware 5.7 (the fork line rebuilt on integration/all-features) uses this upstream layout (the app treats a Version
+reply >= 5.7 like 0.x), with currents at 0.1 A/bit as on the fork. Its CANBoard has the ignition block: a main sends
+its state as Msg 10 = `base+12` (followers copy that id), and its app starts at 0x08002000 behind the 8 KB bootloader.
+
 ---
 
 ## dingoPDM (and -Max / PT-DPDM)
