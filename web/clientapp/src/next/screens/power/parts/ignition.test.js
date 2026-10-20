@@ -1,6 +1,6 @@
 // node src/next/screens/power/parts/ignition.test.js
 import assert from 'node:assert/strict'
-import { fixMain, mainCandidates, ignitionMain, hasSync, resolveSync, statusWords } from './ignition.js'
+import { fixMain, mainCandidates, ignitionMain, hasSync, resolveSync, statusWords, hasStatusId, resolveStatus } from './ignition.js'
 
 assert.equal(fixMain('ignition-main:abc-1'), 'abc-1')
 assert.equal(fixMain(null), null)
@@ -31,4 +31,17 @@ assert.equal(resolveSync(cb, 1, 14).error, '')
 assert.equal(ignitionMain([{ ...pdm, ignition: { enabled: true, role: 'standalone' } }]).guid, 'p')
 assert.equal(statusWords({ dash: 2, sleep: 2, sleepInS: 90, link: 0 }), 'dash grace (dash still on) · sleep in 90 s')
 assert.equal(statusWords({ dash: 1, sleep: 3, sleepInS: 0, link: 2 }), 'dash on · following the main · main lost')
+// 5.7 status frame id (sub 23)
+assert.ok(!hasStatusId(m)); assert.ok(hasStatusId({ ...m, paramRuns: [[0x1E00, 1, 23]] })); assert.ok(!hasStatusId({ ...m, family: 'fork' }))
+assert.deepEqual(resolveStatus(m, 0x7A0, [m, f1], 0x6F1), { id: 0x7A0, error: '', warn: '' })
+assert.equal(resolveStatus(m, 0x6A0 + 36, [m], 0x6F1).error, '')               // its own slot
+assert.match(resolveStatus(m, 0x6A0 + 5, [m], 0x6F1).error, /own frames/)      // its own Msg 3
+assert.match(resolveStatus(m, 0x6F1, [m], 0x6F1).error, /sync id/)
+assert.equal(resolveStatus(m, 0x6F1, [m], null).error, '')                     // standalone: no sync frame
+assert.match(resolveStatus(m, 0, [m]).error, /0x001 to 0x7FF/)
+assert.match(resolveStatus(m, 0x800, [m]).error, /0x001 to 0x7FF/)
+assert.match(resolveStatus(m, 0x6D0, [m, f1]).warn, /PDM-03/)                  // inside PDM-03's range
+assert.match(resolveStatus(m, 0x7A0, [m, { ...f1, ignition: { statusId: 0x7A0 } }]).warn, /PDM-03/)   // PDM-03's status id
+assert.match(resolveStatus(cb, 0x660 + 13, [cb]).error, /own frames/)          // CANBoard bootloader id
+assert.equal(resolveStatus(cb, 0x660 + 12, [cb]).error, '')
 console.log('ignition ok')

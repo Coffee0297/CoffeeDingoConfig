@@ -1410,7 +1410,7 @@ public class PdmDevice : IDeviceConfigurable
     public bool InIdRange(int id)
     {
         // + the ignition state frame (firmware 5.6), the first id after the module's own range
-        return (id >= BaseId) && (id <= MaxCyclicId + BaseId || id == BaseId + IgnitionStateOffset);
+        return (id >= BaseId && id <= MaxCyclicId + BaseId) || id == Ignition.FrameId(BaseId, IgnitionStateOffset);
     }
     
     public void Read(int id, byte[] data, 
@@ -1420,7 +1420,7 @@ public class PdmDevice : IDeviceConfigurable
         var offset = id - BaseId;
 
         // Ignition frame: fork / 0.x state ['I', state, flags] from a main module, 5.7 status from any role
-        if (offset == IgnitionStateOffset && Ignition.ReadFrame(data)) return;
+        if (id == Ignition.FrameId(BaseId, IgnitionStateOffset) && Ignition.ReadFrame(data)) return;
 
         // Use dictionary lookup for status messages
         if (StatusSigs.TryGetValue(offset, out var signals))

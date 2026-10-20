@@ -23,7 +23,7 @@ public class IntegrationLayoutTests
         .. Block(LookupTable.UpstreamBaseIndex, 4, 3),
         .. Block(MathFunction.BaseIndex, 8, 3),
         .. Block(CanMessage.BaseIndex, 4, 3),
-        .. Block(Ignition.BaseIndex, 1, 23),
+        .. Block(Ignition.BaseIndex, 1, 24),
         .. Enumerable.Range(0x30, outputs).Select(s => (Ignition.BaseIndex, s)),   // output roles
         .. Block(ComfortBlink.BaseIndex, 1, 3),
         .. Block(PidFunction.BaseIndex, 4, 3),
@@ -63,7 +63,7 @@ public class IntegrationLayoutTests
         Assert.Equal(("lua", 1, "Value"), At(d, 310));
         Assert.Equal(("lua", 32, "Value"), At(d, 341));
         Assert.Equal(("ignition", 1, "Dash Shutdown"), At(d, 342));
-        Assert.Equal([.. Enumerable.Range(0, 23), .. Enumerable.Range(0x30, 8)], d.Params.Where(p => p.Index == Ignition.BaseIndex && domain.Common.FwFamily.Has(d, p)).Select(p => p.SubIndex).Order());
+        Assert.Equal([.. Enumerable.Range(0, 24), .. Enumerable.Range(0x30, 8)], d.Params.Where(p => p.Index == Ignition.BaseIndex && domain.Common.FwFamily.Has(d, p)).Select(p => p.SubIndex).Order());
     }
 
     [Fact]

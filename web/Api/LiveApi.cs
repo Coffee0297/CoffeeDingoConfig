@@ -75,7 +75,8 @@ public record FactoryResetReq(string? Confirm);
 public record DigitalOutDto(int Number, string Name, bool Enabled, bool On, int Input);
 public record WakeDto(string Reason, int Source, int Count);
 // Role main / follower / standalone. Status: the 5.7 status frame (any role), null before one is heard or on older firmware.
-public record IgnitionDto(bool Enabled, string Role, string State, bool Dash, int MainStateId, int StateId, bool Live, domain.Devices.Functions.IgnitionStatus? Status = null);
+// StateId: the frame's own slot; StatusId: the custom id it goes out on instead (0x1E00 sub 23), null = the slot.
+public record IgnitionDto(bool Enabled, string Role, string State, bool Dash, int MainStateId, int StateId, bool Live, domain.Devices.Functions.IgnitionStatus? Status = null, int? StatusId = null);
 public record AdaptersDto(string[] Adapters, string[] Ports, bool Connected, string? ActiveAdapter, string? ActivePort, int? GatewayBaseId, bool ProgrammingAllowed,
     // G10: link state and the remembered connection
     bool Reconnecting = false, bool AutoConnect = false, bool AutoReconnect = true, object? Last = null);
@@ -361,7 +362,7 @@ public static class DingoMap
     static IgnitionDto? Ign(domain.Devices.Functions.Ignition? g, int stateId) => g is null ? null
         : new IgnitionDto(g.Enabled, g.Role.ToString().ToLowerInvariant(),
             g.State.ToString().ToLowerInvariant(), g.Dash, g.MainStateId, stateId,
-            (DateTime.UtcNow - g.LastStateFrame).TotalMilliseconds < 1000, g.Status);
+            (DateTime.UtcNow - g.LastStateFrame).TotalMilliseconds < 1000, g.Status, g.StatusId != 0 ? g.StatusId : null);
 
     public static DeviceDto ToDto(IDevice d, DeviceUiState? ui = null)
     {
@@ -1548,6 +1549,9 @@ public static class LiveApi
                 foreach (var (mid, sig) in d.GetStatusSigs())
                     if (d is not (PdmDevice or CanboardDevice) || mid - d.BaseId <= domain.Common.Fw57Migration.Span(d))   // a 5.7 frame whose feature is off is not sent
                     Claim(mid, sig.IsExtended, $"{d.Name}: {(isDbc ? "ECU " + (string.IsNullOrEmpty(sig.MessageName) ? "msg" : sig.MessageName) : "broadcast")}");
+                // a 5.7 ignition status frame moved off its slot (0x1E00 sub 23) is sent outside the module's range
+                if (d is IDeviceConfigurable ic && domain.Common.IgnitionMain.Ign(ic) is { StatusId: > 0 } sg && domain.Common.Fw57Migration.IgnFrame(ic))
+                    Claim(sg.StatusId, false, $"{d.Name}: ignition status");
                 var couts = d switch { PdmDevice p => p.CanOutputs, CanboardDevice c => c.CanOutputs, _ => (IEnumerable<domain.Devices.Functions.CanOutput>?)null };
                 if (couts != null)
                     foreach (var co in couts.Where(x => x.Enabled))

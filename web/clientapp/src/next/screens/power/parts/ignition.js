@@ -29,6 +29,24 @@ export function resolveSync(main, mode, value, devices = []) {
   return { id, error: '', warn: other ? `${hx(id)} is one of ${other.name}'s frames (${hx(other.baseId)}..${hx(other.baseId + spanAfter(other.type, other))}).` : '' }
 }
 
+/** 5.7: the status frame can go out on its own id instead of its slot (0x1E00 sub 23; 0 = the slot). */
+export const hasStatusId = (d) => isUpstream(d) && has(d, 0x1E00, 23)
+/** The status frame's slot: PDM base + 36 (PT-DPDM + 37), CANBoard + 12. */
+export const statusSlot = (d) => d.ignition?.stateId ?? d.baseId + (/canboard/i.test(d.type ?? '') ? 12 : 36)
+
+/** A fixed status frame id for module `d`. Mirrors the firmware: it sends nothing on another of its own frames or on
+ *  the sync id (`syncId`, null for a standalone). warn: another module's frame or status id (the firmware cannot know). */
+export function resolveStatus(d, value, devices = [], syncId = null) {
+  const id = Number(value)
+  if (!Number.isInteger(id) || id < 1 || id > 0x7FF) return { id: null, error: `${d.name}: the status frame id must be 0x001 to 0x7FF.`, warn: '' }
+  const slot = statusSlot(d), end = /canboard/i.test(d.type ?? '') ? d.baseId + 13 : slot
+  if (id !== slot && id >= d.baseId && id <= end)
+    return { id, error: `${hx(id)} is one of ${d.name}'s own frames (${hx(d.baseId)}..${hx(end)}); it would send no status.`, warn: '' }
+  if (id === syncId) return { id, error: `${hx(id)} is the ignition sync id; ${d.name} would send no status.`, warn: '' }
+  const other = devices.find((o) => o.guid !== d.guid && isModule(o.type) && ((id >= o.baseId && id <= o.baseId + spanAfter(o.type, o)) || o.ignition?.statusId === id))
+  return { id, error: '', warn: other ? `${hx(id)} is one of ${other.name}'s frames.` : '' }
+}
+
 /** The 5.7 ignition status (DTO ignition.status) in words: dash, sleep, link. */
 const DASH = ['off', 'on', 'grace (dash still on)', 'halting (dash shutting down)', 'restart (dash unpowered 2 s)']
 const SLEEP = ['', 'awake', 'counting down', 'following the main', 'waiting for the dash', 'held awake (USB or config)', 'going quiet', 'asleep']

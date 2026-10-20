@@ -55,6 +55,8 @@ public class Ignition : IDeviceFunction
     [JsonPropertyName("doorInput")] public int DoorInput { get; set; }
     [JsonPropertyName("doorOnMs")] public int DoorOnMs { get => field; set => field = Math.Clamp(value, 1000, 3600000); } = 60000;
     [JsonPropertyName("sleepDelayMs")] public int SleepDelayMs { get => field; set => field = Math.Clamp(value, 0, 3600000); }
+    // sub 23: the status frame's std id, 0 = its own slot (PDM base + 36, CANBoard + 12)
+    [JsonPropertyName("statusId")] public int StatusId { get => field; set => field = Math.Clamp(value, 0, 2047); }
     // PDMs: one role per output; a fixed 8 so a short array from a client never shifts a sub
     [JsonPropertyName("outputRoles")] public IgnitionOutputRole[] OutputRoles { get => field; set => Array.Copy(value, field, Math.Min(value.Length, field.Length)); } = new IgnitionOutputRole[8];
 
@@ -77,6 +79,9 @@ public class Ignition : IDeviceFunction
         LastStateFrame = DateTime.UtcNow;
         return true;
     }
+
+    /// <summary>The id this module's ignition frame goes out on: the custom status id, else base + its slot (null: none).</summary>
+    public int? FrameId(int baseId, int? slot) => slot is { } o ? (StatusId != 0 ? StatusId : baseId + o) : null;
 
     [JsonIgnore] public List<DeviceParameter> Params { get; }
 
@@ -129,6 +134,7 @@ public class Ignition : IDeviceFunction
             P(20, "doorInput", () => DoorInput, x => DoorInput = (int)x, typeof(int), 0),
             P(21, "doorOnMs", () => DoorOnMs, x => DoorOnMs = (int)x, typeof(int), 60000),
             P(22, "sleepDelayMs", () => SleepDelayMs, x => SleepDelayMs = (int)x, typeof(int), 0),
+            P(23, "statusId", () => StatusId, x => StatusId = (int)x, typeof(int), 0),
             .. Enumerable.Range(0, Math.Min(outputs, OutputRoles.Length)).Select(i =>
                 P(0x30 + i, $"outputRole{i + 1}", () => OutputRoles[i], x => OutputRoles[i] = (IgnitionOutputRole)x, typeof(IgnitionOutputRole), IgnitionOutputRole.None)),
         ];

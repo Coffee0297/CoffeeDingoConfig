@@ -123,7 +123,7 @@ public class Fw57MigrationTests
     internal static List<(int, int)> Cb57Keys() =>
     [
         .. Block(0x0000, 1, 3), .. Block(TimerFunction.UpstreamBaseIndex, 4, 5), .. Block(AnalogInput.BaseIndex, 5, 21),
-        .. Block(MathFunction.BaseIndex, 4, 3), .. Block(CanMessage.BaseIndex, 2, 3), .. Block(Ignition.BaseIndex, 1, 23),
+        .. Block(MathFunction.BaseIndex, 4, 3), .. Block(CanMessage.BaseIndex, 2, 3), .. Block(Ignition.BaseIndex, 1, 24),
         .. Block(ComfortBlink.BaseIndex, 1, 3), .. Block(DigitalInput.BaseIndex, 8, 8), .. Block(PidFunction.BaseIndex, 2, 21),
     ];
 
@@ -150,7 +150,7 @@ public class Fw57MigrationTests
         Assert.Equal(("pid", 2, "Output"), (At(d, 117).OwnerKind, At(d, 117).OwnerNumber, At(d, 117).PropertyName));
         Assert.Equal(("pid", 2, "D"), (At(d, 120).OwnerKind, At(d, 120).OwnerNumber, At(d, 120).PropertyName));
         Assert.Equal(("ignition", "Dash Shutdown"), (At(d, 121).OwnerKind, At(d, 121).PropertyName));
-        Assert.Equal(Enumerable.Range(0, 23).ToList(), d.Params.Where(p => p.Index == Ignition.BaseIndex).Select(p => p.SubIndex).Order().ToList());   // no output roles
+        Assert.Equal(Enumerable.Range(0, 24).ToList(), d.Params.Where(p => p.Index == Ignition.BaseIndex).Select(p => p.SubIndex).Order().ToList());   // no output roles
         Assert.Equal(Enumerable.Range(0, 21).ToList(), d.Params.Where(p => p.Index == PidFunction.BaseIndex + 1).Select(p => p.SubIndex).Order().ToList());
     }
 
@@ -508,7 +508,7 @@ internal static class IntegrationLayoutTestsAccess
         .. Block(LookupTable.UpstreamBaseIndex, 4, 3),
         .. Block(MathFunction.BaseIndex, 8, 3),
         .. Block(CanMessage.BaseIndex, 4, 3),
-        .. Block(Ignition.BaseIndex, 1, 23),
+        .. Block(Ignition.BaseIndex, 1, 24),
         .. Enumerable.Range(0x30, outputs).Select(s => (Ignition.BaseIndex, s)),
         .. Block(ComfortBlink.BaseIndex, 1, 3),
         .. Block(PidFunction.BaseIndex, 4, 3),

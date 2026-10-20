@@ -36,7 +36,8 @@ const appendedFrames = (dev) => dev?.family !== 'upstream' || !dev.paramRuns ? 0
 // number of 0x1B00 table blocks in the upstream module's param list (0 for the fork / unread)
 const upstreamTables = (dev) => dev?.family !== 'upstream' ? 0
   : Math.min(4, new Set((dev.paramRuns ?? []).flatMap((r) => Array.from({ length: r[1] }, (_, k) => r[0] + k)).filter((i) => i >= 0x1b00 && i < 0x1c00)).size)
-const ignSpan = (d) => (d?.ignition?.enabled && d.ignition.role === 'main' && d.ignition.stateId > d.baseId ? d.ignition.stateId - d.baseId : 0)
+// a status frame moved to its own id (ignition.statusId, 5.7 sub 23) leaves the slot free
+const ignSpan = (d) => (d?.ignition?.enabled && d.ignition.role === 'main' && !d.ignition.statusId && d.ignition.stateId > d.baseId ? d.ignition.stateId - d.baseId : 0)
 export const isModule = (type) => /pdm|canboard/i.test(type || '')
 
 export function nextPow2(n) {
@@ -57,6 +58,7 @@ export function usedIds(devices, { reserve = true, exclude = null } = {}) {
   for (const d of devices || []) {
     if (!isModule(d.type) || d.guid === exclude) continue
     addFootprint(used, d.type, d.baseId, d)
+    if (d.ignition?.enabled && d.ignition.statusId) used.add(d.ignition.statusId)
   }
   if (reserve) for (const id of OBD_RESERVED) used.add(id)
   return used

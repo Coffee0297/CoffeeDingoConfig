@@ -250,16 +250,16 @@ public static class Fw57Migration
             p.Tables.Take(2).Any(t => t.Enabled) ? p.UpstreamFrames().Tables12 ?? 0 : 0,
             p.Tables.Skip(2).Take(2).Any(t => t.Enabled) ? p.UpstreamFrames().Tables34 ?? 0 : 0,
             p.Pids.Any(x => x.Enabled) ? p.UpstreamFrames().Pid ?? 0 : 0,
-            IgnFrame(p) ? p.IgnitionStateOffset ?? 0 : 0,
+            IgnFrame(p) && p.Ignition.StatusId == 0 ? p.IgnitionStateOffset ?? 0 : 0,
         }.Max(),
         PdmDevice p => p.Ignition is { Enabled: true, Role: IgnitionRole.Main } ? 30 : 29,
-        CanboardDevice c => Math.Max(IgnFrame(c) ? c.IgnitionStateOffset ?? 11 : 11,
+        CanboardDevice c => Math.Max(IgnFrame(c) && c.Ignition.StatusId == 0 ? c.IgnitionStateOffset ?? 11 : 11,
             c.Family == FwFamily.Upstream && c.Pids.Any(x => x.Enabled) ? CanboardDevice.PidFrameOffset : 0),   // 5.7: PID frame + 13
         _ => 0,
     };
 
     // the module sends its ignition frame: a main (fork / 0.x state frame), or any role with the block on (5.7 status frame)
-    private static bool IgnFrame(IDeviceConfigurable d) =>
+    public static bool IgnFrame(IDeviceConfigurable d) =>
         IgnitionMain.Ign(d) is { Enabled: true } g && (g.Role == IgnitionRole.Main || Ignition.HasSync(d));
 
     /// <summary>Modules whose id ranges overlap <paramref name="d"/>'s after the migration, with a fix.</summary>

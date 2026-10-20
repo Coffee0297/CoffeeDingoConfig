@@ -11,7 +11,7 @@
   import SignalRule from './parts/SignalRule.svelte'
   import { decodeRule, compileRule, ruleSet } from './parts/signalRule.js'
   import { ignitionBlocksHref, ignitionToLua } from './parts/ignitionSelf.js'
-  import { ignitionMain, hasSync, resolveSync, statusWords, DEFAULT_SYNC_ID } from './parts/ignition.js'
+  import { ignitionMain, hasSync, resolveSync, statusWords, DEFAULT_SYNC_ID, hasStatusId, resolveStatus, statusSlot } from './parts/ignition.js'
   import MakeMain from './parts/MakeMain.svelte'
 
   const MODES = [
@@ -50,6 +50,8 @@
   // ---- the setup, seeded from the module that is main today (or the first PDM) ----
   let mainGuid = $state(''), f = $state(null), follow = $state(true), busy = $state(false), err = $state('')
   let funcsOf = $state({}), boolsOf = $state({}), numsOf = $state({}), fullOf = {}, vmapOf = {}
+  // 5.7 status frame id per module (sub 23): { fixed, val }; not fixed = its slot
+  let stIds = $state({})
   // the four signals, each a rule: [NOT] signal [is above N] [OR / AND …] (parts/signalRule.js)
   const FIELDS = { ignitionInput: 'Switch', startInput: 'Start', crankAllowInput: 'Crank OK', runningInput: 'Running' }
   let rules = $state({})
@@ -58,6 +60,8 @@
     try {
       const [fn, vars, inUse] = await Promise.all([api.functions(d.guid), api.inputs(d.guid), fetch(`/api/devices/${d.guid}/inputs?inUse=true`).then((r) => r.json())])
       funcsOf[d.guid] = fn?.ignition ?? null
+      const sid = fn?.ignition?.statusId ?? 0
+      stIds[d.guid] = { fixed: sid > 0, val: sid > 0 ? '0x' + sid.toString(16).toUpperCase() : '' }
       fullOf[d.guid] = fn; vmapOf[d.guid] = vars ?? []   // the whole var map: rules are read back from any slot
       const usable = (inUse ?? []).filter((v) => v.index > 0 && v.kind !== 'ignition' && !(v.name ?? '').startsWith('Ign '))
       boolsOf[d.guid] = usable.filter((v) => v.type === 'bool').map((v) => ({ value: String(v.index), label: word(v) }))
@@ -104,6 +108,12 @@
   const sync = $derived(syncFw && f ? resolveSync(main, f.syncMode, Number(f.syncVal), mods) : null)
   const following = $derived(follow && f?.role !== 2)
   const syncBody = () => ({ mainStateId: Number(f.syncVal), syncMode: f.syncMode })
+  // status frame ids: the main and (when they follow) the followers whose firmware has sub 23
+  const statusMods = $derived(syncFw && f ? [main, ...(following ? followers : [])].filter((d) => hasStatusId(d) && stIds[d.guid]) : [])
+  const statusOf = (d) => (stIds[d.guid]?.fixed ? Number(stIds[d.guid].val) : 0)
+  const edited = $derived(mods.map((d) => (stIds[d.guid] && d.ignition ? { ...d, ignition: { ...d.ignition, statusId: statusOf(d) || null } } : d)))
+  const statusRes = $derived(Object.fromEntries(statusMods.filter((d) => stIds[d.guid].fixed)
+    .map((d) => [d.guid, resolveStatus(d, statusOf(d), edited, f.role === 2 ? null : sync?.id ?? null)])))
   const localItems = $derived([{ value: '0', label: '— not set' }, ...(boolsOf[mainGuid] ?? [])])   // stop / door: the main's own signals
   function problem() {
     if (!f) return 'Pick the main module first.'
@@ -113,6 +123,8 @@
     if (!(f.dashHoldS >= 0 && f.dashHoldS <= 60)) return 'Dash hold must be 0 to 60 s.'
     if (!syncFw) return ''
     if (f.role === 0 && sync?.error) return sync.error
+    const bad = Object.values(statusRes).find((r) => r.error)
+    if (bad) return bad.error
     if (f.btnMask) {
       const id = Number(f.btnId)
       if (!Number.isInteger(id) || id < 0 || id > (f.btnExt ? 0x1FFFFFFF : 0x7FF)) return `The start button's CAN id must be 0 to ${f.btnExt ? '0x1FFFFFFF' : '0x7FF'}.`
@@ -137,10 +149,11 @@
       runningInput: sig.runningInput, maxCrankMs: Math.round(f.maxCrankS * 1000), crankWhileHeld: f.crankWhileHeld, dashHoldMs: Math.round(f.dashHoldS * 1000), mainStateId: 0,
       ...(syncFw ? { role: f.role, ...syncBody(), syncBase: 0, stopInput: +f.stopInput, doorInput: +f.doorInput, doorOnMs: Math.round(f.doorOnS * 1000),
         dashOffDelayMs: Math.round(f.dashOffS * 1000), sleepDelayMs: Math.round(f.sleepMin * 60000), buttonExtended: f.btnExt, buttonId: f.btnMask ? Number(f.btnId) : 0,
-        buttonByte: f.btnByte, buttonMask: +f.btnMask, buttonTimeoutMs: Math.round(f.btnTimeoutS * 1000) } : {}) })
+        buttonByte: f.btnByte, buttonMask: +f.btnMask, buttonTimeoutMs: Math.round(f.btnTimeoutS * 1000), ...(hasStatusId(main) ? { statusId: statusOf(main) } : {}) } : {}) })
     for (const d of followers) {
       // 5.7: a follower listens to the main's sync id (offset mode: + the main's base); older firmware to its state frame
-      if (following) await put(d, { enabled: true, role: 1, ...(syncFw && hasSync(d) ? { ...syncBody(), syncBase: f.syncMode === 1 ? main.baseId : 0 } : { mainStateId: stateIdOf(main) }) })
+      if (following) await put(d, { enabled: true, role: 1, ...(syncFw && hasSync(d) ? { ...syncBody(), syncBase: f.syncMode === 1 ? main.baseId : 0 } : { mainStateId: stateIdOf(main) }),
+        ...(syncFw && hasStatusId(d) ? { statusId: statusOf(d) } : {}) })
       else if (funcsOf[d.guid]?.enabled) await put(d, { enabled: false })
     }
     busy = false
@@ -250,7 +263,27 @@
     <Checkbox checked label="No cranking with the engine running" hint="always on in the firmware: protects the starter if the button is pressed by mistake" disabled />
   </Card>
 
+  {#snippet statusRows()}
+    {#if statusMods.length}
+      <div class="fields" data-testid="ign-status-ids">
+        {#each statusMods as d (d.guid)}
+          {@const r = statusRes[d.guid]}
+          <div class="field"><div><strong>{d.name} status frame</strong><div class="muted hint">its ignition status (state, dash, sleep, link). Move it when the slot is another module's id</div></div>
+            <div class="two">
+              <Select label="{d.name} status id" items={[{ value: '0', label: `Default: 0x${statusSlot(d).toString(16).toUpperCase()}` }, { value: '1', label: 'A fixed CAN id' }]}
+                value={stIds[d.guid].fixed ? '1' : '0'} onchange={(v) => (stIds[d.guid].fixed = v === '1')} disabled={busy} data-testid="ign-status-mode-{d.name}" />
+              <Field label="{d.name} status CAN id (hex)" bind:value={stIds[d.guid].val} mono disabled={busy || !stIds[d.guid].fixed}
+                error={r?.error ?? ''} hint={r?.warn ?? ''} data-testid="ign-status-id-{d.name}" />
+            </div></div>
+        {/each}
+      </div>
+    {/if}
+  {/snippet}
+
   {#if syncFw && f}
+    {#if f.role === 2 && statusMods.length}
+      <Card title="Status frame" subtitle="the id this module sends its ignition status on">{@render statusRows()}</Card>
+    {/if}
     {#if f.role === 0}
       <Card title="Sync frame" subtitle="the id the main module sends the ignition state on; every module of the car must use the same">
         <div class="two">
@@ -263,6 +296,7 @@
           <Button disabled={busy || !!sync?.error} onclick={syncAll} title="Writes the sync id and mode (and, for an offset, this module's base id) to every module whose ignition is a follower; nothing else is changed" data-testid="ign-sync-all">Use this sync setting on all followers</Button>
           <span class="muted hint">A follower on paleppp's dingoFW follows the same frame on the same id.</span>
         </div>
+        {@render statusRows()}
       </Card>
     {/if}
     <Card title="More (firmware 5.7)" subtitle="stop input, CAN start button, dash power down, door, sleep">

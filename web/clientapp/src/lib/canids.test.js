@@ -1,6 +1,6 @@
 // node src/lib/canids.test.js — module CAN-id footprints, incl. an upstream main's ignition state frame (base + 32)
 import assert from 'node:assert/strict'
-import { spanAfter, conflictPairs } from './canids.js'
+import { spanAfter, conflictPairs, usedIds } from './canids.js'
 
 const pdm = (baseId, ignition) => ({ guid: String(baseId), type: 'dingoPDM', baseId, ignition })
 assert.equal(spanAfter('dingoPDM'), 30)
@@ -22,4 +22,9 @@ assert.equal(spanAfter('dingoPDM', all), 35)
 assert.equal(spanAfter('dingoPDM', { ...all, ignition: { enabled: true, role: 'main', stateId: 0x680 + 36 } }), 36)
 assert.equal(spanAfter('dingoPDM', { ...all, paramRuns: [[0x2300, 4, 0, 1]] }), 32)   // the PID alone: Msg 30
 assert.equal(spanAfter('dingoPDM', { ...all, family: 'fork' }), 30)
+// a status frame on its own id (5.7 sub 23): the slot is free, the id itself is taken
+const moved = { ...all, ignition: { enabled: true, role: 'main', stateId: 0x680 + 36, statusId: 0x7A0 } }
+assert.equal(spanAfter('dingoPDM', moved), 35)
+const used = usedIds([{ ...moved, type: 'dingoPDM' }], { reserve: false })
+assert.ok(used.has(0x7A0) && !used.has(0x680 + 36))
 console.log('canids.test.js ok')
