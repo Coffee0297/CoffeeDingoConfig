@@ -130,7 +130,8 @@
     mismatch: ['≠', 'fault', 'Read-back mismatch'], failed: ['✕', 'fault', 'Upload failed'], error: ['✕', 'fault', 'Runtime error'],
     edited: ['◇', 'warn', 'Edited, not on the module'], verified: ['✓', 'ok', 'Verified'], clean: ['○', 'muted', 'Same as the project'],
   }
-  const uploadOff = $derived(status === 'offline' || status === 'sim' || status === 'uploading')
+  const tooBig = $derived(!!cur && used > capOf(cur))
+  const uploadOff = $derived(status === 'offline' || status === 'sim' || status === 'uploading' || tooBig)
   const uploadLabel = $derived(status === 'uploading' ? 'Uploading…' : uploadOff ? 'Upload (off)' : `Upload to ${cur?.name ?? ''}`)
 
   const marks = $derived.by(() => {
@@ -362,7 +363,7 @@
             <Card title="Lua space">
               <Meter label={`Lua space on ${cur.name}`} value={used} max={capOf(cur)} unit="B" />
               <p class="muted">{fmt(Math.max(0, capOf(cur) - used))} B free. Space is {fmt(capOf(cur))} B on {cur.name}{cur.version ? `, firmware ${cur.version}` : ''} (a fixed firmware limit).</p>
-              {#if used > capOf(cur)}<Banner tone="fault" title="Too big.">This script is larger than the space on the module. The upload will be refused.</Banner>{/if}
+              {#if tooBig}<Banner tone="fault" title="Too big.">This script is larger than the space on the module. Upload is off until it fits.</Banner>{/if}
             </Card>
             <Card title="Same script elsewhere">
               {#if twins.length}

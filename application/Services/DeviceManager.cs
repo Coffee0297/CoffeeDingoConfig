@@ -1391,6 +1391,9 @@ public class DeviceManager(ILogger<DeviceManager> logger, ILoggerFactory loggerF
 
     /// <summary>Upload and wait for the read-back verify + commit. False when refused, not verified, or not done
     /// within 90 s — the module then keeps its previous program. Uploads must not overlap: run them one at a time.</summary>
+    /// <summary>Firmware LUA_SCRIPT_MAX; upstream / 5.7 stores at most 4095 bytes (it clamps the length).</summary>
+    public static int LuaMax(PdmDevice p) => p.Family == domain.Common.FwFamily.Upstream ? 4095 : 4096;
+
     public async Task<bool> UploadLuaAsync(Guid deviceId, string source)
     {
         var up = StartLuaUpload(deviceId, source);
@@ -1418,8 +1421,7 @@ public class DeviceManager(ILogger<DeviceManager> logger, ILoggerFactory loggerF
         }
 
         var bytes = System.Text.Encoding.ASCII.GetBytes(source ?? string.Empty);
-        // firmware LUA_SCRIPT_MAX; upstream stores at most 4095 bytes (it clamps the length)
-        if (bytes.Length > (pdm.Family == domain.Common.FwFamily.Upstream ? 4095 : 4096)) return null;
+        if (bytes.Length > LuaMax(pdm)) return null;
         int txId = device.BaseId + 1;             // ConfigTxOffset — device RX channel
 
         logger.LogInformation("UploadLua starting: {Len} bytes to {Name} (txId 0x{TxId:X})", bytes.Length, device.Name, txId);

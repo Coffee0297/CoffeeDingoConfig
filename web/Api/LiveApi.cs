@@ -1124,6 +1124,9 @@ public static class LiveApi
             // CAN only when the module is live — same model as output/function params. Push it later
             // with device_action "uploadlua" once the module is online.
             if (await NoLuaAsync(g, dm, adapters) is { } nl) return nl;
+            // too big: refuse before it lands in the project, or every later Apply of this module failed on it
+            if (dm.GetDevice(g) is PdmDevice lp && System.Text.Encoding.ASCII.GetByteCount(r.Source ?? "") is var n && n > DeviceManager.LuaMax(lp))
+                return Results.BadRequest(new { ok = false, error = string.Format(System.Globalization.CultureInfo.InvariantCulture, "The script is {0:N0} bytes; {1} stores at most {2:N0}. Nothing was saved or sent.", n, lp.Name, DeviceManager.LuaMax(lp)) });
             dm.StoreLua(g, r.Source ?? "");
             var live = await IsLiveModuleAsync(g, dm, adapters);
             if (live)
