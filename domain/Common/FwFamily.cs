@@ -19,6 +19,10 @@ public static class FwFamily
     /// <summary>Status-frame currents in 0.1 A (fork, and the 5.7+ line); plain upstream 0.x sends whole amps.</summary>
     public static bool TenthAmps(IDeviceConfigurable d) => d.Family != Upstream || Firmware.Of(d.Version).Major != 0;
 
+    /// <summary>The 5.7+ line (upstream layout, major != 0): every board runs behind the OpenBLT CAN bootloader (the PDM app is
+    /// linked at 0x08004000, the CANBoard app at 0x08002000), so it updates over CAN.</summary>
+    public static bool OwnLine(IDeviceConfigurable d) => d.Family == Upstream && Firmware.Of(d.Version).Major != 0;
+
     /// <summary>Does the module have param <paramref name="p"/>? Upstream: in the list it returned on Read (none
     /// while unknown). Fork: by its firmware version (<see cref="DeviceParameter.MinFirmware"/>).</summary>
     public static bool Has(IDeviceConfigurable d, DeviceParameter p) => d.Family == Upstream

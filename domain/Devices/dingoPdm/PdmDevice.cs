@@ -47,7 +47,7 @@ public class PdmDevice : IDeviceConfigurable
     // Upstream dingoFW (feat/openblt-can-bootloader): no command tells whether the OpenBLT bootloader is in sector 0, and a
     // plain upstream app answers a CAN-update request by jumping to USB-DFU. So only a module known to have it (the
     // operator says so, it answered as a bootloader, or a CAN update of it worked) is offered a CAN update.
-    [JsonPropertyName("canBootloader")] public bool CanBootloader => Family != FwFamily.Upstream || OpenBlt == true;
+    [JsonPropertyName("canBootloader")] public bool CanBootloader => Family != FwFamily.Upstream || OpenBlt == true || FwFamily.OwnLine(this);   // 5.7 line: always behind OpenBLT
     [JsonPropertyName("openBlt"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public bool? OpenBlt { get; set; }
 
     [JsonIgnore] public const int BaseIndex = 0x0000;

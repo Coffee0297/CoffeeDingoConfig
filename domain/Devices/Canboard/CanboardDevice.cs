@@ -41,8 +41,8 @@ public class CanboardDevice : IDeviceConfigurable
     // shortcut: a stock upstream CANBoard lists 0x0000 sub 2 too (shared device params) and just never sleeps; no
     // param or version tells the two apart, upgrade once the firmware reports its features.
     [JsonIgnore] public bool CanSleep => !VersionReceived || (Family == FwFamily.Fork ? domain.Common.Firmware.Has(Version, SleepSince) : ParamSet.Contains(BaseIndex, 2));
-    // OpenBLT XCP-over-CAN bootloader; upstream dingoFW has no CANBoard port of it (the -O0 app does not fit behind it)
-    [JsonPropertyName("canBootloader")] public bool CanBootloader => Family != FwFamily.Upstream;
+    // OpenBLT XCP-over-CAN bootloader; upstream dingoFW has no CANBoard port of it (the -O0 app does not fit behind it), the 5.7 line has
+    [JsonPropertyName("canBootloader")] public bool CanBootloader => Family != FwFamily.Upstream || FwFamily.OwnLine(this);
 
     [JsonIgnore] public const int BaseIndex = 0x0000;
     [JsonPropertyName("canboardType")] public int CanboardType { get; set; }
