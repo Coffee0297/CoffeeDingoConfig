@@ -73,6 +73,10 @@ test('PDM-02 back on its status slot 0x6C4 (the parity default) overlaps PDM-03:
     // the blocks overlap (PDM-02 now reaches +36): PDM-03's own config ids 0x6C0 / 0x6C1 are in the clash too
     await expect(page.getByTestId('can-table').locator('tr[data-status=clash]').filter({ hasText: 'PDM-02: module block' }).first()).toContainText('0x6C0')
     await applyBlocked(page, /overlap|CAN id 0x6C4/, ['PDM-02', 'PDM-03'])
+    // the module's own settings say which ids overlap (the 5.7 span, not the 5.6 one that would not overlap)
+    await open(page, 'hardware')
+    await page.getByRole('row', { name: /PDM-02/ }).first().click()
+    await expect(page.getByText(/0x6A0 to 0x6C4 overlaps PDM-03 \(0x6C0 to /).first()).toBeVisible()
   } finally {
     await open(page, 'power/ignition')
     await page.getByTestId('ign-status-mode-PDM-02').click()

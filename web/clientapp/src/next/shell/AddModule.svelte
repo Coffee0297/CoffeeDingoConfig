@@ -162,7 +162,7 @@
     if (!name.trim()) return 'Give the module a name.'
     if (devices.some((d) => d.name.toLowerCase() === name.trim().toLowerCase())) return `A module named ${name.trim()} is already in the project.`
     if (base == null) return 'Use a hex ID from 0x001 to 0x7FF, like 0x720.'
-    if (handClash) return `${spanText(handKind, base)} overlaps ${handClash.name} (${spanText(handClash.type, handClash.baseId)}).`
+    if (handClash) return `${spanText(handKind, base)} overlaps ${handClash.name} (${spanText(handClash.type, handClash.baseId, handClash)}).`
     if (reserve && hitsObd(handKind, base)) return `${hexId(base)} is in the OBD-II range. Turn the reserve off to use it.`
     return ''
   })

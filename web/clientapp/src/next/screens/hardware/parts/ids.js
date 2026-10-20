@@ -19,8 +19,8 @@ export function clashOf(devices, selfGuid, type, base) {
   return (devices ?? []).find((x) => x.guid !== selfGuid && isModule(x.type) && x.baseId <= base + after && base <= x.baseId + spanAfter(x.type, x)) ?? null
 }
 
-/** The span a module takes: "0x680 to 0x69D". */
-export const spanText = (type, base) => `${hexId(base)} to ${hexId(base + spanAfter(type))}`
+/** The span a module takes: "0x680 to 0x69D". `dev`: the module, for what it really sends (a 5.7 PDM up to +36). */
+export const spanText = (type, base, dev = null) => `${hexId(base)} to ${hexId(base + spanAfter(type, dev))}`
 
 /** Up to `count` free base IDs for a module of `type`, on 0x10 boundaries. `reserve` keeps 0x7DF-0x7EF free (OBD-II). */
 export function freeBases(devices, selfGuid, type, { reserve = true, count = 3, busy = null } = {}) {

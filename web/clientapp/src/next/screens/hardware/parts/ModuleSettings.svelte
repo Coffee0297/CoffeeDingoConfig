@@ -215,9 +215,9 @@
         {#if edited}<Button onclick={() => (draft = hexId(d.baseId))}>Undo edit</Button>{/if}
       </div>
       {#if clash}
-        <Banner tone="fault" title="CAN ID clash. Setting it is blocked.">{spanText(d.type, base)} overlaps {clash.name} ({spanText(clash.type, clash.baseId)}). Both would answer the same messages. Pick another ID.</Banner>
+        <Banner tone="fault" title="CAN ID clash. Setting it is blocked.">{spanText(d.type, base, d)} overlaps {clash.name} ({spanText(clash.type, clash.baseId, clash)}). Both would answer the same messages. Pick another ID.</Banner>
       {:else if edited && base != null}
-        <p class="ok" role="status">✓ {spanText(d.type, base)} is free. No other module uses it.</p>
+        <p class="ok" role="status">✓ {spanText(d.type, base, d)} is free. No other module uses it.</p>
       {/if}
       {#if obd}<p class="warn" role="status">▲ {hexId(base)} is in the OBD-II range 0x7DF to 0x7EF.</p>{/if}
       <div class="row">
