@@ -71,7 +71,8 @@ public record UnlockReq(uint Password);
 public record FactoryResetReq(string? Confirm);
 public record DigitalOutDto(int Number, string Name, bool Enabled, bool On, int Input);
 public record WakeDto(string Reason, int Source, int Count);
-public record IgnitionDto(bool Enabled, string Role, string State, bool Dash, int MainStateId, int StateId, bool Live);
+// Role main / follower / standalone. Status: the 5.7 status frame (any role), null before one is heard or on older firmware.
+public record IgnitionDto(bool Enabled, string Role, string State, bool Dash, int MainStateId, int StateId, bool Live, domain.Devices.Functions.IgnitionStatus? Status = null);
 public record AdaptersDto(string[] Adapters, string[] Ports, bool Connected, string? ActiveAdapter, string? ActivePort, int? GatewayBaseId, bool ProgrammingAllowed,
     // G10: link state and the remembered connection
     bool Reconnecting = false, bool AutoConnect = false, bool AutoReconnect = true, object? Last = null);
@@ -353,11 +354,11 @@ public static class DingoMap
     static LockDto? LockOf(IDeviceConfigurable c) => c.Family == domain.Common.FwFamily.Upstream && (c.Lock.Locked || c.ParamSet.Contains(domain.Devices.Functions.ConfigLock.BaseIndex, 0))
         ? new LockDto(true, c.Lock.Locked, c.Lock.Contact, c.Lock.Password != 0) : null;
     static WakeDto? Wake(DeviceUiState? ui) => ui?.WakeReason is int r
-        ? new WakeDto(r switch { 1 => "can", 2 => "input", 3 => "usb", _ => "power-on" }, ui.WakeSource, ui.WakeCount) : null;
+        ? new WakeDto(r switch { 1 => "can", 2 => "input", 3 => "usb", 4 => "other", _ => "power-on" }, ui.WakeSource, ui.WakeCount) : null;
     static IgnitionDto? Ign(domain.Devices.Functions.Ignition? g, int stateId) => g is null ? null
-        : new IgnitionDto(g.Enabled, g.Role == domain.Devices.Functions.IgnitionRole.Main ? "main" : "follower",
+        : new IgnitionDto(g.Enabled, g.Role.ToString().ToLowerInvariant(),
             g.State.ToString().ToLowerInvariant(), g.Dash, g.MainStateId, stateId,
-            (DateTime.UtcNow - g.LastStateFrame).TotalMilliseconds < 1000);
+            (DateTime.UtcNow - g.LastStateFrame).TotalMilliseconds < 1000, g.Status);
 
     public static DeviceDto ToDto(IDevice d, DeviceUiState? ui = null)
     {
@@ -1943,6 +1944,17 @@ public static class LiveApi
                 else _ignUndo = snap;
                 return Results.Ok(new { ok = r.Ok, error = r.Error, notes = r.Notes, changes, done = r.Ok && preview != true });
             }
+        });
+
+        // Firmware 5.7: copy the main module's sync setting to every module whose ignition role is follower (nothing else
+        // is touched); staged in the project, Apply to car sends it.
+        api.MapPost("/ignition/sync/{guid:guid}", (Guid guid, DeviceManager dm) =>
+        {
+            var all = dm.GetAllDevices().ToList();
+            if (all.FirstOrDefault(d => d.Guid == guid) is not IDeviceConfigurable main) return Results.NotFound(new { error = "No such module in the project." });
+            var r = domain.Common.IgnitionMain.SyncFollowers(all, main);
+            return r.Error is { } e ? Results.BadRequest(new { ok = false, error = e })
+                : Results.Ok(new { ok = true, changed = r.Changed.Select(d => d.Name), skipped = r.Skipped });
         });
 
         api.MapPost("/project/new",(ConfigFileManager cfg, DeviceManager dm, CrossModuleStore xmod) =>

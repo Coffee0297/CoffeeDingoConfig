@@ -22,7 +22,7 @@ public class UpstreamIgnitionTests
         Assert.Equal(["Ignition", "Accessory", "Cranking", "Running", "Ready", "Dash", "Link OK"],
             d.VarMap.Skip(225).Select(v => { Assert.Equal(("ignition", 1), (v.OwnerKind, v.OwnerNumber)); return v.PropertyName; }));
         Assert.Equal(Enumerable.Range(0, 232), d.VarMap.Select(v => v.VariableIndex));
-        var p = d.Params.Where(x => x.Index == Ignition.BaseIndex).OrderBy(x => x.SubIndex).ToList();
+        var p = d.Params.Where(x => x.Index == Ignition.BaseIndex && domain.Common.FwFamily.Has(d, x)).OrderBy(x => x.SubIndex).ToList();   // 0.x: subs 0-10 only
         Assert.Equal(Enumerable.Range(0, 11), p.Select(x => x.SubIndex));
         Assert.Equal(("ignition.maxCrankMs", (object)5000), (p[7].Name, p[7].DefaultValue));
         Assert.Equal(("ignition.mainStateId", true), (p[10].Name, p.All(x => domain.Common.FwFamily.Has(d, x))));

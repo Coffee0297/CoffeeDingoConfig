@@ -88,6 +88,14 @@ public static class Fw57Migration
                 notes.Add(new("info", $"{d.Name} {ci.Name}: on timeout it takes {ci.TimeoutValue} as before (\"use the timeout value\" turned on)."));
             }
         }
+        // ignition: the role stays (the main stays the main); 5.7 syncs on its own id, every module of the car on the same one
+        if (IgnitionMain.Ign(d) is { Enabled: true } ign)
+        {
+            ign.MainStateId = Ignition.DefaultSyncId; ign.SyncMode = IgnitionSyncMode.Absolute; ign.SyncBase = 0;
+            notes.Add(new("info", ign.Role == IgnitionRole.Follower
+                ? $"{d.Name} ignition follower: follows the sync frame on 0x{Ignition.DefaultSyncId:X3} (the default; every module of the car uses the same id)."
+                : $"{d.Name} ignition {ign.Role.ToString().ToLowerInvariant()}: sends the sync frame on 0x{Ignition.DefaultSyncId:X3} (the default); its old state frame is now the ignition status."));
+        }
         if (d is CanboardDevice cb)
             foreach (var a in cb.AnalogInputs.Where(a => a.Rotary.Enabled && a.Rotary.Mode != 1))
             {
@@ -205,12 +213,11 @@ public static class Fw57Migration
         return free;
     }
 
-    // other modules' CAN inputs that decode a target's status frames, and ignition followers of a target main
+    // other modules' CAN inputs that decode a target's status frames; a fork follower of a target main cannot follow it on 5.7
     private static void CrossModule(IReadOnlyCollection<IDevice> all, Snapshot s)
     {
         var a = s.Dev;
         var now = Sigs(a);
-        var newIgn = IgnOffset(a);
         foreach (var b in all.OfType<IDeviceConfigurable>().Where(b => b != a))
         {
             foreach (var c in CanInputs(b).Where(c => c.Enabled && !c.Ide && c.Id >= a.BaseId && c.Id <= a.BaseId + 40))
@@ -224,12 +231,8 @@ public static class Fw57Migration
                 c.Id = a.BaseId + n.Off; c.StartBit = n.Start; c.BitLength = n.Len;
                 a.Migration!.Add(new("info", $"{b.Name} {c.Name}: reads {a.Name} {old.Name} at its 5.7 place (0x{c.Id:X3} bit {n.Start})."));
             }
-            var ign = b switch { PdmDevice x => x.Ignition, CanboardDevice x => x.Ignition, _ => null };
-            if (ign is { Enabled: true, Role: IgnitionRole.Follower } && ign.MainStateId == a.BaseId + s.IgnOff)
-            {
-                if (newIgn is { } o) { ign.MainStateId = a.BaseId + o; a.Migration!.Add(new("info", $"{b.Name} ignition follower: main {a.Name}'s state frame is 0x{ign.MainStateId:X3} on 5.7.")); }
-                else a.Migration!.Add(new("warn", $"{b.Name} ignition follower: {a.Name} has no ignition state frame on 5.7."));
-            }
+            if (b.Family == FwFamily.Fork && IgnitionMain.Ign(b) is { Enabled: true, Role: IgnitionRole.Follower } ign && ign.MainStateId == a.BaseId + s.IgnOff)
+                a.Migration!.Add(new("warn", $"{b.Name} ignition follower: stays on firmware 5.6, which cannot follow {a.Name}'s 5.7 sync frame. Flash {b.Name} with 5.7 and convert it too."));
         }
     }
 
@@ -243,13 +246,17 @@ public static class Fw57Migration
             p.Tables.Take(2).Any(t => t.Enabled) ? p.UpstreamFrames().Tables12 ?? 0 : 0,
             p.Tables.Skip(2).Take(2).Any(t => t.Enabled) ? p.UpstreamFrames().Tables34 ?? 0 : 0,
             p.Pids.Any(x => x.Enabled) ? p.UpstreamFrames().Pid ?? 0 : 0,
-            p.Ignition is { Enabled: true, Role: IgnitionRole.Main } ? p.IgnitionStateOffset ?? 0 : 0,
+            IgnFrame(p) ? p.IgnitionStateOffset ?? 0 : 0,
         }.Max(),
         PdmDevice p => p.Ignition is { Enabled: true, Role: IgnitionRole.Main } ? 30 : 29,
-        CanboardDevice c => Math.Max(c.Ignition is { Enabled: true, Role: IgnitionRole.Main } ? c.IgnitionStateOffset ?? 11 : 11,
+        CanboardDevice c => Math.Max(IgnFrame(c) ? c.IgnitionStateOffset ?? 11 : 11,
             c.Family == FwFamily.Upstream && c.Pids.Any(x => x.Enabled) ? CanboardDevice.PidFrameOffset : 0),   // 5.7: PID frame + 13
         _ => 0,
     };
+
+    // the module sends its ignition frame: a main (fork / 0.x state frame), or any role with the block on (5.7 status frame)
+    private static bool IgnFrame(IDeviceConfigurable d) =>
+        IgnitionMain.Ign(d) is { Enabled: true } g && (g.Role == IgnitionRole.Main || Ignition.HasSync(d));
 
     /// <summary>Modules whose id ranges overlap <paramref name="d"/>'s after the migration, with a fix.</summary>
     public static IEnumerable<MigrationNote> Overlaps(IReadOnlyCollection<IDevice> all, IDevice d)
@@ -262,13 +269,14 @@ public static class Fw57Migration
             if (end < hi.BaseId) continue;
             var free = (end + 2 + 0xF) & ~0xF;
             var why = lo is PdmDevice p && p.Family == FwFamily.Upstream
-                ? $"{lo.Name} sends up to 0x{end:X3} on 5.7 (wire load, tables, PID and ignition-main frames sit at base+32..+36)"
+                ? $"{lo.Name} sends up to 0x{end:X3} on 5.7 (wire load, tables, PID and ignition frames sit at base+32..+36)"
                 : $"{lo.Name} sends up to 0x{end:X3}";
-            // the ignition main's frame is the one that sticks out: a CANBoard can take the role (its frame stays in its range)
-            var cb = lo is not CanboardDevice && lo is IDeviceConfigurable lc && IgnitionMain.Current(all) == lc && IgnOffset(lc) == Span(lo)
+            // a fork / 0.x main's state frame is the one that sticks out: a CANBoard can take the role (its frame stays in
+            // its range). Not on 5.7: every module with the ignition on sends its status frame, whatever its role.
+            var cb = lo is not CanboardDevice && lo is IDeviceConfigurable lc && !Ignition.HasSync(lc) && IgnitionMain.Current(all) == lc && IgnOffset(lc) == Span(lo)
                 ? IgnitionMain.Suggest(all, lc) : null;
             yield return new("warn", $"CAN ids overlap: {why}, into {hi.Name}'s range from 0x{hi.BaseId:X3}. Fix: move {hi.Name} to 0x{free:X3} or higher (space PDMs 0x30 apart), "
-                + $"or make {cb?.Name ?? "a CANBoard"} the ignition main, or turn off the feature that sends the highest frame.", cb is null ? null : $"ignition-main:{cb.Guid}");
+                + (cb is null ? "" : $"or make {cb.Name} the ignition main, ") + "or turn off the feature that sends the highest frame.", cb is null ? null : $"ignition-main:{cb.Guid}");
         }
     }
 

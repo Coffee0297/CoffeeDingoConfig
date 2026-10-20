@@ -20,8 +20,30 @@ namespace domain.Common;
 public static class IgnitionMain
 {
     public record Result(bool Ok, string? Error, List<MigrationNote> Notes);
+    public record SyncResult(string? Error, List<IDeviceConfigurable> Changed, List<string> Skipped);
 
-    internal static Ignition? Ign(IDevice d) => d switch { PdmDevice x => x.Ignition, CanboardDevice x => x.Ignition, _ => null };
+    /// <summary>Firmware 5.7: give every other module whose ignition role is Follower the main's sync setting (sub 10 id
+    /// or offset, sub 11 mode; offset mode: sub 12 = the main's base id). Nothing else is changed; a follower on older
+    /// firmware (sub 10 = a state-frame id there) is skipped.</summary>
+    public static SyncResult SyncFollowers(IReadOnlyCollection<IDevice> all, IDeviceConfigurable main)
+    {
+        if (Ign(main) is not { Role: IgnitionRole.Main } m) return new($"{main.Name} is not an ignition main module.", [], []);
+        if (!Ignition.HasSync(main)) return new($"{main.Name} has no sync id setting (it needs firmware 5.7; Read it first).", [], []);
+        var changed = new List<IDeviceConfigurable>();
+        var skipped = new List<string>();
+        foreach (var d in all.OfType<IDeviceConfigurable>().Where(d => d != main && Ign(d) is { Role: IgnitionRole.Follower }))
+        {
+            if (!Ignition.HasSync(d)) { skipped.Add(d.Name); continue; }
+            var g = Ign(d)!;
+            g.MainStateId = m.MainStateId;
+            g.SyncMode = m.SyncMode;
+            if (m.SyncMode == IgnitionSyncMode.BaseOffset) g.SyncBase = main.BaseId;
+            changed.Add(d);
+        }
+        return new(null, changed, skipped);
+    }
+
+    public static Ignition? Ign(IDevice d) => d switch { PdmDevice x => x.Ignition, CanboardDevice x => x.Ignition, _ => null };
     internal static List<VirtualInput> Vis(IDevice d) => d switch { PdmDevice x => x.VirtualInputs, CanboardDevice x => x.VirtualInputs, _ => [] };
 
     public static IDeviceConfigurable? Current(IReadOnlyCollection<IDevice> all) =>
@@ -143,16 +165,22 @@ public static class IgnitionMain
 
         var n = cb.Ignition;
         n.Enabled = true; n.Role = IgnitionRole.Main; n.Mode = o.Mode; n.MaxCrankMs = o.MaxCrankMs; n.CrankWhileHeld = o.CrankWhileHeld;
-        n.DashHoldMs = o.DashHoldMs; n.MainStateId = 0;
+        n.DashHoldMs = o.DashHoldMs;
+        // 5.7: the main keeps the car's sync id (followers listen to it, not to a frame of the main's own)
+        var sync = Ignition.HasSync(cb);
+        n.MainStateId = sync ? o.MainStateId : 0;
+        if (sync) n.SyncMode = o.SyncMode;
         for (var i = 0; i < fields.Length; i++) fields[i].Set(got[i]);
         o.Role = IgnitionRole.Follower;
         o.IgnitionInput = o.StartInput = o.CrankAllowInput = o.RunningInput = 0;
 
         var id = cb.BaseId + off;
         var follow = all.OfType<IDeviceConfigurable>().Where(d => d != cb && Ign(d) is { Enabled: true, Role: IgnitionRole.Follower }).ToList();
-        foreach (var d in follow) Ign(d)!.MainStateId = id;
-        notes.Insert(0, new("info", $"{cb.Name} is the ignition main (state frame 0x{id:X3}); {old.Name} follows it and its outputs keep their ignition roles."));
-        notes.Add(new("info", $"{follow.Count} follower(s) listen to 0x{id:X3}: {string.Join(", ", follow.Select(d => d.Name))}."));
+        if (sync) SyncFollowers(all, cb);
+        else foreach (var d in follow) Ign(d)!.MainStateId = id;
+        var what = sync ? $"sync id {(n.SyncMode == IgnitionSyncMode.BaseOffset ? $"base + 0x{n.MainStateId:X}" : $"0x{n.MainStateId:X3}")}" : $"state frame 0x{id:X3}";
+        notes.Insert(0, new("info", $"{cb.Name} is the ignition main ({what}); {old.Name} follows it and its outputs keep their ignition roles."));
+        notes.Add(new("info", $"{follow.Count} follower(s) listen to the {what}: {string.Join(", ", follow.Select(d => d.Name))}."));
 
         // the migration reports' overlap warnings: say again only what is still true
         var mods = all.OfType<IDeviceConfigurable>().ToList();

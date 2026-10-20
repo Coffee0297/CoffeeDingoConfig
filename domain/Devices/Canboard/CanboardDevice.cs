@@ -785,6 +785,10 @@ public class CanboardDevice : IDeviceConfigurable
                     VarMap.Add(new DeviceVariable { GetName = () => Pids[num].Name, OwnerKind = "pid", OwnerNumber = num + 1,
                         PropertyName = prop, DataType = "float", VariableIndex = index++, SingleVariable = false });
             }
+        // ignition parity (5.7): DashShutdown, appended last of all by the firmware (after PID)
+        if (ParamSet.Contains(Functions.Ignition.BaseIndex, 19))
+            VarMap.Add(new DeviceVariable { GetName = () => "Ignition", OwnerKind = "ignition", OwnerNumber = 1,
+                PropertyName = "Dash Shutdown", DataType = "bool", VariableIndex = index++, SingleVariable = false });
     }
 
     private void InitParams()
@@ -879,7 +883,7 @@ public class CanboardDevice : IDeviceConfigurable
         foreach (var timer in Timers) allParams.AddRange(Family == FwFamily.Upstream ? timer.UpstreamParams : timer.Params);
         foreach (var m in Maths) allParams.AddRange(m.Params);
         foreach (var m in CanMessages) allParams.AddRange(Family == FwFamily.Upstream ? m.UpstreamParams : m.Params);
-        allParams.AddRange(Ignition.Params);
+        allParams.AddRange(Family == FwFamily.Upstream ? Ignition.UpstreamParams(0) : Ignition.Params);
         allParams.AddRange(ComfortBlink.Params);
         if (Family == FwFamily.Upstream) foreach (var pid in Pids) allParams.AddRange(pid.Params);   // the fork CANBoard has no PID
         foreach (var canOutput in CanOutputs) allParams.AddRange(Family == FwFamily.Upstream ? canOutput.UpstreamParams : canOutput.Params);
@@ -982,14 +986,8 @@ public class CanboardDevice : IDeviceConfigurable
     {
         var offset = id - BaseId;
 
-        // Ignition state frame (firmware 5.6), sent by a main module: ['I', state, flags]
-        if (offset == IgnitionStateOffset && data.Length >= 3 && data[0] == 'I')
-        {
-            Ignition.State = (Functions.IgnitionState)data[1];
-            Ignition.Dash = (data[2] & 0x10) != 0;
-            Ignition.LastStateFrame = DateTime.UtcNow;
-            return;
-        }
+        // Ignition frame: fork / 0.x state ['I', state, flags] from a main module, 5.7 status from any role
+        if (offset == IgnitionStateOffset && Ignition.ReadFrame(data)) return;
 
         // Use dictionary lookup for status messages
         if (StatusSigs.TryGetValue(offset, out var signals))

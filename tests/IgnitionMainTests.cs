@@ -12,9 +12,10 @@ using static tests.Fw57MigrationTests;
 
 namespace tests;
 
-/// <summary>"Make a CANBoard the ignition main" (IgnitionMain.MoveTo) on a project shaped like the Ranchero: PDM-02 at 0x6A0
-/// is main (5.7 frame 0x6C4 overlaps PDM-03 at 0x6C0), its key switch is CB-1 DI3 read over CAN, the start button a
-/// CB-2 bit, crank-allowed a virtual input and running a condition of its own.</summary>
+/// <summary>"Make a CANBoard the ignition main" (IgnitionMain.MoveTo) and "use this sync setting on all followers"
+/// (IgnitionMain.SyncFollowers) on a project shaped like the Ranchero: PDM-02 at 0x6A0 is main, its key switch is CB-1 DI3
+/// read over CAN, the start button a CB-2 bit, crank-allowed a virtual input and running a condition of its own. On 5.7
+/// every module with the ignition on sends its status frame at base+36 (0x6C4 overlaps PDM-03 at 0x6C0), whatever its role.</summary>
 public class IgnitionMainTests
 {
     private static (List<IDevice> All, PdmDevice Main, CanboardDevice Cb1) Ranchero()
@@ -47,13 +48,47 @@ public class IgnitionMainTests
         all.OfType<IDeviceConfigurable>().Any(d => d.Migration?.Any(n => n.Text.StartsWith("CAN ids overlap")) == true);
 
     [Fact]
-    public void Migration_SuggestsTheKeySwitchCanboard()
+    public void Migration_KeepsTheMain_FollowersOnTheDefaultSyncId_NoIgnitionMainFix()
     {
         var (all, main, cb1) = Ranchero();
+        Assert.Equal(main, IgnitionMain.Current(all));
+        foreach (var d in all.OfType<IDeviceConfigurable>())
+            Assert.Equal((d == main ? IgnitionRole.Main : IgnitionRole.Follower, 0x6F1, IgnitionSyncMode.Absolute), (IgnitionMain.Ign(d)!.Role, IgnitionMain.Ign(d)!.MainStateId, IgnitionMain.Ign(d)!.SyncMode));
+        // moving the main would not help: the follower PDMs send their status frame too
         var w = main.Migration!.Single(n => n.Text.StartsWith("CAN ids overlap"));
-        Assert.Contains("make CB-1 the ignition main", w.Text);
-        Assert.Equal($"ignition-main:{cb1.Guid}", w.Fix);
+        Assert.DoesNotContain("ignition main", w.Text);
+        Assert.Null(w.Fix);
         Assert.Equal(cb1, IgnitionMain.Suggest(all, main));
+    }
+
+    [Fact]
+    public void SyncFollowers_WritesOnlyFollowers()
+    {
+        var (all, main, _) = Ranchero();
+        main.Ignition.SyncMode = IgnitionSyncMode.BaseOffset; main.Ignition.MainStateId = 0x40;
+        var pdm3 = all.OfType<PdmDevice>().Single(p => p.Name == "PDM-03");
+        pdm3.Ignition.Role = IgnitionRole.Standalone;
+        var cb2 = all.OfType<CanboardDevice>().Single(c => c.Name == "CB-2");
+        cb2.Ignition.Enabled = false;   // still a follower by role
+        var fork = Pdm(5, 6, 6, 0x700); fork.Name = "PDM-FORK";
+        fork.Ignition.Enabled = true; fork.Ignition.Role = IgnitionRole.Follower; fork.Ignition.MainStateId = 0x6A0 + 30;
+        all.Add(fork);
+        var snap = new ValuesSnapshot(all);
+
+        var r = IgnitionMain.SyncFollowers(all, main);
+        Assert.Null(r.Error);
+        Assert.Equal(["CB-1", "CB-2", "PDM-01"], r.Changed.Select(d => d.Name).Order());
+        Assert.Equal(["PDM-FORK"], r.Skipped);   // 5.6: sub 10 is a state-frame id there
+        foreach (var d in r.Changed)
+            Assert.Equal((0x40, IgnitionSyncMode.BaseOffset, 0x6A0), (IgnitionMain.Ign(d)!.MainStateId, IgnitionMain.Ign(d)!.SyncMode, IgnitionMain.Ign(d)!.SyncBase));
+        // nothing else changed: only id, mode and base of the three followers (not the standalone PDM-03, the main, the fork one)
+        var changes = snap.Changes();
+        Assert.Equal(9, changes.Count);
+        Assert.All(changes, c => Assert.Matches(@"^(PDM-01|CB-1|CB-2) ignition\.(mainStateId|syncMode|syncBase):", c));
+        Assert.Equal((IgnitionRole.Standalone, 0x6F1, IgnitionSyncMode.Absolute), (pdm3.Ignition.Role, pdm3.Ignition.MainStateId, pdm3.Ignition.SyncMode));
+        Assert.Equal(0x6A0 + 30, fork.Ignition.MainStateId);
+
+        Assert.NotNull(IgnitionMain.SyncFollowers(all, pdm3).Error);   // only from a main
     }
 
     [Fact]
@@ -65,7 +100,7 @@ public class IgnitionMainTests
         Assert.True(r.Ok, r.Error);
 
         var g = cb1.Ignition;
-        Assert.Equal((true, IgnitionRole.Main, 4000, 3000, 0), (g.Enabled, g.Role, g.MaxCrankMs, g.DashHoldMs, g.MainStateId));
+        Assert.Equal((true, IgnitionRole.Main, 4000, 3000, 0x6F1), (g.Enabled, g.Role, g.MaxCrankMs, g.DashHoldMs, g.MainStateId));   // 5.7: keeps the car's sync id
         // the key switch is CB-1's own DI3
         Assert.Equal(Idx(cb1, "input", 3, "State"), g.IgnitionInput);
         // the start button: a copy of PDM-02's CAN input on CB-2's frame
@@ -79,15 +114,14 @@ public class IgnitionMainTests
         Assert.Equal((vi.MessageId, vi.Signal.StartBit, true), (On(g.CrankAllowInput).Id, On(g.CrankAllowInput).StartBit, On(g.CrankAllowInput).TimeoutEnabled));
         Assert.Equal((cond.MessageId, cond.Signal.StartBit), (On(g.RunningInput).Id, On(g.RunningInput).StartBit));
 
-        // PDM-02 follows; every follower listens to CB-1 base+12
+        // PDM-02 follows; every follower keeps the sync id 0x6F1
         Assert.Equal((IgnitionRole.Follower, 0, 0), (main.Ignition.Role, main.Ignition.IgnitionInput, main.Ignition.CrankAllowInput));
         foreach (var d in all.OfType<IDeviceConfigurable>().Where(d => d != cb1))
         {
             var f = d is PdmDevice p ? p.Ignition : ((CanboardDevice)d).Ignition;
-            Assert.Equal((IgnitionRole.Follower, 0x66C), (f.Role, f.MainStateId));
+            Assert.Equal((IgnitionRole.Follower, 0x6F1), (f.Role, f.MainStateId));
         }
-        Assert.False(Overlap(all));
-        Assert.DoesNotContain(r.Notes, n => n.Level == "warn");
+        Assert.DoesNotContain(r.Notes, n => n.Level == "warn" && !n.Text.StartsWith("CAN ids overlap"));   // the status frames still overlap
         Assert.Contains(snap.Changes(), c => c == "PDM-02 ignition.role: Main → Follower");
 
         // Undo puts every setting back
@@ -95,7 +129,6 @@ public class IgnitionMainTests
         Assert.Empty(snap.Changes());
         Assert.Equal(IgnitionRole.Main, main.Ignition.Role);
         Assert.DoesNotContain(cb1.CanInputs, c => c.Enabled);
-        Assert.True(Overlap(all));
     }
 
     [Fact]
@@ -121,10 +154,11 @@ public class IgnitionMainTests
         Assert.Equal((true, Idx(cb1, "input", 3, "State"), true), (vi.Enabled, vi.Var0, vi.Not0));
     }
 
-    /// <summary>RANCHERO_COPY=&lt;a COPY of the operator's project&gt; [RANCHERO_OUT=&lt;dir&gt;]: migrate to 5.7, make CB-1 the
-    /// ignition main, check it, and write &lt;name&gt;.57.json + .57-report.txt (never point it at the operator's own file).</summary>
+    /// <summary>RANCHERO_COPY=&lt;a COPY of the operator's project&gt; [RANCHERO_OUT=&lt;dir&gt;]: migrate to 5.7 (PDM-02 stays the
+    /// ignition main, everyone on sync id 0x6F1), check it, and write &lt;name&gt;.57.json + .57-report.txt (never point it at
+    /// the operator's own file).</summary>
     [Fact]
-    public void Ranchero_FromEnv_MigratesAndMovesTheMainToCb1()
+    public void Ranchero_FromEnv_MigratesKeepingTheMain()
     {
         var path = Environment.GetEnvironmentVariable("RANCHERO_COPY");
         if (string.IsNullOrEmpty(path) || !File.Exists(path)) return;
@@ -133,22 +167,16 @@ public class IgnitionMainTests
         var all = LoadProject(path);   // same file, devices set up as the app does
         var mods = all.OfType<IDeviceConfigurable>().ToList();
         Fw57Migration.Migrate(all, mods);
-        var cb1 = all.OfType<CanboardDevice>().Single(c => c.Name == "CB-1");
-        Assert.Equal("PDM-02", IgnitionMain.Current(all)!.Name);
-        Assert.True(Overlap(all));
-        var r = IgnitionMain.MoveTo(all, cb1);
-        Assert.True(r.Ok, r.Error);
-        Assert.Equal(cb1, IgnitionMain.Current(all));
-        foreach (var d in mods.Where(d => d != cb1))
-            Assert.Equal((IgnitionRole.Follower, cb1.BaseId + 12), d is PdmDevice p ? (p.Ignition.Role, p.Ignition.MainStateId) : (((CanboardDevice)d).Ignition.Role, ((CanboardDevice)d).Ignition.MainStateId));
-        Assert.False(Overlap(all));
+        var main = IgnitionMain.Current(all)!;
+        Assert.Equal("PDM-02", main.Name);
+        foreach (var d in mods.Where(d => IgnitionMain.Ign(d) is { Enabled: true }))
+            Assert.Equal((d == main ? IgnitionRole.Main : IgnitionRole.Follower, 0x6F1, IgnitionSyncMode.Absolute), (IgnitionMain.Ign(d)!.Role, IgnitionMain.Ign(d)!.MainStateId, IgnitionMain.Ign(d)!.SyncMode));
         if (Environment.GetEnvironmentVariable("RANCHERO_OUT") is not { Length: > 0 } outDir) return;
         var name = Path.GetFileNameWithoutExtension(path);
         cfg.PdmDevices = [.. all.OfType<PdmDevice>().OrderBy(d => d.BaseId)];
         cfg.CanboardDevices = [.. all.OfType<CanboardDevice>().Where(d => d.GetType() == typeof(CanboardDevice)).OrderBy(d => d.BaseId)];
         File.WriteAllText(Path.Combine(outDir, name + ".57.json"), JsonSerializer.Serialize(cfg, opts));
         File.WriteAllLines(Path.Combine(outDir, name + ".57-report.txt"),
-            mods.SelectMany(m => m.Migration!.Select(n => $"[{n.Level}] {n.Text}"))
-                .Append("").Append("--- Make CB-1 the ignition main ---").Concat(r.Notes.Select(n => $"[{n.Level}] {n.Text}")));
+            mods.SelectMany(m => m.Migration!.Select(n => $"[{n.Level}] {n.Text}")));
     }
 }

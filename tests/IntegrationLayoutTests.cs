@@ -9,7 +9,7 @@ namespace tests;
 /// <summary>
 /// integration/all-features firmware (every feature branch merged): the var-map tail and the appended status frames
 /// as the firmware numbers them. Var-map sizes = pVarMap length read with arm-none-eabi-nm from the integration ELFs:
-/// dingopdm_v7 0x558 bytes = 342, dingopdmmax_v1 0x4d8 = 310, canboard_v2 0x168 = 90. Frames: status/integration-frames.md.
+/// dingopdm_v7 0x55c bytes = 343 (DashShutdown last, ignition parity c828e5c), dingopdmmax_v1 0x4dc = 311, canboard_v2 0x168 = 90. Frames: status/integration-frames.md.
 /// </summary>
 public class IntegrationLayoutTests
 {
@@ -23,7 +23,8 @@ public class IntegrationLayoutTests
         .. Block(LookupTable.UpstreamBaseIndex, 4, 3),
         .. Block(MathFunction.BaseIndex, 8, 3),
         .. Block(CanMessage.BaseIndex, 4, 3),
-        .. Block(Ignition.BaseIndex, 1, 11),
+        .. Block(Ignition.BaseIndex, 1, 23),
+        .. Enumerable.Range(0x30, outputs).Select(s => (Ignition.BaseIndex, s)),   // output roles
         .. Block(ComfortBlink.BaseIndex, 1, 3),
         .. Block(PidFunction.BaseIndex, 4, 3),
         .. Block(CurveFunction.BaseIndex, 4, 3),
@@ -44,8 +45,8 @@ public class IntegrationLayoutTests
     public void Pdm_v7_VarMapTail_MatchesTheIntegrationFirmware()
     {
         var d = IntegrationPdm(UpstreamPdm(), 8, 2);
-        Assert.Equal(342, d.VarMap.Count);
-        Assert.Equal(Enumerable.Range(0, 342), d.VarMap.Select(v => v.VariableIndex));
+        Assert.Equal(343, d.VarMap.Count);
+        Assert.Equal(Enumerable.Range(0, 343), d.VarMap.Select(v => v.VariableIndex));
         Assert.Equal(("timer", 8, "State"), At(d, 224));
         Assert.Equal(("input", 1, "PWM Duty"), At(d, 225));
         Assert.Equal(("math", 1, "Value"), At(d, 229));
@@ -61,6 +62,8 @@ public class IntegrationLayoutTests
         Assert.Equal(("output", 1, "Wire Load"), At(d, 302));
         Assert.Equal(("lua", 1, "Value"), At(d, 310));
         Assert.Equal(("lua", 32, "Value"), At(d, 341));
+        Assert.Equal(("ignition", 1, "Dash Shutdown"), At(d, 342));
+        Assert.Equal([.. Enumerable.Range(0, 23), .. Enumerable.Range(0x30, 8)], d.Params.Where(p => p.Index == Ignition.BaseIndex && domain.Common.FwFamily.Has(d, p)).Select(p => p.SubIndex).Order());
     }
 
     [Fact]
@@ -72,7 +75,8 @@ public class IntegrationLayoutTests
         var q = Q();
         d.Read(0x680, [31, 1, 0, 0, 0, 6, 0, 3], ref q, []);
         IntegrationPdm(d, 4, 2);
-        Assert.Equal(310, d.VarMap.Count);
+        Assert.Equal(311, d.VarMap.Count);
+        Assert.Equal(("ignition", 1, "Dash Shutdown"), At(d, 310));
         Assert.Equal(("input", 1, "PWM Duty"), At(d, 209));
         Assert.Equal(("math", 1, "Value"), At(d, 213));
         Assert.Equal(("table", 1, "Value"), At(d, 221));
@@ -122,6 +126,13 @@ public class IntegrationLayoutTests
         Assert.Equal((50.0, -10.0), (d.Pids[0].Value, d.Pids[1].Value));
         d.Read(0x680 + 36, [(byte)'I', 3, 0x1C, 0, 0, 0, 0, 0], ref q, []);
         Assert.Equal((IgnitionState.Running, true), (d.Ignition.State, d.Ignition.Dash));
+        // ignition parity: the status frame (any role): Cranking | follower << 4, dash Halting, sleep Counting, link ok,
+        // 300 s to sleep, flags ignition + dash + starter + dash shutdown, woke from sleep on CAN
+        d.Read(0x680 + 36, [0x12, 3, 2, 1, 0x2C, 0x01, 0x4D, 0x81], ref q, []);
+        Assert.Equal(new IgnitionStatus(IgnitionState.Cranking, 1, 3, 2, 1, 300, 0x4D, 0x81), d.Ignition.Status);
+        Assert.Equal((IgnitionState.Cranking, true), (d.Ignition.State, d.Ignition.Dash));
+        d.Read(0x680 + 36, [0x01, 1, 1, 0, 0, 0, 0x01, 0], ref q, []);   // on, dash flag off
+        Assert.Equal((IgnitionState.On, false), (d.Ignition.State, d.Ignition.Dash));
 
         // a module with only the PID and the ignition: PID at the first appended frame, ignition next
         var p = UpstreamPdm();

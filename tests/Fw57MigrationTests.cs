@@ -113,17 +113,17 @@ public class Fw57MigrationTests
     internal static List<(int, int)> Cb57Keys() =>
     [
         .. Block(0x0000, 1, 3), .. Block(TimerFunction.UpstreamBaseIndex, 4, 5), .. Block(AnalogInput.BaseIndex, 5, 21),
-        .. Block(MathFunction.BaseIndex, 4, 3), .. Block(CanMessage.BaseIndex, 2, 3), .. Block(Ignition.BaseIndex, 1, 11),
+        .. Block(MathFunction.BaseIndex, 4, 3), .. Block(CanMessage.BaseIndex, 2, 3), .. Block(Ignition.BaseIndex, 1, 23),
         .. Block(ComfortBlink.BaseIndex, 1, 3), .. Block(DigitalInput.BaseIndex, 8, 8), .. Block(PidFunction.BaseIndex, 2, 21),
     ];
 
     [Fact]
-    public void Canboard57_VarMap_121()
+    public void Canboard57_VarMap_122()
     {
         var d = Cb(5, 7, 0);
         UpstreamAnalogScaleTests.LearnParams(d, Cb57Keys());
-        Assert.Equal(121, d.VarMap.Count);   // nm canboard_v2.elf (integration c9644d3): pVarMap 0x1E4 bytes
-        Assert.Equal(Enumerable.Range(0, 121), d.VarMap.Select(v => v.VariableIndex));
+        Assert.Equal(122, d.VarMap.Count);   // nm canboard_v2.elf (integration c828e5c): pVarMap 0x1E8 bytes
+        Assert.Equal(Enumerable.Range(0, 122), d.VarMap.Select(v => v.VariableIndex));
         Assert.Equal(("timer", 1), (At(d, 75).OwnerKind, At(d, 75).OwnerNumber));
         for (var n = 1; n <= 8; n++)
         {
@@ -139,7 +139,8 @@ public class Fw57MigrationTests
         Assert.Equal(("pid", 1, "Output"), (At(d, 113).OwnerKind, At(d, 113).OwnerNumber, At(d, 113).PropertyName));
         Assert.Equal(("pid", 2, "Output"), (At(d, 117).OwnerKind, At(d, 117).OwnerNumber, At(d, 117).PropertyName));
         Assert.Equal(("pid", 2, "D"), (At(d, 120).OwnerKind, At(d, 120).OwnerNumber, At(d, 120).PropertyName));
-        Assert.Equal(Enumerable.Range(0, 11).ToList(), d.Params.Where(p => p.Index == Ignition.BaseIndex).Select(p => p.SubIndex).Order().ToList());
+        Assert.Equal(("ignition", "Dash Shutdown"), (At(d, 121).OwnerKind, At(d, 121).PropertyName));
+        Assert.Equal(Enumerable.Range(0, 23).ToList(), d.Params.Where(p => p.Index == Ignition.BaseIndex).Select(p => p.SubIndex).Order().ToList());   // no output roles
         Assert.Equal(Enumerable.Range(0, 21).ToList(), d.Params.Where(p => p.Index == PidFunction.BaseIndex + 1).Select(p => p.SubIndex).Order().ToList());
     }
 
@@ -183,13 +184,13 @@ public class Fw57MigrationTests
         var p = Pdm(5, 6, 6);
         p.UseFamily(FwFamily.Upstream, assumeAll: true);
         var learned = IntegrationLayoutTestsAccess.IntegrationPdm();
-        Assert.Equal(342, p.VarMap.Count);   // nm dingopdm_v7.elf (integration): pVarMap 0x558
+        Assert.Equal(343, p.VarMap.Count);   // nm dingopdm_v7.elf (integration c828e5c): pVarMap 0x55c
         Assert.Equal(learned.VarMap.Select(v => (v.OwnerKind, v.OwnerNumber, v.PropertyName)), p.VarMap.Select(v => (v.OwnerKind, v.OwnerNumber, v.PropertyName)));
         Assert.False(p.ParamSet.FromModule);   // Apply still waits for a Read
 
         var c = Cb(5, 6, 6);
         c.UseFamily(FwFamily.Upstream, assumeAll: true);
-        Assert.Equal(121, c.VarMap.Count);
+        Assert.Equal(122, c.VarMap.Count);
         var cl = Cb(5, 7, 0);
         UpstreamAnalogScaleTests.LearnParams(cl, Cb57Keys());
         Assert.Equal(cl.VarMap.Select(v => (v.OwnerKind, v.OwnerNumber, v.PropertyName)), c.VarMap.Select(v => (v.OwnerKind, v.OwnerNumber, v.PropertyName)));
@@ -325,17 +326,20 @@ public class Fw57MigrationTests
         // next reads main's table 1 (fork Msg 27 = +29) and output 2 current (Msg 1 = +3)
         next.CanInputs[5].Enabled = true; next.CanInputs[5].Id = 0x680 + 29; next.CanInputs[5].StartBit = 0; next.CanInputs[5].BitLength = 32;
         next.CanInputs[6].Enabled = true; next.CanInputs[6].Id = 0x680 + 3; next.CanInputs[6].StartBit = 16; next.CanInputs[6].BitLength = 16;
-        var cb = Cb(5, 6, 6, 0x660);   // a fork CANBoard that also follows: not migrated, but its follower id is
+        var cb = Cb(5, 6, 6, 0x660);   // a fork CANBoard that also follows: not migrated, it cannot follow a 5.7 main
         cb.Ignition.Enabled = true; cb.Ignition.Role = IgnitionRole.Follower; cb.Ignition.MainStateId = 0x680 + 30;
         Fw57Migration.Migrate([main, next, cb], [main, next]);
 
         Assert.Equal(0x680 + 33, next.CanInputs[5].Id);   // integration: tables 1-2 at +33
         Assert.Equal(0, next.CanInputs[5].StartBit);
         Assert.Equal(0x680 + 3, next.CanInputs[6].Id);    // unchanged
-        Assert.Equal(0x680 + 36, next.Ignition.MainStateId);
-        Assert.Equal(0x680 + 36, cb.Ignition.MainStateId);
+        // 5.7 syncs on its own id: both migrated modules on the default, main stays main
+        Assert.Equal((IgnitionRole.Main, 0x6F1, IgnitionSyncMode.Absolute), (main.Ignition.Role, main.Ignition.MainStateId, main.Ignition.SyncMode));
+        Assert.Equal((IgnitionRole.Follower, 0x6F1, IgnitionSyncMode.Absolute), (next.Ignition.Role, next.Ignition.MainStateId, next.Ignition.SyncMode));
+        Assert.Equal(0x680 + 30, cb.Ignition.MainStateId);   // the fork CANBoard is left alone, and told
+        Assert.True(Has(main, "warn", "CB ignition follower"));
         Assert.True(Has(main, "info", "reads PDM-680 Table1.Value"));
-        // main's ignition frame (+36 = 0x6A4) lands in next's range (0x6A0..)
+        // main's ignition status frame (+36 = 0x6A4) lands in next's range (0x6A0..)
         Assert.True(Has(main, "warn", "CAN ids overlap"));
         Assert.True(Has(main, "warn", "move PDM-6A0 to 0x6B0"));
         Assert.Equal(FwFamily.Fork, cb.Family);
@@ -482,7 +486,8 @@ internal static class IntegrationLayoutTestsAccess
         .. Block(LookupTable.UpstreamBaseIndex, 4, 3),
         .. Block(MathFunction.BaseIndex, 8, 3),
         .. Block(CanMessage.BaseIndex, 4, 3),
-        .. Block(Ignition.BaseIndex, 1, 11),
+        .. Block(Ignition.BaseIndex, 1, 23),
+        .. Enumerable.Range(0x30, outputs).Select(s => (Ignition.BaseIndex, s)),
         .. Block(ComfortBlink.BaseIndex, 1, 3),
         .. Block(PidFunction.BaseIndex, 4, 3),
         .. Block(CurveFunction.BaseIndex, 4, 3),
