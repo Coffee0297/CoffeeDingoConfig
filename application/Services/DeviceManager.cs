@@ -384,6 +384,12 @@ public class DeviceManager(ILogger<DeviceManager> logger, ILoggerFactory loggerF
 
     private void RecordConfirm(IDevice device, CanFrame frame, List<DeviceCanFrame> outgoing)
     {
+        // the Lua commit reply is 4 bytes: [cmd, lenHi, lenLo, stored ok]
+        if (frame.Payload.Length >= 4 && frame.Payload[0] == (byte)domain.Enums.MessageCommand.LuaWriteComplete)
+        {
+            if (_confirms.TryRemove((device.BaseId, domain.Enums.MessageCommand.LuaWriteComplete), out var lc)) lc.TrySetResult(frame.Payload[3] == 1);
+            return;
+        }
         if (frame.Payload.Length != 8) return;
         var cmd = (domain.Enums.MessageCommand)frame.Payload[0];
         bool ok;
@@ -1453,12 +1459,23 @@ public class DeviceManager(ILogger<DeviceManager> logger, ILoggerFactory loggerF
                     logger.LogError("UploadLua failed for {Name}: {Count} chunk(s) still wrong after 3 re-sends; not committed, the device keeps its previous program", device.Name, bad.Count);
                     return false;
                 }
-                QueueMessage(new DeviceCanFrame
+                // wait for the module to store it: it writes its config then (seconds on a slow store), and a read
+                // started before that finished got no answer and came back empty
+                var stored = await Confirmed(device, domain.Enums.MessageCommand.LuaWriteComplete, () =>
                 {
-                    DeviceBaseId = device.BaseId, SendOnly = true, Name = "LuaWriteComplete",
-                    Frame = new CanFrame(txId, 8,
-                        [(byte)domain.Enums.MessageCommand.LuaWriteComplete, (byte)(bytes.Length >> 8), (byte)(bytes.Length & 0xFF), 0, 0, 0, 0, 0])
-                });
+                    QueueMessage(new DeviceCanFrame
+                    {
+                        DeviceBaseId = device.BaseId, SendOnly = true, Name = "LuaWriteComplete",
+                        Frame = new CanFrame(txId, 8,
+                            [(byte)domain.Enums.MessageCommand.LuaWriteComplete, (byte)(bytes.Length >> 8), (byte)(bytes.Length & 0xFF), 0, 0, 0, 0, 0])
+                    });
+                    return true;
+                }, 10000);
+                if (!stored)
+                {
+                    logger.LogError("UploadLua: {Name} did not confirm storing the program", device.Name);
+                    return false;
+                }
                 logger.LogInformation("UploadLua done: {Len} bytes to {Name}, verified by read-back", bytes.Length, device.Name);
                 return true;
             }
