@@ -507,7 +507,7 @@
           <div class="two">
             <Field label="Timeout" type="number" unit="ms" bind:value={() => draft.timeout ?? 0, (v) => (draft.timeout = toNum(v))} />
             <Field label="Then the value is" type="number" step="any" disabled={oldFw || (flag && !draft.timeoutUseValue)} bind:value={() => draft.timeoutValue ?? 0, (v) => (draft.timeoutValue = toNum(v))}
-              hint={oldFw ? `Reads 0: ${dev?.name} 's firmware has no other value.` : flag && !draft.timeoutUseValue ? 'Reads 0 and off.' : 'Used while the frame is missing.'} />
+              hint={oldFw ? `Reads 0: ${dev?.name}'s firmware has no other value.` : flag && !draft.timeoutUseValue ? 'Reads 0 and off.' : 'Used while the frame is missing.'} />
           </div>
           {#if flag}<Checkbox label="Use this value instead of 0" hint="Pick the value that makes the result safe, e.g. 120 for a coolant > 95 fan." bind:checked={() => !!draft.timeoutUseValue, (v) => (draft.timeoutUseValue = v)} />{/if}
         {/if}
