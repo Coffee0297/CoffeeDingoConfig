@@ -1,5 +1,6 @@
 <script>
   import { Card, Stepper, Select, Switch } from '../../../ui/index.js'
+  import FuseCurve from './FuseCurve.svelte'
   // warn / openLoad: the firmware has the warning / open-load limits (output subs 18-20; on upstream by its param list)
   // under: the undercurrent limit (upstream output subs 27-29, upstream modules only)
   import { latchClears } from '../../../../lib/trip.js'
@@ -8,7 +9,7 @@
   // ssTarget: a current-limited soft start is set (the inrush limit is then the soft start's current target)
   // canShed: the module has load shedding (upstream feat/load-shed: device 0x0000:13 + output sub 26); shedWired: its shed input is set
   // wireTau: the firmware has the wire load estimate (upstream output sub 33)
-  let { f = $bindable(), rating = null, warn = true, openLoad = true, under = false, canClear = false, retryAll = false, hardShort = false, ssTarget = false, canShed = false, shedWired = false, wireTau = false } = $props()
+  let { f = $bindable(), rating = null, warn = true, openLoad = true, under = false, canClear = false, retryAll = false, hardShort = false, ssTarget = false, canShed = false, shedWired = false, wireTau = false, measured = 0 } = $props()
   const UNDER = [{ value: '0', label: 'Report only' }, { value: '1', label: 'Switch the output off' }]
 
   const RESET = [{ value: '0', label: 'Stay off (latch)' }, { value: '1', label: 'Retry a few times' }, { value: '2', label: 'Retry for ever' }]
@@ -90,11 +91,16 @@
     {#if openLoad}{#if num(f.openLoadLimit) > 0}Reports "load missing?" below <strong>{f.openLoadLimit} A</strong> for <strong>{f.openLoadTime} ms</strong>.{:else}Missing load is not checked.{/if}{/if}
     {#if under && num(f.underLimit) > 0}Below <strong>{f.underLimit} A</strong> for <strong>{f.underTime} ms</strong> it {f.underTrip ? 'switches off and latches Fault' : 'reports Undercurrent'}.{/if}
   </p>
+  <details class="curve" open>
+    <summary>Fuse curve</summary>
+    <FuseCurve f={hardShort ? f : { ...f, hardShortLimit: 0 }} {measured} />
+  </details>
 </Card>
 
 <style>
   .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: var(--space-3); }
   .hint { display: block; font-size: var(--text-xs); color: var(--color-text-muted); margin-top: 4px; }
   .hint.bad { color: var(--color-fault); font-weight: 700; }
+  .curve summary { cursor: pointer; min-height: 36px; display: flex; align-items: center; font-weight: 600; }
   .sum { padding: var(--space-3) var(--space-4); border-radius: var(--radius-md); background: var(--color-raised); font-size: var(--text-md); }
 </style>

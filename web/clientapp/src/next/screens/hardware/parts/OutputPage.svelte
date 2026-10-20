@@ -226,7 +226,7 @@
       <div class="col">
         <OutputChain {guid} {dev} bind:f {feed} {connected} raw={src} />
         {#if !isCb}
-          <OutputProtection bind:f {rating} warn={has(dev, 0x1000 + n - 1, 18)} openLoad={has(dev, 0x1000 + n - 1, 19)} under={isUpstream(dev) && has(dev, 0x1000 + n - 1, 27)} canClear={isUpstream(dev) && has(dev, 0x1000 + n - 1, 25)} retryAll={dev.retryAllInput > 0} hardShort={isUpstream(dev) && has(dev, 0x1000 + n - 1, 32)} ssTarget={ssTimeout && f.pwmEnabled && f.softStart && Number(f.softStartTimeout) > 0} canShed={dev.shedInput != null && has(dev, 0x1000 + n - 1, 26)} shedWired={dev.shedInput > 0} {wireTau} />
+          <OutputProtection bind:f {rating} warn={has(dev, 0x1000 + n - 1, 18)} openLoad={has(dev, 0x1000 + n - 1, 19)} under={isUpstream(dev) && has(dev, 0x1000 + n - 1, 27)} canClear={isUpstream(dev) && has(dev, 0x1000 + n - 1, 25)} retryAll={dev.retryAllInput > 0} hardShort={isUpstream(dev) && has(dev, 0x1000 + n - 1, 32)} ssTarget={ssTimeout && f.pwmEnabled && f.softStart && Number(f.softStartTimeout) > 0} canShed={dev.shedInput != null && has(dev, 0x1000 + n - 1, 26)} shedWired={dev.shedInput > 0} {wireTau} measured={amps ?? 0} />
           <!-- upstream dingoFW feat/stay-alive-outputs (sub 34) -->
           {#if isUpstream(dev) && has(dev, 0x1000 + n - 1, 34)}
             <Card title="While the module sleeps" aria-label="While the module sleeps">
