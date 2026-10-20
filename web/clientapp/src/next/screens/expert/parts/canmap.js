@@ -13,7 +13,8 @@ export const RESERVED_WHY = 'The OBD-II standard keeps this range for diagnostic
 export function blocksOf(devices) {
   return devices
     .filter((d) => d.type && !/dbc|keypad/i.test(d.type) && d.baseId)
-    .map((d) => ({ name: d.name, guid: d.guid, lo: d.baseId, hi: d.baseId + (/canboard/i.test(d.type) ? 13 : 29) }))
+    // as the backend's overlap check: a 5.7 module's block reaches its last frame sent (txSpan, e.g. a PDM's status slot at +36)
+    .map((d) => ({ name: d.name, guid: d.guid, lo: d.baseId, hi: d.baseId + Math.max(d.txSpan ?? 0, /canboard/i.test(d.type) ? 13 : 29) }))
 }
 
 /** rates: { [key]: { hz, last } } with key = (ide ? 'x' : '') + id. */

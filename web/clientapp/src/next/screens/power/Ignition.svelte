@@ -61,7 +61,7 @@
       const [fn, vars, inUse] = await Promise.all([api.functions(d.guid), api.inputs(d.guid), fetch(`/api/devices/${d.guid}/inputs?inUse=true`).then((r) => r.json())])
       funcsOf[d.guid] = fn?.ignition ?? null
       const sid = fn?.ignition?.statusId ?? 0
-      stIds[d.guid] = { fixed: sid > 0, val: sid > 0 ? '0x' + sid.toString(16).toUpperCase() : '' }
+      stIds[d.guid] ??= { fixed: sid > 0, val: sid > 0 ? '0x' + sid.toString(16).toUpperCase() : '' }   // Save reloads the main: keep an edit
       fullOf[d.guid] = fn; vmapOf[d.guid] = vars ?? []   // the whole var map: rules are read back from any slot
       const usable = (inUse ?? []).filter((v) => v.index > 0 && v.kind !== 'ignition' && !(v.name ?? '').startsWith('Ign '))
       boolsOf[d.guid] = usable.filter((v) => v.type === 'bool').map((v) => ({ value: String(v.index), label: word(v) }))

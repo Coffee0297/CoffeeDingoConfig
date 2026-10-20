@@ -1555,6 +1555,9 @@ public static class LiveApi
                     && sg.FrameId(d.BaseId, d switch { PdmDevice p => p.IgnitionStateOffset, CanboardDevice c => c.IgnitionStateOffset, _ => null }) is { } sid)
                     Claim(sid, false, $"{d.Name}: ignition status");
                 var couts = d switch { PdmDevice p => p.CanOutputs, CanboardDevice c => c.CanOutputs, _ => (IEnumerable<domain.Devices.Functions.CanOutput>?)null };
+                // a 5.7 main's sync frame (fixed id or base + offset): on another module's frame it is a clash too
+                if (d is IDeviceConfigurable im && domain.Common.IgnitionMain.Ign(im) is { Enabled: true, Role: domain.Devices.Functions.IgnitionRole.Main } mg && domain.Devices.Functions.Ignition.HasSync(im))
+                    Claim(mg.SyncMode == domain.Devices.Functions.IgnitionSyncMode.BaseOffset ? d.BaseId + mg.MainStateId : mg.MainStateId, false, $"{d.Name}: ignition sync");
                 if (couts != null)
                     foreach (var co in couts.Where(x => x.Enabled))
                         Claim(co.Id, co.Ide, $"{d.Name}: CAN out '{co.Name}'");
