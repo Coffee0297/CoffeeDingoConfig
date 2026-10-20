@@ -99,7 +99,9 @@ public class DbcSignalCodec
         double value;
         if (isFloat && length == 32)
         {
-            value = BitConverter.Int32BitsToSingle((int)(uint)rawValue);
+            // the float's own shortest digits: a module's 7.3f is 7.3, not 7.300000190734863 (shown as such after a Read)
+            var f = BitConverter.Int32BitsToSingle((int)(uint)rawValue);
+            value = double.Parse(f.ToString("R", System.Globalization.CultureInfo.InvariantCulture), System.Globalization.CultureInfo.InvariantCulture);
         }
         else if (isSigned)
         {

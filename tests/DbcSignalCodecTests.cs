@@ -109,4 +109,14 @@ public class DbcSignalCodecTests
         Assert.Throws<ArgumentException>(() =>
             DbcSignalCodec.ExtractSignal(data, 0, length, ByteOrder.LittleEndian));
     }
+
+    [Theory]
+    [InlineData(7.3), InlineData(0.2), InlineData(21.7), InlineData(-12.5)]
+    public void Float32_ReadsBackWithItsOwnDigits(double v)
+    {
+        // a 5.7 module stores currents etc. as float32: a Read must give 7.3, not 7.300000190734863
+        var data = new byte[8];
+        DbcSignalCodec.InsertSignal(data, v, 32, 32, isFloat: true);
+        Assert.Equal(v, DbcSignalCodec.ExtractSignal(data, startBit: 32, length: 32, isFloat: true));
+    }
 }
