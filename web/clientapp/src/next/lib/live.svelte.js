@@ -83,9 +83,10 @@ export function moduleState(d) {
   return { key: 'on', word: 'Connected', shape: 'dot' }
 }
 
-/** Changes not sent to the car = modules whose config differs from the project (configMismatch). */
+/** Changes not sent to the car = modules whose config differs from the project (configMismatch), or a firmware 5.7
+ *  module not read since the project was opened (the app cannot compare it before that Read). */
 export function pendingModules() {
-  return live.devices.filter((d) => d.configMismatch && d.connected)
+  return live.devices.filter((d) => d.connected && (d.configMismatch || (d.family === 'upstream' && !d.paramsRead)))
 }
 
 /** Modules holding written values they lose at power-off (G3: storedOnModule false). */

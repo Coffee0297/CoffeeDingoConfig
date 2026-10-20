@@ -194,7 +194,7 @@
     if (!d.connected) return { tone: 'fault', shape: 'square', word: 'Not found: cannot apply' }
     if (!s) return { tone: 'warn', shape: 'diamond', word: d.pendingEdits > 0 ? `${d.pendingEdits} change${d.pendingEdits === 1 ? '' : 's'} waiting` : 'Not sent' }
     return {
-      working: { tone: 'accent', shape: 'ring', word: s.step === 'write' ? 'Writing…' : 'Storing…' },
+      working: { tone: 'accent', shape: 'ring', word: s.step === 'write' ? (d.family === 'upstream' && !d.paramsRead ? 'Reading, then writing…' : 'Writing…') : 'Storing…' },
       written: { tone: 'warn', shape: 'diamond', word: 'Written, not stored' },
       refused: { tone: 'fault', shape: 'square', word: `Refused ${s.rejected.length} value${s.rejected.length === 1 ? '' : 's'}` },
       stored: { tone: 'ok', shape: 'dot', word: 'Stored' },
@@ -298,6 +298,9 @@
           </div>
         {:else if !s && !(edits[d.guid] ?? []).length}
           <p class="muted sm">{d.configDiffCount === 0 ? 'Not compared with the module yet. Read it to see exactly what differs, or apply to send what changed.' : ''}</p>
+        {/if}
+        {#if s?.state !== 'working' && d.family === 'upstream' && !d.paramsRead && d.connected}
+          <p class="muted sm" data-testid="apply-reads-first">Apply reads {d.name} first: the app learns a firmware 5.7 module's list of settings from one Read after the project is opened. The project's values are kept, then written.</p>
         {/if}
         {#if s?.state === 'refused'}
           <div class="refuse" role="alert">

@@ -118,6 +118,14 @@ public class Fw57MigrationTests
         Assert.False(Cb(0, 6, 3).CanBootloader);
     }
 
+    [Fact]
+    public void ProjectFile_HasNoCanBootloader_ItFollowsTheReportedVersion()
+    {
+        // in the file it flipped to true when a just-opened 5.7 project's modules reported their version: "unsaved" at once
+        Assert.DoesNotContain("canBootloader", JsonSerializer.Serialize(Pdm(5, 7, 0)));
+        Assert.DoesNotContain("canBootloader", JsonSerializer.Serialize(Cb(5, 7, 0)));
+    }
+
     // ---- CANBoard 5.7 -----------------------------------------------------------------------------
 
     internal static List<(int, int)> Cb57Keys() =>
@@ -391,6 +399,26 @@ public class Fw57MigrationTests
         // the next Read takes the module's values as usual
         LearnParams(d, 0x680, IntegrationLayoutTestsAccess.PdmKeys(8, 2));
         Assert.Equal(0, d.Outputs[0].Input);
+    }
+
+    [Fact]
+    public void ReopenedProject_TheReadBeforeApplyKeepsTheFilesValues()
+    {
+        // a 5.7 project saved after a Read, edited, opened again: the app needs a Read before it may write, and that
+        // Read used to replace the edit with the module's value
+        var d = ForkPdm();
+        var q = Q();
+        d.Read(0x680, Ver(5, 7, 0), ref q, []);
+        Fw57Migration.Migrate([d], [d]);
+        LearnParams(d, 0x680, IntegrationLayoutTestsAccess.PdmKeys(8, 2));
+        d.Outputs[0].CurrentLimit = 12.5;
+        var cfg = new ConfigFileManager(NullLogger<ConfigFileManager>.Instance, new DeviceDefinitionManager());
+        var back = (PdmDevice)cfg.LoadDevicesFromJson(cfg.SerializeDevices([d]))!.Single();
+        back.SetLogger(NullLogger<PdmDevice>.Instance);
+        Assert.True(back.KeepValuesOnRead);
+        LearnParams(back, 0x680, IntegrationLayoutTestsAccess.PdmKeys(8, 2));
+        Assert.True(back.ParamSet.FromModule);
+        Assert.Equal(12.5, back.Outputs[0].CurrentLimit);
     }
 
     [Fact]

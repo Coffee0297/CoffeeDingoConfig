@@ -479,7 +479,14 @@ public class DeviceManager(ILogger<DeviceManager> logger, ILoggerFactory loggerF
         // firmware the app sends only the oldest firmware's params: a write then wiped the newer settings (math
         // blocks, CAN messages, ignition…). Learn the version first; without it, do not write.
         if (!await EnsureVersionAsync(d)) { logger.LogWarning("{Name}: firmware version unknown, not writing (it would reset its newer settings)", d.Name); return false; }
-        // Upstream: the WriteAll must hold exactly the module's params, so learn them (Read) first.
+        // Upstream: the WriteAll must hold exactly the module's params, so learn them (Read) first. A record from a
+        // project file keeps its values on that Read (KeepValuesOnRead), so do it here instead of refusing the Apply.
+        if (!ParamsKnown(d) && d is IDeviceConfigurable { KeepValuesOnRead: true } kd && !OlderLine(d))
+        {
+            logger.LogInformation("{Name}: learning its list of settings (Read, the project's values are kept) before writing", d.Name);
+            ReadDeviceConfig(deviceId);
+            for (var t = 0; t < 600 && !kd.ParamSet.FromModule; t++) await Task.Delay(100);   // ~1 s on a module, longer on a busy bus
+        }
         if (!ParamsKnown(d)) { logger.LogWarning("{Name}: upstream firmware, its param list is not read yet: not writing", d.Name); return false; }
         return await Confirmed(d, domain.Enums.MessageCommand.WriteAllComplete, () => all ? WriteAllDeviceConfig(deviceId) : WriteDeviceConfig(deviceId), 30000);
     }

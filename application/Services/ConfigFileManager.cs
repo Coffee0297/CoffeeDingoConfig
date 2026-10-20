@@ -111,6 +111,10 @@ public class ConfigFileManager(ILogger<ConfigFileManager> logger, DeviceDefiniti
             device.ApplyDefinition(deviceDefinitionManager.GetByCanboardType(device.CanboardType) ?? DeviceDefinitionManager.DefaultCanboard);
 
         MigrateLegacySleep(jsonString, config);
+        // Upstream / 5.7: the app writes only after a Read has taught it the module's list of settings. For a project
+        // from a file that first Read keeps the file's values (it compares), or the Read before Apply undid every edit.
+        foreach (var d in config.PdmDevices.Cast<IDeviceConfigurable>().Concat(config.CanboardDevices))
+            if (d.Family == domain.Common.FwFamily.Upstream) d.KeepValuesOnRead = true;
 
         var allDevices = new List<IDevice>();
         allDevices.AddRange(config.PdmDevices);

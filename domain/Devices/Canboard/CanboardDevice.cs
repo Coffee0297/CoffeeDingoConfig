@@ -42,7 +42,7 @@ public class CanboardDevice : IDeviceConfigurable
     // param or version tells the two apart, upgrade once the firmware reports its features.
     [JsonIgnore] public bool CanSleep => !VersionReceived || (Family == FwFamily.Fork ? domain.Common.Firmware.Has(Version, SleepSince) : ParamSet.Contains(BaseIndex, 2));
     // OpenBLT XCP-over-CAN bootloader; upstream dingoFW has no CANBoard port of it (the -O0 app does not fit behind it), the 5.7 line has
-    [JsonPropertyName("canBootloader")] public bool CanBootloader => Family != FwFamily.Upstream || FwFamily.OwnLine(this);
+    [JsonIgnore] public bool CanBootloader => Family != FwFamily.Upstream || FwFamily.OwnLine(this);
 
     [JsonIgnore] public const int BaseIndex = 0x0000;
     [JsonPropertyName("canboardType")] public int CanboardType { get; set; }
@@ -1271,7 +1271,7 @@ public class CanboardDevice : IDeviceConfigurable
     }
 
     [JsonIgnore] public bool Migrate57Pending { get; set; }
-    [JsonPropertyName("keepValuesOnRead")] public bool KeepValuesOnRead { get; set; }
+    [JsonIgnore] public bool KeepValuesOnRead { get; set; }
     [JsonPropertyName("migration")] public List<MigrationNote>? Migration { get; set; }
 
     public void UseFamily(string family, bool assumeAll)
