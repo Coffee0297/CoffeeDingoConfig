@@ -37,7 +37,7 @@ public static class IgnitionMain
             var g = Ign(d)!;
             g.MainStateId = m.MainStateId;
             g.SyncMode = m.SyncMode;
-            if (m.SyncMode == IgnitionSyncMode.BaseOffset) g.SyncBase = main.BaseId;
+            g.SyncBase = m.SyncMode == IgnitionSyncMode.BaseOffset ? main.BaseId : 0;   // as Save: a fixed id leaves no stale base (a diff to Apply)
             changed.Add(d);
         }
         return new(null, changed, skipped);

@@ -89,6 +89,12 @@ public class IgnitionMainTests
         Assert.Equal(0x6A0 + 30, fork.Ignition.MainStateId);
 
         Assert.NotNull(IgnitionMain.SyncFollowers(all, pdm3).Error);   // only from a main
+
+        // back to a fixed id: the followers' base goes back to 0 too
+        main.Ignition.SyncMode = IgnitionSyncMode.Absolute; main.Ignition.MainStateId = 0x740;
+        IgnitionMain.SyncFollowers(all, main);
+        foreach (var d in r.Changed)
+            Assert.Equal((0x740, IgnitionSyncMode.Absolute, 0), (IgnitionMain.Ign(d)!.MainStateId, IgnitionMain.Ign(d)!.SyncMode, IgnitionMain.Ign(d)!.SyncBase));
     }
 
     [Fact]
