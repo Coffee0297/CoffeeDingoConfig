@@ -1563,8 +1563,9 @@ public static class LiveApi
                     Claim(mg.SyncMode == domain.Devices.Functions.IgnitionSyncMode.BaseOffset ? d.BaseId + mg.MainStateId : mg.MainStateId, false, $"{d.Name}: ignition sync");
                 var couts = d switch { PdmDevice p => p.CanOutputs, CanboardDevice c => c.CanOutputs, _ => (IEnumerable<domain.Devices.Functions.CanOutput>?)null };
                 if (couts != null)
-                    foreach (var co in couts.Where(x => x.Enabled))
-                        Claim(co.Id, co.Ide, $"{d.Name}: CAN out '{co.Name}'");
+                    // a module packs its CAN outputs on one id into one frame (signals, counter, checksum): one sender
+                    foreach (var co in couts.Where(x => x.Enabled).GroupBy(x => (x.Id, x.Ide)))
+                        Claim(co.Key.Id, co.Key.Ide, $"{d.Name}: CAN out {string.Join(", ", co.Select(x => $"'{x.Name}'"))}");
                 // A Lua program's txCan(bus, id, ext, …) frames are transmissions as well — without them a future module
                 // placed on those ids would overlap silently.
                 if (d is PdmDevice lp && !string.IsNullOrWhiteSpace(lp.LuaProgram))
