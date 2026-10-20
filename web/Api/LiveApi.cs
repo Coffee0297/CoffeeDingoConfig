@@ -1603,7 +1603,7 @@ public static class LiveApi
         // ---- Sim playback: replay a CAN-log CSV onto the simulated bus (connect the "Sim" adapter).
         // CSV format is the app's own CAN-log export: header row, then
         //   timestamp(yyyy-MM-dd HH:mm:ss.fff), Rx|Tx, id(hex), length, data(space-separated hex bytes)
-        api.MapPost("/sim/load", async (HttpRequest req, application.Services.SimPlayback pb) =>
+        api.MapPost("/sim/load", async (HttpRequest req, string? name, application.Services.SimPlayback pb) =>
         {
             // No upload size limit — replay logs can be hundreds of MB. Stream straight to a temp file
             // (never the whole body in memory), then stream-parse it.
@@ -1614,7 +1614,7 @@ public static class LiveApi
             {
                 await using (var fs = File.Create(tmp))
                     await req.Body.CopyToAsync(fs);
-                var (ok, err) = await pb.LoadFile(tmp);
+                var (ok, err) = await pb.LoadFile(tmp, name);   // the user's file name, not the temp one
                 return ok ? Results.Ok(new { ok, total = pb.TotalMessages, fileName = pb.CurrentFileName })
                           : Results.BadRequest(new { ok, error = err });
             }

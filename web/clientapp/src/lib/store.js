@@ -174,7 +174,7 @@ export const api = {
   simRate: (fps) => j('POST', `/api/sim/rate?fps=${fps}`),
   async simLoad(body) {
     // body is a File/Blob — the browser streams it, so even a huge log isn't held as a JS string.
-    const r = await fetch('/api/sim/load', { method: 'POST', headers: { 'Content-Type': 'text/csv' }, body })
+    const r = await fetch('/api/sim/load' + (body?.name ? '?name=' + encodeURIComponent(body.name) : ''), { method: 'POST', headers: { 'Content-Type': 'text/csv' }, body })
     if (!r.ok) throw await apiError(r)
     return r.json()
   },

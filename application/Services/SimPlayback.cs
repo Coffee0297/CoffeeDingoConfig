@@ -52,7 +52,8 @@ public class SimPlayback(ILogger<SimPlayback> logger)
     // The app's own timestamp; logs recorded before it was culture-invariant may use '.' between the time parts.
     private static readonly string[] TsFormats = ["yyyy-MM-dd HH:mm:ss.fff", "yyyy-MM-dd HH.mm.ss.fff"];
 
-    public async Task<(bool success, string? error)> LoadFile(string filePath)
+    /// <param name="name">the name to show (an upload is read from a temp file)</param>
+    public async Task<(bool success, string? error)> LoadFile(string filePath, string? name = null)
     {
         try
         {
@@ -177,7 +178,7 @@ public class SimPlayback(ILogger<SimPlayback> logger)
                 CurrentMessageIndex = 0;
                 State = PlaybackState.Idle;
                 CurrentTime = TimeSpan.Zero;
-                CurrentFileName = Path.GetFileName(filePath);
+                CurrentFileName = string.IsNullOrWhiteSpace(name) ? Path.GetFileName(filePath) : Path.GetFileName(name);
             }
 
             logger.LogInformation("Loaded {Count} CAN messages from {FileName}", messages.Count, CurrentFileName);
