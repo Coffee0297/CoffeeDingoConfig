@@ -62,6 +62,22 @@ public class IgnitionMainTests
     }
 
     [Fact]
+    public void Migration_OneByOne_DropsTheStale56FollowerWarning_AndOffersTheStatusId()
+    {
+        var main = Pdm(5, 6, 6, 0x6A0); main.Name = "PDM-02";
+        var f = Pdm(5, 6, 6, 0x6C0); f.Name = "PDM-03";
+        main.Ignition.Enabled = true; main.Ignition.Role = IgnitionRole.Main;
+        f.Ignition.Enabled = true; f.Ignition.Role = IgnitionRole.Follower; f.Ignition.MainStateId = 0x6A0 + 30;
+        List<IDevice> all = [main, f];
+        Fw57Migration.Migrate(all, [main]);   // the main reports 5.7 first
+        Assert.Contains(main.Migration!, n => n.Text.StartsWith("PDM-03 ignition follower: stays on firmware 5.6"));
+        Fw57Migration.Migrate(all, [f]);
+        Assert.DoesNotContain(main.Migration!, n => n.Text.Contains("stays on firmware 5.6"));
+        // PDM-02's status slot (+36) reaches into PDM-03: the fix names the status id
+        Assert.Contains(main.Migration!.Concat(f.Migration!), n => n.Text.StartsWith("CAN ids overlap") && n.Text.Contains("give PDM-02's ignition status frame a free CAN id"));
+    }
+
+    [Fact]
     public void SyncFollowers_WritesOnlyFollowers()
     {
         var (all, main, _) = Ranchero();

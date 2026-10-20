@@ -54,6 +54,9 @@ public static class Fw57Migration
             d.UseFamily(FwFamily.Upstream, assumeAll: true);
             d.KeepValuesOnRead = true;
         }
+        // a module converted now is no longer a 5.6 follower: drop that warning from the reports of mains converted before it
+        foreach (var o in all.OfType<IDeviceConfigurable>())
+            o.Migration?.RemoveAll(n => snaps.Any(s => n.Text.StartsWith($"{s.Dev.Name} ignition follower: stays on firmware 5.6")));
         foreach (var s in snaps)
         {
             var notes = new List<MigrationNote> { new("info", $"{s.Dev.Name}: converted to the firmware 5.7 layout ({s.Map.Count} → {s.Dev.VarMap.Count} signals).") };
@@ -279,8 +282,11 @@ public static class Fw57Migration
             // its range). Not on 5.7: every module with the ignition on sends its status frame, whatever its role.
             var cb = lo is not CanboardDevice && lo is IDeviceConfigurable lc && !Ignition.HasSync(lc) && IgnitionMain.Current(all) == lc && IgnOffset(lc) == Span(lo)
                 ? IgnitionMain.Suggest(all, lc) : null;
+            // 5.7: the highest frame is the ignition status on its slot, which can go out on its own id (sub 23)
+            var st = lo is IDeviceConfigurable sc && Ignition.HasSync(sc) && IgnFrame(sc) && IgnitionMain.Ign(sc)!.StatusId == 0 && IgnOffset(sc) == Span(lo);
             yield return new("warn", $"CAN ids overlap: {why}, into {hi.Name}'s range from 0x{hi.BaseId:X3}. Fix: move {hi.Name} to 0x{free:X3} or higher (space PDMs 0x30 apart), "
-                + (cb is null ? "" : $"or make {cb.Name} the ignition main, ") + "or turn off the feature that sends the highest frame.", cb is null ? null : $"ignition-main:{cb.Guid}");
+                + (cb is null ? "" : $"or make {cb.Name} the ignition main, ") + (st ? $"or give {lo.Name}'s ignition status frame a free CAN id on the Ignition page, " : "")
+                + "or turn off the feature that sends the highest frame.", cb is null ? null : $"ignition-main:{cb.Guid}");
         }
     }
 
