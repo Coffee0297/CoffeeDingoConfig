@@ -397,6 +397,7 @@ export function slotUsage(dev, funcs, defs) {
     ['Curves', 'curves', 'numCurves'],   // only where /functions has them (upstream with the curve block)
     ['Latch / Gate', 'latchGates', 'numLatchGates'],   // only where /functions has them (upstream with the latch/gate block)
     ['PIDs', 'pids', 'numPids'],   // only where /functions has them (upstream with the PID block)
+    ...(olderThan(dev?.version, [5, 6, 1]) ? [] : [['Comfort blink', 'comfortBlinks', 'numComfortBlinks']]),
   ]
   return rows.filter(([, arr]) => Array.isArray(funcs?.[arr])).map(([label, arr, key]) => {
     const list = funcs[arr]

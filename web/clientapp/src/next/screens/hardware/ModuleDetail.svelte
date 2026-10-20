@@ -8,6 +8,7 @@
   import { setupSheetHtml, printHtml } from '../../../lib/setupsheet.js'
   import { href, go } from '../../router.svelte.js'
   import ModuleSettings from './parts/ModuleSettings.svelte'
+  import SlotMeters from '../functions/flow/SlotMeters.svelte'
   import { hexId, fwText } from './parts/ids.js'
   import { isUpstream } from './parts/util.js'
   import { isTripped, isOn, fmt1, num, worstCaseA } from '../car/parts/summary.js'
@@ -107,6 +108,11 @@
     {#if !d.connected}
       <Banner tone="warn" title={live.connected ? `${d.name} is not answering` : 'Not connected'}>Values below are from the project, not from the module. {live.connected ? 'Check power, wiring, base ID and speed.' : 'Connect to see live values.'}</Banner>
     {/if}
+
+    <Card title="Blocks used" subtitle="of what this module has">
+      {#snippet actions()}<Button size="sm" href={href('functions', 'flow', guid)}>Open in the flow builder</Button>{/snippet}
+      <SlotMeters {guid} />
+    </Card>
 
     <div class="wrap"><Tabs label="Module" bind:value={current} items={[{ value: 'outputs', label: 'Outputs', count: outputs.filter((o) => o.enabled).length }, { value: 'inputs', label: 'Inputs' }, { value: 'settings', label: 'Settings' }]}>
       {#snippet panel(v)}

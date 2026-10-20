@@ -6,7 +6,8 @@
   import { untrack } from 'svelte'
   import { Page, PageHeader, Button, Chip, Banner, Empty, Dialog, Select, Field } from '../../ui/index.js'
   import { spareOutputs } from './parts/handbuilt.js'
-  import { live } from '../../lib/live.svelte.js'
+  import { live, modulesOf } from '../../lib/live.svelte.js'
+  import SlotMeters from './flow/SlotMeters.svelte'
   import { href } from '../../router.svelte.js'
   import { templateInstances } from '../../../lib/store.js'
   import { SYSTEMS, systemName } from './parts/catalog.js'
@@ -17,6 +18,7 @@
   const M = createModel()
   const m = M.m
 
+  let slotsOpen = $state(false)
   let q = $state(''), chip = $state('all'), selectedId = $state('')
   let confirmRemove = $state(false), confirmOn = $state(false)
   // Duplicate of a hand-built function: a spare output and a name
@@ -80,6 +82,13 @@
     <Banner tone="warn" title="Not connected">Showing the project as saved. Live state needs a connection.</Banner>
   {/if}
   {#if m.error}<Banner tone="fault" title="Could not read the modules">{m.error}</Banner>{/if}
+
+  <details class="slots" bind:open={slotsOpen} data-testid="fn-slots">
+    <summary>Blocks used on each module</summary>
+    {#if slotsOpen}{#each modulesOf(live.devices) as d (d.guid)}
+      <section aria-label={d.name}><h2 class="gh"><a href={href('functions', 'flow', d.guid)}>{d.name}</a></h2><SlotMeters guid={d.guid} /></section>
+    {/each}{/if}
+  </details>
 
   {#if m.loading}
     <p class="muted" role="status">Reading the modules…</p>
@@ -147,6 +156,8 @@
 </Dialog>
 
 <style>
+  .slots summary { cursor: pointer; min-height: 36px; display: flex; align-items: center; font-weight: 600; }
+  .slots section { margin-top: var(--space-3); }
   .srch { width: min(380px, 100%); }
   .info { display: inline-grid; place-items: center; width: 20px; height: 20px; border-radius: 50%; border: 1px solid var(--color-line-strong); font-size: 12px; font-weight: 700; font-style: italic; color: var(--color-text-muted); cursor: help; }
   .chips { display: flex; gap: var(--space-2); flex-wrap: wrap; }
