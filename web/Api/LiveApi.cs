@@ -1368,7 +1368,7 @@ public static class LiveApi
             using var ms = new MemoryStream();
             await req.Body.CopyToAsync(ms);
             var res = await flasher.FlashAsync(g, ms.ToArray());
-            return Results.Ok(new { ok = res.Ok, log = res.Log, version = res.Version });
+            return Results.Ok(new { ok = res.Ok, log = res.Log, version = res.Version, started = res.Started });
         });
 
         // Live CAN-flash progress (polled by the UI while a CAN flash is in flight).

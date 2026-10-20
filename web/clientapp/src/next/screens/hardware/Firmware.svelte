@@ -6,20 +6,26 @@
   import Confirm from '../power/parts/Confirm.svelte'
   import FlashNewBoard from './parts/firmware/FlashNewBoard.svelte'
   import { boardOf, boardOfFile, fileVersion, cleanVersion, flashPath, pathLabel, extFor, fitsPath, checkFile, lastLine, cmpVersion, relationTo, relationLabel } from './parts/firmware/firmwareLogic.js'
-  import { isUpstream } from './parts/util.js'
+  import { isUpstream, ownLine } from './parts/util.js'
   let props = $props()
 
   const mods = $derived(live.devices.filter((d) => /pdm|canboard/i.test(d.type ?? '')))
-  const blocked = $derived(!live.connected ? 'Connect to the car first.' : (!live.adapter || !live.programmingAllowed) ? 'Switch to a real CAN or USB adapter: the Sim cannot program hardware.' : '')
-
   let files = $state([]), st = $state({}), busy = $state(false), pausing = $state(false)
+  // an update over CAN started before this page opened (a reload, another window) still runs on the backend
+  let other = $state(null)
+  async function pollOther() { try { const s = await api.flashCanStatus(); other = s?.busy && !busy ? s : null } catch { /* backend away */ } }
+  $effect(() => { pollOther(); const t = setInterval(pollOther, 1500); return () => clearInterval(t) })
+  const blocked = $derived(!live.connected ? 'Connect to the car first.' : (!live.adapter || !live.programmingAllowed) ? 'Switch to a real CAN or USB adapter: the Sim cannot program hardware.'
+    : other ? `An update over CAN is already running (${other.phase || 'writing'} · ${other.percent} %), started before this page opened or in another window. Wait until it is done.` : '')
   let run = $state(null)          // { label, done, total } while an update-all is going
   let confirm = $state(null)      // { mode: 'one' | 'all', ... }
   let newBoard = $state(false), fileInput, reading = $state(false)
 
   const pathOf = (d) => flashPath(d, live.connected)
   // over CAN only an image built for the bootloader (the pre-flight check reads where it starts; .srec/.hex)
-  const fileFor = (d) => { const p = pathOf(d); return p ? files.find((f) => boardOfFile(f.name)?.key === boardOf(d).key && fitsPath(f.name, p) && (p !== 'can' || checks[f.name]?.relocated !== false)) ?? null : null }
+  // once checked, the image's own board marker decides (a CANBoard image named like a PDM file was offered to the PDMs)
+  const fitsBoard = (f, d) => (checks[f.name]?.board ? checks[f.name].modules.some((m) => m.guid === d.guid) : boardOfFile(f.name)?.key === boardOf(d).key)
+  const fileFor = (d) => { const p = pathOf(d); return p ? files.find((f) => fitsBoard(f, d) && fitsPath(f.name, p) && (p !== 'can' || checks[f.name]?.relocated !== false)) ?? null : null }
   // upstream dingoFW PDM: the operator says whether it has the OpenBLT bootloader (nothing on the bus can tell)
   async function markBootloader(d, on) {
     try {
@@ -134,7 +140,8 @@
         api.action(d.guid, 'version').catch(() => {})
         return true
       }
-      st[d.guid] = { state: 'failed', pct: st[d.guid]?.pct ?? 0, text: `Failed: ${lastLine(r.log) || 'no reason given'}. The module stays in its bootloader and is safe. Run it again.` }
+      st[d.guid] = { state: 'failed', pct: st[d.guid]?.pct ?? 0, text: `Failed: ${lastLine(r.log) || 'no reason given'}. ` + (path === 'can' && r.started === false
+        ? 'Nothing was sent: the module runs its firmware as before.' : 'The module stays in its bootloader and is safe. Run it again.') }
     } catch (e) {
       st[d.guid] = { state: 'failed', pct: st[d.guid]?.pct ?? 0, text: `Link lost or cut off: ${e?.message ?? e}. The module stays in its bootloader and is safe. Check power and wiring, then run it again.` }
     } finally { clearInterval(poll) }
@@ -246,7 +253,7 @@
               <td data-label="Board">{boardOf(d).label}</td>
               <td class="mono" data-label="Now" data-testid={`fw-version-${d.name}`}>{d.connected ? (cleanVersion(d.version) || 'unknown') : d.inBootloader ? 'in bootloader' : 'not seen'}</td>
               <td data-label="Path">{pathLabel(p)}
-                {#if isUpstream(d) && /pdm/i.test(d.type ?? '')}
+                {#if isUpstream(d) && !ownLine(d) && /pdm/i.test(d.type ?? '')}<!-- the 5.7 line is always behind OpenBLT: nothing to tick -->
                   <Checkbox label="Has the CAN bootloader" hint="Upstream dingoFW: tick once OpenBLT is programmed on it. Without it a CAN update sends the module to USB-DFU." checked={!!d.canBootloader} disabled={busy} onchange={(v) => markBootloader(d, v)} data-testid={`fw-openblt-${d.name}`} />
                 {/if}</td>
               <td class="pc">

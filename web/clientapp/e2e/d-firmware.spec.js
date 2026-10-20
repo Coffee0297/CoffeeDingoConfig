@@ -107,7 +107,8 @@ test('firmware: a refused image shows the failure and that the module is safe @e
   await page.getByTestId('fw-update-CB-2').click()
   await page.getByTestId('confirm-go').click()
   await expect(page.getByTestId('fw-status-CB-2')).toContainText(/Failed|Link lost/, { timeout: 180_000 })
-  await expect(page.getByTestId('fw-status-CB-2')).toContainText('stays in its bootloader and is safe')
+  // refused before the module was touched (5.7: too small) says nothing was sent; a failure during the update, that the module is safe
+  await expect(page.getByTestId('fw-status-CB-2')).toContainText(/stays in its bootloader and is safe|Nothing was sent: the module runs its firmware as before/)
   // the module must come back
   await waitFor(async () => (await deviceByName('CB-2')).connected, 120_000, 'CB-2 back on the bus')
 })

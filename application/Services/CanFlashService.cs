@@ -17,7 +17,8 @@ public sealed class CanFlashService(
     ICommsAdapterManager adapters,
     ILogger<CanFlashService> logger)
 {
-    public record FlashResult(bool Ok, string Log, string? Version = null);
+    // Started: the module was sent to its bootloader (false: refused before anything reached it, it runs as before)
+    public record FlashResult(bool Ok, string Log, string? Version = null, bool Started = false);
     public record FlashStatus(bool Busy, int Percent, string Phase);
 
     // OpenBLT PDMs relocate the app above the 16 KB bootloader to sector 1 (CANBoards from 5.7: DfuImage.CanboardAppBase).
@@ -26,6 +27,7 @@ public sealed class CanFlashService(
     private volatile int _percent;
     private volatile string _phase = "idle";
     private volatile bool _busy;
+    private int _running;
     public FlashStatus Status() => new(_busy, _percent, _phase);
     private void Set(string phase, int percent) { _phase = phase; _percent = percent; }
 
@@ -72,6 +74,8 @@ public sealed class CanFlashService(
             _ => null,
         } is { Length: > 0 } v && v != "v0.0.0" ? v : null;
         var before = Ver();
+        // one update at a time: a second one (another window, a reload) moved the receive filter off the first module
+        if (Interlocked.CompareExchange(ref _running, 1, 0) != 0) return new(false, "Refused: another module is being updated over CAN. Wait until it is done.");
         _busy = true; Set("Entering bootloader", 2);
         using var lifetime = ct.CanBeCanceled ? null : new CancellationTokenSource(TimeSpan.FromMinutes(4));
         var token = lifetime?.Token ?? ct;
@@ -174,7 +178,7 @@ public sealed class CanFlashService(
             Set("Done", 100);
             log.AppendLine(version is not null ? $"✓ Done — module reports {version}." : "✓ Done — module rebooting (version not yet reported).");
             logger.LogInformation("CAN flash ok ({Bytes} bytes) for {Name}", written, dev.Name);
-            return new(true, log.ToString(), version);
+            return new(true, log.ToString(), version, true);
         }
         catch (OperationCanceledException) { return Fail(log, "Timed out / cancelled."); }
         catch (Exception ex)
@@ -182,13 +186,13 @@ public sealed class CanFlashService(
             logger.LogError(ex, "CAN flash error");
             return Fail(log, "Error: " + ex.Message);
         }
-        finally { adapters.ActiveAdapter?.SetReceiveFilter(null); dm.ResumeConfigFilter(); _busy = false; }
+        finally { adapters.ActiveAdapter?.SetReceiveFilter(null); dm.ResumeConfigFilter(); _busy = false; _running = 0; }
     }
 
     private FlashResult Fail(StringBuilder log, string msg)
     {
         Set("Failed", _percent);
         log.AppendLine("✗ " + msg);
-        return new(false, log.ToString());
+        return new(false, log.ToString(), null, true);
     }
 }
