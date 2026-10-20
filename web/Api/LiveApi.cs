@@ -62,7 +62,10 @@ public record DeviceDto(string Guid, string Name, string Type, int BaseId, bool 
     // runs Lua: a PDM on the fork, or an upstream PDM that answered a Lua command (feat/lua-scripting)
     bool HasLua = false,
     // the firmware 5.7 migration report (null: never migrated); KeepValuesOnRead: the next Read keeps the project
-    List<domain.Common.MigrationNote>? Migration = null, bool KeepValuesOnRead = false);
+    List<domain.Common.MigrationNote>? Migration = null, bool KeepValuesOnRead = false,
+    // upstream / 5.7 PDM: the highest id offset it sends with its current settings (the appended frames go out only while
+    // their feature is on); the CAN ID map and the clash checks use it. Null: the fixed fork / CANBoard span.
+    int? TxSpan = null);
 // Has: the module has the lock (its Read listed 0x0200, or it refused a request as locked). PasswordSet: the
 // project holds a password, sent on every write. The password itself never goes to the UI.
 public record LockDto(bool Has, bool Locked, string Contact, bool PasswordSet);
@@ -384,7 +387,8 @@ public static class DingoMap
                 HasLed: ui?.HasLed, Asleep: ui?.Asleep == true && !p.Connected, LastWake: Wake(ui), SleepCountdownS: p.SleepCountdownS,
                 SleepBlockers: ui?.SleepBlockers, Ignition: Ign(p.Ignition, p.BaseId + (p.IgnitionStateOffset ?? domain.Devices.Functions.Ignition.StateOffsetFor(p.Type, p.Family, p.PdmType))),
                 Family: p.Family, ParamsRead: p.ParamSet.FromModule, ParamRuns: p.ParamRuns, RetryAllInput: p.HasRetryAll ? p.RetryAllInput : null, ShedInput: p.HasShed ? p.ShedInput : null,
-                WakeFrame: p.ParamSet.Contains(domain.Devices.Functions.WakeFrame.Index, 0) ? p.WakeFrame : null, Lock: LockOf(p), HasLua: p.RunsLua, Migration: p.Migration, KeepValuesOnRead: p.KeepValuesOnRead);
+                WakeFrame: p.ParamSet.Contains(domain.Devices.Functions.WakeFrame.Index, 0) ? p.WakeFrame : null, Lock: LockOf(p), HasLua: p.RunsLua, Migration: p.Migration, KeepValuesOnRead: p.KeepValuesOnRead,
+                TxSpan: p.Family == domain.Common.FwFamily.Upstream ? domain.Common.Fw57Migration.Span(p) : null);
         }
         if (d is domain.Devices.Canboard.CanboardDevice cb)
             // CANBoard has no battery/total-current sensing (those are PDM smart-output features) — leave
@@ -1542,6 +1546,7 @@ public static class LiveApi
             {
                 var isDbc = d is DbcDevice;
                 foreach (var (mid, sig) in d.GetStatusSigs())
+                    if (d is not (PdmDevice or CanboardDevice) || mid - d.BaseId <= domain.Common.Fw57Migration.Span(d))   // a 5.7 frame whose feature is off is not sent
                     Claim(mid, sig.IsExtended, $"{d.Name}: {(isDbc ? "ECU " + (string.IsNullOrEmpty(sig.MessageName) ? "msg" : sig.MessageName) : "broadcast")}");
                 var couts = d switch { PdmDevice p => p.CanOutputs, CanboardDevice c => c.CanOutputs, _ => (IEnumerable<domain.Devices.Functions.CanOutput>?)null };
                 if (couts != null)
@@ -1559,7 +1564,7 @@ public static class LiveApi
                 // Span = the module's real TX footprint (same figures as clientapp canids.js and docs/can-frame-map.md):
                 // a PDM's 28 cyclic frames sit at base+2..base+29; a CANBoard's 10 at base+2..base+11 plus its
                 // OpenBLT bootloader ids at +12/+13.
-                if (!isDbc && d is IDeviceConfigurable) ranges.Add((d.Name, d.BaseId, d.BaseId + (d is CanboardDevice ? 13 : 29)));
+                if (!isDbc && d is IDeviceConfigurable) ranges.Add((d.Name, d.BaseId, d.BaseId + Math.Max(domain.Common.Fw57Migration.Span(d), d is CanboardDevice ? 13 : 29)));
             }
             // An id sent ONLY by Lua txCan calls on several modules is a deliberate shared id (e.g. a master
             // PDM broadcasts a state and backups take over when it goes quiet): report it as `shared`, not as

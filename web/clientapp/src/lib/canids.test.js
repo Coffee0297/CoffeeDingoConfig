@@ -13,6 +13,9 @@ assert.equal(spanAfter('dingoPDM', pdm(0x680, { enabled: false, role: 'main', st
 assert.equal(conflictPairs([pdm(0x680, { enabled: true, role: 'main', stateId: 0x6a0 }), pdm(0x6a0)]).length, 1)
 assert.equal(conflictPairs([pdm(0x680, { enabled: true, role: 'main', stateId: 0x6a0 }), pdm(0x6b0)]).length, 0)
 assert.equal(conflictPairs([pdm(0x680, { enabled: true, role: 'main', stateId: 0x69e }), pdm(0x6a0)]).length, 0)
+// 5.7: a PDM sends up to +31 (txSpan from the backend), filling its 0x20 slot: the next PDM shares no id, no clash
+assert.equal(conflictPairs([{ ...pdm(0x680), txSpan: 31 }, { ...pdm(0x6a0), txSpan: 31 }]).length, 0)
+assert.equal(conflictPairs([{ ...pdm(0x680), txSpan: 34 }, { ...pdm(0x6a0), txSpan: 31 }]).length, 1)
 // integration/all-features: wire load, tables 1-4, PID = +32..+35, an enabled main's ignition state + 36
 const all = { family: 'upstream', baseId: 0x680, paramRuns: [[0x1000, 8, ...Array.from({ length: 35 }, (_, k) => k)], [0x1b00, 4, 0, 1], [0x2300, 4, 0, 1]] }
 assert.equal(spanAfter('dingoPDM', all), 35)

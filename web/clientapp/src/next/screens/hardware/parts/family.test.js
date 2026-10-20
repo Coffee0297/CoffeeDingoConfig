@@ -1,6 +1,6 @@
 // node src/next/screens/hardware/parts/family.test.js — upstream dingoFW gating helpers
 import assert from 'node:assert/strict'
-import { has, hasBlock, lacks, olderThan, isUpstream, pwmFreqError, upstreamHas, driveCaps } from './util.js'
+import { has, hasBlock, lacks, olderThan, isUpstream, ownLine, pwmFreqError, upstreamHas, driveCaps } from './util.js'
 import { spanAfter } from '../../../../lib/canids.js'
 
 const fork = { family: 'fork', version: 'v5.5.112' }
@@ -42,6 +42,8 @@ assert.equal(spanAfter('dingoPDM', up), 30)
 assert.equal(spanAfter('dingoPDM', { ...up, paramRuns: [...up.paramRuns, [0x1b00, 2, 0, 1]] }), 32)
 assert.equal(spanAfter('dingoPDM', { ...up, paramRuns: [...up.paramRuns, [0x1b00, 4, 0, 1]] }), 33)   // more-tables: Msg 31
 assert.equal(spanAfter('dingoPDM', fork), 30)
+// the backend's span (TxSpan: 5.7 frames only while their feature is on) wins over the param-list guess
+assert.equal(spanAfter('dingoPDM', { ...up, paramRuns: [...up.paramRuns, [0x1b00, 4, 0, 1]], txSpan: 31 }), 31)
 assert.equal(spanAfter('CANBoard'), 14)
 
 // drive card: CANBoard DO PWM only with feat/canboard-do-pwm (0x2100 subs 2-10), never the fork's freq/ramp subs
@@ -53,3 +55,8 @@ assert.deepEqual(driveCaps(fork, true, 1), { pwm: true, varFreq: true, rampChang
 assert.deepEqual(driveCaps(up, false, 1), { pwm: false, varFreq: false, rampChanges: false })   // that list has subs 0-2 only
 
 console.log('family.test.js ok')
+
+// the 5.7 line: upstream layout with the fork's own features (trip log)
+assert.equal(ownLine({ family: 'upstream', version: 'v5.7.0' }), true)
+assert.equal(ownLine({ family: 'upstream', version: 'v0.6.3' }), false)
+assert.equal(ownLine({ family: 'fork', version: 'v5.6.6' }), false)

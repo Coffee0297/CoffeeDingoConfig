@@ -26,6 +26,8 @@ export const ID_BEFORE = 1
 // + 36 there). Pass the device (`dev`).
 export const spanAfter = (type, dev = null) => {
   if (/canboard/i.test(type || '')) return 14
+  // the backend knows what the module sends with its current settings (5.7: an appended frame only while its feature is on)
+  if (dev?.txSpan != null) return Math.max(dev.txSpan, ignSpan(dev))
   const n = appendedFrames(dev)
   return Math.max(n ? 31 + n + (/pt-?dpdm/i.test(type || '') ? 1 : 0) : 30, ignSpan(dev))
 }
@@ -95,8 +97,8 @@ export function conflictPairs(devices) {
   for (let i = 0; i < m.length; i++) {
     for (let j = i + 1; j < m.length; j++) {
       const a = m[i], b = m[j]
-      if (a.baseId - ID_BEFORE <= b.baseId + spanAfter(b.type, b) &&
-          b.baseId - ID_BEFORE <= a.baseId + spanAfter(a.type, a)) {
+      if (a.baseId <= b.baseId + spanAfter(b.type, b) &&   // shared ids only, as clashOf
+          b.baseId <= a.baseId + spanAfter(a.type, a)) {
         out.push([a, b])
       }
     }
