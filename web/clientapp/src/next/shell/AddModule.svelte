@@ -229,18 +229,18 @@
               </Banner>
             {/if}
             {#if found.length}
-              <table class="nx-table" aria-label="Modules found">
+              <table class="nx-table table-cards" aria-label="Modules found">
                 <thead><tr><th><span class="sr-only">Add</span></th><th>Type</th><th>Base ID</th><th>Firmware</th><th>In this project?</th></tr></thead>
                 <tbody>
                   {#each found as f (f.baseId)}
                     <tr>
-                      <td class="ck">
+                      <td class="ck" data-label="Add">
                         {#if f.isNew}<Checkbox label="" checked={!off[f.baseId]} onchange={(c) => (off = { ...off, [f.baseId]: !c })} aria-label={`Add ${f.label} at ${f.hex}`} />{:else}<span aria-hidden="true">–</span>{/if}
                       </td>
-                      <td>{f.label}</td>
-                      <td class="mono">{f.hex}</td>
-                      <td class:muted={!f.version} class:mono={!!f.version}>{fwText({ version: f.version, connected: true })}</td>
-                      <td>{#if f.isNew}<strong>New: not in the project</strong>{:else}<span class="muted">In project as {f.already?.name}</span>{/if}</td>
+                      <td data-label="Type">{f.label}</td>
+                      <td class="mono" data-label="Base ID">{f.hex}</td>
+                      <td class:muted={!f.version} class:mono={!!f.version} data-label="Firmware">{fwText({ version: f.version, connected: true })}</td>
+                      <td data-label="In this project?">{#if f.isNew}<strong>New: not in the project</strong>{:else}<span class="muted">In project as {f.already?.name}</span>{/if}</td>
                     </tr>
                   {/each}
                 </tbody>

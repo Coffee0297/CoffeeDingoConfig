@@ -121,3 +121,17 @@ test('the module page on a phone: the outputs list fits the screen and every out
   await expect(page).toHaveURL(new RegExp(`module/${d.guid}/output/1`))
   expect(errors).toEqual([])
 })
+
+test('Find on CAN on a phone: every module found shows whether it is in the project, nothing cut off', async ({ page }) => {
+  const errors = watchErrors(page)
+  await page.setViewportSize({ width: 390, height: 844 })
+  await page.goto('/#/next/hardware')
+  await expect(page.getByTestId('connection-pill')).toContainText(/live/i, { timeout: 20_000 })
+  await page.getByRole('button', { name: 'Find modules' }).click()
+  const dlg = page.getByRole('dialog', { name: 'Add module' })
+  const cell = dlg.getByText('In project as CB-1')
+  await expect(cell).toBeVisible({ timeout: 30_000 })
+  const box = await cell.boundingBox()
+  expect(box.x + box.width).toBeLessThanOrEqual(390)
+  expect(errors).toEqual([])
+})
