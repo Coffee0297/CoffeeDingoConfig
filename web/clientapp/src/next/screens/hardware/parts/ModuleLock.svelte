@@ -19,6 +19,7 @@
   // ---- unlock ----
   let unlockOpen = $state(false)
   let pwTry = $state('')
+  let refused = $state('')   // the module's answer to a wrong password: shown in the dialog, not behind it
   const pwTryErr = $derived(pwTry ? parsePassword(pwTry).error ?? '' : '')
   async function unlock() {
     const p = parsePassword(pwTry)
@@ -29,7 +30,7 @@
       unlockOpen = false; pwTry = ''
       msg = `${d.name} is unlocked until it restarts. Read it to see its settings.`
       toast(msg, 'info', 5000)
-    } catch (e) { msg = e.message } finally { busy = '' }
+    } catch (e) { refused = e.message } finally { busy = '' }
   }
   async function readNow() {
     busy = 'read'
@@ -122,7 +123,7 @@
 
   <Confirm bind:open={unlockOpen} title={`Unlock ${d.name}`} width={480}>
     {#if d.lock.contact}<p>Installer: <strong>{d.lock.contact}</strong></p>{/if}
-    <Field label="Password" type="password" bind:value={pwTry} error={pwTryErr} autocomplete="current-password" onkeydown={(e) => e.key === 'Enter' && unlock()} data-testid="unlock-pw" />
+    <Field label="Password" type="password" bind:value={pwTry} oninput={() => (refused = '')} error={pwTryErr || refused} autocomplete="current-password" onkeydown={(e) => e.key === 'Enter' && unlock()} data-testid="unlock-pw" />
     <p class="muted sm">It stays unlocked until it restarts. After a wrong password, wait a second before trying again.</p>
     {#snippet footer()}
       <Button onclick={() => (unlockOpen = false)}>Cancel</Button>
