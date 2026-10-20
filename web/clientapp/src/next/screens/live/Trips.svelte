@@ -7,7 +7,7 @@
   import { tripFixes } from './parts/tripFixes.js'
   import LiveTabs from './parts/LiveTabs.svelte'
   import FaultHistory from './parts/FaultHistory.svelte'
-  import { isUpstream } from '../hardware/parts/util.js'
+  import { isUpstream, ownLine } from '../hardware/parts/util.js'
 
   let { guid = undefined, index = undefined } = $props()
 
@@ -18,9 +18,9 @@
   $effect.pre(() => { if (guid != null && index != null) sel = `${guid}:${index}` })
   let zoom = $state('whole')
 
-  // upstream dingoFW keeps a fault history in FRAM instead of the fork's trip log with waveforms
+  // upstream dingoFW keeps a fault history in FRAM instead of the fork's trip log with waveforms; the 5.7 line has both
   const histDevices = $derived(live.devices.filter((d) => (d.outputs ?? []).length > 0 && isUpstream(d)))
-  const logDevices = $derived(live.devices.filter((d) => (d.outputs ?? []).length > 0 && !isUpstream(d)))
+  const logDevices = $derived(live.devices.filter((d) => (d.outputs ?? []).length > 0 && (!isUpstream(d) || ownLine(d))))
   const answering = $derived(logDevices.filter((d) => d.connected))
   const silent = $derived(logDevices.filter((d) => !d.connected))
 

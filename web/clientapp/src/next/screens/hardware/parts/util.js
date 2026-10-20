@@ -17,6 +17,8 @@ export function olderThan(v, min) {
 }
 
 /** The module runs upstream dingoFW (version 0.x) rather than the fork (5.x). */
+/** The 5.7+ line: upstream layout, but the fork's features too (e.g. the trip log next to the fault history). */
+export const ownLine = (dev) => isUpstream(dev) && /^v?[1-9]/.test(dev?.version ?? '')
 export const isUpstream = (dev) => dev?.family === 'upstream'
 
 /** Why a fixed output PWM frequency is refused ('' = fine). Upstream: 16-400 Hz or 0 = keep the timer's period (its
