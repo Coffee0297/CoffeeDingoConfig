@@ -304,6 +304,8 @@ export async function applyTemplate(api0, { devices, tpl, sel, relays, name, id,
     }, outputDuty: (v, duty, on) => {
       // PWM with the duty from a 0–100 % signal (duty % = signal ÷ denominator, so 1)
       prev[v] ??= was(v)
+      // CANBoard DO (5.7): variable duty (sub 4) from the signal (sub 5), denominator (sub 9) 1
+      if (isCb(dev)) return api.setFunction(dev.guid, 'digitaloutput', numOut(v), { enabled: true, input: on, pwmEnabled: true, variableDutyCycle: true, dutyCycleInput: duty, dutyCycleDenominator: 1 })
       const o = (dev.outputs ?? []).find((x) => x.number === numOut(v)) ?? { number: numOut(v) }
       return api.outputConfig(dev.guid, { ...binBody(o, on), PwmEnabled: true, VariableDutyCycle: true, DutyCycleInput: duty, DutyCycleDenom: 1 })
     } })

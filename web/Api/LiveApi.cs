@@ -173,6 +173,7 @@ public static class FunctionMap
                 "canmsg"              => (c.CanMessages.FirstOrDefault(x => x.Number == number), CanMessage.BaseIndex + n),
                 "ignition"            => (c.Ignition, Ignition.BaseIndex),
                 "comfortblink"        => (c.ComfortBlink, ComfortBlink.BaseIndex),
+                "pid"                 => (c.Pids.FirstOrDefault(x => x.Number == number), PidFunction.BaseIndex + n),
                 _ => (null, -1)
             };
         return (null, -1);
@@ -1000,6 +1001,7 @@ public static class LiveApi
                     maths = Has(c, MathFunction.BaseIndex) ? c.Maths : null, canMessages = Has(c, CanMessage.BaseIndex) ? c.CanMessages : null,
                     ignition = c.Ignition,   // firmware 5.6
                     comfortBlinks = Has(c, ComfortBlink.BaseIndex) ? new[] { c.ComfortBlink } : null,   // 5.6.1
+                    pids = c.Family == domain.Common.FwFamily.Upstream && Has(c, PidFunction.BaseIndex) ? c.Pids : null,   // 5.7 line
                     device = new { forceSleepInput = c.ForceSleepInput, muteTxInput = c.MuteTxInput, canSleep = c.CanSleep },
                 });
             return Results.Ok(new { });
@@ -1087,7 +1089,11 @@ public static class LiveApi
             using var doc = await JsonDocument.ParseAsync(req.Body);
             var track = Track(CanonKind(kind), number, FnLabel(kind, number, fn), fn);
             var before = fn is PidFunction ? JsonSerializer.SerializeToElement(fn, fn.GetType()) : default;
+            var prevDuty = (fn as DigitalOutput)?.DutyCycleInput;
             var rejected = FunctionMap.ApplyJson(fn, doc.RootElement);
+            // CANBoard DO: a PID output already is the duty in %, so wiring one in sets the denominator to 1 (as /outputconfig)
+            if (fn is DigitalOutput dout && dout.DutyCycleInput != prevDuty && dev.VarMap.FirstOrDefault(v => v.VariableIndex == dout.DutyCycleInput)?.OwnerKind == "pid")
+                dout.DutyCycleDenominator = 1;
             // the firmware refuses out-of-range values and runs crossed limits as "disabled": refuse them here
             if (rejected.Count == 0 && fn is PidFunction pid && pid.Problem() is { } why)
             {
@@ -1806,6 +1812,8 @@ public static class LiveApi
                 foreach (var c in cb.Counters) s.Add(new("Counter", c.Name, c.Value.ToString(), c.Value != 0, c.Enabled, N: c.Number));
                 foreach (var f in cb.Flashers) s.Add(new("Flasher", f.Name, f.Value ? "on" : "off", f.Value, f.Enabled, N: f.Number));
                 foreach (var t in cb.Timers) s.Add(new("Timer", t.Name, t.Value ? "on" : "off", t.Value, t.Enabled, N: t.Number));
+                if (cb.Family == domain.Common.FwFamily.Upstream && domain.Common.FwFamily.HasBlock(cb, PidFunction.BaseIndex, false))
+                    foreach (var c in cb.Pids) s.Add(new("PID", c.Name, c.Value.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture), c.Value != 0, c.Enabled, N: c.Number));
             }
             else if (dm.GetDevice(g) is DbcDevice dbc)
             {
@@ -2407,6 +2415,7 @@ public static class LiveApi
                 "Counter" => c.GetCounters().FirstOrDefault(x => x.Number == n)?.Name,
                 "Flasher" => c.GetFlashers().FirstOrDefault(x => x.Number == n)?.Name,
                 "Timer" => c.GetTimers().FirstOrDefault(x => x.Number == n)?.Name,
+                "Pid" => c.Pids.FirstOrDefault(x => x.Number == n)?.Name,
                 _ => null,
             },
             _ => null,
@@ -2458,6 +2467,7 @@ public static class LiveApi
                 "condition" => c.GetConditions().FirstOrDefault(x => x.Number == n)?.Enabled ?? true,
                 "counter" => c.GetCounters().FirstOrDefault(x => x.Number == n)?.Enabled ?? true,
                 "flasher" => c.GetFlashers().FirstOrDefault(x => x.Number == n)?.Enabled ?? true,
+                "pid" => c.Pids.FirstOrDefault(x => x.Number == n)?.Enabled ?? true,
                 "timer" => c.GetTimers().FirstOrDefault(x => x.Number == n)?.Enabled ?? true,
                 _ => true,
             },
@@ -2503,6 +2513,7 @@ public static class LiveApi
                 "Counter" => c.GetCounters().FirstOrDefault(x => x.Number == n)?.Enabled ?? false,
                 "Flasher" => c.GetFlashers().FirstOrDefault(x => x.Number == n)?.Enabled ?? false,
                 "Timer" => c.GetTimers().FirstOrDefault(x => x.Number == n)?.Enabled ?? false,
+                "Pid" => c.Pids.FirstOrDefault(x => x.Number == n)?.Enabled ?? false,
                 _ => true,
             };
         return true;

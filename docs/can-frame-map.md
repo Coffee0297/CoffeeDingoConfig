@@ -78,7 +78,9 @@ base + 36. The app derives the offsets the same way (PdmDevice.UpstreamFrames, c
 
 Firmware 5.7 (the fork line rebuilt on integration/all-features) uses this upstream layout (the app treats a Version
 reply >= 5.7 like 0.x), with currents at 0.1 A/bit as on the fork. Its CANBoard has the ignition block: a main sends
-its state as Msg 10 = `base+12` (followers copy that id), and its app starts at 0x08002000 behind the 8 KB bootloader.
+its state as Msg 10 = `base+12` (followers copy that id), PID 1 / 2 outputs go out as Msg 11 = `base+13` (int16 x10 LE, bytes
+0-1 / 2-3, only while a PID is enabled), and its app starts at 0x08002000 behind the 8 KB bootloader. Its var map has 121
+entries: DI PWM duty / Hz 79-94 after the timers, analog scaled 95-99, math 100-103, ignition 104-110, comfort 111-112, PID 113-120.
 
 ---
 

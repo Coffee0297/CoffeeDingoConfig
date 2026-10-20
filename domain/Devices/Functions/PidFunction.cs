@@ -5,7 +5,7 @@ using domain.Models;
 
 namespace domain.Devices.Functions;
 
-// PID controller (upstream-family dingoFW feat/pid, param base 0x2300, 4 on the PDMs, none on the CANBoard).
+// PID controller (upstream-family dingoFW feat/pid, param base 0x2300, 4 on the PDMs, 2 on the 5.7 CANBoard).
 // Every PeriodMs: error = setpoint − pv (inverted: pv − setpoint) with a deadband; P = Kp·e; I += Ki·e·dt, clamped
 // to IMin..IMax and not pushed further into a saturated output; D on the measurement; output = feed-forward
 // (constant + var) + P + I + D, clamped to OutMin..OutMax. pv outside PvMin..PvMax (both 0 = no window) → Fallback.

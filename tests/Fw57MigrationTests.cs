@@ -114,24 +114,50 @@ public class Fw57MigrationTests
     [
         .. Block(0x0000, 1, 3), .. Block(TimerFunction.UpstreamBaseIndex, 4, 5), .. Block(AnalogInput.BaseIndex, 5, 21),
         .. Block(MathFunction.BaseIndex, 4, 3), .. Block(CanMessage.BaseIndex, 2, 3), .. Block(Ignition.BaseIndex, 1, 11),
-        .. Block(ComfortBlink.BaseIndex, 1, 3),
+        .. Block(ComfortBlink.BaseIndex, 1, 3), .. Block(DigitalInput.BaseIndex, 8, 8), .. Block(PidFunction.BaseIndex, 2, 21),
     ];
 
     [Fact]
-    public void Canboard57_VarMap_IgnitionAfterMath_97()
+    public void Canboard57_VarMap_121()
     {
         var d = Cb(5, 7, 0);
         UpstreamAnalogScaleTests.LearnParams(d, Cb57Keys());
-        Assert.Equal(97, d.VarMap.Count);   // nm canboard_v2.elf (integration): pVarMap 0x184 bytes
-        Assert.Equal(Enumerable.Range(0, 97), d.VarMap.Select(v => v.VariableIndex));
+        Assert.Equal(121, d.VarMap.Count);   // nm canboard_v2.elf (integration c9644d3): pVarMap 0x1E4 bytes
+        Assert.Equal(Enumerable.Range(0, 121), d.VarMap.Select(v => v.VariableIndex));
         Assert.Equal(("timer", 1), (At(d, 75).OwnerKind, At(d, 75).OwnerNumber));
-        Assert.Equal(("analoginput", 1, "Scaled Value"), (At(d, 79).OwnerKind, At(d, 79).OwnerNumber, At(d, 79).PropertyName));
-        Assert.Equal(("math", 1), (At(d, 84).OwnerKind, At(d, 84).OwnerNumber));
-        Assert.Equal(["Ignition", "Accessory", "Cranking", "Running", "Ready", "Dash", "Link OK"], Enumerable.Range(88, 7).Select(i => At(d, i).PropertyName));
-        Assert.All(Enumerable.Range(88, 7), i => Assert.Equal("ignition", At(d, i).OwnerKind));
-        Assert.Equal(("comfortblink", "Left"), (At(d, 95).OwnerKind, At(d, 95).PropertyName));
-        Assert.Equal(("comfortblink", "Right"), (At(d, 96).OwnerKind, At(d, 96).PropertyName));
+        for (var n = 1; n <= 8; n++)
+        {
+            Assert.Equal(("input", n, "PWM Duty"), (At(d, 79 + 2 * (n - 1)).OwnerKind, At(d, 79 + 2 * (n - 1)).OwnerNumber, At(d, 79 + 2 * (n - 1)).PropertyName));
+            Assert.Equal(("input", n, "PWM Frequency"), (At(d, 80 + 2 * (n - 1)).OwnerKind, At(d, 80 + 2 * (n - 1)).OwnerNumber, At(d, 80 + 2 * (n - 1)).PropertyName));
+        }
+        Assert.Equal(("analoginput", 1, "Scaled Value"), (At(d, 95).OwnerKind, At(d, 95).OwnerNumber, At(d, 95).PropertyName));
+        Assert.Equal(("math", 1), (At(d, 100).OwnerKind, At(d, 100).OwnerNumber));
+        Assert.Equal(["Ignition", "Accessory", "Cranking", "Running", "Ready", "Dash", "Link OK"], Enumerable.Range(104, 7).Select(i => At(d, i).PropertyName));
+        Assert.All(Enumerable.Range(104, 7), i => Assert.Equal("ignition", At(d, i).OwnerKind));
+        Assert.Equal(("comfortblink", "Left"), (At(d, 111).OwnerKind, At(d, 111).PropertyName));
+        Assert.Equal(("comfortblink", "Right"), (At(d, 112).OwnerKind, At(d, 112).PropertyName));
+        Assert.Equal(("pid", 1, "Output"), (At(d, 113).OwnerKind, At(d, 113).OwnerNumber, At(d, 113).PropertyName));
+        Assert.Equal(("pid", 2, "Output"), (At(d, 117).OwnerKind, At(d, 117).OwnerNumber, At(d, 117).PropertyName));
+        Assert.Equal(("pid", 2, "D"), (At(d, 120).OwnerKind, At(d, 120).OwnerNumber, At(d, 120).PropertyName));
         Assert.Equal(Enumerable.Range(0, 11).ToList(), d.Params.Where(p => p.Index == Ignition.BaseIndex).Select(p => p.SubIndex).Order().ToList());
+        Assert.Equal(Enumerable.Range(0, 21).ToList(), d.Params.Where(p => p.Index == PidFunction.BaseIndex + 1).Select(p => p.SubIndex).Order().ToList());
+    }
+
+    [Fact]
+    public void Canboard57_PidFrame_IsMsg11_Base13()
+    {
+        var d = Cb(5, 7, 0);
+        UpstreamAnalogScaleTests.LearnParams(d, Cb57Keys());
+        d.BaseId = 0x660;
+        Assert.True(d.InIdRange(0x660 + 13));
+        Assert.False(d.InIdRange(0x660 + 14));
+        var q = Q();
+        d.Read(0x660 + 13, [0x2C, 0x01, 0xF6, 0xFF, 0, 0, 0, 0], ref q, []);   // 300 -> 30.0, -10 -> -1.0
+        Assert.Equal((30.0, -1.0), (d.Pids[0].Value, d.Pids[1].Value));
+        var c = Cb(5, 7, 0); c.BaseId = 0x660;
+        c.Pids[0].Enabled = true;
+        Assert.Equal(13, Fw57Migration.Span(c));
+        Assert.DoesNotContain(Cb(5, 6, 6).Params, p => p.Index == PidFunction.BaseIndex);   // the fork CANBoard has none
     }
 
     [Fact]
@@ -163,7 +189,10 @@ public class Fw57MigrationTests
 
         var c = Cb(5, 6, 6);
         c.UseFamily(FwFamily.Upstream, assumeAll: true);
-        Assert.Equal(97, c.VarMap.Count);
+        Assert.Equal(121, c.VarMap.Count);
+        var cl = Cb(5, 7, 0);
+        UpstreamAnalogScaleTests.LearnParams(cl, Cb57Keys());
+        Assert.Equal(cl.VarMap.Select(v => (v.OwnerKind, v.OwnerNumber, v.PropertyName)), c.VarMap.Select(v => (v.OwnerKind, v.OwnerNumber, v.PropertyName)));
     }
 
     // ---- migration --------------------------------------------------------------------------------
@@ -277,9 +306,12 @@ public class Fw57MigrationTests
         var c = Cb(5, 6, 6);
         c.AnalogInputs[0].Enabled = true; c.AnalogInputs[0].Rotary.Enabled = true; c.AnalogInputs[0].Rotary.NumPos = 6;
         c.DigitalOutputs[0].Enabled = true; c.DigitalOutputs[0].Input = Idx(c, "math", 1, "Value");
+        c.DigitalOutputs[1].Enabled = true; c.DigitalOutputs[1].Input = Idx(c, "input", 2, "PWM Duty");
         Fw57Migration.Migrate([c], [c]);
         Assert.Equal(1, c.AnalogInputs[0].Rotary.Mode);
-        Assert.Equal(84, c.DigitalOutputs[0].Input);   // integration CANBoard: math 84-87
+        Assert.Equal(100, c.DigitalOutputs[0].Input);   // integration CANBoard: math 100-103
+        Assert.Equal(81, c.DigitalOutputs[1].Input);    // DI PWM is on the 5.7 CANBoard: DI 2 duty = 79 + 2
+        Assert.DoesNotContain(c.Migration!, n => n.Text.Contains("PWM"));
     }
 
     [Fact]

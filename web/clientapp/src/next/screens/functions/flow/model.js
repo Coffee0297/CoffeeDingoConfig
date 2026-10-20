@@ -45,7 +45,7 @@ export const KINDS = {
   curve: { label: 'Curve', fam: 'logic', arr: 'curves', def: 'numCurves', addable: true, ins: [['input', 'Input', 'num']] },
   // upstream dingoFW feat/latch-gate-block (PDMs; /functions has `latchGates` only when the module has the 0x2600 block)
   latchgate: { label: 'Latch / Gate', fam: 'time', arr: 'latchGates', def: 'numLatchGates', addable: true, ins: latchGateIns() },
-  // upstream dingoFW feat/pid (PDMs; /functions has `pids` only when the module has the 0x2300 block)
+  // upstream dingoFW feat/pid (PDMs; CANBoard 5.7: 2; /functions has `pids` only when the module has the 0x2300 block)
   pid: { label: 'PID', fam: 'logic', arr: 'pids', def: 'numPids', addable: true, ins: [['setpointInput', 'Setpoint', 'num'], ['processInput', 'Measured', 'num'], ['activateInput', 'Active while', 'bool'], ['feedFwdInput', 'Feed-forward signal', 'num']] },
   ignition: { label: 'Ignition', fam: 'fn', ins: [['ignitionInput', 'Ignition switch', 'bool'], ['startInput', 'Start button', 'bool'], ['crankAllowInput', 'Crank allowed', 'bool'], ['runningInput', 'Engine running', 'bool']] },
 }

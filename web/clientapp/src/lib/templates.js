@@ -301,7 +301,7 @@ TEMPLATES.push(
   // A PI loop on a fixed setpoint (the target): Kp = 100 / (full − target), so P alone gives 100 % at "full";
   // Ki = Kp / 20 (a slow 20 s integral time, coolant lags) removes the steady error. I is 0..100, no windup at 0 / 100 %.
   { key: 'pidfan', group: 'cooling', name: 'Fan by coolant temperature (PID)', icon: '🌀', logicOn: 'output',
-    desc: 'The fan speed (PWM duty) holds the coolant at the target temperature: it speeds up as the coolant goes above the target and is at 100 % by the full-speed temperature. If the temperature signal is lost (a CAN frame that stops reads 0) or out of range, the fan runs at 100 %. Needs a dingoPDM whose firmware has the PID block, and a fan output on that module.',
+    desc: 'The fan speed (PWM duty) holds the coolant at the target temperature: it speeds up as the coolant goes above the target and is at 100 % by the full-speed temperature. If the temperature signal is lost (a CAN frame that stops reads 0) or out of range, the fan runs at 100 %. Needs a module whose firmware has the PID block (a dingoPDM, or a CANBoard from 5.7) and a PWM fan output on that module.',
     fields: [{ k: 'temp', t: 'num', label: 'Coolant temperature signal' },
       { k: 'target', t: 'number', label: 'Hold the coolant at', def: 90 }, { k: 'full', t: 'number', label: 'Full speed at', def: 100 },
       { k: 'ign', t: 'bool', label: 'Ignition (fan only with it on)', opt: true },
@@ -496,13 +496,13 @@ export async function liveCtx(env) {
     },
     // A PID block (upstream dingoFW with the PID feature, PDMs only); returns its Output signal.
     pid: (c, name) => {
-      if (!funcs?.pids) throw new Error('This module has no PID block: it needs a dingoPDM whose firmware has the PID feature')
+      if (!funcs?.pids) throw new Error('This module has no PID block: it needs a dingoPDM or a CANBoard 5.7 whose firmware has the PID feature')
       return make('pid', 'pids', 'Output', { ...c, name })
     },
-    // A PDM output on this module: on from `on`, PWM with its duty from `duty` (a 0–100 % signal, denominator 1).
+    // An output on this module (PDM output, or CANBoard DO on 5.7): on from `on`, PWM with its duty from `duty` (a 0–100 % signal, denominator 1).
     outputDuty: async (o, duty, on) => {
       const [g] = String(o).split(':')
-      if (env.isCanboard || g !== guid || !env.outputDuty) throw new Error('The fan output must be a dingoPDM output on the module that runs the PID')
+      if (g !== guid || !env.outputDuty) throw new Error('The fan output must be an output on the module that runs the PID')
       await env.outputDuty(o, duty, on)
       wired.push(o)
     },

@@ -32,6 +32,7 @@ public class CanboardDevice : IDeviceConfigurable
     [JsonIgnore] protected int NumTimers { get; private set; } = 4;
     [JsonIgnore] protected int NumMath { get; private set; } = 4;
     [JsonIgnore] protected int NumCanMessages { get; private set; } = 2;
+    [JsonIgnore] protected int NumPids { get; private set; } = 2;   // 5.7 line (integrate: pid on the canboard)
     
     // Firmware 5.5.111 put the CANBoard to sleep (STOP) like the PDM; older firmware only goes quiet (mute TX).
     // Version not read yet: assumed able, like a PDM, so the sleep settings do not vanish until it answers.
@@ -132,6 +133,7 @@ public class CanboardDevice : IDeviceConfigurable
     [JsonIgnore] public int? SleepCountdownS => domain.Common.Firmware.Has(Version, Functions.MathFunction.Since) && SleepCountdownRaw < 255 ? SleepCountdownRaw : null;
     // firmware 5.6
     [JsonPropertyName("maths")] public List<MathFunction> Maths { get; init; } = [];
+    [JsonPropertyName("pids")] public List<PidFunction> Pids { get; init; } = [];   // upstream family (5.7) only
     [JsonPropertyName("canMessages")] public List<CanMessage> CanMessages { get; init; } = [];
     [JsonPropertyName("ignition")] public Ignition Ignition { get; set; } = null!;
     [JsonPropertyName("comfortBlink")] public ComfortBlink ComfortBlink { get; set; } = null!;   // 5.6.1
@@ -202,6 +204,7 @@ public class CanboardDevice : IDeviceConfigurable
         NumCounters = definition.NumCounters;
         NumConditions = definition.NumConditions;
         NumTimers = Timers.Count;
+        NumPids = Pids.Count;
         NumMath = Maths.Count;
         NumCanMessages = CanMessages.Count;
 
@@ -246,6 +249,8 @@ public class CanboardDevice : IDeviceConfigurable
             Maths.Add(new MathFunction(i + 1, "math" + (i + 1)));
         for (var i = 0; i < NumCanMessages; i++)
             CanMessages.Add(new CanMessage(i + 1, "canMessage" + (i + 1)));
+        for (var i = 0; i < NumPids; i++)
+            Pids.Add(new PidFunction(i + 1, "pid" + (i + 1)));
         Ignition = new Ignition("ignition");
         ComfortBlink = new ComfortBlink("Comfort blink");
 
@@ -432,7 +437,22 @@ public class CanboardDevice : IDeviceConfigurable
         }
 
         MaxCyclicId = 11; // last frame = BaseId+11 (firmware NUM_TX_MSGS=10 → offsets +2..+11)
+
+        // 5.7 line Msg 11 (BaseId + 13): PID 1-2 outputs, int16 LE x10 (saturated), sent while a PID is enabled.
+        // (Msg 10 = + 12, the ignition state, is decoded in Read().)
+        if (Family == FwFamily.Upstream && FwFamily.HasBlock(this, PidFunction.BaseIndex, false))
+        {
+            StatusSigs[PidFrameOffset] = [];
+            for (var i = 0; i < NumPids; i++)
+            {
+                var index = i;
+                StatusSigs[PidFrameOffset].Add((new DbcSignal { Name = $"Pid{index + 1}.Output", StartBit = i * 16, Length = 16, IsSigned = true, Factor = 0.1 },
+                    val => Pids[index].Value = val));
+            }
+            MaxCyclicId = PidFrameOffset;
+        }
     }
+    [JsonIgnore] public const int PidFrameOffset = 13;
     
     private void InitVarMap()
     {
@@ -720,6 +740,16 @@ public class CanboardDevice : IDeviceConfigurable
                 VarMap.Add(new DeviceVariable { GetName = () => Timers[num].Name, OwnerKind = "timer", OwnerNumber = num + 1,
                     PropertyName = "State", DataType = "bool", VariableIndex = index++, SingleVariable = false });
             }
+        // feat/digital-input-pwm (0x1200 sub 5): per DI duty %, Hz (5.7 line: back on the CANBoard)
+        if (ParamSet.Contains(DigitalInput.BaseIndex, 5))
+            for (var i = 0; i < NumDigitalInputs; i++)
+            {
+                var num = i;
+                VarMap.Add(new DeviceVariable { GetName = () => DigitalInputs[num].Name, OwnerKind = "input", OwnerNumber = num + 1,
+                    PropertyName = "PWM Duty", DataType = "float", VariableIndex = index++, SingleVariable = false });
+                VarMap.Add(new DeviceVariable { GetName = () => DigitalInputs[num].Name, OwnerKind = "input", OwnerNumber = num + 1,
+                    PropertyName = "PWM Frequency", DataType = "float", VariableIndex = index++, SingleVariable = false });
+            }
         // feat/analog-linear-scaling: one scaled value per analog input (0x2200 sub 10; the block itself always exists)
         if (ParamSet.Contains(AnalogInput.BaseIndex, 10))
             for (var i = 0; i < NumAnalogInputs; i++)
@@ -746,6 +776,15 @@ public class CanboardDevice : IDeviceConfigurable
             foreach (var side in new[] { "Left", "Right" })
                 VarMap.Add(new DeviceVariable { GetName = () => ComfortBlink.Name, OwnerKind = "comfortblink", OwnerNumber = 1,
                     PropertyName = side, DataType = "bool", VariableIndex = index++, SingleVariable = false });
+        // feat/pid (integrate: pid on the canboard): per PID output, P, I, D
+        if (FwFamily.HasBlock(this, PidFunction.BaseIndex, false))
+            for (var i = 0; i < NumPids; i++)
+            {
+                var num = i;
+                foreach (var prop in new[] { "Output", "P", "I", "D" })
+                    VarMap.Add(new DeviceVariable { GetName = () => Pids[num].Name, OwnerKind = "pid", OwnerNumber = num + 1,
+                        PropertyName = prop, DataType = "float", VariableIndex = index++, SingleVariable = false });
+            }
     }
 
     private void InitParams()
@@ -842,6 +881,7 @@ public class CanboardDevice : IDeviceConfigurable
         foreach (var m in CanMessages) allParams.AddRange(Family == FwFamily.Upstream ? m.UpstreamParams : m.Params);
         allParams.AddRange(Ignition.Params);
         allParams.AddRange(ComfortBlink.Params);
+        if (Family == FwFamily.Upstream) foreach (var pid in Pids) allParams.AddRange(pid.Params);   // the fork CANBoard has no PID
         foreach (var canOutput in CanOutputs) allParams.AddRange(Family == FwFamily.Upstream ? canOutput.UpstreamParams : canOutput.Params);
         foreach (var digitalOutput in DigitalOutputs) allParams.AddRange(digitalOutput.Params);
         foreach (var analogInput in AnalogInputs) allParams.AddRange(Family == FwFamily.Upstream ? analogInput.UpstreamParams : analogInput.Params);

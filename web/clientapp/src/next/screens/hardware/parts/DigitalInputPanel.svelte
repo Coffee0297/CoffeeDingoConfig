@@ -27,7 +27,7 @@
   const pwmIn = $derived(isCanboard(dev)
     ? { board: 'CANBoard', maxHz: 5000, text: 'A 10 kΩ series resistor and no filter capacitor, so up to about 5 kHz. Nothing filters noise on a long wire: a glitch filter of 20 to 50 µs is a good start.' }
     : { board: 'dingoPDM', maxHz: 1000, text: 'A 4.7 kΩ and 10 nF filter, so up to about 1 kHz from a driven source and about 100 Hz from an open-collector one. The filter already removes short spikes.' })
-  // upstream dingoFW: PWM measurement only where the module has 0x1200 sub 5 (feat/digital-input-pwm; not the CANBoard)
+  // upstream dingoFW: PWM measurement only where the module has 0x1200 sub 5 (feat/digital-input-pwm; the CANBoard from 5.7)
   const pwmOk = $derived(has(dev, 0x1200, 5))
   const problem = $derived.by(() => {
     if (!f || !dirty) return ''

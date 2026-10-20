@@ -156,6 +156,12 @@ assert.deepEqual([pc[0][0], pc[0][1], pc[0][2].kp, pc[0][2].setpointInput, pc[0]
   ['pid', 2, 5, 0, 85, 0, true, 0.25, 0, 1, 100])
 assert.deepEqual(dutyCalls, [['p:3', 230, 1]])
 await assert.rejects(T('pidfan').build(await liveCtx({ api: { functions: async () => ({ pids: null }), inputs: async () => [] }, guid: 'p' }), { temp: 5, target: 85, full: 105, output: 'p:3' }), /no PID block/)
+// CANBoard 5.7: PID 1 output (var 113) drives a DO's variable duty
+const cdut = []
+const cctx = await liveCtx({ api: { functions: async () => ({ pids: [1, 2].map((number) => ({ number, enabled: false })) }), inputs: async () => [{ index: 113, kind: 'pid', number: 1, prop: 'Output' }, { index: 1, name: 'Always On' }],
+  setFunction: async () => {} }, guid: 'c', isCanboard: true, outputDuty: async (o, d, on) => cdut.push([o, d, on]) })
+await T('pidfan').build(cctx, { temp: 96, target: 85, full: 105, ign: '', output: 'c:2' })
+assert.deepEqual(cdut, [['c:2', 113, 1]])
 
 // relay wiring adapts to the switching side
 assert.deepEqual(outputCircuit('high', true).coil, ['OUT', 'GND'])

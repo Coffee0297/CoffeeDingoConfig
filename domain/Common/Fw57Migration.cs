@@ -246,7 +246,8 @@ public static class Fw57Migration
             p.Ignition is { Enabled: true, Role: IgnitionRole.Main } ? p.IgnitionStateOffset ?? 0 : 0,
         }.Max(),
         PdmDevice p => p.Ignition is { Enabled: true, Role: IgnitionRole.Main } ? 30 : 29,
-        CanboardDevice c => c.Ignition is { Enabled: true, Role: IgnitionRole.Main } ? c.IgnitionStateOffset ?? 11 : 11,
+        CanboardDevice c => Math.Max(c.Ignition is { Enabled: true, Role: IgnitionRole.Main } ? c.IgnitionStateOffset ?? 11 : 11,
+            c.Family == FwFamily.Upstream && c.Pids.Any(x => x.Enabled) ? CanboardDevice.PidFrameOffset : 0),   // 5.7: PID frame + 13
         _ => 0,
     };
 
