@@ -119,6 +119,7 @@ public record SdoWriteReq(int Node, int Index, int Sub, uint Value, int Size);
 public record SdoNodeReq(int Node);
 // Client (G4): the app's own project state to store in the file; null keeps the one already held.
 public record ProjReq(string FileName, System.Text.Json.JsonElement? Client = null);
+public record FolderReq(string? Dir);
 public record LuaReq(string Source);
 public record LinkRemoteReq(int CanInput, string SourceGuid, string Signal, bool? NewRule = null);   // NewRule: State = (value != 0) even on a slot in use
 public record CrossTrigReq(string Guid, int? VarIndex);
@@ -1554,10 +1555,10 @@ public static class LiveApi
                 if (d is IDeviceConfigurable ic && domain.Common.IgnitionMain.Ign(ic) is { } sg && domain.Common.Fw57Migration.IgnFrame(ic)
                     && sg.FrameId(d.BaseId, d switch { PdmDevice p => p.IgnitionStateOffset, CanboardDevice c => c.IgnitionStateOffset, _ => null }) is { } sid)
                     Claim(sid, false, $"{d.Name}: ignition status");
-                var couts = d switch { PdmDevice p => p.CanOutputs, CanboardDevice c => c.CanOutputs, _ => (IEnumerable<domain.Devices.Functions.CanOutput>?)null };
                 // a 5.7 main's sync frame (fixed id or base + offset): on another module's frame it is a clash too
                 if (d is IDeviceConfigurable im && domain.Common.IgnitionMain.Ign(im) is { Enabled: true, Role: domain.Devices.Functions.IgnitionRole.Main } mg && domain.Devices.Functions.Ignition.HasSync(im))
                     Claim(mg.SyncMode == domain.Devices.Functions.IgnitionSyncMode.BaseOffset ? d.BaseId + mg.MainStateId : mg.MainStateId, false, $"{d.Name}: ignition sync");
+                var couts = d switch { PdmDevice p => p.CanOutputs, CanboardDevice c => c.CanOutputs, _ => (IEnumerable<domain.Devices.Functions.CanOutput>?)null };
                 if (couts != null)
                     foreach (var co in couts.Where(x => x.Enabled))
                         Claim(co.Id, co.Ide, $"{d.Name}: CAN out '{co.Name}'");
@@ -1971,6 +1972,20 @@ public static class LiveApi
                 : Results.Ok(new { ok = true, changed = r.Changed.Select(d => d.Name), skipped = r.Skipped });
         });
 
+        // The project folder (kept in the user preferences). The open project stays open but forgets its file name,
+        // so a Save cannot overwrite a same-named file in the new folder without asking.
+        api.MapPost("/project/folder", (FolderReq r, ConfigFileManager cfg, UserPreferencesManager prefs) =>
+        {
+            var dir = r.Dir?.Trim() ?? "";
+            if (!Path.IsPathFullyQualified(dir)) return Results.BadRequest(new { ok = false, error = "Give the full path of a folder, like C:\\Users\\you\\Documents\\dingoConfig." });
+            try { Directory.CreateDirectory(dir); }
+            catch (Exception e) { return Results.BadRequest(new { ok = false, error = $"Cannot use that folder: {e.Message}" }); }
+            if (!string.Equals(Path.GetFullPath(dir).TrimEnd('\\', '/'), Path.GetFullPath(cfg.WorkingDirectory).TrimEnd('\\', '/'), StringComparison.OrdinalIgnoreCase)) cfg.NewFile();
+            cfg.WorkingDirectory = dir;
+            prefs.Preferences.WorkingDirectory = dir; prefs.Save();
+            return Results.Ok(new { ok = true, dir });
+        });
+
         api.MapPost("/project/new",(ConfigFileManager cfg, DeviceManager dm, CrossModuleStore xmod) =>
         {
             dm.ClearDevices(); xmod.Clear(); cfg.NewFile(); cfg.ClientState = null; TemplateApi.LoadInstances(null); GroupApi.Load(null); MarkClean(cfg, dm); return Results.Ok(new { ok = true });
@@ -2131,7 +2146,7 @@ public static class LiveApi
                         return Results.Json(new { ok = false, error = dm.GetDevice(g) is { } wd && !DeviceManager.VersionKnown(wd)
                             ? "The module hasn't said which firmware it runs, so nothing was written (a write now could reset its newer settings). Try again in a moment."
                             : dm.GetDevice(g) is { } ud && !DeviceManager.ParamsKnown(ud)
-                            ? "Read the module first: it runs upstream dingoFW and the app needs its list of settings before it can write them. Nothing was written."
+                            ? "Read the module first: on firmware 5.7 (and upstream dingoFW) the app learns the module's list of settings from a Read before it can write them. Nothing was written."
                             : dm.GetDevice(g) is IDeviceConfigurable { Lock.Locked: true }
                             ? "The module is locked by its installer: Unlock it first. Nothing was written."
                             : "The module didn't confirm the write (see Logs) — it keeps its previous config" }, statusCode: 409);

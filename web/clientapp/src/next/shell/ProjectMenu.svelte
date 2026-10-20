@@ -113,6 +113,13 @@
     } catch (e) { say('Could not open: ' + e.message, 'fault'); ui.panel = 'project'; toast('Could not open: ' + e.message, 'error', 6000) }
     finally { busy = false }
   }
+  // the project folder (kept in the preferences); the open project stays open, without a file name in the new folder
+  let folderDraft = $state(null)   // null: not editing
+  async function setFolder() {
+    busy = true
+    try { const r = await api.projFolder(folderDraft); folderDraft = null; await refreshProject(); say(`Project folder: ${r?.dir}.`) }
+    catch (e) { say('Could not change the folder: ' + e.message, 'fault') } finally { busy = false }
+  }
   const pickFile = (f) => { if (f === project.current && !unsaved) { say('This project is already open.'); return } guard(() => openFile(f), `open ${f}`) }
 
   async function newProject() {
@@ -252,6 +259,14 @@
 
     {#if showFiles}
       <span class="nx-label" id="files-l">Project files ({files.length}) · {project.dir}</span>
+      {#if folderDraft == null}
+        <div class="row"><Button size="sm" onclick={() => (folderDraft = project.dir)} disabled={busy} data-testid="proj-folder">Change folder…</Button></div>
+      {:else}
+        <div class="box">
+          <Field label="Project folder" bind:value={folderDraft} mono hint="Full path. Created if it does not exist. Kept for the next start." />
+          <div class="row"><Button onclick={() => (folderDraft = null)}>Cancel</Button><Button variant="primary" onclick={setFolder} busy={busy} data-testid="proj-folder-go">Use this folder</Button></div>
+        </div>
+      {/if}
       <div class="files" role="group" aria-labelledby="files-l">
         {#each listed as r (r.name)}
           <button type="button" class="file" onclick={() => pickFile(r.name)} disabled={busy}>
