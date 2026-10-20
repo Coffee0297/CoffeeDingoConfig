@@ -43,22 +43,11 @@ assert.match(summary(s, 'lamp', 5, f()), /dead short 30 A.* stays off/)
 assert.equal(simulate(f({ hardShortLimit: 0 }), 'lamp', 5, 1000).trips.length, 0, '0 = no dead-short trip')
 
 // PWM soft start ramps the current: the lamp's 7x peak is never reached, so 20 A inrush holds
-s = simulate(f({ inrushLimit: 20, pwmEnabled: true, softStartEnabled: true, softStartRampTime: 200 }), 'lamp', 5, 1000)
+s = simulate(f({ inrushLimit: 20, pwmEnabled: true, softStart: true, softStartRamp: 200 }), 'lamp', 5, 1000)
 assert.equal(s.trips.length, 0); assert.equal(s.demand[0], 0)
-assert.equal(simulate(f({ inrushLimit: 20, pwmEnabled: false, softStartEnabled: true, softStartRampTime: 200 }), 'lamp', 5, 1000).trips.length, 1, 'soft start needs PWM')
+assert.equal(simulate(f({ inrushLimit: 20, pwmEnabled: false, softStart: true, softStartRamp: 200 }), 'lamp', 5, 1000).trips.length, 1, 'soft start needs PWM')
 
-assert.equal(windowMs(f()), 1000); // dead short: latches at once during inrush, no retry even in endless mode
-s = simulate(f({ hardShortLimit: 30, resetMode: 2, resetTime: 100 }), 'lamp', 5, 1000)
-assert.equal(s.trips.length, 1); assert.ok(s.trips[0].hard); assert.equal(s.fault, 0)
-assert.match(summary(s, 'lamp', 5, f()), /dead short 30 A.* stays off/)
-assert.equal(simulate(f({ hardShortLimit: 0 }), 'lamp', 5, 1000).trips.length, 0, '0 = no dead-short trip')
-
-// PWM soft start ramps the current: the lamp's 7x peak is never reached, so 20 A inrush holds
-s = simulate(f({ inrushLimit: 20, pwmEnabled: true, softStartEnabled: true, softStartRampTime: 200 }), 'lamp', 5, 1000)
-assert.equal(s.trips.length, 0); assert.equal(s.demand[0], 0)
-assert.equal(simulate(f({ inrushLimit: 20, pwmEnabled: false, softStartEnabled: true, softStartRampTime: 200 }), 'lamp', 5, 1000).trips.length, 1, 'soft start needs PWM')
-
-assert.equal(windowMs(f({ resetMode: 2, resetTime: 60000 })), 20000)
+assert.equal(windowMs(f()), 1000); assert.equal(windowMs(f({ resetMode: 2, resetTime: 60000 })), 20000)
 assert.deepEqual(thin([1, 5, 2, 0, 3, 1], 3), [5, 2, 3])
 assert.equal(loadFromName('Rad fan'), 'motor'); assert.equal(loadFromName('Low beam'), 'lamp'); assert.equal(loadFromName('ECU'), 'steady')
 console.log('fuse.test.js ok')

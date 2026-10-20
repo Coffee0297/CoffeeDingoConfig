@@ -20,7 +20,7 @@
   const sim = $derived(simulate(f, load, Number(runA) || 0, ms))
   const text = $derived(summary(sim, load, Number(runA) || 0, f))
   const hard = $derived(Number(f.hardShortLimit) || 0)
-  const ramp = $derived(f.pwmEnabled && f.softStartEnabled ? Number(f.softStartRampTime) || 0 : 0)
+  const ramp = $derived(f.pwmEnabled && f.softStart ? Number(f.softStartRamp) || 0 : 0)
   const yMax = $derived(Math.max(1, hard, ...sim.limit, ...sim.demand) * 1.1)
   const xLabels = $derived([0, 0.25, 0.5, 0.75, 1].map((k) => { const t = ms * k; return t >= 1000 ? (t / 1000).toFixed(t % 1000 ? 1 : 0) + ' s' : Math.round(t) + ' ms' }))
 </script>

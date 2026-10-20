@@ -4,7 +4,7 @@
 // then latches (reset mode 0), retries up to resetCountLimit times (1) or for ever (2), resetTime ms apart.
 // Each retry is a new turn-on, so the inrush window starts again.
 // Optional, when the module has them: hardShortLimit (> 0: latches off at once, even during inrush, no retry) and
-// PWM soft start (pwmEnabled + softStartEnabled: duty ramps up over softStartRampTime ms, the current with it).
+// PWM soft start (pwmEnabled + softStart: duty ramps up over softStartRamp ms, the current with it).
 
 export const DT = 2   // ms, the firmware's control loop
 
@@ -38,7 +38,7 @@ export function simulate(f, load, runA, durationMs) {
   const num = (x) => Number(x) || 0
   const lim = num(f.currentLimit), inLim = num(f.inrushLimit), inT = num(f.inrushTime)
   const mode = num(f.resetMode), count = num(f.resetCountLimit), wait = num(f.resetTime)
-  const hard = num(f.hardShortLimit), ramp = f.pwmEnabled && f.softStartEnabled ? num(f.softStartRampTime) : 0
+  const hard = num(f.hardShortLimit), ramp = f.pwmEnabled && f.softStart ? num(f.softStartRamp) : 0
   const draw = (since) => loadCurrent(load, runA, since) * (ramp > 0 ? Math.min(1, since / ramp) : 1)
   const out = { t: [], demand: [], flow: [], limit: [], trips: [], fault: null }
   let st = 'on', onAt = 0, trigAt = 0, n = 0
