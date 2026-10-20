@@ -9,7 +9,7 @@ namespace web.Api;
 /// to it at startup when asked to, and reconnects when the link drops on its own. A Disconnect from the user
 /// stops the reconnecting until the next Connect.
 /// </summary>
-public sealed class ConnectionKeeper(ICommsAdapterManager adapters, UserPreferencesManager prefs, ILogger<ConnectionKeeper> log) : BackgroundService
+public sealed class ConnectionKeeper(ICommsAdapterManager adapters, UserPreferencesManager prefs, ConfigFileManager cfg, ILogger<ConnectionKeeper> log) : BackgroundService
 {
     private volatile bool _wanted;          // the user asked for a connection and has not disconnected since
     private readonly SemaphoreSlim _gate = new(1, 1);
@@ -78,6 +78,7 @@ public sealed class ConnectionKeeper(ICommsAdapterManager adapters, UserPreferen
     protected override async Task ExecuteAsync(CancellationToken ct)
     {
         prefs.Initialize();
+        cfg.WorkingDirectory = prefs.Preferences.WorkingDirectory;   // the project folder the preferences name (default Documents\dingoConfig)
         var p = prefs.Preferences;
         if (p.AutoConnect && p.SelectedAdapter is { } a)
         {
