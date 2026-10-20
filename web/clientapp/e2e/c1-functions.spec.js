@@ -227,7 +227,7 @@ test.describe('add function', () => {
     await open(page, 'functions/add')
     const cards = page.getByTestId('tpl-cards').locator('article[data-tpl]')
     const total = await cards.count()
-    expect(total).toBe(18)   // every template in templates.js
+    expect(total).toBe(22)   // every template in templates.js (the integration branch adds retryall, loadshed, reminder, pidfan)
     await expect(cards.first().getByText(/You need:/)).toBeVisible()
     await expect(page.locator('article[data-tpl=washwipe]').getByText('NEW')).toBeVisible()
     await expect(page.locator('article[data-tpl=headlights]').getByText('NEW')).toHaveCount(0)

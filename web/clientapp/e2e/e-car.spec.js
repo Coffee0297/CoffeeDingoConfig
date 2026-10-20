@@ -137,7 +137,7 @@ test('modules with no place wait in the tray, and Place them for me puts them on
     for (const m of d) expect(stored[m.guid]).toBeTruthy()
     // the same layout on the first-run map: nothing "not placed"
     await open(page, 'connect')
-    for (const m of d) await expect(page.getByTestId('first-' + m.name)).toContainText('placed ✓')
+    for (const m of d.filter((x) => !/dbc/i.test(x.type))) await expect(page.getByTestId('first-' + m.name)).toContainText('placed ✓')   // the first-run list has modules only, no ECU
   } finally {
     await restorePins(page, before)
   }
@@ -231,6 +231,13 @@ test('engine rpm appears on Car home and the dashboard when a CAN input provides
     list.push({ kind: 'CAN input', name: 'Engine RPM', value: '850', on: true, enabled: true })
     await r.fulfill({ response: real, json: list })
   })
+  // the Ranchero's ECU (DBC) has an engine speed of its own and comes first: hide it, so the CAN input is the source
+  for (const e of (await devs()).filter((x) => /dbc/i.test(x.type))) {
+    await page.route(`**/api/devices/${e.guid}/signals`, async (r) => {
+      const real = await r.fetch()
+      await r.fulfill({ response: real, json: (await real.json()).filter((s) => !/rpm|engine.?speed/i.test(s.name)) })
+    })
+  }
   await open(page, 'car')
   const card = page.locator('.stat', { hasText: 'Engine' })
   await expect(card).toContainText('850', { timeout: 15_000 })

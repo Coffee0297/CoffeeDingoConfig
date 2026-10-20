@@ -20,7 +20,7 @@ test('power home: modules, roles, sleep status, links', async ({ page }) => {
   const rows = page.getByTestId('power-modules').locator('tbody tr')
   await expect(rows).toHaveCount((await devices()).filter((d) => !/dbc/i.test(d.type)).length)   // modules; an ECU (DBC) has no power state
   await expect(page.getByTestId('power-modules').locator('tr[data-module="CB-2"]')).toContainText('Awake')
-  await expect(page.getByTestId('power-modules').locator('tr[data-module="PDM-01"]')).toContainText(/Own auto-sleep|Stays awake|Master|Follower|sleep input/)
+  await expect(page.getByTestId('power-modules').locator('tr[data-module="PDM-01"]')).toContainText(/Own auto-sleep|Stays awake|Master|Follower|sleep input|master's "sleep now"/)   // a follower of the Ranchero's CB-1 master
   await expect(page.getByTestId('ignition-gap')).toContainText(/not set up yet|runs the ignition/)
   if (await page.getByTestId('ignition-setup').count()) await expect(page.getByTestId('ignition-setup')).toHaveAttribute('href', /power\/ignition/)
   // sleep editor: every module but the master follows; staging needs a keep-awake signal; Cancel writes nothing
@@ -43,7 +43,10 @@ test('power home: modules, roles, sleep status, links', async ({ page }) => {
 
 test('power home: the power-down timeline is read from the modules\' own sleep blocks', async ({ page }) => {
   const errors = watchErrors(page)
-  const pdm = await deviceByName('PDM-01')
+  // the project's sleep master (CB-1 on the Ranchero, PDM-01 on older fixtures)
+  await open(page, 'power')
+  const mName = (await page.getByTestId('sequence-source').innerText()).split(' is the master')[0]
+  const pdm = await deviceByName(mName)
   // feed the screen a master's blocks without touching a module: awake 60 s, pre-sleep 20 s before as a 0.5 s pulse
   await page.route(`**/api/devices/*/functions`, async (route) => {
     const r = await route.fetch(), j = await r.json()
@@ -53,15 +56,15 @@ test('power home: the power-down timeline is read from the modules\' own sleep b
     }
     await route.fulfill({ response: r, json: j })
   })
-  await open(page, 'power')
+  await page.reload()
   const tl = page.getByTestId('power-timeline')
   await expect(tl).toBeVisible()
-  await expect(page.getByTestId('sequence-source')).toContainText('PDM-01 is the master')
+  await expect(page.getByTestId('sequence-source')).toContainText(`${mName} is the master`)
   await expect(tl).toContainText('Pre-sleep')
   await expect(tl).toContainText('Asleep')
   await expect(page.getByTestId('power-rules')).toContainText('The car stays awake 60 s after')
   await expect(page.getByTestId('power-rules')).toContainText('20 s before sleep as a 0.5 s pulse')
-  await expect(page.getByTestId('power-modules').locator('tr[data-module="PDM-01"]')).toContainText('Sleep master')
+  await expect(page.getByTestId('power-modules').locator(`tr[data-module="${mName}"]`)).toContainText('Sleep master')
   await page.getByRole('link', { name: 'Open sleep settings' }).click()
   await expect(page).toHaveURL(/#\/next\/power\/sleep/)
   expect(errors).toEqual([])
@@ -284,6 +287,7 @@ test('ignition on PDM-01 with the others following: live state, a Starter role, 
   const ign = async (d) => (await apiJson('GET', `/api/devices/${d.guid}/functions`)).ignition
   const o8 = p4.outputs.find((o) => o.number === 8)
   const ciBefore = (await apiJson('GET', `/api/devices/${p1.guid}/functions`)).canInputs.filter((c) => c.enabled).map((c) => c.number)
+  const rolesBefore = (await ign(p4)).outputRoles   // 5.7 only
   try {
     await open(page, 'power/ignition')
     await pick(page, 'ign-main', 'PDM-01')
@@ -300,7 +304,9 @@ test('ignition on PDM-01 with the others following: live state, a Starter role, 
     expect(startVar.kind).toBe('caninput')
     // the page saves to the project; Apply to car sends it (G2): write every module now
     for (const d of all) await apiJson('POST', `/api/devices/${d.guid}/write`).catch(() => {})
-    for (const d of all.filter((x) => x.guid !== p1.guid)) await waitFor(async () => { const g = await ign(d); return g.enabled && g.role === 1 && g.mainStateId === p1.baseId + 30 }, 30_000, d.name + ' follows')
+    // the followers listen on the main's frame: fork 5.6 base+30; 5.7 the shared sync id the main sends on (0x1E00 sub 10)
+    const syncId = p1.family === 'upstream' ? (await ign(p1)).mainStateId : p1.baseId + 30
+    for (const d of all.filter((x) => x.guid !== p1.guid)) await waitFor(async () => { const g = await ign(d); return g.enabled && g.role === 1 && g.mainStateId === syncId }, 30_000, d.name + ' follows')
     // PDM-01 sends its state frame: the backend and the screens show it
     await waitFor(async () => { const d = await deviceByName('PDM-01'); return d.ignition?.live && d.ignition.state === 'on' }, 15_000, 'ignition state on')
     await open(page, 'power')
@@ -308,13 +314,19 @@ test('ignition on PDM-01 with the others following: live state, a Starter role, 
     // a role: PDM-04 o8 = Starter (follows Cranking)
     await open(page, 'power/roles')
     await page.getByTestId('role-PDM-04-o8').selectOption('Starter')
-    const vars = await apiJson('GET', `/api/devices/${p4.guid}/inputs`)
-    const cranking = vars.find((v) => v.kind === 'ignition' && v.prop === 'Cranking').index
-    await waitFor(async () => (await deviceByName('PDM-04')).outputs.find((o) => o.number === 8).inputVal === cranking, 20_000, 'o8 follows Cranking')
+    if (Array.isArray((await ign(p4)).outputRoles)) {
+      // 5.7: Starter is the module's own output role (0x1E00 sub 0x30 + output, 4 = Starter), not the output's input
+      await waitFor(async () => (await ign(p4)).outputRoles[7] === 4, 20_000, 'o8 has the Starter role')
+    } else {
+      const vars = await apiJson('GET', `/api/devices/${p4.guid}/inputs`)
+      const cranking = vars.find((v) => v.kind === 'ignition' && v.prop === 'Cranking').index
+      await waitFor(async () => (await deviceByName('PDM-04')).outputs.find((o) => o.number === 8).inputVal === cranking, 20_000, 'o8 follows Cranking')
+    }
     await expect(page.getByTestId('role-PDM-04-o8')).toHaveValue('Starter')
   } finally {
     await apiJson('POST', `/api/devices/${p4.guid}/outputconfig`, { Number: 8, Input: o8.inputVal, Enabled: o8.enabled }).catch(() => {})
     for (const d of all) await apiJson('POST', `/api/devices/${d.guid}/function/ignition/1`, { enabled: false, role: 0, mainStateId: 0, ignitionInput: 0, startInput: 0 }).catch(() => {})
+    if (rolesBefore) await apiJson('POST', `/api/devices/${p4.guid}/function/ignition/1`, { outputRoles: rolesBefore }).catch(() => {})
     for (const c of (await apiJson('GET', `/api/devices/${p1.guid}/functions`)).canInputs.filter((c) => c.enabled && !ciBefore.includes(c.number)))
       await apiJson('POST', `/api/devices/${p1.guid}/function/caninput/${c.number}`, { enabled: false }).catch(() => {})
     for (const d of all) await apiJson('POST', `/api/devices/${d.guid}/write`).catch(() => {})

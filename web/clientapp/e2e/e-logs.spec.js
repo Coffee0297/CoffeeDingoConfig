@@ -2,7 +2,7 @@
 // Safe write: CAN log recording start/stop (always stopped again).
 import { test, expect } from '@playwright/test'
 import { open, watchErrors } from './helpers.js'
-import { apiJson } from './api.js'
+import { apiJson, API } from './api.js'
 import { inject, devs } from './e-util.js'
 
 const rowsOf = (page) => page.getByTestId('can-table').locator('tbody tr')
@@ -118,7 +118,7 @@ test('Download ID summary returns a CSV of the traffic', async ({ page }) => {
   await open(page, 'live/logs')
   const href = await page.getByTestId('dl-summary').getAttribute('href')
   expect(href).toBe('/api/canlog/export')
-  const r = await page.request.get('http://127.0.0.1:5000' + href)
+  const r = await page.request.get(API + href)
   expect(r.ok()).toBe(true)
   expect((await r.text()).startsWith('Dir,ID,Type,DLC,Data,Count')).toBe(true)
 })
@@ -183,7 +183,7 @@ test('System log export is a CSV download', async ({ page }) => {
   await page.getByRole('tab', { name: 'System log' }).click()
   const href = await page.getByTestId('sys-export').getAttribute('href')
   expect(href).toBe('/api/syslog/export')
-  const r = await page.request.get('http://127.0.0.1:5000' + href)
+  const r = await page.request.get(API + href)
   expect(r.ok()).toBe(true)
   expect((await r.text()).startsWith('Time,Level,Source,Message')).toBe(true)
   const dl = page.waitForEvent('download')

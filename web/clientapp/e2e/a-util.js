@@ -1,10 +1,11 @@
 // Helpers for the a-* specs (connect, project, apply, add module, modules, module page, first run).
 import { expect } from '@playwright/test'
 import fs from 'node:fs'
-import { apiJson, devices, waitFor, API } from './api.js'
+import { apiJson, devices, waitFor, API, readUpstream } from './api.js'
 
 export const FIXTURE = process.env.E2E_PROJECT
 export const SIM_PORT = process.env.SIM_PORT ?? 'tcp://127.0.0.1:7778'
+export const SIM_TCP_PORT = SIM_PORT.split(':').pop()   // the Sim's SLCAN port as the Connect panel shows it
 
 /** Open the hash route and wait for the shell + live pill, but do not require a connection. */
 export async function openAny(page, path) {
@@ -32,6 +33,7 @@ export async function restoreProject() {
   if (!r.ok) throw new Error('could not restore the project: ' + (await r.text()))
   await waitFor(async () => (await devices()).length >= 7, 15_000, 'project restored')
   await waitFor(async () => (await devices()).every((d) => d.connected || /dbc/i.test(d.type)), 30_000, 'modules answering again')
+  await readUpstream()   // an uploaded project is a fresh record: 5.7 modules need a Read before any write
 }
 
 export const hex3 = (n) => '0x' + n.toString(16).toUpperCase().padStart(3, '0')
@@ -42,6 +44,7 @@ export async function forceRestoreProject() {
   if (!r.ok) throw new Error('could not restore the project: ' + (await r.text()))
   await waitFor(async () => (await devices()).length >= 7, 15_000, 'project restored')
   await waitFor(async () => (await devices()).every((d) => d.connected || /dbc/i.test(d.type)), 30_000, 'modules answering again')
+  await readUpstream()   // an uploaded project is a fresh record: 5.7 modules need a Read before any write
 }
 
 /** Wait until a module answers (other runs on the shared Sim can briefly take one off the bus). */

@@ -77,7 +77,9 @@ async function save(page) {
 
 // writes wait for the module's confirm; on a busy shared bus that can take a while
 test.describe.configure({ timeout: 240_000 })
-test.beforeAll(async () => { pdm4 = await deviceByName('PDM-04') })
+// the builder adds the highest free table: 2 on the fork, 4 on 5.7 (upstream layout, tables 1-4)
+let TAB = 2
+test.beforeAll(async () => { pdm4 = await deviceByName('PDM-04'); TAB = (await fns(pdm4.guid)).tables.length; TARGETS.tables = [TAB] })
 
 test('canvas shows the module\'s real blocks with live values and switches module', async ({ page }) => {
   const errors = watchErrors(page)
@@ -111,6 +113,9 @@ test('+ Add a Compare, edit it with hysteresis, Delete removes it and Undo bring
     await expect(insp(page).getByRole('heading', { level: 2 })).toBeVisible()
     await insp(page).getByLabel('Name').fill('c2 battery low')
     await pickSource(page, 'input', 'Battery Voltage')
+    // battery LOW: "is below", so the off point 12.2 lies above the value (5.7 refuses a band on the wrong side of the operator)
+    await insp(page).getByRole('button', { name: 'Is', exact: true }).click()
+    await page.getByRole('option', { name: /is below/ }).first().click()
     await insp(page).getByLabel('Value', { exact: true }).fill('11.5')
     await insp(page).getByText('Separate off point (hysteresis)').click()
     await insp(page).getByLabel('Off again at').fill('12.2')
@@ -179,7 +184,7 @@ test('timer, flasher, push-button toggle, table and CAN output inspectors write 
     await waitFor(async () => { const r = await row('timers', 8); return r.enabled && r.mode === 1 }, 15_000, 'timer 8 keep-on-after')
     await pickSource(page, 'input', 'Hazard · State')
     await insp(page).getByLabel('Time').fill('2.5')
-    await insp(page).getByRole('radiogroup', { name: 'Kind' }).getByRole('radio', { name: 'Pulse' }).click()
+    await insp(page).getByRole('radiogroup', { name: 'Kind' }).getByRole('radio', { name: /^Pulse(, restarts)?$/ }).click()   // 5.7: mode 2 is "Pulse, restarts" ("One pulse" is mode 3)
     await save(page)
     await waitFor(async () => { const r = await row('timers', 8); return r.preset === 2500 && r.mode === 2 && r.input > 0 }, 15_000, 'timer saved')
     // Flasher 4
@@ -196,15 +201,15 @@ test('timer, flasher, push-button toggle, table and CAN output inspectors write 
     await pickSource(page, 'incInput', 'Brake · State')
     await save(page)
     await waitFor(async () => (await row('counters', 4)).incInput > 0, 15_000, 'counter wired')
-    // Table 2
+    // Table 2 (fork) / 4 (5.7)
     await addBlock(page, 'Table')
-    await waitFor(async () => (await row('tables', 2)).enabled, 15_000, 'table 2')
+    await waitFor(async () => (await row('tables', TAB)).enabled, 15_000, 'table ' + TAB)
     await pickSource(page, 'xInput', 'Battery Voltage')
     await insp(page).getByLabel('X point 1').fill('10')
     await insp(page).getByLabel('X point 2').fill('14')
     await insp(page).getByLabel('Value at row 1, column 2').fill('50')
     await save(page)
-    await waitFor(async () => { const r = await row('tables', 2); return r.xAxis[0] === 10 && r.xAxis[1] === 14 && r.cells[1] === 50 && r.xInput === 4 }, 20_000, 'table saved')
+    await waitFor(async () => { const r = await row('tables', TAB); return r.xAxis[0] === 10 && r.xAxis[1] === 14 && r.cells[1] === 50 && r.xInput === 4 }, 20_000, 'table saved')
     // CAN output 32 with the ID-free check
     await addBlock(page, 'CAN output')
     await waitFor(async () => (await row('canOutputs', 32)).enabled, 15_000, 'canout 32')
@@ -299,6 +304,15 @@ test('spare output o2: wire its input from the inspector and by dragging on the 
     const brake = (await apiJson('GET', `/api/devices/${pdm4.guid}/inputs`)).find((v) => v.name === 'Brake'), brakeIdx = brake.index
     await page.getByRole('button', { name: 'Tidy' }).click()
     const src = page.locator(`.svelte-flow__node[data-id="caninput:${brake.number}"] .svelte-flow__handle[data-handleid="v${brakeIdx}"]`)
+    // the 5.7 Ranchero's PDM-04 has more blocks: after Tidy the CAN input can sit left of the canvas, under the side rail;
+    // pan the canvas right (drag on its empty bottom edge) until the handle is inside it
+    const pane = page.getByTestId('canvas')
+    for (let i = 0; i < 6; i++) {
+      const hb = await src.boundingBox(), cb = await pane.boundingBox()
+      if (!hb || !cb || hb.x > cb.x + 40) break
+      const x = cb.x + cb.width / 2, y = cb.y + cb.height - 12
+      await page.mouse.move(x, y); await page.mouse.down(); await page.mouse.move(x + 300, y, { steps: 6 }); await page.mouse.up()
+    }
     const dst = page.locator('.svelte-flow__node[data-id="output:2"] .svelte-flow__handle[data-handleid="input"]')
     await src.scrollIntoViewIfNeeded()
     await src.dragTo(dst)
@@ -377,7 +391,8 @@ test('suggestion banner: Replace groups blocks (a record on the server), Open in
     await expect(sug).toContainText('Ready to start')
     if (!(await page.getByTestId('replace-all').isVisible())) await page.getByTestId('tool-palette').click()
     await page.getByTestId('replace-all').click()
-    await expect(page.locator('.svelte-flow__node[data-id^="grp:"]')).toHaveCount(3)
+    // every suggestion became a group: 3 on the old fixture, more on the 5.7 Ranchero (CB-1 has more blocks there)
+    await expect.poll(() => page.locator('.svelte-flow__node[data-id^="grp:"]').count()).toBeGreaterThanOrEqual(3)
     // the blocks on the module did not change
     expect(JSON.stringify(await fns(cb1.guid))).toBe(before)
     await page.getByRole('button', { name: 'Block sheet' }).click()

@@ -30,11 +30,11 @@ test('lists every module with its script size and opens one', async ({ page }) =
   const list = page.getByTestId('lua-modules')
   const all = await devices()
   const pdms = all.filter((d) => /pdm/i.test(d.type))
-  for (const d of pdms) {
+  for (const d of pdms) {   // upstream / 5.7: 4,095 B (the firmware clamps), fork 4,096 B
     const src = await storedLua(d.guid)
     const row = list.getByRole('link', { name: new RegExp('^' + d.name) })
     await expect(row).toBeVisible()
-    await expect(row).toContainText(src.trim() ? `${Buffer.byteLength(src).toLocaleString('en-US')} of 4,096 B` : 'No script')
+    await expect(row).toContainText(src.trim() ? `${Buffer.byteLength(src).toLocaleString('en-US')} of ${d.family === 'upstream' ? '4,095' : '4,096'} B` : 'No script')
   }
   await expect(page.getByText(/have no Lua|has no Lua/)).toContainText('CB-1')
   const pdm3 = pdms.find((d) => d.name === 'PDM-03')

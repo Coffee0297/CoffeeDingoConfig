@@ -1,5 +1,8 @@
+import { test } from '@playwright/test'
 // Direct backend access for tests: arrange state and assert that a click really reached the module.
 export const API = process.env.E2E_API ?? 'http://127.0.0.1:5000'
+// The CoffeeDingoSim server's MCP endpoint (state, switches, resets); SIM_MCP for a Sim on another port.
+export const SIM_MCP = process.env.SIM_MCP ?? 'http://127.0.0.1:8787/mcp'
 
 export async function apiJson(method, path, body, timeoutMs = 30_000) {
   const ac = new AbortController()
@@ -36,3 +39,15 @@ export const near = (a, b, eps = 1e-4) => Math.abs(Number(a) - Number(b)) <= eps
 
 /** Project modules only (PDMs, CANBoards): an ECU from a DBC file is listed apart. */
 export async function modules() { return (await devices()).filter((d) => !/dbc/i.test(d.type)) }
+
+/** Firmware 5.7 / upstream dingoFW: the app writes a module only after a Read this session (it learns the module's
+ *  list of settings; a migrated project keeps its values). One module at a time: seven bulk reads at once lose frames. */
+export async function readUpstream() {
+  const todo = (await apiJson('GET', '/api/devices')).filter((x) => /pdm|canboard/i.test(x.type) && x.family === 'upstream' && !x.paramsRead && x.connected)
+  // ~20 s per PDM on the Sim: a test that re-uploads the project gets the time on top (outside a test, e.g. global setup, nothing to extend)
+  try { if (todo.length) test.info().setTimeout(test.info().timeout + todo.length * 30_000) } catch {}
+  for (const d of todo) {
+    await apiJson('POST', `/api/devices/${d.guid}/read`)
+    await waitFor(async () => (await apiJson('GET', '/api/devices')).find((x) => x.guid === d.guid)?.paramsRead, 60_000, `${d.name} read`)
+  }
+}

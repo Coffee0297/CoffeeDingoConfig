@@ -4,6 +4,9 @@ import { svelte } from '@sveltejs/vite-plugin-svelte'
 // Dev:   `npm run dev`   -> Vite on :5173, proxies /api + /hub to the .NET backend on :5000.
 // Build: `npm run build` -> emits the SPA straight into the backend's wwwroot, so the
 //                           .NET app serves everything single-process on :5000.
+// DINGO_BACKEND: another backend for the dev proxy (an e2e run against a second instance)
+const backend = process.env.DINGO_BACKEND ?? 'http://localhost:5000'
+
 export default defineConfig({
   plugins: [svelte()],
   build: {
@@ -24,9 +27,9 @@ export default defineConfig({
     // e2e runs write traces/screenshots here; watching them would reload the page mid-test.
     watch: { ignored: ['**/e2e-results/**', '**/test-results/**', '**/playwright-report/**'] },
     proxy: {
-      '/api': { target: 'http://localhost:5000', changeOrigin: true },
-      '/hub': { target: 'http://localhost:5000', ws: true, changeOrigin: true },
-      '/mcp': { target: 'http://localhost:5000', changeOrigin: true },
+      '/api': { target: backend, changeOrigin: true },
+      '/hub': { target: backend, ws: true, changeOrigin: true },
+      '/mcp': { target: backend, changeOrigin: true },
     },
   },
 })

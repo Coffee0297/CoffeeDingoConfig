@@ -2,7 +2,7 @@
 import { test, expect } from '@playwright/test'
 import { open, watchErrors } from './helpers.js'
 import { apiJson, devices, modules, waitFor } from './api.js'
-import { restoreConnection, SIM_PORT } from './a-util.js'
+import { restoreConnection, SIM_PORT, SIM_TCP_PORT } from './a-util.js'
 
 const panel = (page) => page.getByRole('dialog', { name: 'Connection' })
 const radio = (page, re) => panel(page).getByRole('radio', { name: re })
@@ -26,7 +26,7 @@ test('shows the live connection through SLCAN over TCP', async ({ page }) => {
   await expect(panel(page).getByText('In use')).toBeVisible()
   // the host and port fields show the live address
   await expect(panel(page).getByRole('textbox', { name: 'Host' })).toHaveValue('127.0.0.1')
-  await expect(panel(page).getByRole('textbox', { name: 'Port', exact: true })).toHaveValue('7778')
+  await expect(panel(page).getByRole('textbox', { name: 'Port', exact: true })).toHaveValue(SIM_TCP_PORT)
   expect(errors).toEqual([])
 })
 
@@ -139,7 +139,7 @@ test('Disconnect then Connect over TCP @exclusive', async ({ page }) => {
     // reconnect through the form
     await radio(page, /SLCAN over TCP/).check()
     await panel(page).getByRole('textbox', { name: 'Host' }).fill('127.0.0.1')
-    await panel(page).getByRole('textbox', { name: 'Port', exact: true }).fill('7778')
+    await panel(page).getByRole('textbox', { name: 'Port', exact: true }).fill(SIM_TCP_PORT)
     await panel(page).getByRole('radiogroup', { name: 'CAN speed' }).getByRole('radio', { name: '500 k' }).click()
     await panel(page).getByTestId('connect').click()
     await expect(page.getByTestId('connection-pill')).toContainText(/of \d+ live/, { timeout: 30_000 })

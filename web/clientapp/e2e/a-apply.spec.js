@@ -234,7 +234,7 @@ test('a saved edit in the redesign waits for Apply to car: counted, shown, and w
   const errors = watchErrors(page)
   const d = await deviceByName('PDM-05')
   const out = d.outputs.find((o) => o.number === 1)
-  const staged = (body) => fetch(`http://127.0.0.1:5000/api/devices/${d.guid}/outputconfig`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Dingo-Stage': '1' }, body: JSON.stringify(body) }).then((r) => r.json())
+  const staged = (body) => fetch(`${API}/api/devices/${d.guid}/outputconfig`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Dingo-Stage': '1' }, body: JSON.stringify(body) }).then((r) => r.json())
   const limit = out.currentLimit === 7 ? 6 : 7
   try {
     const r = await staged({ Number: 1, CurrentLimit: limit })

@@ -1,6 +1,6 @@
 // Make sure the backend is connected to the Sim and a project with the Sim's modules is loaded.
 import fs from 'node:fs'
-import { API, apiJson, waitFor } from './api.js'
+import { API, apiJson, waitFor, readUpstream } from './api.js'
 
 export default async function globalSetup() {
   const v = await apiJson('GET', '/api/version').catch(() => null)
@@ -20,11 +20,14 @@ export default async function globalSetup() {
   if (!r.ok) throw new Error('Project upload failed: ' + (await r.text()))
   // Every module in the project should answer on the Sim before tests start.
   await waitFor(async () => (await apiJson('GET', '/api/devices')).every((d) => d.connected || /dbc/i.test(d.type)), 30_000, 'all modules connected')   // an ECU (DBC) shows only while it sends
+  await readUpstream()   // 5.7 modules: Read before any write
   // ...and hold the fixture: the modules keep whatever was written last (another project), and a test that writes one
   // setting and "restores" the fixture's value then leaves a mix (CB-2 muted by its own ignition input, silent for good)
   for (const d of (await apiJson('GET', '/api/devices')).filter((x) => /pdm|canboard/i.test(x.type))) {
     for (const a of ['writeall', ...(/pdm/i.test(d.type) ? ['uploadlua'] : []), 'burn']) {
-      const r = await fetch(`${API}/api/devices/${d.guid}/${a}`, { method: 'POST' })
+      // a burn takes ~0.1 s on the module but ~3 s of wall time in a 7-module Sim: its reply can miss the app's wait, try again
+      let r
+      for (let i = 0; i < (a === 'burn' ? 3 : 1); i++) if ((r = await fetch(`${API}/api/devices/${d.guid}/${a}`, { method: 'POST' })).ok) break
       if (!r.ok) throw new Error(`${d.name} ${a}: ${await r.text()}`)
     }
   }

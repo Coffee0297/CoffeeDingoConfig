@@ -36,12 +36,17 @@ test('CAN map lists owners with rates and filters', async ({ page }) => {
   await expect(first).toHaveAttribute('aria-pressed', 'true')
   await expect(page.getByTestId('can-detail')).toContainText('Owner')
   // filters
+  // a project with ECUs (the Ranchero's DBC devices) has ECU rows, and an ECU id inside 0x7DF..0x7EF leaves no free reserved block
+  const ecu = Object.values(map.claimed).some((o) => o.some((w) => /: ECU /.test(w)))
   await page.getByTestId('can-filter-res').click()
-  await expect(table).toContainText('OBD-II')
-  await expect(table).toContainText('0x7DF')
-  await expect(table).not.toContainText('broadcast')
+  if (!ecu) {
+    await expect(table).toContainText('OBD-II')
+    await expect(table).toContainText('0x7DF')
+    await expect(table).not.toContainText('broadcast')
+  }
   await page.getByTestId('can-filter-ecu').click()
-  await expect(page.getByText('No id matches this filter.')).toBeVisible()
+  if (ecu) await expect(table).not.toContainText('broadcast')
+  else await expect(page.getByText('No id matches this filter.')).toBeVisible()
   await page.getByTestId('can-filter-all').click()
   await expect(table).toContainText('broadcast')
   expect(errors).toEqual([])
@@ -93,6 +98,7 @@ test('the CAN map logic merges neighbours and finds collisions, overlaps and res
   for (let i = 2; i <= 5; i++) claimed[(0x680 + i).toString(16).toUpperCase()] = ['PDM-A: broadcast']
   claimed['7E0'] = ['PDM-A: CAN out x']
   claimed['3E0'] = ['ECU: ECU Temps']
+  claimed['7E8'] = ['ECU: ECU Diag']   // the car's own ECU answering diagnostics: not a clash
   const map = { claimed, collisions: [{ id: 0x3e0, ide: false, owners: ['ECU: ECU Temps', 'PDM-B: CAN out y'] }], shared: [], overlaps: [{ a: 'PDM-A', b: 'PDM-B' }] }
   claimed['3E0'] = ['ECU: ECU Temps', 'PDM-B: CAN out y']
   const rows = buildRows({ map, log: [{ id: 0x5aa, ide: false, count: 4 }], devices })
@@ -102,6 +108,7 @@ test('the CAN map logic merges neighbours and finds collisions, overlaps and res
   expect(rows.find((r) => r.lo === 0x3e0).status).toBe('clash')
   expect(rows.find((r) => r.lo <= 0x7e0 && r.hi >= 0x7e0).status).toBe('clash')
   expect(rows.find((r) => r.lo === 0x5aa).status).toBe('unknown')
+  expect(rows.find((r) => r.lo <= 0x7e8 && r.hi >= 0x7e8).status).toBe('ok')
   // block overlap 0x690..0x69D is shared by both modules
   expect(rows.find((r) => r.lo <= 0x692 && r.hi >= 0x692).status).toBe('clash')
   expect(rows.find((r) => r.kind === 'res' && r.lo === 0x7df)).toBeTruthy()
@@ -117,7 +124,8 @@ const SIGS = [
 async function mockDbc(page, posts = []) {
   await page.route('**/api/devices', async (route) => {
     if (route.request().method() !== 'GET') return route.fallback()
-    const real = await (await fetch(API + '/api/devices')).json()
+    // the Ranchero has ECUs of its own: hide them, the fake one is the only DBC device on the page
+    const real = (await (await fetch(API + '/api/devices')).json()).filter((d) => !/dbc/i.test(d.type))
     real.push({ guid: FAKE, name: 'MCPVAL_ECU', type: 'dbcdevice', baseId: 0 })
     await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(real) })
   })
@@ -231,7 +239,7 @@ test('DBC devices: export one combined DBC from the live project', async ({ page
   const errors = watchErrors(page)
   await open(page, 'expert/can')
   await goTab(page, 'DBC devices')
-  await expect(page.getByText('No DBC file imported yet')).toBeVisible()
+  if (!(await apiJson('GET', '/api/devices')).some((d) => /dbc/i.test(d.type))) await expect(page.getByText('No DBC file imported yet')).toBeVisible()   // the Ranchero has ECUs
   const dl = page.waitForEvent('download')
   await page.getByTestId('dbc-export').click()
   const file = await dl
@@ -291,7 +299,7 @@ test('importing a DBC file adds an ECU device, search works, a signal can be def
     await expect(page.getByTestId('dbc-list')).toContainText('4 signals')
     await page.getByTestId('dbc-remove').click()
     await page.getByTestId('dbc-remove-go').click()
-    await expect(page.getByTestId('dbc-list')).toHaveCount(0)
+    await expect(page.getByTestId('dbc-list').filter({ hasText: name })).toHaveCount(0)   // the project's own ECUs stay listed
   } finally {
     for (const d of await apiJson('GET', '/api/devices')) if (d.name === name) await apiJson('POST', `/api/devices/${d.guid}/remove`)
   }
@@ -357,36 +365,37 @@ test('Parameters: read, write with a confirmed read-back, then restore (PDM-05 o
   test.setTimeout(180_000)
   const errors = watchErrors(page)
   const g = await safeGuid()
-  expect(await paramValue(g, NAME)).toBe(6)
+  // the fixture's own value (6 on the old fixture, 8 on the Ranchero); the test writes the next whole amp and puts it back
+  const V0 = await paramValue(g, NAME), V1 = V0 + 1
   try {
     await open(page, 'expert/can')
     await findParam(page, NAME)
     const row = rowOf(page, NAME)
     await expect(resultOf(page, NAME)).toContainText('Not read or written yet')
     await row.getByTestId('par-read').dispatchEvent('click')
-    await expect(resultOf(page, NAME)).toContainText('Read 6 from PDM-05.')
+    await expect(resultOf(page, NAME)).toContainText(`Read ${V0} from PDM-05.`)
     // write 7: the confirm dialog names the parameter and the value; Cancel sends nothing
-    await row.locator('input').fill('7')
+    await row.locator('input').fill(String(V1))
     await row.getByTestId('par-write').dispatchEvent('click')
     const dlg = page.getByRole('dialog')
     await expect(dlg).toContainText(NAME)
-    await expect(dlg).toContainText('= 7')
+    await expect(dlg).toContainText(`= ${V1}`)
     await dlg.getByRole('button', { name: 'Cancel' }).click()
     await expect(dlg).toHaveCount(0)
-    expect(await paramValue(g, NAME)).toBe(6)
-    await writeUi(page, NAME, 'Wrote 7. Read back 7.')
-    expect(await paramValue(g, NAME)).toBe(7)
-    await waitFor(async () => (await deviceByName('PDM-05')).outputs.find((o) => o.number === 8).currentLimit === 7, 10_000, 'telemetry shows 7 A')
+    expect(await paramValue(g, NAME)).toBe(V0)
+    await writeUi(page, NAME, `Wrote ${V1}. Read back ${V1}.`)
+    expect(await paramValue(g, NAME)).toBe(V1)
+    await waitFor(async () => (await deviceByName('PDM-05')).outputs.find((o) => o.number === 8).currentLimit === V1, 10_000, `telemetry shows ${V1} A`)
     // a second read agrees
     await row.getByTestId('par-read').dispatchEvent('click')
-    await expect(resultOf(page, NAME)).toContainText('Read 7 from PDM-05.')
+    await expect(resultOf(page, NAME)).toContainText(`Read ${V1} from PDM-05.`)
     // restore through the UI
-    await row.locator('input').fill('6')
-    await writeUi(page, NAME, 'Wrote 6. Read back 6.')
+    await row.locator('input').fill(String(V0))
+    await writeUi(page, NAME, `Wrote ${V0}. Read back ${V0}.`)
   } finally {
-    await restoreParam(g, NAME, 4103, 2, f32(6), 6)
+    await restoreParam(g, NAME, 4103, 2, f32(V0), V0)
   }
-  expect(await paramValue(g, NAME)).toBe(6)
+  expect(await paramValue(g, NAME)).toBe(V0)
   expect(errors).toEqual([])
 })
 
@@ -394,6 +403,7 @@ test('Parameters: a value the module does not accept is reported and the module 
   test.setTimeout(120_000)
   const errors = watchErrors(page)
   const g = await safeGuid()
+  const V0 = await paramValue(g, NAME)   // the fixture's own value
   try {
     await open(page, 'expert/can')
     await findParam(page, NAME)
@@ -404,15 +414,15 @@ test('Parameters: a value the module does not accept is reported and the module 
     await page.getByTestId('par-confirm').dispatchEvent('click')
     await resp
     await expect(resultOf(page, NAME)).toContainText(/Refused by the module|did not confirm/, { timeout: 30_000 })
-    await expect(resultOf(page, NAME)).toContainText('It holds 6.')
-    expect(await paramValue(g, NAME)).toBe(6)
+    await expect(resultOf(page, NAME)).toContainText(`It holds ${V0}.`)
+    expect(await paramValue(g, NAME)).toBe(V0)
     // a bad entry never leaves the browser
     await row.locator('input').fill('abc')
     await row.getByTestId('par-write').dispatchEvent('click')
     await expect(resultOf(page, NAME)).toContainText('Enter a number.')
     await expect(page.getByRole('dialog')).toHaveCount(0)
   } finally {
-    await restoreParam(g, NAME, 4103, 2, f32(6), 6)
+    await restoreParam(g, NAME, 4103, 2, f32(V0), V0)
   }
   expect(errors).toEqual([])
 })
