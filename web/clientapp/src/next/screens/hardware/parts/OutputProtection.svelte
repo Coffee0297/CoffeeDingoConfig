@@ -1,6 +1,7 @@
 <script>
   import { Card, Stepper, Select } from '../../../ui/index.js'
-  let { f = $bindable(), rating = null } = $props()
+  import FuseCurve from './FuseCurve.svelte'
+  let { f = $bindable(), rating = null, measured = 0 } = $props()
 
   const RESET = [{ value: '0', label: 'Stay off (latch)' }, { value: '1', label: 'Retry a few times' }, { value: '2', label: 'Retry for ever' }]
   let rm = $state('0')
@@ -42,11 +43,16 @@
     {#if num(f.warnLimit) > 0}Warns at <strong>{f.warnLimit} A</strong>.{:else}No early warning.{/if}
     {#if num(f.openLoadLimit) > 0}Reports "load missing?" below <strong>{f.openLoadLimit} A</strong> for <strong>{f.openLoadTime} ms</strong>.{:else}Missing load is not checked.{/if}
   </p>
+  <details class="curve" open>
+    <summary>Fuse curve</summary>
+    <FuseCurve {f} {measured} />
+  </details>
 </Card>
 
 <style>
   .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: var(--space-3); }
   .hint { display: block; font-size: var(--text-xs); color: var(--color-text-muted); margin-top: 4px; }
   .hint.bad { color: var(--color-fault); font-weight: 700; }
+  .curve summary { cursor: pointer; min-height: 36px; display: flex; align-items: center; font-weight: 600; }
   .sum { padding: var(--space-3) var(--space-4); border-radius: var(--radius-md); background: var(--color-raised); font-size: var(--text-md); }
 </style>
