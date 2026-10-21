@@ -37,6 +37,14 @@ public static class FwFamily
     /// <paramref name="whenUnknown"/> (the board's stock upstream layout).</summary>
     public static bool HasBlock(IDeviceConfigurable d, int baseIndex, bool whenUnknown) =>
         d.ParamSet.Known ? d.ParamSet.HasBlock(baseIndex) : whenUnknown;
+
+    /// <summary>A record added fresh and still as built, meeting an upstream-family module: take that firmware's
+    /// defaults (each param's DefaultValue), so its first Read shows no differences. Its address and bitrate stay.</summary>
+    public static void TakeDefaults(IDeviceConfigurable d)
+    {
+        foreach (var p in d.Params.Where(p => !p.WriteOnly && !p.LocalOnly && !(p.Index == 0 && p.SubIndex <= 1)))
+            p.SetValue(p.DefaultValue);
+    }
 }
 
 /// <summary>

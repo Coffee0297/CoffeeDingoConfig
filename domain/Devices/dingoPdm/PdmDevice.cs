@@ -309,7 +309,11 @@ public class PdmDevice : IDeviceConfigurable
         if (definition.OutputCurrentRatings is { Length: > 0 } ratings)
             for (var i = 0; i < Outputs.Count && i < ratings.Length; i++)
                 if (ratings[i] > 0) Outputs[i].CurrentLimit = ratings[i];
+        _asBuilt = [.. Params.Select(p => p.GetValue())];
     }
+
+    // The values a fresh record was built with, until its module first reports its version (FwFamily.TakeDefaults)
+    private List<object>? _asBuilt;
 
     public void ApplyDefinition(PdmDeviceDefinition definition)
     {
@@ -1315,6 +1319,9 @@ public class PdmDevice : IDeviceConfigurable
 
     // Upstream dingoFW device params (0x0000 sub 0-8, 9-11 with feat/sleep-config). The wake bools map onto the fork's wake mask / wake-on-CAN
     // and the mute / force-sleep inputs keep their names, so the same UI drives both families.
+    // PT-DPDM4: inputs 3-4 are its analog inputs; the firmware's wake mask covers its 2 digital inputs (port.h NUM_DIG_INPUTS)
+    private int UpstreamWakeMask => PdmType == 2 ? 3 : (1 << NumDigitalInputs) - 1;
+
     private List<DeviceParameter> UpstreamDeviceParams() =>
     [
         new() { ParentName = Name, Name = "device.baseId", Index = BaseIndex, SubIndex = 0,
@@ -1326,7 +1333,7 @@ public class PdmDevice : IDeviceConfigurable
         new() { ParentName = Name, Name = "device.canFiltersEnabled", Index = BaseIndex, SubIndex = 3,
             GetValue = () => CanFiltersEnabled, SetValue = val => CanFiltersEnabled = (bool)val, ValueType = typeof(bool), DefaultValue = false },
         new() { ParentName = Name, Name = "device.disableDigInWake", Index = BaseIndex, SubIndex = 4,
-            GetValue = () => WakeDigInputMask == 0, SetValue = val => WakeDigInputMask = (bool)val ? 0 : (1 << NumDigitalInputs) - 1, ValueType = typeof(bool), DefaultValue = false },
+            GetValue = () => WakeDigInputMask == 0, SetValue = val => WakeDigInputMask = (bool)val ? 0 : UpstreamWakeMask, ValueType = typeof(bool), DefaultValue = false },
         new() { ParentName = Name, Name = "device.disableCanWake", Index = BaseIndex, SubIndex = 5,
             GetValue = () => !WakeOnCan, SetValue = val => WakeOnCan = !(bool)val, ValueType = typeof(bool), DefaultValue = false },
         new() { ParentName = Name, Name = "device.connectUsbToCan", Index = BaseIndex, SubIndex = 6,
@@ -1346,9 +1353,9 @@ public class PdmDevice : IDeviceConfigurable
         new() { ParentName = Name, Name = "device.sleepIgnoreAlwaysOn", Index = BaseIndex, SubIndex = 10,
             GetValue = () => SleepIgnoreAlwaysOn, SetValue = val => SleepIgnoreAlwaysOn = (bool)val, ValueType = typeof(bool), DefaultValue = false },
         new() { ParentName = Name, Name = "device.wakeDigInputMask", Index = BaseIndex, SubIndex = 11,
-            GetValue = () => WakeDigInputMask == 0 ? (1 << NumDigitalInputs) - 1 : WakeDigInputMask,
-            SetValue = val => { if (WakeDigInputMask != 0) WakeDigInputMask = (int)val & ((1 << NumDigitalInputs) - 1); },
-            ValueType = typeof(int), DefaultValue = (1 << NumDigitalInputs) - 1 },
+            GetValue = () => WakeDigInputMask == 0 ? UpstreamWakeMask : WakeDigInputMask,
+            SetValue = val => { if (WakeDigInputMask != 0) WakeDigInputMask = (int)val & (UpstreamWakeMask); },
+            ValueType = typeof(int), DefaultValue = UpstreamWakeMask },
     ];
 
     private void Clear()
@@ -1796,7 +1803,12 @@ public class PdmDevice : IDeviceConfigurable
             Migrate57Pending = true;   // a fork project on a 5.7+ module: DeviceManager converts it after this frame
         else if (family != Family && family == FwFamily.Fork && Migration != null)
             ErrorNotification?.Invoke($"{Name} runs {version}, but this project was converted for firmware 5.7: flash 5.7 first (Read and Apply are refused).");
-        else if (family != Family) UseFamily(family, false);
+        else if (family != Family)
+        {
+            var fresh = _asBuilt?.SequenceEqual(Params.Select(p => p.GetValue())) == true;
+            UseFamily(family, false);
+            if (fresh && family == FwFamily.Upstream) FwFamily.TakeDefaults(this);
+        }
         else if (version != was)
         {
             InitStatusSigs();   // 0.x vs 5.7: whole amps vs 0.1 A
@@ -1807,6 +1819,7 @@ public class PdmDevice : IDeviceConfigurable
             }
         }
         VersionReceived = true;
+        _asBuilt = null;
     }
 
     [JsonIgnore] public bool Migrate57Pending { get; set; }

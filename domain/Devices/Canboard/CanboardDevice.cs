@@ -178,7 +178,11 @@ public class CanboardDevice : IDeviceConfigurable
 
         InitFunctions();
         ApplyDefinition(definition);
+        _asBuilt = [.. Params.Select(p => p.GetValue())];
     }
+
+    // The values a fresh record was built with, until its module first reports its version (FwFamily.TakeDefaults)
+    private List<object>? _asBuilt;
     
     public void SetLogger(ILogger<CanboardDevice> logger)
     {
@@ -1265,9 +1269,15 @@ public class CanboardDevice : IDeviceConfigurable
             Migrate57Pending = true;   // a fork project on a 5.7+ module: DeviceManager converts it after this frame
         else if (family != Family && family == FwFamily.Fork && Migration != null)
             ErrorNotification?.Invoke($"{Name} runs {version}, but this project was converted for firmware 5.7: flash 5.7 first (Read and Apply are refused).");
-        else if (family != Family) UseFamily(family, false);
+        else if (family != Family)
+        {
+            var fresh = _asBuilt?.SequenceEqual(Params.Select(p => p.GetValue())) == true;
+            UseFamily(family, false);
+            if (fresh && family == FwFamily.Upstream) FwFamily.TakeDefaults(this);
+        }
         else if (VersionReceived && version != was) ParamSet.Stale();   // reflashed: read its param list again
         VersionReceived = true;
+        _asBuilt = null;
     }
 
     [JsonIgnore] public bool Migrate57Pending { get; set; }

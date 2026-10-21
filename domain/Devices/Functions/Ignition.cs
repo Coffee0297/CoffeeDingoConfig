@@ -121,7 +121,8 @@ public class Ignition : IDeviceFunction
             new() { ParentName = Name, Name = $"{n}.{name}", Index = BaseIndex, SubIndex = sub, GetValue = get, SetValue = set, ValueType = t, DefaultValue = def };
         return
         [
-            .. Params,
+            .. Params.Take(10),
+            P(10, "mainStateId", () => MainStateId, x => MainStateId = (int)x, typeof(int), 0x6F1),   // the firmware's default
             P(11, "syncMode", () => SyncMode, x => SyncMode = (IgnitionSyncMode)x, typeof(IgnitionSyncMode), IgnitionSyncMode.Absolute),
             P(12, "syncBase", () => SyncBase, x => SyncBase = (int)x, typeof(int), 0),
             P(13, "stopInput", () => StopInput, x => StopInput = (int)x, typeof(int), 0),
