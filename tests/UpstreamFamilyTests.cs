@@ -73,9 +73,9 @@ public class UpstreamFamilyTests
         Assert.Equal(("caninput", 1), (d.VarMap[35].OwnerKind, d.VarMap[35].OwnerNumber));
         Assert.Equal(("counter", 4), (d.VarMap[74].OwnerKind, d.VarMap[74].OwnerNumber));
         Assert.False(d.CanSleep);
-        // upstream analog input: rotary offset / step / max position at sub 7-9, calibrated mode 13-20 (feat/analog-calibrated-switch)
+        // upstream analog input: rotary offset / step / max position at sub 7-9, calibrated mode 13-25 (feat/analog-calibrated-switch)
         var ai = d.Params.Where(p => p.Index == 0x2200).ToList();
-        Assert.Equal(18, ai.Count);
+        Assert.Equal(23, ai.Count);   // switch 0-4, rotary 5-9, calibrated mode 13-15 and a centre per position 16-25
         Assert.Equal(typeof(double), ai.Single(p => p.SubIndex == 8).ValueType);
     }
 

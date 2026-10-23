@@ -30,15 +30,15 @@ public class RotarySwitch(int number, string name) : IDeviceFunction
     [JsonPropertyName("offsetMv")] public double OffsetMv { get; set; }
     [JsonPropertyName("stepMv")] public double StepMv { get => field; set => field = Math.Max(value, 1e-6); } = 100;
     [JsonPropertyName("maxPos")] public double MaxPos { get => field; set => field = Math.Max(value, 0); } = 10;
-    // Upstream feat/analog-calibrated-switch (sub 13): 0 = uniform (above), 1 = calibrated (NumPos / Tolerance /
-    // Points at sub 14-20, same packing as the fork). The fork's rotary is always calibrated.
+    // Upstream feat/analog-calibrated-switch (sub 13): 0 = uniform (above), 1 = calibrated (NumPos / Tolerance at
+    // sub 14-15, then one centre per position at sub 16 + k, unpacked). The fork's rotary is always calibrated.
     [JsonPropertyName("mode")] public int Mode { get => field; set => field = Math.Clamp(value, 0, 1); }
 
     [JsonIgnore][Plotable(displayName:"Pos")] public int Pos { get; set; }
 
     /// <summary>Upstream layout: enabled, invert, then offset / step / max position (floats); then the calibrated
-    /// mode at sub 13-20 (a module without feat/analog-calibrated-switch drops them by its param list; the CANBoard
-    /// holds 8 positions, so it has no sub 20).</summary>
+    /// mode at sub 13-25 (a module without feat/analog-calibrated-switch drops them by its param list; the CANBoard
+    /// holds 8 positions, so it has no sub 24-25).</summary>
     public List<DeviceParameter> UpstreamParams(ref int subIndex)
     {
         var idx = BaseIndex + (Number - 1);
@@ -60,11 +60,16 @@ public class RotarySwitch(int number, string name) : IDeviceFunction
                 GetValue = () => NumPos, SetValue = val => NumPos = Convert.ToInt32(val), ValueType = typeof(int), DefaultValue = 2 },
             new DeviceParameter { ParentName = Name, Name = $"rotarySwitch[{Number}].tolerance", Index = idx, SubIndex = 15,
                 GetValue = () => Tolerance, SetValue = val => Tolerance = Convert.ToInt32(val), ValueType = typeof(int), DefaultValue = 200 },
-            .. PointPairs(idx, 16),
+            .. Enumerable.Range(0, MaxPositions).Select(k => new DeviceParameter
+            {
+                ParentName = Name, Name = $"rotarySwitch[{Number}].center[{k}]", Index = idx, SubIndex = 16 + k,
+                GetValue = () => PointAt(k), SetValue = val => SetPointAt(k, Convert.ToInt32(val)),
+                ValueType = typeof(int), DefaultValue = 0
+            }),
         ];
     }
 
-    // Calibrated point voltages, packed two per 32-bit word: low half = even position, high half = odd.
+    // Fork firmware: calibrated point voltages packed two per 32-bit word: low half = even position, high half = odd.
     private IEnumerable<DeviceParameter> PointPairs(int idx, int firstSub) =>
         Enumerable.Range(0, MaxPositions / 2).Select(p => new DeviceParameter
         {
