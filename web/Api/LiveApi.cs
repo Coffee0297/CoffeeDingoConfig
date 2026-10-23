@@ -61,8 +61,9 @@ public record DeviceDto(string Guid, string Name, string Type, int BaseId, bool 
     LockDto? Lock = null,
     // runs Lua: a PDM on the fork, or an upstream PDM that answered a Lua command (feat/lua-scripting)
     bool HasLua = false,
-    // the firmware 5.7 migration report (null: never migrated); KeepValuesOnRead: the next Read keeps the project
-    List<domain.Common.MigrationNote>? Migration = null, bool KeepValuesOnRead = false,
+    // the last firmware 5.7 / 5.8 migration report (null: never migrated); KeepValuesOnRead: the next Read keeps the project;
+    // Layout58: the project holds firmware 5.8's signal numbers
+    List<domain.Common.MigrationNote>? Migration = null, bool KeepValuesOnRead = false, bool Layout58 = false,
     // upstream / 5.7 PDM: the highest id offset it sends with its current settings (the appended frames go out only while
     // their feature is on); the CAN ID map and the clash checks use it. Null: the fixed fork / CANBoard span.
     int? TxSpan = null);
@@ -389,7 +390,7 @@ public static class DingoMap
                 HasLed: ui?.HasLed, Asleep: ui?.Asleep == true && !p.Connected, LastWake: Wake(ui), SleepCountdownS: p.SleepCountdownS,
                 SleepBlockers: ui?.SleepBlockers, Ignition: Ign(p.Ignition, p.BaseId + (p.IgnitionStateOffset ?? domain.Devices.Functions.Ignition.StateOffsetFor(p.Type, p.Family, p.PdmType))),
                 Family: p.Family, ParamsRead: p.ParamSet.FromModule, ParamRuns: p.ParamRuns, RetryAllInput: p.HasRetryAll ? p.RetryAllInput : null, ShedInput: p.HasShed ? p.ShedInput : null,
-                WakeFrame: p.ParamSet.Contains(domain.Devices.Functions.WakeFrame.Index, 0) ? p.WakeFrame : null, Lock: LockOf(p), HasLua: p.RunsLua, Migration: p.Migration, KeepValuesOnRead: p.KeepValuesOnRead,
+                WakeFrame: p.ParamSet.Contains(domain.Devices.Functions.WakeFrame.Index, 0) ? p.WakeFrame : null, Lock: LockOf(p), HasLua: p.RunsLua, Migration: p.Migration, KeepValuesOnRead: p.KeepValuesOnRead, Layout58: p.Layout58,
                 TxSpan: p.Family == domain.Common.FwFamily.Upstream ? domain.Common.Fw57Migration.Span(p) : null);
         }
         if (d is domain.Devices.Canboard.CanboardDevice cb)
@@ -404,7 +405,7 @@ public static class DingoMap
                 HasLed: ui?.HasLed, Asleep: ui?.Asleep == true && !cb.Connected, LastWake: Wake(ui), SleepCountdownS: cb.SleepCountdownS,
                 SleepBlockers: cb.SleepCountdownS != null ? cb.SleepBlockersRaw : ui?.SleepBlockers, Ignition: Ign(cb.Ignition, cb.BaseId + (cb.IgnitionStateOffset ?? domain.Devices.Functions.Ignition.StateOffsetFor(cb.Type))),
                 DigitalOut: cb.DigitalOutputs.Select(o => new DigitalOutDto(o.Number, o.Name, o.Enabled, o.State, o.Input)).ToArray(),
-                Family: cb.Family, ParamsRead: cb.ParamSet.FromModule, ParamRuns: cb.ParamRuns, Lock: LockOf(cb), Migration: cb.Migration, KeepValuesOnRead: cb.KeepValuesOnRead);
+                Family: cb.Family, ParamsRead: cb.ParamSet.FromModule, ParamRuns: cb.ParamRuns, Lock: LockOf(cb), Migration: cb.Migration, KeepValuesOnRead: cb.KeepValuesOnRead, Layout58: cb.Layout58);
         return new DeviceDto(d.Guid.ToString(), d.Name, d.Type, d.BaseId, d.Connected,
             0, 0, 0, "", "", "", Array.Empty<OutputDto>(), reading, readDone, readTotal, false, 30000, true, 0, 0, 0, true,
             (d as IDeviceConfigurable)?.CanBootloader ?? false, CanSleep: false);   // an ECU (DBC) or other device: nothing to put to sleep

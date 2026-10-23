@@ -136,7 +136,7 @@ public static class Fw57Migration
 
     /// <summary>Each binding param's var index from <paramref name="before"/> to the same signal in the device's current
     /// var map. A signal the new layout lacks becomes 0 (none) and is reported.</summary>
-    public static void Rebind(IDeviceConfigurable d, List<DeviceVariable> before, IEnumerable<DeviceParameter> bindings, List<MigrationNote> notes)
+    public static void Rebind(IDeviceConfigurable d, List<DeviceVariable> before, IEnumerable<DeviceParameter> bindings, List<MigrationNote> notes, string fw = "5.7")
     {
         var now = d.VarMap.GroupBy(Key).ToDictionary(g => g.Key, g => g.First().VariableIndex);
         int moved = 0;
@@ -148,18 +148,18 @@ public static class Fw57Migration
             if (old is null) { notes.Add(new("warn", $"{d.Name} {p.Name}: signal #{v} is not in the old layout; set to none.")); p.SetValue(0); continue; }
             if (!now.TryGetValue(Key(old), out var n))
             {
-                notes.Add(new("warn", $"{d.Name} {p.Name}: \"{Label(old)}\" does not exist on 5.7; set to none. Pick another signal."));
+                notes.Add(new("warn", $"{d.Name} {p.Name}: \"{Label(old)}\" does not exist on {fw}; set to none. Pick another signal."));
                 p.SetValue(0);
                 continue;
             }
             if (n != v) { p.SetValue(n); moved++; }
         }
-        if (moved > 0) notes.Add(new("info", $"{d.Name}: {moved} signal choice(s) renumbered to the 5.7 list."));
+        if (moved > 0) notes.Add(new("info", $"{d.Name}: {moved} signal choice(s) renumbered to the {fw} list."));
     }
 
     private static readonly Regex ReadVar = new(@"readVar\s*\(\s*(\d+)\s*\)");
 
-    private static void RemapLua(PdmDevice p, List<DeviceVariable> before, List<MigrationNote> notes)
+    internal static void RemapLua(PdmDevice p, List<DeviceVariable> before, List<MigrationNote> notes, string fw = "5.7")
     {
         if (string.IsNullOrWhiteSpace(p.LuaProgram)) return;
         var now = p.VarMap.GroupBy(Key).ToDictionary(g => g.Key, g => g.First().VariableIndex);
@@ -170,7 +170,7 @@ public static class Fw57Migration
             var old = before.FirstOrDefault(x => x.VariableIndex == v);
             if (old is null || !now.TryGetValue(Key(old), out var n))
             {
-                notes.Add(new("warn", $"{p.Name} Lua: readVar({v}) has no 5.7 signal; left as is. Fix the script."));
+                notes.Add(new("warn", $"{p.Name} Lua: readVar({v}) has no {fw} signal; left as is. Fix the script."));
                 return m.Value;
             }
             if (n != v) moved++;
@@ -182,7 +182,7 @@ public static class Fw57Migration
         {
             // signals before the first one that moved keep their number: a name set to one of those is fine
             var same = before.Zip(p.VarMap).TakeWhile(x => Key(x.First) == Key(x.Second)).Count();
-            notes.Add(new("warn", $"{p.Name} Lua: {computed} readVar() call(s) take a name, not a number (e.g. readVar(SHOW)). Signals #0–#{same - 1} keep their numbers on 5.7; check any name set to a number above {same - 1} against the 5.7 signal list."));
+            notes.Add(new("warn", $"{p.Name} Lua: {computed} readVar() call(s) take a name, not a number (e.g. readVar(SHOW)). Signals #0–#{same - 1} keep their numbers on {fw}; check any name set to a number above {same - 1} against the {fw} signal list."));
         }
     }
 

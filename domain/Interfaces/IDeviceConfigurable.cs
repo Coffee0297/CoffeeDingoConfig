@@ -20,6 +20,11 @@ public interface IDeviceConfigurable : IDevice
     bool Migrate57Pending { get; set; }
     /// <summary>After a migration: the next Read learns the module's param list but keeps the project's values (Apply them).</summary>
     bool KeepValuesOnRead { get; set; }
+    /// <summary>Upstream family: the var map and calibrated rotary params follow firmware 5.8 (false: 5.7). Saved with the project.</summary>
+    bool Layout58 { get; }
+    /// <summary>Switch to (or off) the 5.8 layout and rebuild the var map and params; values stay. Stored indices are not
+    /// renumbered: <see cref="domain.Common.Fw58Migration"/> does that.</summary>
+    void UseLayout58(bool on);
     /// <summary>What the last 5.7 migration changed or could not map; saved with the project.</summary>
     List<domain.Common.MigrationNote>? Migration { get; set; }
     /// <summary>Switch the record to <paramref name="family"/>'s layout; <paramref name="assumeAll"/>: take every param the

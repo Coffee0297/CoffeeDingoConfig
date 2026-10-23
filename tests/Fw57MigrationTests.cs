@@ -465,9 +465,11 @@ public class Fw57MigrationTests
 
     // ---- fixture projects -------------------------------------------------------------------------
 
-    internal static List<IDevice> LoadProject(string path)
+    internal static List<IDevice> LoadProject(string path) => LoadProjectJson(File.ReadAllText(path));
+
+    internal static List<IDevice> LoadProjectJson(string json)
     {
-        var cfg = JsonSerializer.Deserialize<ConfigFile>(File.ReadAllText(path), new JsonSerializerOptions { PropertyNameCaseInsensitive = true })!;
+        var cfg = JsonSerializer.Deserialize<ConfigFile>(json, new JsonSerializerOptions { PropertyNameCaseInsensitive = true })!;
         foreach (var p in cfg.PdmDevices) { p.SetLogger(NullLogger<PdmDevice>.Instance); p.ApplyDefinition(DeviceDefinitionManager.DefaultPdm); }
         foreach (var c in cfg.CanboardDevices) { c.SetLogger(NullLogger<CanboardDevice>.Instance); c.ApplyDefinition(DeviceDefinitionManager.DefaultCanboard); }
         return [.. cfg.PdmDevices, .. cfg.CanboardDevices, .. cfg.DbcDevices];

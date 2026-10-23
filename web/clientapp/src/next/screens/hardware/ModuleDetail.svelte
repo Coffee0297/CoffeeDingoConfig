@@ -108,7 +108,7 @@
     {/if}
     {#if d.migration?.length}
       {@const warns = d.migration.filter((n) => n.level === 'warn')}
-      <Banner tone={warns.length ? 'warn' : 'info'} title={`Converted to firmware 5.7${warns.length ? `: ${warns.length} thing${warns.length === 1 ? '' : 's'} to check` : ''}`} data-testid="migration-report">
+      <Banner tone={warns.length ? 'warn' : 'info'} title={`Converted to firmware ${d.layout58 ? '5.8' : '5.7'}${warns.length ? `: ${warns.length} thing${warns.length === 1 ? '' : 's'} to check` : ''}`} data-testid="migration-report">
         {d.keepValuesOnRead ? "The next Read learns the module's list of settings and keeps this project; then Apply to car and Store." : 'Apply to car and Store to put the converted project on the module.'}
         <details><summary>Migration report ({d.migration.length})</summary>
           <ul class="mig">{#each d.migration as n, i (i)}<li class:warn={n.level === 'warn'}>{n.level === 'warn' ? '▲ ' : ''}{n.text}{#if fixMain(n.fix)} <a href={href('power', 'ignition', { main: fixMain(n.fix) })} data-testid="migration-fix-main">Set the CANBoard as ignition main…</a>{/if}</li>{/each}</ul>

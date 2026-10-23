@@ -79,6 +79,10 @@ public class CanboardDevice : IDeviceConfigurable
     [JsonPropertyName("family")] public string Family { get; set; } = FwFamily.Fork;
     [JsonIgnore] public DeviceParamSet ParamSet { get; } = new();
     // Upstream: the module's param list, saved so the project reloads with its layout (Apply still needs a Read).
+    // Upstream family: the record's var-map indices and calibrated rotary params are firmware 5.8's (false = 5.7's).
+    // Saved: a project's stored signal numbers mean that layout until Fw58Migration converts them.
+    [JsonPropertyName("layout58"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public bool Layout58 { get; set; }
     [JsonPropertyName("paramRuns"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public int[][]? ParamRuns { get => Family == FwFamily.Upstream ? ParamSet.Runs : null; set => ParamSet.Runs = value; }
     public event Action<string>? SuccessNotification;
@@ -732,67 +736,77 @@ public class CanboardDevice : IDeviceConfigurable
     }
 
     // Upstream dingoFW var map: same order as the fork's up to here (InitVarMap in core/device.cpp), then the timers
-    // LAST (if the module has the 0x1A00 timer block), no Lua slots.
-    // FEATURE BRANCHES: append your block's entries below the timers, in the canonical upstream order, each guarded
-    // by FwFamily.HasBlock(this, <your param base>, false) so a module without the block keeps its indices.
+    // (if the module has the 0x1A00 timer block), then the blocks the 5.7 / 5.8 line appends after them. No Lua slots.
+    // FEATURE BRANCHES: add your block as a local function below and put it in both orders, guarded by
+    // FwFamily.HasBlock(this, <your param base>, false) so a module without the block keeps its indices.
     private void AddUpstreamTail(ref int index)
     {
+        var n = index;
+        void Add(Func<string> name, string kind, int num, string prop, string type) =>
+            VarMap.Add(new DeviceVariable { GetName = name, OwnerKind = kind, OwnerNumber = num, PropertyName = prop,
+                DataType = type, VariableIndex = n++, SingleVariable = false });
+
         if (FwFamily.HasBlock(this, TimerFunction.UpstreamBaseIndex, false /* stock upstream CANBoard: NUM_TIMERS 0 */))
-            for (var i = 0; i < NumTimers; i++)
-            {
-                var num = i;
-                VarMap.Add(new DeviceVariable { GetName = () => Timers[num].Name, OwnerKind = "timer", OwnerNumber = num + 1,
-                    PropertyName = "State", DataType = "bool", VariableIndex = index++, SingleVariable = false });
-            }
+            for (var i = 0; i < NumTimers; i++) { var num = i; Add(() => Timers[num].Name, "timer", num + 1, "State", "bool"); }
+
         // feat/digital-input-pwm (0x1200 sub 5): per DI duty %, Hz (5.7 line: back on the CANBoard)
-        if (ParamSet.Contains(DigitalInput.BaseIndex, 5))
+        void DiPwm()
+        {
+            if (!ParamSet.Contains(DigitalInput.BaseIndex, 5)) return;
             for (var i = 0; i < NumDigitalInputs; i++)
             {
                 var num = i;
-                VarMap.Add(new DeviceVariable { GetName = () => DigitalInputs[num].Name, OwnerKind = "input", OwnerNumber = num + 1,
-                    PropertyName = "PWM Duty", DataType = "float", VariableIndex = index++, SingleVariable = false });
-                VarMap.Add(new DeviceVariable { GetName = () => DigitalInputs[num].Name, OwnerKind = "input", OwnerNumber = num + 1,
-                    PropertyName = "PWM Frequency", DataType = "float", VariableIndex = index++, SingleVariable = false });
+                Add(() => DigitalInputs[num].Name, "input", num + 1, "PWM Duty", "float");
+                Add(() => DigitalInputs[num].Name, "input", num + 1, "PWM Frequency", "float");
             }
+        }
         // feat/analog-linear-scaling: one scaled value per analog input (0x2200 sub 10; the block itself always exists)
-        if (ParamSet.Contains(AnalogInput.BaseIndex, 10))
-            for (var i = 0; i < NumAnalogInputs; i++)
-            {
-                var num = i;
-                VarMap.Add(new DeviceVariable { GetName = () => AnalogInputs[num].Name, OwnerKind = "analoginput", OwnerNumber = num + 1,
-                    PropertyName = "Scaled Value", DataType = "float", VariableIndex = index++, SingleVariable = false });
-            }
+        void Scaled()
+        {
+            if (ParamSet.Contains(AnalogInput.BaseIndex, 10))
+                for (var i = 0; i < NumAnalogInputs; i++) { var num = i; Add(() => AnalogInputs[num].Name, "analoginput", num + 1, "Scaled Value", "float"); }
+        }
         // feat/math-block: one value per math block
-        if (FwFamily.HasBlock(this, MathFunction.BaseIndex, false))
-            for (var i = 0; i < NumMath; i++)
-            {
-                var num = i;
-                VarMap.Add(new DeviceVariable { GetName = () => Maths[num].Name, OwnerKind = "math", OwnerNumber = num + 1,
-                    PropertyName = "Value", DataType = "float", VariableIndex = index++, SingleVariable = false });
-            }
-        // integration 5.7 (integrate: ignition on the canboard): the seven ignition roles, after math
-        if (FwFamily.HasBlock(this, Functions.Ignition.BaseIndex, false))
-            foreach (var role in new[] { "Ignition", "Accessory", "Cranking", "Running", "Ready", "Dash", "Link OK" })
-                VarMap.Add(new DeviceVariable { GetName = () => "Ignition", OwnerKind = "ignition", OwnerNumber = 1,
-                    PropertyName = role, DataType = "bool", VariableIndex = index++, SingleVariable = false });
+        void MathVals()
+        {
+            if (FwFamily.HasBlock(this, MathFunction.BaseIndex, false))
+                for (var i = 0; i < NumMath; i++) { var num = i; Add(() => Maths[num].Name, "math", num + 1, "Value", "float"); }
+        }
+        // integration 5.7 (integrate: ignition on the canboard): the seven ignition roles
+        void Ign()
+        {
+            if (FwFamily.HasBlock(this, Functions.Ignition.BaseIndex, false))
+                foreach (var role in new[] { "Ignition", "Accessory", "Cranking", "Running", "Ready", "Dash", "Link OK" })
+                    Add(() => "Ignition", "ignition", 1, role, "bool");
+        }
+        // ignition parity (5.7): DashShutdown (5.7: last of all; 5.8: right after the seven roles)
+        void DashShutdown()
+        {
+            if (ParamSet.Contains(Functions.Ignition.BaseIndex, 19)) Add(() => "Ignition", "ignition", 1, "Dash Shutdown", "bool");
+        }
         // feat/comfort-blink: "indicator on" per side
-        if (FwFamily.HasBlock(this, Functions.ComfortBlink.BaseIndex, false))
-            foreach (var side in new[] { "Left", "Right" })
-                VarMap.Add(new DeviceVariable { GetName = () => ComfortBlink.Name, OwnerKind = "comfortblink", OwnerNumber = 1,
-                    PropertyName = side, DataType = "bool", VariableIndex = index++, SingleVariable = false });
+        void Blink()
+        {
+            if (FwFamily.HasBlock(this, Functions.ComfortBlink.BaseIndex, false))
+                foreach (var side in new[] { "Left", "Right" }) Add(() => ComfortBlink.Name, "comfortblink", 1, side, "bool");
+        }
         // feat/pid (integrate: pid on the canboard): per PID output, P, I, D
-        if (FwFamily.HasBlock(this, PidFunction.BaseIndex, false))
-            for (var i = 0; i < NumPids; i++)
-            {
-                var num = i;
-                foreach (var prop in new[] { "Output", "P", "I", "D" })
-                    VarMap.Add(new DeviceVariable { GetName = () => Pids[num].Name, OwnerKind = "pid", OwnerNumber = num + 1,
-                        PropertyName = prop, DataType = "float", VariableIndex = index++, SingleVariable = false });
-            }
-        // ignition parity (5.7): DashShutdown, appended last of all by the firmware (after PID)
-        if (ParamSet.Contains(Functions.Ignition.BaseIndex, 19))
-            VarMap.Add(new DeviceVariable { GetName = () => "Ignition", OwnerKind = "ignition", OwnerNumber = 1,
-                PropertyName = "Dash Shutdown", DataType = "bool", VariableIndex = index++, SingleVariable = false });
+        void Pid()
+        {
+            if (FwFamily.HasBlock(this, PidFunction.BaseIndex, false))
+                for (var i = 0; i < NumPids; i++)
+                {
+                    var num = i;
+                    foreach (var prop in new[] { "Output", "P", "I", "D" }) Add(() => Pids[num].Name, "pid", num + 1, prop, "float");
+                }
+        }
+
+        // The firmware's InitVarMap after the timers: 5.7 = status/integration-order.txt (merge order), 5.8 regrouped it.
+        Action[] order = Layout58
+            ? [MathVals, Blink, Pid, Scaled, DiPwm, Ign, DashShutdown]
+            : [DiPwm, Scaled, MathVals, Ign, Blink, Pid, DashShutdown];
+        foreach (var block in order) block();
+        index = n;
     }
 
     private void InitParams()
@@ -892,7 +906,7 @@ public class CanboardDevice : IDeviceConfigurable
         if (Family == FwFamily.Upstream) foreach (var pid in Pids) allParams.AddRange(pid.Params);   // the fork CANBoard has no PID
         foreach (var canOutput in CanOutputs) allParams.AddRange(Family == FwFamily.Upstream ? canOutput.UpstreamParams : canOutput.Params);
         foreach (var digitalOutput in DigitalOutputs) allParams.AddRange(digitalOutput.Params);
-        foreach (var analogInput in AnalogInputs) allParams.AddRange(Family == FwFamily.Upstream ? analogInput.UpstreamParams : analogInput.Params);
+        foreach (var analogInput in AnalogInputs) allParams.AddRange(Family == FwFamily.Upstream ? analogInput.UpstreamParamsFor(Layout58) : analogInput.Params);
         
         Params = allParams;
 
@@ -1265,13 +1279,25 @@ public class CanboardDevice : IDeviceConfigurable
         var family = FwFamily.Of(data[4], data[5]);
         var was = Version;
         Version = version;
+        var to58 = Fw58Migration.Is58(data[4], data[5]);
+        // a 5.7 project on a 5.8 module (or back): renumber its stored signals to that layout (before the Lua slots are re-asked)
+        if (family == FwFamily.Upstream && Family == FwFamily.Upstream && Layout58 != to58)
+        {
+            Fw58Migration.Convert(this, to58);
+            var warn = Migration!.Count(m => m.Level == "warn");
+            SuccessNotification?.Invoke($"Project converted to firmware {(to58 ? "5.8" : "5.7")}{(warn > 0 ? $", {warn} warning(s)" : "")}: see the module's migration report. Read it, then Apply to car and Store.");
+        }
         if (family != Family && Family == FwFamily.Fork && data[4] != 0 && Fw57Migration.Configured(this))
+        {
+            Layout58 = to58;           // the 5.7 migration lands on this module's own layout
             Migrate57Pending = true;   // a fork project on a 5.7+ module: DeviceManager converts it after this frame
+        }
         else if (family != Family && family == FwFamily.Fork && Migration != null)
             ErrorNotification?.Invoke($"{Name} runs {version}, but this project was converted for firmware 5.7: flash 5.7 first (Read and Apply are refused).");
         else if (family != Family)
         {
             var fresh = _asBuilt?.SequenceEqual(Params.Select(p => p.GetValue())) == true;
+            Layout58 = to58;
             UseFamily(family, false);
             if (fresh && family == FwFamily.Upstream) FwFamily.TakeDefaults(this);
         }
@@ -1291,6 +1317,8 @@ public class CanboardDevice : IDeviceConfigurable
         ParamSet.Assume(Params.Select(p => (p.Index, p.SubIndex)));
         Rebuild();
     }
+
+    public void UseLayout58(bool on) { Layout58 = on; Rebuild(); }
 
     // The family changed: rebuild everything that has a per-family layout (values stay on the function objects).
     private void Rebuild()

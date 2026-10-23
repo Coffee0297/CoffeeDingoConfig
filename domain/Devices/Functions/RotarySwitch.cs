@@ -37,9 +37,10 @@ public class RotarySwitch(int number, string name) : IDeviceFunction
     [JsonIgnore][Plotable(displayName:"Pos")] public int Pos { get; set; }
 
     /// <summary>Upstream layout: enabled, invert, then offset / step / max position (floats); then the calibrated
-    /// mode at sub 13-20 (a module without feat/analog-calibrated-switch drops them by its param list; the CANBoard
-    /// holds 8 positions, so it has no sub 20).</summary>
-    public List<DeviceParameter> UpstreamParams(ref int subIndex)
+    /// mode at sub 13-15 and the position voltages from sub 16 (a module without feat/analog-calibrated-switch drops
+    /// them by its param list). 5.7: packed two per word at sub 16-20; 5.8 (<paramref name="fw58"/>): one centre (mV)
+    /// per position at sub 16-25.</summary>
+    public List<DeviceParameter> UpstreamParams(ref int subIndex, bool fw58 = false)
     {
         var idx = BaseIndex + (Number - 1);
         return
@@ -60,7 +61,7 @@ public class RotarySwitch(int number, string name) : IDeviceFunction
                 GetValue = () => NumPos, SetValue = val => NumPos = Convert.ToInt32(val), ValueType = typeof(int), DefaultValue = 2 },
             new DeviceParameter { ParentName = Name, Name = $"rotarySwitch[{Number}].tolerance", Index = idx, SubIndex = 15,
                 GetValue = () => Tolerance, SetValue = val => Tolerance = Convert.ToInt32(val), ValueType = typeof(int), DefaultValue = 200 },
-            .. PointPairs(idx, 16),
+            .. (fw58 ? Centres(idx, 16) : PointPairs(idx, 16)),
         ];
     }
 
@@ -71,6 +72,15 @@ public class RotarySwitch(int number, string name) : IDeviceFunction
             ParentName = Name, Name = $"rotarySwitch[{Number}].pointPair[{p}]", Index = idx, SubIndex = firstSub + p,
             GetValue = () => (PointAt(p * 2) & 0xFFFF) | ((PointAt(p * 2 + 1) & 0xFFFF) << 16),
             SetValue = val => { var w = Convert.ToInt32(val); SetPointAt(p * 2, w & 0xFFFF); SetPointAt(p * 2 + 1, (w >> 16) & 0xFFFF); },
+            ValueType = typeof(int), DefaultValue = 0
+        });
+
+    // Firmware 5.8: the centre of position k (uint16 mV, 0-5000) at sub firstSub + k.
+    private IEnumerable<DeviceParameter> Centres(int idx, int firstSub) =>
+        Enumerable.Range(0, MaxPositions).Select(k => new DeviceParameter
+        {
+            ParentName = Name, Name = $"rotarySwitch[{Number}].centre[{k}]", Index = idx, SubIndex = firstSub + k,
+            GetValue = () => PointAt(k), SetValue = val => SetPointAt(k, Math.Clamp(Convert.ToInt32(val), 0, 5000)),
             ValueType = typeof(int), DefaultValue = 0
         });
 
