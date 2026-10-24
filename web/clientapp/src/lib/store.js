@@ -145,8 +145,10 @@ export const api = {
   flashScan: () => j('GET', '/api/flash/dfu'),   // list DFU devices dfu-util can see
   // SWD through a debug probe (pyOCD): board = canboard | dingopdm | dingopdmmax
   swdScan: () => j('GET', '/api/flash/swd', undefined, 20000),
-  async flashSwd(board, name, bytes) {
-    const r = await fetch(`/api/flash/swd?board=${encodeURIComponent(board)}&name=${encodeURIComponent(name)}`, { method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: bytes })
+  // baseId: the ID the board starts on while it has no stored settings (null = the firmware's default)
+  async flashSwd(board, name, bytes, baseId = null) {
+    const id = baseId == null ? '' : `&baseId=${baseId}`
+    const r = await fetch(`/api/flash/swd?board=${encodeURIComponent(board)}&name=${encodeURIComponent(name)}${id}`, { method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: bytes })
     if (!r.ok) throw await apiError(r)
     return r.json()
   },

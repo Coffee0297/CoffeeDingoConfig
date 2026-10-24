@@ -3,9 +3,12 @@
   // For what USB and CAN can't reach: a CANBoard's bootloader, a bricked board. Needs the "I checked" tick first.
   import { Dialog, Button, Banner, Checkbox, Chip, Select } from '../../../../ui/index.js'
   import { api, toast } from '../../../../lib/live.svelte.js'
-  import { lastLine, boardOfFile, isFull, BOARDS as FILE_BOARDS } from './firmwareLogic.js'
-  // files: the page's release files; the one for the picked board is used unless another file is chosen here
-  let { open = $bindable(false), busyOther = false, onflashing, files = [] } = $props()
+  import { lastLine, boardOf, boardOfFile, isFull, releaseFiles, BOARDS as FILE_BOARDS } from './firmwareLogic.js'
+  import { hexId } from '../ids.js'
+  // files: the page's release files, else the release chosen at the top (release); the one for the picked board is used
+  // unless another file is chosen here. modules: the project's modules, to flash a board with one's base ID.
+  let { open = $bindable(false), busyOther = false, onflashing, files: pageFiles = [], release = null, modules = [] } = $props()
+  const files = $derived(pageFiles.length ? pageFiles : releaseFiles(release))
 
   const BOARDS = [{ value: 'canboard', label: 'CANBoard (STM32F303)', file: FILE_BOARDS.canboard }, { value: 'dingopdm', label: 'dingoPDM (STM32F446)', file: FILE_BOARDS.pdm }, { value: 'dingopdmmax', label: 'dingoPDM-Max (STM32F446)', file: FILE_BOARDS.pdmmax }]
   let board = $state('canboard'), scan = $state(null), scanning = $state(false), picked = $state(null), sure = $state(false)
@@ -15,6 +18,11 @@
   const pageFile = $derived(files.filter((f) => boardOfFile(f.name) === BOARDS.find((b) => b.value === board)?.file && extRank(f.name) >= 0)
     .sort((a, b) => isFull(b.name) - isFull(a.name) || extRank(a.name) - extRank(b.name))[0] ?? null)
   const file = $derived(picked ?? pageFile)
+  // which project module this board becomes: it is flashed to start on that module's base ID ('' = firmware default)
+  const sameKind = $derived(modules.filter((m) => boardOf(m) === BOARDS.find((b) => b.value === board)?.file).sort((a, b) => a.baseId - b.baseId))
+  let target = $state('')
+  const targetMod = $derived(sameKind.find((m) => m.guid === target) ?? null)
+  const settingsInFlash = $derived(board === 'canboard')   // a PDM keeps its settings in FRAM, out of SWD's reach
   let running = $state(false), pct = $state(0), phase = $state(''), result = $state(null)
   let input
 
@@ -28,7 +36,7 @@
     running = true; result = null; pct = 0; phase = 'Starting'; onflashing?.(true)
     const poll = setInterval(async () => { try { const s = await api.flashStatus(); if (s.busy || s.percent) { pct = s.percent; phase = s.phase } } catch {} }, 400)
     try {
-      const r = await api.flashSwd(board, file.name, await file.arrayBuffer())
+      const r = await api.flashSwd(board, file.name, await file.arrayBuffer(), targetMod?.baseId ?? null)
       result = { ok: !!r.ok, text: lastLine(r.log) || (r.ok ? 'Done.' : 'Failed.'), log: r.log }
       if (r.ok) { pct = 100; toast('Flashed over SWD.', 'info', 4000) }
     } catch (e) {
@@ -39,6 +47,13 @@
 
 <Dialog bind:open title="Flash over SWD" description="With a debug probe (CMSIS-DAP, ST-Link, J-Link) on the board's SWD pins, through pyOCD on this PC. Writes only the flash the image covers: a bootloader leaves the app, an app leaves the bootloader." width={640}>
   <Select label="Board" items={BOARDS} bind:value={board} disabled={running} data-testid="swd-board" />
+  <Select label="This board becomes" items={[{ value: '', label: 'No module: keep the firmware default ID' }, ...sameKind.map((m) => ({ value: m.guid, label: `${m.name} · ${hexId(m.baseId)}` }))]}
+    value={targetMod ? target : ''} onchange={(v) => (target = v)} disabled={running} data-testid="swd-target" />
+  {#if targetMod}
+    <p class="muted" data-testid="swd-target-note">{settingsInFlash
+      ? `It starts on ${hexId(targetMod.baseId)}: its stored settings are erased first, so it comes up on factory settings with ${targetMod.name}'s ID. Wire it up and apply the project over CAN.`
+      : `It starts on ${hexId(targetMod.baseId)} if it has no stored settings (a new board). A PDM keeps its settings in FRAM, which SWD can't erase: one that has settings keeps its ID, move it with Deploy to USB.`}</p>
+  {/if}
   <div class="row">
     <Button onclick={doScan} busy={scanning} disabled={running} data-testid="swd-scan">Look for the probe</Button>
     {#if scan}
@@ -57,7 +72,7 @@
     {#if file}<span class="muted mono" data-testid="swd-filename">{file.name} · {(file.size / 1024).toFixed(0)} KB{picked ? '' : ' · from the release above'}{isFull(file.name) ? ' · bootloader + app' : ' · app only'}</span>{/if}
     {#if picked && pageFile}<Button size="sm" onclick={() => (picked = null)} disabled={running}>Use the release's</Button>{/if}
   </div>
-  {#if !file && files.length}<p class="muted">The release above has no image for this board. A CANBoard's bootloader is not in a release: choose it (canboard_blt.srec).</p>{/if}
+  {#if !file && files.length}<p class="muted">The release above has no image for this board: choose one (5.7.1 and later have a _FULL_ image with the bootloader).</p>{/if}
   <Checkbox bind:checked={sure} label="The probe is on this board and the board is powered" hint="SWDIO, SWCLK and GND wired. The image is for the board picked above: pyOCD does not check what it writes." disabled={running} data-testid="swd-sure" />
 
   {#if running || result}
