@@ -6,7 +6,7 @@
   import Confirm from '../power/parts/Confirm.svelte'
   import FlashNewBoard from './parts/firmware/FlashNewBoard.svelte'
   import FlashSwd from './parts/firmware/FlashSwd.svelte'
-  import { boardOf, boardOfFile, fileVersion, cleanVersion, flashPath, pathLabel, extFor, fitsPath, checkFile, lastLine, cmpVersion, relationTo, relationLabel } from './parts/firmware/firmwareLogic.js'
+  import { boardOf, boardOfFile, isFull, fileVersion, cleanVersion, flashPath, pathLabel, extFor, fitsPath, checkFile, lastLine, cmpVersion, relationTo, relationLabel } from './parts/firmware/firmwareLogic.js'
   import { isUpstream, ownLine } from './parts/util.js'
   let props = $props()
 
@@ -26,7 +26,7 @@
   // over CAN only an image built for the bootloader (the pre-flight check reads where it starts; .srec/.hex)
   // once checked, the image's own board marker decides (a CANBoard image named like a PDM file was offered to the PDMs)
   const fitsBoard = (f, d) => (checks[f.name]?.board ? checks[f.name].modules.some((m) => m.guid === d.guid) : boardOfFile(f.name)?.key === boardOf(d).key)
-  const fileFor = (d) => { const p = pathOf(d); return p ? files.find((f) => fitsBoard(f, d) && fitsPath(f.name, p) && (p !== 'can' || checks[f.name]?.relocated !== false)) ?? null : null }
+  const fileFor = (d) => { const p = pathOf(d); return p ? files.find((f) => !isFull(f.name) && fitsBoard(f, d) && fitsPath(f.name, p) && (p !== 'can' || checks[f.name]?.relocated !== false)) ?? null : null }
   // upstream dingoFW PDM: the operator says whether it has the OpenBLT bootloader (nothing on the bus can tell)
   async function markBootloader(d, on) {
     try {
@@ -80,8 +80,13 @@
   }
   loadReleases()
   const release = $derived(rel.list.find((x) => x.tag === relTag) ?? null)
-  // the images this project needs: a .srec per board kind in it, and the .bin for PDMs (the USB link module)
-  const needed = $derived(release ? release.images.filter((i) => mods.some((d) => boardOf(d).label === i.board) && (i.kind === 'srec' || i.board !== 'CANBoard')) : [])
+  // the images this project needs: the over-CAN image per board kind in it (.srec, or the .hex when the release has
+  // none: 5.7.0 ships .bin + .hex only), and the .bin for PDMs (the USB link module). Plus the _FULL_ images (5.7.1 on:
+  // bootloader + app) for the new / blank board dialogs: the .hex for SWD and, on a PDM, the .bin for DFU.
+  const canKind = (board) => (release.images.some((x) => x.board === board && !x.full && x.kind === 'srec') ? 'srec' : 'hex')
+  const needed = $derived(release ? release.images.filter((i) => mods.some((d) => boardOf(d).label === i.board) && (i.full
+    ? i.kind === 'hex' || (i.kind === 'bin' && i.board !== 'CANBoard')
+    : i.kind === canKind(i.board) || (i.kind === 'bin' && i.board !== 'CANBoard'))) : [])
   async function useRelease() {
     if (!release) return
     loadingRel = true
@@ -137,12 +142,14 @@
       const buf = await file.arrayBuffer()
       const r = path === 'can' ? await api.flashCan(d.guid, buf) : await api.flash(d.guid, buf)
       if (r.ok) {
-        st[d.guid] = { state: 'done', pct: 100, text: `Done ✓${r.version ? ' · now ' + cleanVersion(r.version) : ''}` }
+        // the backend puts the module back on its base ID when the new firmware started it on the default: say so
+        const idLine = (r.log ?? '').split('\n').find((l) => l.includes('Base ID'))?.replace(/^✓\s*/, '')
+        st[d.guid] = { state: 'done', pct: 100, text: `Done ✓${r.version ? ' · now ' + cleanVersion(r.version) : ''}${idLine ? ' · ' + idLine : ''}`, log: r.log }
         api.action(d.guid, 'version').catch(() => {})
         return true
       }
       st[d.guid] = { state: 'failed', pct: st[d.guid]?.pct ?? 0, text: `Failed: ${lastLine(r.log) || 'no reason given'}. ` + (path === 'can' && r.started === false
-        ? 'Nothing was sent: the module runs its firmware as before.' : 'The module stays in its bootloader and is safe. Run it again.') }
+        ? 'Nothing was sent: the module runs its firmware as before.' : 'The module stays in its bootloader and is safe. Run it again.'), log: r.log }
     } catch (e) {
       st[d.guid] = { state: 'failed', pct: st[d.guid]?.pct ?? 0, text: `Link lost or cut off: ${e?.message ?? e}. The module stays in its bootloader and is safe. Check power and wiring, then run it again.` }
     } finally { clearInterval(poll) }
@@ -260,6 +267,7 @@
               <td class="pc">
                 <div class="prog"><div class="bar" role="progressbar" aria-label={`${d.name} progress`} aria-valuenow={c.pct} aria-valuemin="0" aria-valuemax="100"><span style="width: {c.pct}%" class:bad={c.state === 'failed'} class:ok={c.state === 'done'}></span></div>
                   <span class:fault={c.state === 'failed'} data-testid={`fw-status-${d.name}`}>{c.state === 'failed' ? '■ ' : ''}{c.text}</span></div>
+                {#if c.log}<details class="flog"><summary>Show log</summary><pre class="mono" data-testid={`fw-log-${d.name}`}>{c.log}</pre></details>{/if}
               </td>
               <td><Button size="sm" disabled={!!blocked || busy || checking || !reach(d) || !p || !f || (d.connected && upToDate(d, f))} onclick={() => ask(d)} data-testid={`fw-update-${d.name}`}>{p === 'usb' ? 'Update over USB' : 'Update'}</Button>
                 {#if d.inBootloader}<Button size="sm" variant="ghost" disabled={!!blocked || busy} onclick={() => leaveBootloader(d)} data-testid={`fw-restart-${d.name}`}>Restart it</Button>{/if}</td>
@@ -310,8 +318,8 @@
   <p data-testid="fw-downgrade-note">{release?.version} is {relationLabel[relation] ?? 'older'}{installed.length ? `: the modules run ${[...new Set(installed)].join(', ')}` : ''}. Flashing it takes them back to older firmware, and settings added since may be lost.</p>
 </Confirm>
 
-<FlashNewBoard bind:open={newBoard} {blocked} busyOther={busy} onflashing={(v) => (busy = v)} />
-<FlashSwd bind:open={swd} busyOther={busy} onflashing={(v) => (busy = v)} />
+<FlashNewBoard bind:open={newBoard} {blocked} busyOther={busy} onflashing={(v) => (busy = v)} {files} />
+<FlashSwd bind:open={swd} busyOther={busy} onflashing={(v) => (busy = v)} {files} />
 
 <style>
   .active { background: var(--color-on-soft); }
@@ -329,5 +337,7 @@
   .warnT { color: var(--color-warn); font-weight: 600; }
   @media (max-width: 900px) { .prog { min-width: 0; flex: 1 1 100%; } }
   .notes summary { cursor: pointer; font-weight: 600; }
+  .flog summary { cursor: pointer; font-size: var(--text-xs); }
+  .flog pre { white-space: pre-wrap; max-height: 220px; overflow: auto; font-size: var(--text-xs); margin: var(--space-1) 0 0; padding: var(--space-2); background: var(--color-bg); border: 1px solid var(--color-line); border-radius: var(--radius-md); }
   .md { white-space: pre-wrap; max-height: 220px; overflow: auto; font-size: var(--text-xs); margin-top: var(--space-2); }
 </style>

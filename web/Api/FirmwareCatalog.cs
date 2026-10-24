@@ -21,15 +21,17 @@ public static partial class FirmwareCatalog
     static readonly TimeSpan ListFresh = TimeSpan.FromMinutes(10);   // GitHub allows 60 unauthenticated calls an hour
     static (DateTime At, List<Release> List)? _list;
 
-    public record Image(string Board, string Kind, string Name, long Size, string Url, bool Cached);
+    public record Image(string Board, string Kind, string Name, long Size, string Url, bool Cached, bool Full = false);
     public record Release(string Tag, string Version, string? Name, bool Prerelease, string? Published, string Notes, List<Image> Images);
 
     // release asset name -> board, kind: dingopdm_v7_FW_v5-5-112.srec, dingopdmmax_v1_FW_v5-5-112.bin, canboard_v2_FW_...
+    // _FULL_ (5.7.1 on): the OpenBLT bootloader and the app in one image from 0x08000000, for a blank board (SWD / DFU)
     // .hex: upstream dingoFW releases (no .srec); it goes over CAN like a .srec when it starts at 0x08004000
-    [GeneratedRegex(@"^(dingopdm_v7|dingopdmmax_v1|canboard_v2)_FW_v(\d+)-(\d+)-(\d+)\.(srec|bin|hex)$", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"^(dingopdm_v7|dingopdmmax_v1|canboard_v2)_(?:FW|FULL)_v(\d+)-(\d+)-(\d+)\.(srec|bin|hex)$", RegexOptions.IgnoreCase)]
     private static partial Regex AssetName();
     [GeneratedRegex(@"v(\d+)[.-](\d+)[.-](\d+)\.(srec|s19|bin|hex)$", RegexOptions.IgnoreCase)]
     private static partial Regex NameVersion();
+    static bool IsFull(string name) => name.Contains("_FULL_", StringComparison.OrdinalIgnoreCase);
     static string BoardOf(string prefix) => prefix.ToLowerInvariant() switch
     {
         "dingopdm_v7" => "dingoPDM", "dingopdmmax_v1" => "dingoPDM-Max", _ => "CANBoard",
@@ -120,7 +122,10 @@ public static partial class FirmwareCatalog
         if (version is null) problems.Add("Neither the image nor the file name gives a version.");
         var cb = board is not null && board.Contains("CANBoard", StringComparison.OrdinalIgnoreCase);
         var relocated = address is uint ra && DfuImage.IsAppBase(ra, cb);
-        if ((isSrec || isHex) && address is uint a && !relocated)
+        var full = IsFull(name) && address == 0x08000000;
+        if (full)
+            problems.Add("Bootloader and app in one image: for a blank board over SWD or USB DFU, not for an update (it would rewrite the bootloader).");
+        else if ((isSrec || isHex) && address is uint a && !relocated)
             problems.Add($"It starts at 0x{a:X8}, not 0x{DfuImage.AppBase:X8}{(cb ? $" or 0x{DfuImage.CanboardAppBase:X8}" : "")}: not built for the CAN bootloader, so it cannot go over CAN (and over USB it would replace the bootloader).");
         if (cb && address == DfuImage.CanboardAppBase)
             problems.Add("Built for the new 8 KB CANBoard bootloader (app at 0x08002000, firmware 5.7). Each CANBoard needs that bootloader programmed once over SWD first: with the old 16 KB one the update fails and the module stays in its bootloader.");
@@ -134,7 +139,7 @@ public static partial class FirmwareCatalog
                 ? $"This is {version}, the 5.7 line (new settings layout); {string.Join(", ", switching)} run{(switching.Count == 1 ? "s" : "")} fork 5.x. The module starts from its defaults: when it reports {version} the app converts this project to the 5.7 layout (see the module's migration report). Then Read, Apply to car and Store."
                 : $"This is {(imageFamily == "upstream" ? "upstream dingoFW" : "the dingoFW fork")} {version}; {string.Join(", ", switching)} run{(switching.Count == 1 ? "s" : "")} the {(imageFamily == "upstream" ? "fork" : "upstream firmware")}. Its settings do not carry over: after the update Read the module, then Apply and Store the project again.");
         return new { name, kind = isSrec ? "srec" : isHex ? "hex" : "bin", size = data.Length, board, marker, version, modules, problems,
-            address = address is uint ad ? $"0x{ad:X8}" : null, relocated };
+            address = address is uint ad ? $"0x{ad:X8}" : null, relocated, full };
     }
 
     static string? CurrentVersion(IDevice d) => d switch
@@ -165,7 +170,7 @@ public static partial class FirmwareCatalog
                 var m = AssetName().Match(n);
                 if (!m.Success) continue;
                 images.Add(new Image(BoardOf(m.Groups[1].Value), m.Groups[5].Value.ToLowerInvariant(), n,
-                    a.GetProperty("size").GetInt64(), a.GetProperty("browser_download_url").GetString() ?? "", false));
+                    a.GetProperty("size").GetInt64(), a.GetProperty("browser_download_url").GetString() ?? "", false, IsFull(n)));
             }
             if (images.Count == 0) continue;
             list.Add(new Release(tag, tag.TrimStart('v'), r.GetProperty("name").GetString(), r.GetProperty("prerelease").GetBoolean(),

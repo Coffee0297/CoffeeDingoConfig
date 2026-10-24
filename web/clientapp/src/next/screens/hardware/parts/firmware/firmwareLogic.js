@@ -19,6 +19,9 @@ export function boardOfFile(name) {
   return null
 }
 
+/** A release's bootloader + app image (…_FULL_v5-7-1.hex): for a blank board over SWD or DFU, never for an update. */
+export const isFull = (name) => /_FULL_/i.test(name ?? '')
+
 /** Version in a release file name: dingopdm_v7-v5-5-112.srec -> 5.5.112 */
 export const fileVersion = (name) => (name ?? '').match(/v(\d+)[.-](\d+)[.-](\d+)\.[a-z0-9]+$/i)?.slice(1).join('.') ?? null   // _FW_v5-6-4.bin or _v5.6.4.bin
 export const cleanVersion = (v) => String(v ?? '').replace(/^v/i, '')

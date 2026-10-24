@@ -3,11 +3,18 @@
   // For what USB and CAN can't reach: a CANBoard's bootloader, a bricked board. Needs the "I checked" tick first.
   import { Dialog, Button, Banner, Checkbox, Chip, Select } from '../../../../ui/index.js'
   import { api, toast } from '../../../../lib/live.svelte.js'
-  import { lastLine } from './firmwareLogic.js'
-  let { open = $bindable(false), busyOther = false, onflashing } = $props()
+  import { lastLine, boardOfFile, isFull, BOARDS as FILE_BOARDS } from './firmwareLogic.js'
+  // files: the page's release files; the one for the picked board is used unless another file is chosen here
+  let { open = $bindable(false), busyOther = false, onflashing, files = [] } = $props()
 
-  const BOARDS = [{ value: 'canboard', label: 'CANBoard (STM32F303)' }, { value: 'dingopdm', label: 'dingoPDM (STM32F446)' }, { value: 'dingopdmmax', label: 'dingoPDM-Max (STM32F446)' }]
-  let board = $state('canboard'), scan = $state(null), scanning = $state(false), file = $state(null), sure = $state(false)
+  const BOARDS = [{ value: 'canboard', label: 'CANBoard (STM32F303)', file: FILE_BOARDS.canboard }, { value: 'dingopdm', label: 'dingoPDM (STM32F446)', file: FILE_BOARDS.pdm }, { value: 'dingopdmmax', label: 'dingoPDM-Max (STM32F446)', file: FILE_BOARDS.pdmmax }]
+  let board = $state('canboard'), scan = $state(null), scanning = $state(false), picked = $state(null), sure = $state(false)
+  const EXT_ORDER = ['.srec', '.hex', '.elf', '.bin']
+  const extRank = (n) => EXT_ORDER.findIndex((x) => n.toLowerCase().endsWith(x))
+  // the release's image for this board: its _FULL_ one (bootloader + app) first, then a .srec before the others
+  const pageFile = $derived(files.filter((f) => boardOfFile(f.name) === BOARDS.find((b) => b.value === board)?.file && extRank(f.name) >= 0)
+    .sort((a, b) => isFull(b.name) - isFull(a.name) || extRank(a.name) - extRank(b.name))[0] ?? null)
+  const file = $derived(picked ?? pageFile)
   let running = $state(false), pct = $state(0), phase = $state(''), result = $state(null)
   let input
 
@@ -15,7 +22,7 @@
     scanning = true
     try { scan = await api.swdScan() } catch (e) { scan = { toolOk: false, probes: 0, raw: 'Scan failed: ' + (e?.message ?? e) } } finally { scanning = false }
   }
-  function onFile(e) { file = e.target.files?.[0] ?? null; e.target.value = ''; result = null }
+  function onFile(e) { picked = e.target.files?.[0] ?? picked; e.target.value = ''; result = null }
   async function flash() {
     if (!file || !sure || running) return
     running = true; result = null; pct = 0; phase = 'Starting'; onflashing?.(true)
@@ -46,15 +53,17 @@
 
   <div class="row">
     <input bind:this={input} type="file" accept=".srec,.hex,.bin,.elf" class="sr-only" onchange={onFile} data-testid="swd-file" aria-label="Firmware or bootloader image" />
-    <Button onclick={() => input.click()} disabled={running}>Choose image…</Button>
-    {#if file}<span class="muted mono">{file.name} · {(file.size / 1024).toFixed(0)} KB</span>{/if}
+    <Button onclick={() => input.click()} disabled={running}>{pageFile ? 'Choose another image…' : 'Choose image…'}</Button>
+    {#if file}<span class="muted mono" data-testid="swd-filename">{file.name} · {(file.size / 1024).toFixed(0)} KB{picked ? '' : ' · from the release above'}{isFull(file.name) ? ' · bootloader + app' : ' · app only'}</span>{/if}
+    {#if picked && pageFile}<Button size="sm" onclick={() => (picked = null)} disabled={running}>Use the release's</Button>{/if}
   </div>
+  {#if !file && files.length}<p class="muted">The release above has no image for this board. A CANBoard's bootloader is not in a release: choose it (canboard_blt.srec).</p>{/if}
   <Checkbox bind:checked={sure} label="The probe is on this board and the board is powered" hint="SWDIO, SWCLK and GND wired. The image is for the board picked above: pyOCD does not check what it writes." disabled={running} data-testid="swd-sure" />
 
   {#if running || result}
     <div class="bar" role="progressbar" aria-label="Flash progress" aria-valuenow={pct} aria-valuemin="0" aria-valuemax="100"><span style="width: {pct}%" class:bad={result && !result.ok}></span></div>
     <p role="status" data-testid="swd-status">{running ? `${phase || 'Working'}… ${pct} %` : result.ok ? '✓ Done. ' + result.text : '■ Failed. ' + result.text}</p>
-    {#if result && !result.ok && result.log}<pre class="raw mono" data-testid="swd-log">{result.log}</pre>{/if}
+    {#if result?.log}<details open={!result.ok}><summary class="logsum">Show log</summary><pre class="raw mono" data-testid="swd-log">{result.log}</pre></details>{/if}
   {/if}
   {#snippet footer()}
     <Button onclick={() => (open = false)} disabled={running} data-testid="swd-close">Close</Button>
@@ -65,6 +74,7 @@
 <style>
   .row { display: flex; align-items: center; gap: var(--space-3); flex-wrap: wrap; }
   .raw { background: var(--color-bg); border: 1px solid var(--color-line); border-radius: var(--radius-md); padding: var(--space-2); font-size: var(--text-xs); max-height: 160px; overflow: auto; white-space: pre-wrap; margin: 0; }
+  .logsum { cursor: pointer; font-size: var(--text-xs); margin-bottom: var(--space-1); }
   .bar { height: 10px; border-radius: 5px; background: var(--color-raised); overflow: hidden; }
   .bar span { display: block; height: 100%; background: var(--color-on); transition: width 0.25s; }
   .bar span.bad { background: var(--color-fault); }
