@@ -46,6 +46,35 @@ public class IdRangeTests
     }
 
     [Fact]
+    public void Pdm_SendsAppended_OnlyItsActiveAppendedFrames()
+    {
+        // PDM-01 at 0x680, PDM-02 at 0x6A0: PDM-01's PID frame sits in PDM-02's core range
+        var pdm1 = Pdm57WithWireAndPid(0x680);
+        var pid = 0x680 + pdm1.UpstreamFrames().Pid!.Value;
+        Assert.False(pdm1.SendsAppended(pid));            // PID off: the id is PDM-02's
+        pdm1.Pids[0].Enabled = true;
+        Assert.True(pdm1.SendsAppended(pid));             // PID on: PDM-01 sends it, PDM-02 must not read it
+        Assert.False(pdm1.SendsAppended(0x682));          // a core frame is never "appended"
+        Assert.False(new PdmDevice("old", 0x680).SendsAppended(0x6A0));   // pre-5.7: no appended frames
+    }
+
+    [Fact]
+    public void Pdm_OnlyItsConfigReplyAndMsg0_MakeItConnected()
+    {
+        // PDM-03 at 0x6C0, absent; PDM-02 at 0x6A0 sends its tables (+33) and ignition (+36) frames = 0x6C1 / 0x6C4
+        var pdm3 = new PdmDevice("PDM-03", 0x6C0);
+        pdm3.SetLogger(NullLogger<PdmDevice>.Instance);
+        var q = UpstreamFamilyTests.Q();
+        pdm3.Read(0x6C4, new byte[8], ref q, []);
+        pdm3.Read(0x6C1, new byte[8], ref q, []);
+        pdm3.UpdateIsConnected();
+        Assert.False(pdm3.Connected);
+        pdm3.Read(0x6C2, new byte[8], ref q, []);   // its own Msg0
+        pdm3.UpdateIsConnected();
+        Assert.True(pdm3.Connected);
+    }
+
+    [Fact]
     public void Dbc_OnlyItsOwnMessages()
     {
         var ecu = new DbcDevice("ECU", 0)

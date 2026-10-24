@@ -1425,7 +1425,13 @@ public class PdmDevice : IDeviceConfigurable
             || (off == fr.Tables34 && Tables.Skip(2).Take(2).Any(t => t.Enabled))
             || (off == fr.Pid && Pids.Any(p => p.Enabled));
     }
-    
+
+    /// <summary>Upstream: <paramref name="id"/> is one of this module's appended frames (or its ignition frame) that it
+    /// sends now. At 0x20 spacing those land on the next module's base+0..+4, so the frame is this module's, not that one's.</summary>
+    public bool SendsAppended(int id) =>
+        Upstream && ((Ignition.Enabled && id == Ignition.FrameId(BaseId, IgnitionStateOffset))
+                     || (id - BaseId > _coreMaxCyclicId && InIdRange(id)));
+
     public void Read(int id, byte[] data, 
             ref ConcurrentDictionary<(int BaseId, int Index, int SubIndex), DeviceCanFrame> queue, 
             List<DeviceCanFrame> outgoing)
@@ -1522,8 +1528,9 @@ public class PdmDevice : IDeviceConfigurable
         // (self-reception), NOT proof the module is present. Only frames the device actually
         // originates — its config reply (ConfigRxOffset) and cyclic status (offset >= CyclicRxOffset)
         // — count toward the liveness heartbeat, so writing to an absent module can't make it
-        // momentarily look connected and defeat the live-write guards.
-        if (offset != ConfigTxOffset)
+        // momentarily look connected and defeat the live-write guards. Of the cyclic frames only Msg0 (+2, always sent)
+        // counts: at 0x20 spacing a 5.7 PDM's +33 / +36 land on the next module's +1 / +4 and made a silent one look connected.
+        if (offset == ConfigRxOffset || offset == CyclicRxOffset)
             LastRxTime = DateTime.Now;
     }
 

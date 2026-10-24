@@ -361,9 +361,11 @@ public class DeviceManager(ILogger<DeviceManager> logger, ILoggerFactory loggerF
     {
         CountFrame();
         RecordWriteOutcome(frame);
+        // a PDM's appended/ignition frame on the next module's base+0..: only that PDM reads it, or a silent module looks connected
+        var sender = _devices.Values.OfType<PdmDevice>().FirstOrDefault(p => p.SendsAppended(frame.Id));
         foreach (var device in _devices.Values)
         {
-            if (device.InIdRange(frame.Id))
+            if ((sender == null || device == sender) && device.InIdRange(frame.Id))
             {
                 var outgoing = new List<DeviceCanFrame>();
                 device.Read(frame.Id, frame.Payload, ref _requestQueue, outgoing);
