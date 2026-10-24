@@ -19,8 +19,9 @@ export async function deployToUsb(src, usbBase, devices) {
   const same = src.baseId === usbBase
   let made = null
   try {
-    let tgt = same ? src : now((d) => d.guid !== src.guid && /pdm/i.test(d.type ?? '') && d.baseId === usbBase)
-    if (!tgt) { // no project entry at the module's current ID yet: add a temporary one to talk to it
+    // never reuse another project entry at usbBase: applyProfile would overwrite its settings and rename it
+    let tgt = same ? src : null
+    if (!tgt) { // a temporary entry to talk to the module at its current ID
       made = (await api.addLike(src.guid, `USB module ${hx(usbBase)}`, hx(usbBase))).guid
       for (let i = 0; i < 40 && !(tgt = now((d) => d.guid === made))?.connected; i++) await sleep(250)
       if (!tgt) throw new Error('could not add a project entry for it')
@@ -28,11 +29,12 @@ export async function deployToUsb(src, usbBase, devices) {
     if (!tgt.connected) throw new Error(`the module at ${hx(usbBase)} is not answering`)
     if (same) await api.action(src.guid, 'writeall')
     else await api.applyProfile(tgt.guid, src.guid)
+    // applyProfile renames the temporary entry to src and moves it to src's ID: drop it now, or src shows twice
+    if (made) { await api.remove(made); made = null }
     // After the re-address the module answers at src's ID: wait for it, then send the Lua through src's entry.
     for (let i = 0; i < 40 && !now((d) => d.guid === src.guid)?.connected; i++) await sleep(250)
     let luaOk = true
     try { const lua = await luaForDeploy(src.guid); if (lua.trim() && !(await api.luaUpload(src.guid, lua))?.written) luaOk = false } catch { luaOk = false }
-    if (made) { await api.remove(made); made = null }
     const newBase = (await api.usbIdentify().catch(() => null))?.gatewayBaseId ?? src.baseId
     return { luaOk, newBase }
   } catch (e) {
