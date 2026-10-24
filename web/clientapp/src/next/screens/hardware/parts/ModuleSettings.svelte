@@ -23,7 +23,9 @@
   const st = $derived(d ? moduleState(d) : null)
   const simAdapter = $derived(!live.programmingAllowed)
   const progBlock = $derived(!d ? '' : !live.connected ? 'Not connected.' : simAdapter ? 'The simulator replay cannot program modules.' : !d.connected ? `${d.name} is not answering on the bus.` : '')
-  const askBlock = $derived(!d ? '' : !live.connected ? 'Not connected.' : !d.connected ? `${d.name} is not answering on the bus.` : '')
+  // deploy talks to the module on USB only, so the project module need not be on the bus
+  const deployBlock = $derived(!live.connected ? 'Not connected.' : simAdapter ? 'The simulator replay cannot program modules.' : '')
+  const askBlock =$derived(!d ? '' : !live.connected ? 'Not connected.' : !d.connected ? `${d.name} is not answering on the bus.` : '')
 
   // ---- name -----------------------------------------------------------------------
   let renaming = $state(false)
@@ -277,8 +279,9 @@
             {:else if usb.label}<p class="bad" role="status">■ Board check failed: {d.name} is a {d.type}, the module on USB is a {usb.label}. Deploy is off so a config for one board never lands on another.</p>
             {:else}<p class="bad" role="status">■ The bus scan could not tell what board is on USB, so Deploy is off.</p>{/if}
           {/if}
-          {#if progBlock}<p class="warn" role="status">▲ {progBlock} Deploy needs {d.name} awake and on the bus.</p>{/if}
-          <div class="row"><Button variant="primary" disabled={!boardOk || !!progBlock || deployBusy} busy={deployBusy} onclick={askDeploy} data-testid="deploy-usb">Deploy to USB module…</Button></div>
+          {#if usb?.base != null && usb.base !== d.baseId}<p class="warn" role="status" data-testid="usb-id-warn">▲ The module on USB answers on {hexId(usb.base)}, not {d.name}'s {hexId(d.baseId)}. Deploy moves it to {hexId(d.baseId)}.</p>{/if}
+          {#if deployBlock}<p class="warn" role="status">▲ {deployBlock}</p>{/if}
+          <div class="row"><Button variant="primary" disabled={!boardOk || !!deployBlock || deployBusy} title={usb?.base == null ? 'Check what is on USB first' : ''} busy={deployBusy} onclick={askDeploy} data-testid="deploy-usb">Deploy to USB module…</Button></div>
         {/if}
       {/if}
     </section>
