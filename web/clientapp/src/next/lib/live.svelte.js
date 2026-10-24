@@ -77,6 +77,8 @@ export function device(key) {
 /** Module live state for display: { key, word, shape } — never colour alone. */
 export function moduleState(d) {
   if (!live.connected) return { key: 'stale', word: 'No connection', shape: 'ring' }
+  // the module on USB answers there even while it sends no telemetry (its mute input is on)
+  if (!d?.connected && d?.isGateway) return { key: 'off', word: 'On USB · quiet', shape: 'ring' }
   if (!d?.connected) return { key: 'fault', word: 'Not found', shape: 'square' }
   if (/sleep/i.test(d.state ?? '')) return { key: 'off', word: 'Asleep', shape: 'ring' }
   if (/error|overtemp/i.test(d.state ?? '')) return { key: 'fault', word: d.state, shape: 'square' }

@@ -38,7 +38,8 @@
   const verOf = (f) => checks[f.name]?.version ?? fileVersion(f.name)
   const upToDate = (d, f) => !!f && !!verOf(f) && cleanVersion(d.version) === verOf(f)
   // reachable: answering, or found waiting in its bootloader (G9: a CAN update can run from there)
-  const reach = (d) => d.connected || (d.inBootloader && pathOf(d) === 'can')
+  // or the module on USB: a USB update talks to it directly, it needs no telemetry (a muted module sends none)
+  const reach = (d) => d.connected || (d.inBootloader && pathOf(d) === 'can') || (d.isGateway && pathOf(d) === 'usb')
   const plan = $derived(mods.filter((d) => pathOf(d) === 'can' && reach(d)).map((d) => ({ d, file: fileFor(d) })).filter((p) => p.file && !upToDate(p.d, p.file)))
   const anyFile = $derived(files.length > 0)
 

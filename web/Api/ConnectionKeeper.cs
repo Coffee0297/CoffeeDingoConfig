@@ -89,6 +89,13 @@ public sealed class ConnectionKeeper(ICommsAdapterManager adapters, UserPreferen
         while (!ct.IsCancellationRequested)
         {
             try { await Task.Delay(2000, ct); } catch (OperationCanceledException) { return; }
+            // The module on USB is asked for its id once, at connect. Still booting then (the reconnect after a DFU
+            // update) it gave none, every PDM looked CAN-only and its update went over CAN: ask until it answers.
+            if (!Lost && adapters.GatewayBaseId is null && prefs.Preferences.SelectedAdapter == "USB")
+            {
+                try { if (await adapters.ReidentifyAsync(ct) is int gw) log.LogInformation("Module on USB answers at 0x{Id:X3}", gw); }
+                catch (Exception e) { log.LogDebug("USB identify failed: {Msg}", e.Message); }
+            }
             if (!Reconnecting || prefs.Preferences.SelectedAdapter is not { } adapter) continue;
             try
             {
