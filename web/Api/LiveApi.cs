@@ -1192,13 +1192,16 @@ public static class LiveApi
         // In-app firmware update over USB DFU (raw .bin body): commands the module on USB into DFU and flashes
         // it with dfu-util at the address the image's vector table calls for (relocated app → 0x08004000, the
         // OpenBLT bootloader in sector 0 kept; full image → 0x08000000).
-        api.MapPost("/devices/{guid}/flash", async (string guid, HttpRequest req, FirmwareFlashService flasher) =>
+        api.MapPost("/devices/{guid}/flash", async (string guid, HttpRequest req, FirmwareFlashService flasher, FlashBaseIdRestore restore, DeviceManager dm, ICommsAdapterManager adapters) =>
         {
             if (!Guid.TryParse(guid, out var g)) return Results.BadRequest();
             using var ms = new MemoryStream();
             await req.Body.CopyToAsync(ms);
+            // the ID the module on USB answers on now: it gets it back if the new firmware starts on its default
+            var saved = (adapters.ActiveAdapter is { } usb ? await usb.IdentifyBridgeBaseIdAsync() : null) ?? dm.GetDevice(g)?.BaseId;
             var res = await flasher.FlashAsync(g, ms.ToArray());
-            return Results.Ok(new { ok = res.Ok, log = res.Log });
+            var log = res.Ok && saved is int s ? res.Log + await restore.RestoreAsync(g, s, viaUsb: true) + "\n" : res.Log;
+            return Results.Ok(new { ok = res.Ok, log });
         });
 
         // Flash a new module that isn't in the project (Guid.Empty). If it runs dingo firmware and answers on
@@ -1380,13 +1383,15 @@ public static class LiveApi
             return Results.Ok(new { ok = true, canBootloader = p.CanBootloader });
         });
 
-        api.MapPost("/devices/{guid}/flash-can", async (string guid, HttpRequest req, CanFlashService flasher) =>
+        api.MapPost("/devices/{guid}/flash-can", async (string guid, HttpRequest req, CanFlashService flasher, FlashBaseIdRestore restore, DeviceManager dm) =>
         {
             if (!Guid.TryParse(guid, out var g)) return Results.BadRequest();
             using var ms = new MemoryStream();
             await req.Body.CopyToAsync(ms);
+            var saved = dm.GetDevice(g)?.BaseId;   // over CAN the module answers on its project ID
             var res = await flasher.FlashAsync(g, ms.ToArray());
-            return Results.Ok(new { ok = res.Ok, log = res.Log, version = res.Version, started = res.Started });
+            var log = res.Ok && saved is int s ? res.Log + await restore.RestoreAsync(g, s, viaUsb: false) + "\n" : res.Log;
+            return Results.Ok(new { ok = res.Ok, log, version = res.Version, started = res.Started });
         });
 
         // Live CAN-flash progress (polled by the UI while a CAN flash is in flight).

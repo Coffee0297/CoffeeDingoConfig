@@ -30,6 +30,7 @@ builder.Services.AddSingleton<DeviceManager>();
 builder.Services.AddSingleton<CrossModuleStore>();
 builder.Services.AddSingleton<FirmwareFlashService>();
 builder.Services.AddSingleton<CanFlashService>();
+builder.Services.AddSingleton<FlashBaseIdRestore>();
 builder.Services.AddSingleton<SdoService>();
 builder.Services.AddSingleton<SystemConfigService>();
 builder.Services.AddSingleton<CanMsgLogger>();
