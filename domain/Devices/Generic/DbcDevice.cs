@@ -107,7 +107,9 @@ public class DbcDevice : IDevice
 
     public bool InIdRange(int id)
     {
-        return id >= MinId && id <= MaxId;
+        // Only the DBC's own messages: anything between its lowest and highest id made the device look connected
+        // (a GM DBC spans most of the 11-bit range, so every dingo module's frames counted)
+        return _byId.ContainsKey(id);
     }
 
     public async Task<bool> ParseDbcFile(string dbcFilePath)

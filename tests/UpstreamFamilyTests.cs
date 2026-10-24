@@ -382,6 +382,8 @@ public class UpstreamFamilyTests
         Assert.Equal(("output", 8, "Wire Load"), (d.VarMap[232].OwnerKind, d.VarMap[232].OwnerNumber, d.VarMap[232].PropertyName));
         Assert.Equal("timer", d.VarMap[224].OwnerKind);
         Assert.Equal(32, d.MaxCyclicId);
+        Assert.False(d.InIdRange(0x680 + 32));   // no output has a time constant: the frame isn't sent, the id is the next module's
+        d.Outputs[0].Enabled = true; d.Outputs[0].ThermalTau = 30;
         Assert.True(d.InIdRange(0x680 + 32));
         var q = Q();
         d.Read(0x680 + 32, [38, 0, 120, 0, 0, 0, 0, 255], ref q, []);
@@ -439,7 +441,9 @@ public class UpstreamFamilyTests
         d.Pids[1].Kp = 2.5;
         Assert.Equal(2.5f, BitConverter.ToSingle(ParamCodec.ToFrame(domain.Enums.MessageCommand.WriteAllVal, pid[6], 0).Payload, 4));
 
-        // live output: Msg 30 at +32, signed int16 LE x10
+        // live output: Msg 30 at +32, signed int16 LE x10, sent (and claimed) only while a PID is enabled
+        Assert.False(d.InIdRange(0x680 + 32));
+        d.Pids[0].Enabled = true;
         Assert.True(d.InIdRange(0x680 + 32));
         var q = Q();
         d.Read(0x680 + 32, [0xFA, 0x00, 0x18, 0xFC, 0xE8, 0x03, 0, 0], ref q, []);

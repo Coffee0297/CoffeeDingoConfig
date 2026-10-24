@@ -657,7 +657,8 @@ public class PdmDevice : IDeviceConfigurable
                 }
             }
             // the ignition frame (fr.Ignition) is decoded in Read() and counted by InIdRange, like the fork's
-            MaxCyclicId = new[] { cyclicIndex + 2, fr.Wire ?? 0, fr.Tables12 ?? 0, fr.Tables34 ?? 0, fr.Pid ?? 0 }.Max();
+            _coreMaxCyclicId = cyclicIndex + 2;
+            MaxCyclicId = new[] { _coreMaxCyclicId, fr.Wire ?? 0, fr.Tables12 ?? 0, fr.Tables34 ?? 0, fr.Pid ?? 0 }.Max();
             return;
         }
         // Msg 27 (offset +29): table 1-2 outputs as IEEE-754 float32 LE (firmware >= 5.5.107).
@@ -1394,6 +1395,7 @@ public class PdmDevice : IDeviceConfigurable
     [JsonIgnore] public int? IgnitionStateOffset => !Upstream ? Functions.Ignition.StateOffsetFor(Type) : _upFrames.Ignition;
 
     private (int? Wire, int? Tables12, int? Tables34, int? Pid, int? Ignition) _upFrames;
+    private int _coreMaxCyclicId;   // upstream: the last frame every module sends (Msg 29), the appended ones come after
 
     /// <summary>Upstream: the cyclic frames feature branches append after Msg 29, numbered as the firmware integration
     /// does (merge order: wire load, tables 1-2, tables 3-4, PID, ignition), one index each, only for the features the
@@ -1411,7 +1413,17 @@ public class PdmDevice : IDeviceConfigurable
     public bool InIdRange(int id)
     {
         // + the ignition state frame (firmware 5.6), the first id after the module's own range
-        return (id >= BaseId && id <= MaxCyclicId + BaseId) || id == Ignition.FrameId(BaseId, IgnitionStateOffset);
+        if (id == Ignition.FrameId(BaseId, IgnitionStateOffset)) return true;
+        var off = id - BaseId;
+        if (off < 0 || off > MaxCyclicId) return false;
+        if (!Upstream || off <= _coreMaxCyclicId) return true;
+        // An appended frame goes out only while its feature is on (firmware bSend). Claiming an idle slot took the next
+        // module's frames at the usual 0x20 spacing: PDM-02's base+0..+3 made a silent PDM-01 look connected.
+        var fr = _upFrames;
+        return (off == fr.Wire && Outputs.Any(o => o.Enabled && o.ThermalTau > 0))
+            || (off == fr.Tables12 && Tables.Take(2).Any(t => t.Enabled))
+            || (off == fr.Tables34 && Tables.Skip(2).Take(2).Any(t => t.Enabled))
+            || (off == fr.Pid && Pids.Any(p => p.Enabled));
     }
     
     public void Read(int id, byte[] data, 
