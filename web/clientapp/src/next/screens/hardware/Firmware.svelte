@@ -5,6 +5,7 @@
   import { live, api, toast, hex } from '../../lib/live.svelte.js'
   import Confirm from '../power/parts/Confirm.svelte'
   import FlashNewBoard from './parts/firmware/FlashNewBoard.svelte'
+  import FlashSwd from './parts/firmware/FlashSwd.svelte'
   import { boardOf, boardOfFile, fileVersion, cleanVersion, flashPath, pathLabel, extFor, fitsPath, checkFile, lastLine, cmpVersion, relationTo, relationLabel } from './parts/firmware/firmwareLogic.js'
   import { isUpstream, ownLine } from './parts/util.js'
   let props = $props()
@@ -19,7 +20,7 @@
     : other ? `An update over CAN is already running (${other.phase || 'writing'} · ${other.percent} %), started before this page opened or in another window. Wait until it is done.` : '')
   let run = $state(null)          // { label, done, total } while an update-all is going
   let confirm = $state(null)      // { mode: 'one' | 'all', ... }
-  let newBoard = $state(false), fileInput, reading = $state(false)
+  let newBoard = $state(false), swd = $state(false), fileInput, reading = $state(false)
 
   const pathOf = (d) => flashPath(d, live.connected)
   // over CAN only an image built for the bootloader (the pre-flight check reads where it starts; .srec/.hex)
@@ -276,8 +277,11 @@
       <p class="muted note" role="status" data-testid="fw-bl-result">{blResult}</p>
     </Card>
     <Card title="New or blank board" aria-label="New or blank board">
-      <p>Over USB (DFU) on a PDM. A CANBoard needs a probe once.</p>
-      <div><Button onclick={() => (newBoard = true)} disabled={busy} data-testid="fw-new-board">Flash a new board…</Button></div>
+      <p>Over USB (DFU) on a PDM. A CANBoard needs a probe once: flash its bootloader over SWD.</p>
+      <div class="btns">
+        <Button onclick={() => (newBoard = true)} disabled={busy} data-testid="fw-new-board">Flash a new board…</Button>
+        <Button onclick={() => (swd = true)} disabled={busy} data-testid="fw-swd">Flash over SWD…</Button>
+      </div>
     </Card>
   </div>
 </Page>
@@ -307,6 +311,7 @@
 </Confirm>
 
 <FlashNewBoard bind:open={newBoard} {blocked} busyOther={busy} onflashing={(v) => (busy = v)} />
+<FlashSwd bind:open={swd} busyOther={busy} onflashing={(v) => (busy = v)} />
 
 <style>
   .active { background: var(--color-on-soft); }
@@ -316,6 +321,7 @@
   .bar span.ok { background: var(--color-ok); }
   .bar span.bad { background: var(--color-fault); }
   .fault { color: var(--color-fault); font-weight: 600; }
+  .btns { display: flex; gap: var(--space-2); flex-wrap: wrap; }
   .three { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: var(--space-4); align-items: start; }
   .row { display: flex; align-items: center; gap: var(--space-3); flex-wrap: wrap; }
   .files { margin: 0; padding-left: 18px; font-size: var(--text-xs); display: flex; flex-direction: column; gap: 2px; }

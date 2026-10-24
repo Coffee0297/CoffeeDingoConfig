@@ -143,6 +143,13 @@ export const api = {
   },
   flashStatus: () => j('GET', '/api/flash/status'),
   flashScan: () => j('GET', '/api/flash/dfu'),   // list DFU devices dfu-util can see
+  // SWD through a debug probe (pyOCD): board = canboard | dingopdm | dingopdmmax
+  swdScan: () => j('GET', '/api/flash/swd', undefined, 20000),
+  async flashSwd(board, name, bytes) {
+    const r = await fetch(`/api/flash/swd?board=${encodeURIComponent(board)}&name=${encodeURIComponent(name)}`, { method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: bytes })
+    if (!r.ok) throw await apiError(r)
+    return r.json()
+  },
   // Flash a module's app over CAN via the OpenBLT XCP bootloader (.srec). No USB/DFU.
   async flashCan(guid, bytes) {
     const r = await fetch(`/api/devices/${guid}/flash-can`, { method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: bytes })

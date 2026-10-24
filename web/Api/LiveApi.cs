@@ -1225,6 +1225,20 @@ public static class LiveApi
             return Results.Ok(new { utilOk = s.UtilOk, util = s.Util, devices = s.DfuDevices, raw = s.Raw });
         });
 
+        // SWD through a debug probe (pyOCD): list the probes, and flash an image (raw body) for one board type.
+        api.MapGet("/flash/swd", async (FirmwareFlashService flasher) =>
+        {
+            var s = await flasher.SwdScanAsync();
+            return Results.Ok(new { toolOk = s.ToolOk, tool = s.Tool, probes = s.Probes, raw = s.Raw });
+        });
+        api.MapPost("/flash/swd", async (string board, string name, HttpRequest req, FirmwareFlashService flasher) =>
+        {
+            using var ms = new MemoryStream();
+            await req.Body.CopyToAsync(ms);
+            var res = await flasher.SwdFlashAsync(board, name, ms.ToArray());
+            return Results.Ok(new { ok = res.Ok, log = res.Log });
+        });
+
         // In-app firmware update over CAN (OpenBLT XCP). Upload a .srec (raw body); commands the
         // module into its CAN bootloader and programs it over the live SLCAN link — no USB/DFU.
         // G9: which silent modules sit in their OpenBLT bootloader (after a failed or stopped update). Sends one

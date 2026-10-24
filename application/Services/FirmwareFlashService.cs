@@ -172,6 +172,77 @@ public partial class FirmwareFlashService(
 
     [GeneratedRegex(@"Found DFU:[^\n]*?devnum=(\d+)")] private static partial Regex DfuDevnumRegex();
 
+    // ---- SWD: a debug probe (CMSIS-DAP, ST-Link, J-Link) through pyOCD, for what USB and CAN can't reach (a CANBoard's
+    // bootloader, a bricked board). pyocd path: env var DINGO_PYOCD, else PATH. Only whole-chip targets we know.
+    public record SwdBoard(string Target, int FlashKb);
+    public static readonly IReadOnlyDictionary<string, SwdBoard> SwdBoards = new Dictionary<string, SwdBoard>
+    {
+        ["canboard"] = new("stm32f303k8", 64),       // STM32F303x8
+        ["dingopdm"] = new("stm32f446re", 512),      // STM32F446
+        ["dingopdmmax"] = new("stm32f446re", 512),
+    };
+
+    private static string ResolvePyocd()
+    {
+        var env = Environment.GetEnvironmentVariable("DINGO_PYOCD");
+        return !string.IsNullOrWhiteSpace(env) && File.Exists(env) ? env : "pyocd";
+    }
+
+    public record SwdScan(bool ToolOk, string Tool, int Probes, string Raw);
+
+    /// <summary>The probes pyOCD sees ("pyocd list": one numbered row per probe).</summary>
+    public async Task<SwdScan> SwdScanAsync()
+    {
+        var tool = ResolvePyocd();
+        try
+        {
+            var (_, outp) = await RunAsync(tool, "list", 15_000);
+            return new(true, tool, ProbeRowRegex().Matches(outp).Count, outp.Trim());
+        }
+        catch (Exception ex) { return new(false, tool, 0, $"Could not run pyocd ({tool}): {ex.Message}. Install it with: pip install pyocd"); }
+    }
+
+    [GeneratedRegex(@"(?m)^\s+\d+\s+\S")] private static partial Regex ProbeRowRegex();
+
+    /// <summary>Write an image over SWD. pyOCD erases only the sectors the image covers, so a bootloader (0x08000000)
+    /// leaves the app alone and an app leaves the bootloader alone. A .bin goes where its reset vector says.</summary>
+    public async Task<FlashResult> SwdFlashAsync(string board, string fileName, byte[] image)
+    {
+        if (!SwdBoards.TryGetValue(board ?? "", out var b)) return new(false, $"Refused: unknown board '{board}'.");
+        var ext = Path.GetExtension(fileName ?? "").ToLowerInvariant();
+        if (ext is not (".srec" or ".hex" or ".bin" or ".elf")) return new(false, "Refused: pick a .srec, .hex, .bin or .elf file.");
+        if (image.Length < 64 || image.Length > 4 * 1024 * 1024) return new(false, $"Refused: the file is {image.Length} bytes.");
+        var baseArg = "";
+        if (ext == ".bin")
+        {
+            if (image.Length > b.FlashKb * 1024) return new(false, $"Refused: {image.Length / 1024} KB does not fit the {b.FlashKb} KB flash.");
+            if (DfuImage.FlashAddress(image) is not uint a) return new(false, "Refused: not an STM32 firmware .bin (its reset vector doesn't point into flash).");
+            baseArg = $" --base-address 0x{a:X8}";
+        }
+        if (_busy) return new(false, "Refused: another flash is running.");
+
+        var tmp = Path.Combine(Path.GetTempPath(), $"dingo_swd_{Guid.NewGuid():N}{ext}");
+        await File.WriteAllBytesAsync(tmp, image);
+        var log = new StringBuilder($"pyOCD → {b.Target} ({board}), {fileName}{baseArg}\n");
+        _busy = true; Set("Writing", 15);
+        try
+        {
+            var (code, outp) = await RunAsync(ResolvePyocd(), $"flash -t {b.Target}{baseArg} \"{tmp}\"", 180_000, trackProgress: true);
+            log.Append(outp);
+            var ok = code == 0;
+            Set(ok ? "Done" : "Failed", ok ? 100 : _percent);
+            log.AppendLine(ok ? "✓ Flash complete — the board restarts." : $"✗ Flash failed (exit {code}). Check the probe wiring (SWDIO, SWCLK, GND) and that the board is powered.");
+            logger.LogInformation("SWD flash {Result} ({Board}, {Len} bytes)", ok ? "ok" : "failed", board, image.Length);
+            return new(ok, log.ToString());
+        }
+        catch (Exception ex)
+        {
+            Set("Failed", _percent);
+            return new(false, log + $"\nCould not run pyocd: {ex.Message}. Install it with: pip install pyocd");
+        }
+        finally { _busy = false; try { File.Delete(tmp); } catch { /* ignore */ } }
+    }
+
     [GeneratedRegex(@"(\d{1,3})%")] private static partial Regex PercentRegex();
 
     // dfu-util runs an erase pass then a download pass, each reporting 0→100%. Map them into
