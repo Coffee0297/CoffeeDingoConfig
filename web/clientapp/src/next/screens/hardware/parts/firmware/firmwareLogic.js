@@ -22,6 +22,17 @@ export function boardOfFile(name) {
 /** A release's bootloader + app image (…_FULL_v5-7-1.hex): for a blank board over SWD or DFU, never for an update. */
 export const isFull = (name) => /_FULL_/i.test(name ?? '')
 
+/** The images of a release as files to pick: name, size, and arrayBuffer() downloading it (the backend keeps it on this
+ *  PC). Lets the flash dialogs use the release chosen at the top without "Use this release" first. */
+export const releaseFiles = (release) => (release?.images ?? []).map((i) => ({
+  name: i.name, size: i.size,
+  async arrayBuffer() {
+    const r = await fetch(`/api/firmware/releases/${encodeURIComponent(release.tag)}/${encodeURIComponent(i.name)}`)
+    if (!r.ok) throw new Error((await r.json().catch(() => null))?.error ?? `${i.name}: HTTP ${r.status}`)
+    return r.arrayBuffer()
+  },
+}))
+
 /** Version in a release file name: dingopdm_v7-v5-5-112.srec -> 5.5.112 */
 export const fileVersion = (name) => (name ?? '').match(/v(\d+)[.-](\d+)[.-](\d+)\.[a-z0-9]+$/i)?.slice(1).join('.') ?? null   // _FW_v5-6-4.bin or _v5.6.4.bin
 export const cleanVersion = (v) => String(v ?? '').replace(/^v/i, '')

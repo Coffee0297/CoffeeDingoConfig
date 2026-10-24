@@ -75,6 +75,18 @@ public class IdRangeTests
     }
 
     [Fact]
+    public void Pdm_LastFirmware_IsSavedAndLoadsBackWithoutBeingTheLiveVersion()
+    {
+        var pdm = Pdm57WithWireAndPid(0x6A0);   // reported v5.7.1
+        Assert.Equal("v5.7.1", pdm.LastFirmware);
+        var json = System.Text.Json.JsonSerializer.Serialize(pdm);
+        Assert.Contains("\"lastFirmware\":\"v5.7.1\"", json);
+        var back = System.Text.Json.JsonSerializer.Deserialize<PdmDevice>(json)!;
+        Assert.Equal("v5.7.1", back.LastFirmware);
+        Assert.Equal("v0.0.0", back.Version);   // what it runs now is only known once it answers
+    }
+
+    [Fact]
     public void Dbc_OnlyItsOwnMessages()
     {
         var ecu = new DbcDevice("ECU", 0)

@@ -159,6 +159,8 @@ public class PdmDevice : IDeviceConfigurable
     [JsonIgnore][Plotable(displayName:"BatteryVoltage", unit:"V")] public double BatteryVoltage { get; private set; }
     [JsonIgnore][Plotable(displayName:"Temperature", unit:"degC")] public double BoardTempC { get; private set; }
     [JsonIgnore] public string Version { get; private set; } = "v0.0.0";
+    /// <summary>The version the module reported last time it answered, saved in the project (Version is what it runs now).</summary>
+    [JsonPropertyName("lastFirmware")] public string? LastFirmware { get; set; }
     [JsonIgnore] public bool VersionReceived { get; private set; }
     // Fork (dingoFW 5.x) or upstream (dingoFW 0.x): picks the param numbering, var map and status frames.
     [JsonPropertyName("family")] public string Family { get; set; } = FwFamily.Fork;
@@ -1812,6 +1814,7 @@ public class PdmDevice : IDeviceConfigurable
         var family = FwFamily.Of(data[4], data[5]);
         var was = Version;
         Version = version;   // first: the status frames' current scale follows it
+        if (data[4] != 0 || data[5] != 0) LastFirmware = version;
         var to58 = Fw58Migration.Is58(data[4], data[5]);
         // a 5.7 project on a 5.8 module (or back): renumber its stored signals to that layout (before the Lua slots are re-asked)
         if (family == FwFamily.Upstream && Family == FwFamily.Upstream && Layout58 != to58)

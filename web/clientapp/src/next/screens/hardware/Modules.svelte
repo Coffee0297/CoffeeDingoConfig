@@ -4,7 +4,7 @@
   // POST /devices/{id}/rename|remove|modify. A module cannot report its own board revision (the definitions name the
   // documented board only, G21), so there is no Rev column; Identify (firmware 5.6) blinks the module's LEDs.
   import { DropdownMenu } from 'bits-ui'
-  import { Page, PageHeader, Card, Button, Chip, StateDot, Empty } from '../../ui/index.js'
+  import { Page, PageHeader, Card, Button, Chip, StateDot, Empty, Banner } from '../../ui/index.js'
   import Confirm from '../../shell/parts/Confirm.svelte'
   import { live, api, mutate, moduleState, hex, blinkModule, modulesOf, toast } from '../../lib/live.svelte.js'
   import { lacks, isUpstream } from './parts/util.js'
@@ -35,6 +35,9 @@
   let sel = $state(null)
   $effect.pre(() => { sel = query?.sel ?? null })   // a link to another module while this page is open
   const selected = $derived(mods.find((m) => m.guid === sel) ?? mods[0] ?? null)
+  // the module on USB answers on an ID no module of this project has (re-addressed in the project, or a spare): its
+  // frames can land in a neighbour's ID range and make that one look connected with no version
+  const strayUsb = $derived(live.connected && live.usbBaseId != null && !mods.some((m) => m.baseId === live.usbBaseId) ? live.usbBaseId : null)
 
   // Last seen: the time this browser last saw the module answering (telemetry has no per-module timestamp).
   let seen = $state({})
@@ -95,6 +98,11 @@
     {/snippet}
   </PageHeader>
   <HardwareNav current="modules" />
+  {#if strayUsb != null}
+    <Banner tone="warn" title={`The module on USB answers on ${hexId(strayUsb)}, which no module in this project uses`} data-testid="usb-stray">
+      Its frames can make a neighbouring module look connected. Click the module it should be, then use Deploy to the module on USB: it moves there with that module's settings.
+    </Banner>
+  {/if}
 
   {#if !mods.length}
     <Empty title="No modules in this project" text={live.connected ? 'Find the modules on the bus, or add one by hand.' : 'Connect to the car to find modules, or add one by hand.'}>

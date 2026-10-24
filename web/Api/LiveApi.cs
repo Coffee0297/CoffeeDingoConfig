@@ -66,7 +66,9 @@ public record DeviceDto(string Guid, string Name, string Type, int BaseId, bool 
     List<domain.Common.MigrationNote>? Migration = null, bool KeepValuesOnRead = false, bool Layout58 = false,
     // upstream / 5.7 PDM: the highest id offset it sends with its current settings (the appended frames go out only while
     // their feature is on); the CAN ID map and the clash checks use it. Null: the fixed fork / CANBoard span.
-    int? TxSpan = null);
+    int? TxSpan = null,
+    // the version it reported last time it answered, saved in the project (shown while it is not answering)
+    string? LastFirmware = null);
 // Has: the module has the lock (its Read listed 0x0200, or it refused a request as locked). PasswordSet: the
 // project holds a password, sent on every write. The password itself never goes to the UI.
 public record LockDto(bool Has, bool Locked, string Contact, bool PasswordSet);
@@ -83,7 +85,8 @@ public record AdaptersDto(string[] Adapters, string[] Ports, bool Connected, str
     bool Reconnecting = false, bool AutoConnect = false, bool AutoReconnect = true, object? Last = null);
 public record ConnectionOptionsReq(bool? AutoConnect, bool? AutoReconnect);
 public record TelemetryDto(bool Connected, string? Adapter, long CanTotal, long CanRate, int[] Ids, DeviceDto[] Devices, bool ProgrammingAllowed, bool Reconnecting = false,
-    int AgentPending = 0, string? AgentPendingId = null);   // G22: AI agent requests waiting for the operator, and the oldest
+    int AgentPending = 0, string? AgentPendingId = null,   // G22: AI agent requests waiting for the operator, and the oldest
+    int? UsbBaseId = null);   // the base ID the module on USB answers on (null: a plain adapter, or not known yet)
 public record ConnectReq(string Adapter, string Port, string Bitrate);
 public record AddDeviceReq(string Type, string Name, string BaseId);
 public record ModifyReq(string Name, string BaseId);
@@ -391,7 +394,7 @@ public static class DingoMap
                 SleepBlockers: ui?.SleepBlockers, Ignition: Ign(p.Ignition, p.BaseId + (p.IgnitionStateOffset ?? domain.Devices.Functions.Ignition.StateOffsetFor(p.Type, p.Family, p.PdmType))),
                 Family: p.Family, ParamsRead: p.ParamSet.FromModule, ParamRuns: p.ParamRuns, RetryAllInput: p.HasRetryAll ? p.RetryAllInput : null, ShedInput: p.HasShed ? p.ShedInput : null,
                 WakeFrame: p.ParamSet.Contains(domain.Devices.Functions.WakeFrame.Index, 0) ? p.WakeFrame : null, Lock: LockOf(p), HasLua: p.RunsLua, Migration: p.Migration, KeepValuesOnRead: p.KeepValuesOnRead, Layout58: p.Layout58,
-                TxSpan: p.Family == domain.Common.FwFamily.Upstream ? domain.Common.Fw57Migration.Span(p) : null);
+                TxSpan: p.Family == domain.Common.FwFamily.Upstream ? domain.Common.Fw57Migration.Span(p) : null, LastFirmware: p.LastFirmware);
         }
         if (d is domain.Devices.Canboard.CanboardDevice cb)
             // CANBoard has no battery/total-current sensing (those are PDM smart-output features) — leave
@@ -405,7 +408,7 @@ public static class DingoMap
                 HasLed: ui?.HasLed, Asleep: ui?.Asleep == true && !cb.Connected, LastWake: Wake(ui), SleepCountdownS: cb.SleepCountdownS,
                 SleepBlockers: cb.SleepCountdownS != null ? cb.SleepBlockersRaw : ui?.SleepBlockers, Ignition: Ign(cb.Ignition, cb.BaseId + (cb.IgnitionStateOffset ?? domain.Devices.Functions.Ignition.StateOffsetFor(cb.Type))),
                 DigitalOut: cb.DigitalOutputs.Select(o => new DigitalOutDto(o.Number, o.Name, o.Enabled, o.State, o.Input)).ToArray(),
-                Family: cb.Family, ParamsRead: cb.ParamSet.FromModule, ParamRuns: cb.ParamRuns, Lock: LockOf(cb), Migration: cb.Migration, KeepValuesOnRead: cb.KeepValuesOnRead, Layout58: cb.Layout58);
+                Family: cb.Family, ParamsRead: cb.ParamSet.FromModule, ParamRuns: cb.ParamRuns, Lock: LockOf(cb), Migration: cb.Migration, KeepValuesOnRead: cb.KeepValuesOnRead, Layout58: cb.Layout58, LastFirmware: cb.LastFirmware);
         return new DeviceDto(d.Guid.ToString(), d.Name, d.Type, d.BaseId, d.Connected,
             0, 0, 0, "", "", "", Array.Empty<OutputDto>(), reading, readDone, readTotal, false, 30000, true, 0, 0, 0, true,
             (d as IDeviceConfigurable)?.CanBootloader ?? false, CanSleep: false);   // an ECU (DBC) or other device: nothing to put to sleep
@@ -468,7 +471,7 @@ public class TelemetryBroadcaster(
                         return isGateway ? dto with { IsGateway = true } : dto;
                     }).ToArray();
                 var dto = new TelemetryDto(status.isConnected, status.activeAdapter, _total, _rate, ids, devices, !LiveApi.IsSim(adapterManager), keeper.Reconnecting,
-                    AgentGuard.PendingCount, AgentGuard.OldestPendingId);
+                    AgentGuard.PendingCount, AgentGuard.OldestPendingId, adapterManager.GatewayBaseId);
 
                 await hub.Clients.All.SendAsync("telemetry", dto, ct);
               }
@@ -1234,11 +1237,11 @@ public static class LiveApi
             var s = await flasher.SwdScanAsync();
             return Results.Ok(new { toolOk = s.ToolOk, tool = s.Tool, probes = s.Probes, raw = s.Raw });
         });
-        api.MapPost("/flash/swd", async (string board, string name, HttpRequest req, FirmwareFlashService flasher) =>
+        api.MapPost("/flash/swd", async (string board, string name, int? baseId, HttpRequest req, FirmwareFlashService flasher) =>
         {
             using var ms = new MemoryStream();
             await req.Body.CopyToAsync(ms);
-            var res = await flasher.SwdFlashAsync(board, name, ms.ToArray());
+            var res = await flasher.SwdFlashAsync(board, name, ms.ToArray(), baseId);
             return Results.Ok(new { ok = res.Ok, log = res.Log });
         });
 

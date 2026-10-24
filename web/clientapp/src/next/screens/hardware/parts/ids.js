@@ -62,9 +62,11 @@ export const typeName = (d) => d?.type ?? 'Module'
 
 /** Firmware text: the Sim and unconnected modules report v0.0.0, which is not a real version. */
 export function fwText(d) {
-  const v = d?.version
-  if (!v || /^v?0\.0\.0$/.test(v)) return d?.connected ? 'not reported' : 'unknown'
-  return v.replace(/^v/, '')
+  // not answering: what it reported last time, saved in the project (the live version is whoever answered on its ID
+  // earlier in this session, which may be another module that was re-addressed since)
+  if (!d?.connected) return d?.lastFirmware ? `${d.lastFirmware.replace(/^v/, '')} (last seen)` : 'unknown'
+  const v = d.version
+  return !v || /^v?0\.0\.0$/.test(v) ? 'not reported' : v.replace(/^v/, '')
 }
 
 /** Next free default name: "PDM-06", "CB-3". */

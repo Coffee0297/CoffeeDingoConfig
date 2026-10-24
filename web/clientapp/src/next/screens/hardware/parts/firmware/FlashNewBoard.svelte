@@ -2,12 +2,15 @@
   // New or blank board over USB (DFU): scan, pick the .bin, flash. Needs the "I checked" tick first.
   import { Dialog, Button, Banner, Checkbox, Chip, Select } from '../../../../ui/index.js'
   import { api, toast } from '../../../../lib/live.svelte.js'
-  import { lastLine, isFull } from './firmwareLogic.js'
-  // files: the page's release files; their .bin is used unless another file is chosen here. A blank board needs the
-  // bootloader too: the release's _FULL_ .bin when it has one, else its app .bin (a board that has the bootloader)
-  let { open = $bindable(false), blocked = '', busyOther = false, onflashing, files = [] } = $props()
+  import { lastLine, isFull, releaseFiles, boardOfFile, BOARDS } from './firmwareLogic.js'
+  // files: the page's release files, else the release chosen at the top (release); its .bin is used unless another file is
+  // chosen here. A blank board needs the bootloader too: the _FULL_ .bin when there is one, else the app .bin (a board
+  // that has the bootloader). boards: the board keys in the project, preferred among the release's (a CANBoard has no DFU).
+  let { open = $bindable(false), blocked = '', busyOther = false, onflashing, files = [], release = null, boards = [] } = $props()
 
-  const allBins = $derived(files.filter((f) => f.name.toLowerCase().endsWith('.bin')))
+  const relBins = $derived(releaseFiles(release).filter((f) => f.name.toLowerCase().endsWith('.bin') && boardOfFile(f.name) && boardOfFile(f.name) !== BOARDS.canboard))
+  const relOurs = $derived(relBins.filter((f) => boards.includes(boardOfFile(f.name).key)))
+  const allBins = $derived(files.length ? files.filter((f) => f.name.toLowerCase().endsWith('.bin')) : relOurs.length ? relOurs : relBins)
   const pageBins = $derived(allBins.some((f) => isFull(f.name)) ? allBins.filter((f) => isFull(f.name)) : allBins)
   let picked = $state(null), chosen = $state('')
   // more than one .bin (dingoPDM and -Max): the operator says which, a blank board can't tell us

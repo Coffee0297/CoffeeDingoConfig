@@ -18,6 +18,9 @@
   $effect(() => { pollOther(); const t = setInterval(pollOther, 1500); return () => clearInterval(t) })
   const blocked = $derived(!live.connected ? 'Connect to the car first.' : (!live.adapter || !live.programmingAllowed) ? 'Switch to a real CAN or USB adapter: the Sim cannot program hardware.'
     : other ? `An update over CAN is already running (${other.phase || 'writing'} · ${other.percent} %), started before this page opened or in another window. Wait until it is done.` : '')
+  // a new board over DFU needs no connection: a board in DFU is no adapter (the module on USB, if any, is sent there)
+  const newBoardBlocked = $derived(live.connected && (!live.adapter || !live.programmingAllowed) ? 'Disconnect the Sim first: it cannot program hardware.'
+    : other ? `An update over CAN is already running (${other.phase || 'writing'} · ${other.percent} %). Wait until it is done.` : '')
   let run = $state(null)          // { label, done, total } while an update-all is going
   let confirm = $state(null)      // { mode: 'one' | 'all', ... }
   let newBoard = $state(false), swd = $state(false), fileInput, reading = $state(false)
@@ -39,6 +42,8 @@
   const upToDate = (d, f) => !!f && !!verOf(f) && cleanVersion(d.version) === verOf(f)
   // reachable: answering, or found waiting in its bootloader (G9: a CAN update can run from there)
   // or the module on USB: a USB update talks to it directly, it needs no telemetry (a muted module sends none)
+  // upstream dingoFW 0.x, known: the one line where nothing tells whether OpenBLT is on it. v0.0.0 = no version heard yet
+  const upstreamZero = (d) => !ownLine(d) && /^v?0\.\d+\.\d+/.test(d.version ?? '') && cleanVersion(d.version) !== '0.0.0'
   const reach = (d) => d.connected || (d.inBootloader && pathOf(d) === 'can') || (d.isGateway && pathOf(d) === 'usb')
   const plan = $derived(mods.filter((d) => pathOf(d) === 'can' && reach(d)).map((d) => ({ d, file: fileFor(d) })).filter((p) => p.file && !upToDate(p.d, p.file)))
   const anyFile = $derived(files.length > 0)
@@ -260,9 +265,9 @@
             <tr data-module={d.name} class:active={c.state === 'writing'}>
               <td data-label="Module"><strong>{d.name}</strong> <span class="muted mono">{hex(d.baseId)}</span></td>
               <td data-label="Board">{boardOf(d).label}</td>
-              <td class="mono" data-label="Now" data-testid={`fw-version-${d.name}`}>{d.connected ? (cleanVersion(d.version) || 'unknown') : d.inBootloader ? 'in bootloader' : 'not seen'}</td>
+              <td class="mono" data-label="Now" data-testid={`fw-version-${d.name}`}>{d.connected ? (cleanVersion(d.version) || 'unknown') : d.inBootloader ? 'in bootloader' : d.lastFirmware ? `${cleanVersion(d.lastFirmware)} (last seen)` : 'not seen'}</td>
               <td data-label="Path">{pathLabel(p)}
-                {#if isUpstream(d) && !ownLine(d) && /pdm/i.test(d.type ?? '')}<!-- the 5.7 line is always behind OpenBLT: nothing to tick -->
+                {#if isUpstream(d) && upstreamZero(d) && /pdm/i.test(d.type ?? '')}<!-- the 5.7 line is always behind OpenBLT: nothing to tick -->
                   <Checkbox label="Has the CAN bootloader" hint="Upstream dingoFW: tick once OpenBLT is programmed on it. Without it a CAN update sends the module to USB-DFU." checked={!!d.canBootloader} disabled={busy} onchange={(v) => markBootloader(d, v)} data-testid={`fw-openblt-${d.name}`} />
                 {/if}</td>
               <td class="pc">
@@ -319,8 +324,8 @@
   <p data-testid="fw-downgrade-note">{release?.version} is {relationLabel[relation] ?? 'older'}{installed.length ? `: the modules run ${[...new Set(installed)].join(', ')}` : ''}. Flashing it takes them back to older firmware, and settings added since may be lost.</p>
 </Confirm>
 
-<FlashNewBoard bind:open={newBoard} {blocked} busyOther={busy} onflashing={(v) => (busy = v)} {files} />
-<FlashSwd bind:open={swd} busyOther={busy} onflashing={(v) => (busy = v)} {files} />
+<FlashNewBoard bind:open={newBoard} blocked={newBoardBlocked} busyOther={busy} onflashing={(v) => (busy = v)} {files} {release} boards={[...new Set(mods.map((d) => boardOf(d).key))]} />
+<FlashSwd bind:open={swd} busyOther={busy} onflashing={(v) => (busy = v)} {files} {release} modules={mods} />
 
 <style>
   .active { background: var(--color-on-soft); }
