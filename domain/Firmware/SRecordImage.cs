@@ -19,6 +19,8 @@ public sealed class SRecordImage
     public IReadOnlyList<Segment> Segments { get; }
     /// <summary>Lowest programmed address across all segments.</summary>
     public uint MinAddress { get; }
+    /// <summary>One past the highest programmed address: MinAddress..EndAddress spans every segment and the gaps between them.</summary>
+    public uint EndAddress { get; }
     /// <summary>Total number of data bytes across all segments.</summary>
     public int TotalBytes { get; }
 
@@ -26,6 +28,7 @@ public sealed class SRecordImage
     {
         Segments = segments;
         MinAddress = segments.Count > 0 ? segments[0].Address : 0;
+        EndAddress = segments.Count > 0 ? segments[^1].Address + (uint)segments[^1].Data.Length : 0;
         TotalBytes = segments.Sum(s => s.Data.Length);
     }
 

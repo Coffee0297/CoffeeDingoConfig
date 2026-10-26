@@ -77,7 +77,8 @@ public sealed class CanFlashService(
         // one update at a time: a second one (another window, a reload) moved the receive filter off the first module
         if (Interlocked.CompareExchange(ref _running, 1, 0) != 0) return new(false, "Refused: another module is being updated over CAN. Wait until it is done.");
         _busy = true; Set("Entering bootloader", 2);
-        using var lifetime = ct.CanBeCanceled ? null : new CancellationTokenSource(TimeSpan.FromMinutes(4));
+        // A 450 KB PDM image takes ~4.5 min at 7 bytes a frame (write + read-back): 4 min cut a good update off in its verify.
+        using var lifetime = ct.CanBeCanceled ? null : new CancellationTokenSource(TimeSpan.FromMinutes(10));
         var token = lifetime?.Token ?? ct;
 
         try
@@ -115,13 +116,18 @@ public sealed class CanFlashService(
             if (!await xcp.ProgramStartAsync(token))
                 return Fail(log, "PROGRAM_START refused by the bootloader.");
 
-            // 5. Erase + write each segment.
+            // 5. Erase the whole image range ONCE, then write each segment. OpenBLT erases whole sectors, so erasing
+            //    per segment wiped what an earlier segment had already written into a sector the two share (the 5.7.4
+            //    PDM image has a 4-byte gap at 0x0805B80C inside sector 6: its read-back then mismatched on every module).
             int total = image.TotalBytes, written = 0;
+            Set("Erasing", 8);
+            if (!await xcp.ClearMemoryAsync(image.MinAddress, image.EndAddress - image.MinAddress, token))
+                return Fail(log, $"Erase failed at 0x{image.MinAddress:X8}." + (newCbLoader ? " This CANBoard probably still has the old 16 KB bootloader: program the 8 KB one over SWD once."
+                    // the June-2026 PDM bootloader stops at sector 6 (app up to 0x0805FFFF); a 5.7.4 PDM image reaches into sector 7
+                    : !isCanboard && image.EndAddress > 0x08060000 ? " This image reaches past 0x08060000: the module's older bootloader ends at sector 6. Program the current bootloader once (FULL image over USB-DFU with BOOT0, or over SWD)." : ""));
+            log.AppendLine($"Erased 0x{image.MinAddress:X8}-0x{image.EndAddress - 1:X8} ({image.Segments.Count} segment(s)).");
             foreach (var seg in image.Segments)
             {
-                Set("Erasing", 8);
-                if (!await xcp.ClearMemoryAsync(seg.Address, (uint)seg.Data.Length, token))
-                    return Fail(log, $"Erase failed at 0x{seg.Address:X8}." + (newCbLoader ? " This CANBoard probably still has the old 16 KB bootloader: program the 8 KB one over SWD once." : ""));
                 if (!await xcp.WriteDataAsync(seg.Address, seg.Data, n =>
                         Set("Writing", 10 + (int)(55L * (written + n) / Math.Max(total, 1))), token))
                     return Fail(log, $"Programming failed in segment at 0x{seg.Address:X8}.");
@@ -191,6 +197,7 @@ public sealed class CanFlashService(
 
     private FlashResult Fail(StringBuilder log, string msg)
     {
+        logger.LogWarning("CAN flash failed at {Percent} %: {Msg}", _percent, msg);   // the UI log is the only other place this goes
         Set("Failed", _percent);
         log.AppendLine("✗ " + msg);
         return new(false, log.ToString(), null, true);

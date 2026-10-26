@@ -1255,7 +1255,9 @@ public static class LiveApi
             if (!adapters.GetStatus().isConnected) return Results.BadRequest(new { error = "Not connected to a CAN adapter — connect first." });
             if (can.Status().Busy) return Results.Json(new { error = "A CAN update is running." }, statusCode: 409);
             var found = new List<object>();
-            foreach (var d in dm.GetAllDevices().OfType<IDeviceConfigurable>().Where(d => d.CanBootloader))
+            // every silent module, not only those already known to have the bootloader: after a reload nothing is known
+            // (version unheard), and a module that answers XCP CONNECT proves it has one. That is what marks it below.
+            foreach (var d in dm.GetAllDevices().OfType<IDeviceConfigurable>())
             {
                 d.UpdateIsConnected();
                 var ui = dm.GetDeviceUiState(d.Guid);
