@@ -5,7 +5,7 @@
   import { live, defs, api, device, moduleState, isCanboard, project } from '../../../lib/live.svelte.js'
   import { href } from '../../../router.svelte.js'
   import { pinFor, boardOf } from '../../../../lib/pinmap.js'
-  import { outputRatingA } from '../../../../lib/apply.js'
+  import { outputRatingA, outputPeakA } from '../../../../lib/apply.js'
   import OutputChain from './OutputChain.svelte'
   import OutputProtection from './OutputProtection.svelte'
   import OutputDrive from './OutputDrive.svelte'
@@ -70,17 +70,18 @@
   function revert() { if (src) { f = seedFrom(src); snap = JSON.stringify(f); saveErr = '' } }
 
   const rating = $derived(!isCb && dev ? outputRatingA(defs, dev.type, n) : null)
+  const peakRating = $derived(!isCb && dev ? outputPeakA(defs, dev.type, n) : null)
   // PWM frequency from a signal (output subs 21-23): on upstream only where the module has it
   const varFreq = $derived(isCb || has(dev, 0x1000 + n - 1, 21))
   const rampDuty = $derived(isCb || has(dev, 0x1000 + n - 1, 24))
   const ssTimeout = $derived(!isCb && isUpstream(dev) && has(dev, 0x1000 + n - 1, 30))   // upstream current-limited soft start
   const wireTau = $derived(!isCb && isUpstream(dev) && has(dev, 0x1000 + n - 1, 33))   // upstream wire load
   const wl = $derived(wireLoad(pdmOut))
-  const overRating = $derived(rating != null && Number(f?.currentLimit) > rating)
+  const overRating = $derived(peakRating != null && Number(f?.currentLimit) > peakRating)
 
   function validate() {
     if (!f) return 'Not loaded yet.'
-    if (!isCb && overRating) return `The trip current (${f.currentLimit} A) is above the ${rating} A rating of this pin. Lower it.`
+    if (!isCb && overRating) return `The trip current (${f.currentLimit} A) is above the ${peakRating} A this pin can carry. Lower it.`
     if (f.pwmEnabled) {
       const minD = Math.round(+f.minDuty || 0)
       if (minD < 0 || minD > 100) return 'Lowest duty must be 0 to 100 %.'
@@ -226,7 +227,7 @@
       <div class="col">
         <OutputChain {guid} {dev} bind:f {feed} {connected} raw={src} />
         {#if !isCb}
-          <OutputProtection bind:f {rating} warn={has(dev, 0x1000 + n - 1, 18)} openLoad={has(dev, 0x1000 + n - 1, 19)} under={isUpstream(dev) && has(dev, 0x1000 + n - 1, 27)} canClear={isUpstream(dev) && has(dev, 0x1000 + n - 1, 25)} retryAll={dev.retryAllInput > 0} hardShort={isUpstream(dev) && has(dev, 0x1000 + n - 1, 32)} ssTarget={ssTimeout && f.pwmEnabled && f.softStart && Number(f.softStartTimeout) > 0} canShed={dev.shedInput != null && has(dev, 0x1000 + n - 1, 26)} shedWired={dev.shedInput > 0} {wireTau} measured={amps ?? 0} />
+          <OutputProtection bind:f {rating} peak={peakRating} warn={has(dev, 0x1000 + n - 1, 18)} openLoad={has(dev, 0x1000 + n - 1, 19)} under={isUpstream(dev) && has(dev, 0x1000 + n - 1, 27)} canClear={isUpstream(dev) && has(dev, 0x1000 + n - 1, 25)} retryAll={dev.retryAllInput > 0} hardShort={isUpstream(dev) && has(dev, 0x1000 + n - 1, 32)} ssTarget={ssTimeout && f.pwmEnabled && f.softStart && Number(f.softStartTimeout) > 0} canShed={dev.shedInput != null && has(dev, 0x1000 + n - 1, 26)} shedWired={dev.shedInput > 0} {wireTau} measured={amps ?? 0} />
           <!-- upstream dingoFW feat/stay-alive-outputs (sub 34) -->
           {#if isUpstream(dev) && has(dev, 0x1000 + n - 1, 34)}
             <Card title="While the module sleeps" aria-label="While the module sleeps">
@@ -274,7 +275,7 @@
           {/if}
           <OutputWiring bind:f />
           <Card title="Module limits for this pin">
-            <p class="muted">{#if rating != null}OUT{n} is rated <strong>{rating} A</strong> continuous on the {dev.type}{#if driver} (driver <span class="mono" data-testid="out-driver">{driver}</span>){/if}. The trip current cannot be set above it.{:else}No rating is known for this pin.{/if}</p>
+            <p class="muted">{#if rating != null}OUT{n} is rated <strong>{rating} A</strong> continuous on the {dev.type}{#if driver} (driver <span class="mono" data-testid="out-driver">{driver}</span>){/if}.{#if peakRating > rating} It carries up to <strong>{peakRating} A</strong> for a while, so the trip current can go up to {peakRating} A; keep the load's steady draw at {rating} A or less.{:else} The trip current cannot be set above it.{/if}{:else}No rating is known for this pin.{/if}</p>
           </Card>
         {:else}
           <Card title="Live state"><p class="muted" data-testid="cb-live">{state ? `Right now this output is ${state.toLowerCase()}${sig && cbRow?.pwmEnabled && sig.on ? ' at ' + sig.value + ' %' : ''}.` : 'No live value yet.'}</p></Card>

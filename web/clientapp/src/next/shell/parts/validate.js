@@ -50,8 +50,9 @@ export function checkModule({ dev, funcs, vmap, def, claimed }) {
   for (const o of /can.?board/i.test(dev.type ?? '') ? [] : dev.outputs ?? []) {
     if (!o.enabled) continue
     const id = `output:${o.number}`, t = String(o.name ?? '').trim() || `Output ${o.number}`
-    const r = ratings[o.number - 1]
-    if (r != null && Number(o.currentLimit) > r) add('error', id, t, `trips above ${o.currentLimit} A, more than the ${r} A this pin is rated for`)
+    const r = ratings[o.number - 1], peak = def?.outputPeakRatings?.[o.number - 1] ?? r
+    if (peak != null && Number(o.currentLimit) > peak) add('error', id, t, `trips above ${o.currentLimit} A, more than the ${peak} A this pin can carry`)
+    else if (r != null && Number(o.currentLimit) > r) add('warn', id, t, `trips above ${o.currentLimit} A, over the ${r} A continuous rating (up to ${peak} A only for a while)`)
     if (Number(o.inrushTime) > 0 && Number(o.inrushLimit) < Number(o.currentLimit)) add('warn', id, t, `inrush allowed (${o.inrushLimit} A) is below the trip current (${o.currentLimit} A), so it trips at less during the first ${o.inrushTime} ms`)
   }
   return out

@@ -18,6 +18,15 @@ export function outputRatingA(defs, deviceType, outputNumber) {
   return Array.isArray(r) ? (r[(Number(outputNumber) | 0) - 1] ?? null) : null
 }
 
+// Short-term maximum (A): a trip current up to this is allowed, above the continuous rating it is only flagged.
+// Falls back to the continuous rating when the model gives none.
+export function outputPeakA(defs, deviceType, outputNumber) {
+  const t = (deviceType || '').toLowerCase()
+  const def = [...(defs?.pdms ?? []), ...(defs?.canboards ?? [])].find((d) => (d.typeName || '').toLowerCase() === t)
+  const p = def?.outputPeakRatings
+  return (Array.isArray(p) ? p[(Number(outputNumber) | 0) - 1] : null) ?? outputRatingA(defs, deviceType, outputNumber)
+}
+
 // Build an outputconfig body that binds `input` but PRESERVES every other field from the
 // live output object. The backend overwrites the whole output, so any field we don't carry
 // through here is silently reset — that previously wiped reset/retry, PWM and soft-start.

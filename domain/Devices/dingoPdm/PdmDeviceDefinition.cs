@@ -37,5 +37,8 @@ public record PdmDeviceDefinition(
     // Latch / Gate blocks (upstream dingoFW feat/latch-gate-block)
     int NumLatchGates = 8,
     // PID controllers (upstream dingoFW feat/pid, NUM_PIDS 4 on every PDM board; the CANBoard has none)
-    int NumPids = 4
+    int NumPids = 4,
+    // Per-output short-term maximum (A): a trip current up to this is allowed (the driver carries it for a while),
+    // above the continuous rating it is flagged. null = the continuous rating is also the maximum.
+    int[]? OutputPeakRatings = null
     );

@@ -29,7 +29,8 @@
       "minBuildVersion": 107,
       "tempWarnC": 55,
       "tempCritC": 80,
-      "outputCurrentRatings": [21, 21, 8, 8, 8, 8, 8, 8]
+      "outputCurrentRatings": [21, 21, 8, 8, 8, 8, 8, 8],
+      "outputPeakRatings": [21, 21, 12, 12, 12, 12, 12, 12]
     },
     {
       "pdmType": 1,

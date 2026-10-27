@@ -9,7 +9,7 @@
   // ssTarget: a current-limited soft start is set (the inrush limit is then the soft start's current target)
   // canShed: the module has load shedding (upstream feat/load-shed: device 0x0000:13 + output sub 26); shedWired: its shed input is set
   // wireTau: the firmware has the wire load estimate (upstream output sub 33)
-  let { f = $bindable(), rating = null, warn = true, openLoad = true, under = false, canClear = false, retryAll = false, hardShort = false, ssTarget = false, canShed = false, shedWired = false, wireTau = false, measured = 0 } = $props()
+  let { f = $bindable(), rating = null, peak = null, warn = true, openLoad = true, under = false, canClear = false, retryAll = false, hardShort = false, ssTarget = false, canShed = false, shedWired = false, wireTau = false, measured = 0 } = $props()
   const UNDER = [{ value: '0', label: 'Report only' }, { value: '1', label: 'Switch the output off' }]
 
   const RESET = [{ value: '0', label: 'Stay off (latch)' }, { value: '1', label: 'Retry a few times' }, { value: '2', label: 'Retry for ever' }]
@@ -18,7 +18,9 @@
   let ut = $state('0')
   $effect(() => { ut = f.underTrip ? '1' : '0' })
 
-  const over = $derived(rating != null && Number(f.currentLimit) > rating)
+  const max = $derived(peak ?? rating)
+  const over = $derived(max != null && Number(f.currentLimit) > max)   // not allowed
+  const short = $derived(!over && rating != null && Number(f.currentLimit) > rating)   // allowed, only for a while
   const num = (x) => Number(x) || 0
   const until = $derived(latchClears({ clearOnReassert: canClear && f.clearOnReassert }, retryAll))
   const afterTrip = $derived(num(f.resetMode) === 0 ? `stays off until ${until}`
@@ -30,7 +32,7 @@
   <div class="grid">
     <div>
       <Stepper label="Trips above" bind:value={f.currentLimit} min={0} max={100} step={0.5} decimals={1} unit="A" data-testid="limit" />
-      {#if rating != null}<span class="hint" class:bad={over}>{over ? '■ ' : ''}max {rating} A on this pin</span>{/if}
+      {#if rating != null}<span class="hint" class:bad={over}>{over ? '■ ' : ''}{max > rating ? `${rating} A continuous, up to ${max} A for a while${short ? ': keep the steady draw at ' + rating + ' A or less' : ''}` : `max ${rating} A on this pin`}</span>{/if}
     </div>
     <div>
       <Stepper label="Inrush allowed" bind:value={f.inrushLimit} min={0} max={100} step={1} decimals={1} unit="A" data-testid="inrush" />
