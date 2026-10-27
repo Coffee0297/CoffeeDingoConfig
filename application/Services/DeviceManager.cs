@@ -56,7 +56,7 @@ public class DeviceManager(ILogger<DeviceManager> logger, ILoggerFactory loggerF
     /// id starves the status frames and the UI flickers the device "not found". Re-armed by every config
     /// frame, so a chunked read/write holds it until the burst ends.
     /// </summary>
-    private void ArmConfigFilter(int baseId)
+    private void ArmConfigFilter(int baseId, bool bulk = false)
     {
         if (_setReceiveFilter is null) return;
         lock (_filterLock)
@@ -64,7 +64,9 @@ public class DeviceManager(ILogger<DeviceManager> logger, ILoggerFactory loggerF
             if (_filterOwned) return;
             // Only on a flooded bus: narrowed, the bridge drops every other module's frames, and on a normal bus that
             // cost more than it saved (a module's wake announcement, sent while the app talked to another, was lost).
-            if (!BusFlooded) return;
+            // A full read / write is a 3500-frame burst (a 5.7 PDM): on top of the other modules' telemetry the USB
+            // bridge dropped 1-3 replies, so the Read was "incomplete" and every PDM write was refused. Narrow for those.
+            if (!BusFlooded && !bulk) return;
             // The filter passes ONE module's block. When exchanges with two modules overlap (opening a project asks
             // every module for its version and CRC while a write is still running), narrowing to the newer one hid
             // the older one's reply: its write was never confirmed. Overlapping: open the filter until it is quiet.
@@ -486,8 +488,12 @@ public class DeviceManager(ILogger<DeviceManager> logger, ILoggerFactory loggerF
         if (!ParamsKnown(d) && d is IDeviceConfigurable { KeepValuesOnRead: true } kd && !OlderLine(d))
         {
             logger.LogInformation("{Name}: learning its list of settings (Read, the project's values are kept) before writing", d.Name);
-            ReadDeviceConfig(deviceId);
-            for (var t = 0; t < 600 && !kd.ParamSet.FromModule; t++) await Task.Delay(100);   // ~1 s on a module, longer on a busy bus
+            // a 3500-param read through the USB bridge can lose a reply (Read All Incomplete): read again, up to 4 times
+            for (var attempt = 0; attempt < 4 && !kd.ParamSet.FromModule; attempt++)
+            {
+                ReadDeviceConfig(deviceId);
+                for (var t = 0; t < 80 && !kd.ParamSet.FromModule; t++) await Task.Delay(100);   // ~1 s on a module, longer on a busy bus
+            }
         }
         if (!ParamsKnown(d)) { logger.LogWarning("{Name}: upstream firmware, its param list is not read yet: not writing", d.Name); return false; }
         return await Confirmed(d, domain.Enums.MessageCommand.WriteAllComplete, () => all ? WriteAllDeviceConfig(deviceId) : WriteDeviceConfig(deviceId), 30000);
@@ -784,7 +790,8 @@ public class DeviceManager(ILogger<DeviceManager> logger, ILoggerFactory loggerF
         if (frame.Frame.Payload.Length > 0 &&
             frame.Frame.Id == frame.DeviceBaseId + PdmDevice.ConfigTxOffset &&
             (domain.Enums.MessageCommand)frame.Frame.Payload[0] != domain.Enums.MessageCommand.Bootloader)
-            ArmConfigFilter(frame.DeviceBaseId);
+            ArmConfigFilter(frame.DeviceBaseId, (domain.Enums.MessageCommand)frame.Frame.Payload[0] is domain.Enums.MessageCommand.ReadAll
+                or domain.Enums.MessageCommand.ReadAllModified or domain.Enums.MessageCommand.WriteAll or domain.Enums.MessageCommand.WriteAllModified);
 
         //Some messages have no response, don't queue
         if (frame.SendOnly) return;
