@@ -32,7 +32,7 @@ public class DeviceDefinitionManager
         MinMajorVersion: 5,
         MinMinorVersion: 5,
         MinBuildVersion: 107,
-        OutputCurrentRatings: [14, 14, 8, 8, 8, 8, 8, 8]);
+        OutputCurrentRatings: [21, 21, 8, 8, 8, 8, 8, 8]);
 
     public static readonly CanboardDeviceDefinition DefaultCanboard = new(
         CanboardType: 0,
