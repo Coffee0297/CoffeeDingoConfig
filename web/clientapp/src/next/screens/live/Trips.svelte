@@ -146,7 +146,7 @@
         <header class="dh">
           <nav aria-label="Breadcrumb" class="cr muted"><a href="#/next/live">Live</a> › <a href="#/next/live/trips">Trips</a> › <span>{current.dev} · {current.outName || 'Output ' + current.output}</span></nav>
           <h2 data-testid="trip-title">{tripTitle(current)}: {current.peakA.toFixed(1)} A, limit {current.limitA} A</h2>
-          <p class="muted">{current.at ? whenText(current.at) + ' · ' : ''}{current.dev} out {current.output}{current.kind === 'inrush' ? ' · judged against the inrush limit' : ''} · {current.text}{current.clears ? ' · ' + current.clears : ''}</p>
+          <p class="muted">{current.at ? whenText(current.at) + ' · ' : ''}{current.dev} out {current.output}{current.kind === 'inrush' ? ' · judged against the inrush limit' : ''} · {current.text}{current.note ? ' · ' + current.note : ''}{current.clears ? ' · ' + current.clears : ''}</p>
           <div class="chips"><Chip tone="fault" symbol="■">{current.state}</Chip>{#if current.out?.resetMode}<Chip tone="muted">auto retry on</Chip>{/if}</div>
         </header>
 

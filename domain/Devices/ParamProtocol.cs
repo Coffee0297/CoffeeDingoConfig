@@ -128,6 +128,7 @@ internal class ParamProtocol(IDeviceConfigurable device, List<DeviceParameter> @
                 {
                     _fill = null;
                     _tempParamValues.Clear();
+                    _writeBusyUntil = default;
                     _logger.LogError("{Name} ID: {BaseId}, Read All Incomplete: the module does not have 0x{index:X}:{sub} from the saved list", name, baseId, index, subIndex);
                 }
 
@@ -292,6 +293,7 @@ internal class ParamProtocol(IDeviceConfigurable device, List<DeviceParameter> @
                 else
                 {
                     _tempParamValues.Clear();
+                    _writeBusyUntil = default;
                     _logger.LogError("{Name} ID: {BaseId}, Read All Incomplete {pdmCrc} != {thisCrc}, {fromPdm} vs {received}",
                                         name, baseId, readAllCrc, _readCrc32.Final, readAllCount, _readAllCount);
                 }
@@ -540,6 +542,7 @@ internal class ParamProtocol(IDeviceConfigurable device, List<DeviceParameter> @
 
     private void FinishRead(string name, int baseId, int readAllCount)
     {
+        _writeBusyUntil = default;
         // Upstream: a full Read is the module's param list, in its CRC order. Learn it before the diff, so
         // the diff and every later read/write/CRC use exactly the params this module has.
         if (Upstream && !_readModifiedOnly)
@@ -645,6 +648,7 @@ internal class ParamProtocol(IDeviceConfigurable device, List<DeviceParameter> @
         if (crc.Final != f.Crc)
         {
             _tempParamValues.Clear();
+            _writeBusyUntil = default;
             _logger.LogError("{Name} ID: {BaseId}, Read All Incomplete: the filled list does not match the module's CRC ({crc} != {mod})", name, baseId, crc.Final, f.Crc);
         }
         else

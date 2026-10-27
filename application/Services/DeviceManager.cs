@@ -35,7 +35,7 @@ public class DeviceManager(ILogger<DeviceManager> logger, ILoggerFactory loggerF
 
     public int QueueCount => _requestQueue.Count;
 
-    private const int MaxRetries = 2;
+    private const int MaxRetries = 3;   // 2 lost a WriteAll start twice in a row on a busy bridged bus
     private const int TimeoutMs = 3000;
 
     public event EventHandler<DeviceEventArgs>? DeviceAdded;
@@ -62,34 +62,51 @@ public class DeviceManager(ILogger<DeviceManager> logger, ILoggerFactory loggerF
         lock (_filterLock)
         {
             if (_filterOwned) return;
-            // Only on a flooded bus: narrowed, the bridge drops every other module's frames, and on a normal bus that
-            // cost more than it saved (a module's wake announcement, sent while the app talked to another, was lost).
-            // A full read / write is a 3500-frame burst (a 5.7 PDM): on top of the other modules' telemetry the USB
-            // bridge dropped 1-3 replies, so the Read was "incomplete" and every PDM write was refused. Narrow for those.
-            if (!BusFlooded && !bulk) return;
-            // The filter passes ONE module's block. When exchanges with two modules overlap (opening a project asks
-            // every module for its version and CRC while a write is still running), narrowing to the newer one hid
-            // the older one's reply: its write was never confirmed. Overlapping: open the filter until it is quiet.
-            var other = (_filterBase is { } b && b != baseId) || _confirms.Keys.Any(k => k.BaseId != baseId);
-            if (other || _filterBase == -1)
+            // Unfiltered, the USB bridge on a busy bus loses config replies (with the ECU on the bus, many of a 3500-frame
+            // transfer and often the one WriteAllComplete answer). So the module with an exchange running keeps the filter
+            // until it is done; another module's request (the app's background checks) does not take it away: that reply
+            // may be lost and is asked again later. A full read/write always narrows; a small request only on a flooded bus.
+            var cur = _filterBase ?? -1;
+            if (cur >= 0 && cur != baseId && ExchangeRunning(cur)) return;
+            if (bulk || BusFlooded)
             {
-                _filterBase = -1;
-                _setReceiveFilter(null, null);
-                domain.Devices.RxFilterWindow.Lift();
-            }
-            else
-            {
+                if (cur != baseId) logger.LogInformation("RX filter: only 0x{Base:X} ({Why})", baseId, bulk ? "full read/write" : "busy bus");
                 _filterBase = baseId;
                 _setReceiveFilter(baseId, baseId + 15);   // config reply (base+0), status (base+2..) and XCP (base+12/13)
                 domain.Devices.RxFilterWindow.Narrow(baseId, baseId + 15);   // the other modules aren't gone, just hidden
             }
-            _filterIdleTimer ??= new System.Threading.Timer(_ =>
+            else if (cur >= 0 && cur != baseId)
             {
-                lock (_filterLock) { _filterBase = null; _setReceiveFilter?.Invoke(null, null); domain.Devices.RxFilterWindow.Lift(); }
-            });
+                // a small exchange on a normal bus wants no filter, but one left narrowed to the module before hides its reply
+                logger.LogInformation("RX filter: lifted for 0x{Base:X} (was 0x{Old:X})", baseId, cur);
+                _filterBase = null;
+                _setReceiveFilter(null, null);
+                domain.Devices.RxFilterWindow.Lift();
+                return;
+            }
+            else if (cur != baseId) return;
+            _filterIdleTimer ??= new System.Threading.Timer(_ => LiftWhenQuiet());
             _filterIdleTimer.Change(FilterIdleMs, Timeout.Infinite);
         }
     }
+
+    // Lift the filter once its module's exchange is over; while it still awaits answers, look again later.
+    private void LiftWhenQuiet()
+    {
+        lock (_filterLock)
+        {
+            if (_filterBase is { } b && b >= 0 && ExchangeRunning(b)) { _filterIdleTimer?.Change(FilterIdleMs, Timeout.Infinite); return; }
+            if (_filterBase != null) logger.LogInformation("RX filter: lifted (quiet)");
+            _filterBase = null; _setReceiveFilter?.Invoke(null, null); domain.Devices.RxFilterWindow.Lift();
+        }
+    }
+
+    // A request to the module still awaits its answer, a write/burn waits for its confirmation, or it is in a Write All /
+    // Read All (sending no status meanwhile)
+    private bool ExchangeRunning(int baseId) =>
+        // both time-bound (the confirmation's own timeout, 10 s after the last transfer activity); not the request queue,
+        // where a background check left behind held the filter on a finished module and shut the next one out
+        _confirms.Keys.Any(k => k.BaseId == baseId) || (GetDeviceByBaseId(baseId) is IDeviceConfigurable { WriteAllBusy: true });
     private int? _filterBase;   // module the filter passes now; -1 = open because exchanges overlap; null = lifted
     // Bus load, measured while the filter is open (narrowed, it hides most frames): frames per second.
     private long _rxWindowStart = Environment.TickCount64, _rxInWindow, _rxRate;
@@ -818,12 +835,9 @@ public class DeviceManager(ILogger<DeviceManager> logger, ILoggerFactory loggerF
         //Unique message key, used to find message in transmit queue later
         var key = (frame.DeviceBaseId, index, subIndex);
 
-        if (!_requestQueue.TryAdd(key, frame))
-        {
-            logger.LogWarning("Message already in queue: BaseId={BaseId}, Prefix={Prefix:X}, Index={Index}",
-                key.Item1, key.Item2, key.Item3);
-            return;
-        }
+        // a newer request with the same key (Version, ReadAll and WriteAll all use 0:0) replaces a leftover one, which
+        // otherwise kept the new one untracked: no retry, and its answer cleared nothing
+        _requestQueue.AddOrUpdate(key, frame, (_, old) => { old.TimeSentTimer?.Dispose(); return frame; });
 
         // NOTE: Timer starts after transmission in OnFrameTransmitted
     }
@@ -937,6 +951,7 @@ public class DeviceManager(ILogger<DeviceManager> logger, ILoggerFactory loggerF
     /// </summary>
     public void OnFrameTransmitted(DeviceCanFrame frame)
     {
+        if (_filterBase is { } fb && fb >= 0 && frame.DeviceBaseId == fb) _filterIdleTimer?.Change(FilterIdleMs, Timeout.Infinite);
         if (frame.SendOnly) return;
 
         int index = frame.Frame.Payload[2] << 8 | frame.Frame.Payload[1];

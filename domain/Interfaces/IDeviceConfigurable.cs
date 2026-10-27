@@ -11,6 +11,8 @@ public interface IDeviceConfigurable : IDevice
     bool WriteAllPending => false;
     /// <summary>A short Read All is asking for its missing params one by one: don't start another Read over it.</summary>
     bool ReadFillPending => false;
+    /// <summary>Taking a Write All or streaming a Read All (it sends no status meanwhile).</summary>
+    bool WriteAllBusy => false;
     /// <summary>Firmware version as reported ("v5.6.0"; "v0.0.0" until the module answered).</summary>
     string Version { get; }
     /// <summary>A Version reply arrived (upstream firmware reports major 0, so "v0.x" is a real answer).</summary>
