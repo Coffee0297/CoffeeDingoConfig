@@ -163,9 +163,49 @@ public class UpstreamFamilyTests
         var q = Q();
         d.Read(0x680, [20, 0, 0, 0, 0, 0, 0, 0], ref q, []);
         var outgoing = new List<DeviceCanFrame>();
-        d.Read(0x680, [22, 1, 0, 0, 0, 0, 0, 0], ref q, outgoing);   // applied = 0
+        d.Read(0x680, [22, 2, 0, 0, 0, 0, 0, 0], ref q, outgoing);   // all arrived, applied = 0 (CRC differs): nothing to list
         Assert.Contains(outgoing, f => f.Name == "WriteAll (retry)");
         Assert.True(d.ConfigMismatch);
+    }
+
+    // A WriteAll short by a few params: the module keeps what arrived and lists what it missed. Only those are sent
+    // again, then WriteAllComplete; the verdict waits for that round (a full re-send loses others on a busy bus).
+    [Fact]
+    public void ShortUpstreamWriteAll_ResendsOnlyTheMissedParams()
+    {
+        var d = UpstreamPdm();
+        d.ParamSet.Learn([(0, 0), (0, 1), (0, 2)], new());
+        var q = Q();
+        var sent = new List<DeviceCanFrame>();
+        d.Read(0x680, [20, 0, 0, 0, 0, 0, 0, 0], ref q, sent);
+        var outgoing = new List<DeviceCanFrame>();
+        d.Read(0x680, [22, 2, 0, 0, 0, 0, 0, 0], ref q, outgoing);   // 2 of 3, applied = 0
+        Assert.Empty(outgoing);
+        Assert.True(d.WriteAllPending);
+        d.Read(0x680, [24, 0, 0, 1, 0, 0, 0, 0], ref q, outgoing);   // missed 0x0000:1
+        d.Read(0x680, [27, 1, 0, 0, 0, 0, 0, 0], ref q, outgoing);   // end of list, 1
+        Assert.False(d.WriteAllPending);
+        Assert.Equal(2, outgoing.Count);
+        Assert.Equal(sent[1].Frame.Payload, outgoing[0].Frame.Payload);   // the same WriteAllVal as before
+        Assert.Equal(sent[^1].Frame.Payload, outgoing[1].Frame.Payload);  // and the same WriteAllComplete
+        Assert.Equal("WriteAllComplete", outgoing[1].Name);
+    }
+
+    // More than 16 missed: the module lists none, so every value goes again into the same staged write (no new
+    // WriteAll, which would clear what arrived), then WriteAllComplete.
+    [Fact]
+    public void ShortUpstreamWriteAll_TooManyToList_ResendsEveryValueWithoutRestarting()
+    {
+        var d = UpstreamPdm();
+        d.ParamSet.Learn([(0, 0), (0, 1)], new());
+        var q = Q();
+        var sent = new List<DeviceCanFrame>();
+        d.Read(0x680, [20, 0, 0, 0, 0, 0, 0, 0], ref q, sent);
+        var outgoing = new List<DeviceCanFrame>();
+        d.Read(0x680, [22, 1, 0, 0, 0, 0, 0, 0], ref q, outgoing);
+        d.Read(0x680, [27, 0xFF, 0xFF, 0, 0, 0, 0, 0], ref q, outgoing);   // too many to list, none listed
+        Assert.Equal(sent.Select(f => f.Frame.Payload), outgoing.Select(f => f.Frame.Payload));
+        Assert.DoesNotContain(outgoing, f => f.Name == "WriteAll (retry)");
     }
 
     // feat/output-warn-openload: output subs 18-20 (same numbers as the fork's) only where the module listed them, and

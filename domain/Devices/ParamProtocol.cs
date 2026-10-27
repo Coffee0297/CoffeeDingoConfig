@@ -62,6 +62,24 @@ internal class ParamProtocol(IDeviceConfigurable device, List<DeviceParameter> @
     private const int MaxFill = 64;
     // Upstream: the params a failed full WriteAll did not get (WriteAllMissing), reported with the failure.
     private readonly List<(int Index, int SubIndex)> _writeMissing = new();
+    // Upstream full WriteAll short by a few params: the module keeps what arrived and lists what did not, so only
+    // those are sent again (into the same staged write) and the WriteAllComplete repeated. A full re-send on a busy
+    // bus loses a few others each time, and the old one-by-one fallback flooded the bridge for minutes.
+    private const int MaxTopUps = 6;
+    private int _topUps;
+    private int _missedCount;
+    private uint _missedCrc;
+    private bool _awaitMissing;
+    private Dictionary<(int Index, int SubIndex), CanFrame> _lastWriteVals = new();
+    private List<CanFrame> _lastWriteOrder = [];
+    private CanFrame? _lastComplete;
+    /// <summary>A WriteAllComplete said "short" and the missed params are being sent again: not the final verdict.</summary>
+    public bool WriteAllPending => _awaitMissing;
+    /// <summary>A Read All is being completed by asking for its missing params one by one.</summary>
+    public bool ReadFillPending => _fill != null;
+    // The module sends no status while it takes a WriteAll (4-5 s through the USB bridge): not "gone" until this passes.
+    private DateTime _writeBusyUntil;
+    public bool WriteAllBusy => DateTime.Now < _writeBusyUntil;
 
     public void SetLogger(ILogger logger) => _logger = logger;
 
@@ -193,6 +211,7 @@ internal class ParamProtocol(IDeviceConfigurable device, List<DeviceParameter> @
                 _readRaw.Clear();
                 _readVal.Clear();
                 _fill = null;
+                _writeBusyUntil = DateTime.Now.AddSeconds(10);   // quiet while it streams the list, too
 
                 _readAllCount = 0;
                 device.Lock.Locked = false;   // it started sending its config
@@ -374,6 +393,7 @@ internal class ParamProtocol(IDeviceConfigurable device, List<DeviceParameter> @
                 if (Upstream ? data[3] == 1 : writeAllCrc == _writeCrc32.Final)
                 {
                     _writeMissing.Clear();
+                    _writeBusyUntil = default;
                     // The device acknowledged every param the app sent — they're in sync now.
                     _writeAllRetries = 0;
                     device.ConfigMismatch = false;
@@ -382,34 +402,19 @@ internal class ParamProtocol(IDeviceConfigurable device, List<DeviceParameter> @
                         name, baseId, writeAllCrc, _writeCrc32.Final, writeAllCount);
                     NotifySuccess?.Invoke($"{name}: Write Successful");
                 }
-                else if (_writeAllRetries < MaxWriteAllRetries)
+                else if (Upstream && _writeAllCmd == MessageCommand.WriteAll && data[3] == 0 && writeAllCount < _writeAllCount && _topUps < MaxTopUps)
                 {
-                    _writeAllRetries++;
-                    _logger.LogWarning("{Name} ID: {BaseId}, Write All incomplete ({fromPdm} of {sent} params arrived), retry {Try}/{Max}",
-                        name, baseId, writeAllCount, _writeAllCount, _writeAllRetries, MaxWriteAllRetries);
-                    outgoing.Add(new DeviceCanFrame
-                    {
-                        DeviceBaseId = baseId,
-                        Frame = new CanFrame(Id: txId, Len: 8, Payload: [Convert.ToByte(_writeAllCmd), 0, 0, 0, 0, 0, 0, 0]),
-                        Name = "WriteAll (retry)"
-                    });
+                    // the list of what it missed follows (WriteAllMissing ... WriteAllMissingDone): resend those there
+                    _awaitMissing = true;
+                    _writeMissing.Clear();
+                    _missedCount = writeAllCount; _missedCrc = writeAllCrc;
+                    _logger.LogInformation("{Name} ID: {BaseId}, Write All short ({fromPdm} of {sent} params arrived): waiting for the module's list of what it missed",
+                        name, baseId, writeAllCount, _writeAllCount);
                     break;
                 }
-                else
-                {
-                    _writeAllRetries = 0;
-                    _logger.LogError("{Name} ID: {BaseId}, Write All Failed {pdmCrc} != {thisCrc}, {fromPdm} vs {received}",
-                        name, baseId, writeAllCrc, _writeCrc32.Final, writeAllCount, _writeAllCount);
-                    if (_writeMissing.Count > 0)
-                        _logger.LogError("{Name}: the module did not get {Params}", name,
-                            string.Join(", ", _writeMissing.Select(k => @params.FirstOrDefault(p => (p.Index, p.SubIndex) == k)?.Name ?? $"0x{k.Index:X4}:{k.SubIndex}")));
-                    // The device keeps its old config when the count/CRC don't match: say so, don't let a
-                    // following burn look like it stored the new one.
-                    device.ConfigMismatch = true;
-                    if (WriteAllFailed?.Invoke() != true)
-                        NotifyError?.Invoke($"{name}: Write failed — device received {writeAllCount} of {_writeAllCount} params, config NOT applied");
-                }
-                
+                else if (NotApplied(name, baseId, txId, writeAllCount, writeAllCrc, outgoing))
+                    break;   // re-sent in full
+
                 outgoing.Add(new DeviceCanFrame
                 {
                     DeviceBaseId = baseId,
@@ -431,6 +436,29 @@ internal class ParamProtocol(IDeviceConfigurable device, List<DeviceParameter> @
                 _logger.LogWarning("{Name} ID: {BaseId}, module missed {Count} param(s) of the Write All: {Params}", name, baseId,
                     missingCount == 0xFFFF ? "many" : missingCount.ToString(),
                     string.Join(", ", _writeMissing.Select(k => $"0x{k.Index:X4}:{k.SubIndex}")));
+                if (!_awaitMissing) break;
+                _awaitMissing = false;
+                // more than 16 missed: the module lists none ("many") but still keeps what arrived, so send every value
+                // again without a new WriteAll (that would clear it); each pass only adds, and the next list is short
+                var every = missingCount == 0xFFFF && _writeMissing.Count == 0;
+                if ((every || (_writeMissing.Count > 0 && _writeMissing.All(_lastWriteVals.ContainsKey))) && _lastComplete is { } done)
+                {
+                    _topUps++;
+                    _writeBusyUntil = DateTime.Now.AddSeconds(10);
+                    foreach (var f in every ? _lastWriteOrder : _writeMissing.Select(k => _lastWriteVals[k]))
+                        outgoing.Add(new DeviceCanFrame { DeviceBaseId = baseId, SendOnly = true, Frame = f, Name = "WriteAll top-up" });
+                    outgoing.Add(new DeviceCanFrame { DeviceBaseId = baseId, Frame = done, Name = "WriteAllComplete" });
+                    _logger.LogInformation("{Name} ID: {BaseId}, sending {What} again (round {r}/{max})", name, baseId,
+                        every ? "every param (it missed too many to list)" : $"the {_writeMissing.Count} missed param(s)", _topUps, MaxTopUps);
+                }
+                else if (!NotApplied(name, baseId, txId, _missedCount, _missedCrc, outgoing))
+                    outgoing.Add(new DeviceCanFrame
+                    {
+                        DeviceBaseId = baseId,
+                        SendOnly = true,
+                        Frame = new CanFrame(Id: txId, Len: 8, Payload: [Convert.ToByte(MessageCommand.CheckCrc), 0, 0, 0, 0, 0, 0, 0]),
+                        Name = "CheckCRC"
+                    });
                 break;
 
             // Config lock (upstream feat/config-lock): a request refused while locked. [58, idxLo, idxHi, sub, refused cmd].
@@ -593,6 +621,7 @@ internal class ParamProtocol(IDeviceConfigurable device, List<DeviceParameter> @
         if (!_readOrder.SequenceEqual(order.Where(got.Contains))) return false;
         var missing = order.Where(k => !got.Contains(k)).ToHashSet();
         _fill = ([.. order], missing, readAllCrc, readAllCount);
+        _writeBusyUntil = DateTime.Now.AddSeconds(10);
         foreach (var (i, sub) in missing)
             outgoing.Add(new DeviceCanFrame
             {
@@ -642,6 +671,43 @@ internal class ParamProtocol(IDeviceConfigurable device, List<DeviceParameter> @
         });
     }
 
+    /// <summary>The module did not take the WriteAll: re-send it in full (true) or give up (false, CheckCrc follows).</summary>
+    private bool NotApplied(string name, int baseId, int txId, int writeAllCount, uint writeAllCrc, List<DeviceCanFrame> outgoing)
+    {
+        if (_writeAllRetries < MaxWriteAllRetries)
+        {
+            _writeAllRetries++;
+            _logger.LogWarning("{Name} ID: {BaseId}, Write All incomplete ({fromPdm} of {sent} params arrived), retry {Try}/{Max}",
+                name, baseId, writeAllCount, _writeAllCount, _writeAllRetries, MaxWriteAllRetries);
+            outgoing.Add(new DeviceCanFrame
+            {
+                DeviceBaseId = baseId,
+                Frame = new CanFrame(Id: txId, Len: 8, Payload: [Convert.ToByte(_writeAllCmd), 0, 0, 0, 0, 0, 0, 0]),
+                Name = "WriteAll (retry)"
+            });
+            return true;
+        }
+        else
+        {
+            _writeAllRetries = 0;
+            _writeBusyUntil = default;
+            _logger.LogError("{Name} ID: {BaseId}, Write All Failed {pdmCrc} != {thisCrc}, {fromPdm} vs {received}",
+                name, baseId, writeAllCrc, _writeCrc32.Final, writeAllCount, _writeAllCount);
+            if (_writeMissing.Count > 0)
+                _logger.LogError("{Name}: the module did not get {Params}", name,
+                    string.Join(", ", _writeMissing.Select(k => @params.FirstOrDefault(p => (p.Index, p.SubIndex) == k)?.Name ?? $"0x{k.Index:X4}:{k.SubIndex}")));
+            // The device keeps its old config when the count/CRC don't match: say so, don't let a
+            // following burn look like it stored the new one.
+            device.ConfigMismatch = true;
+            // upstream: no one-by-one fallback (3500 acknowledged writes flooded the bridge for minutes and applied the
+            // config piecemeal); the missed-param top-up above already had its rounds
+            if (Upstream || WriteAllFailed?.Invoke() != true)
+                NotifyError?.Invoke($"{name}: Write failed — device received {writeAllCount} of {_writeAllCount} params, config NOT applied");
+        }
+        
+        return false;
+    }
+
     private List<DeviceCanFrame> BuildWriteAllMsgs(int baseId, int txId, bool allParams)
     {
         List<DeviceCanFrame> msgs = [];
@@ -661,6 +727,10 @@ internal class ParamProtocol(IDeviceConfigurable device, List<DeviceParameter> @
                 });
         }
         _writeAllCount = msgs.Count;
+        _topUps = 0; _awaitMissing = false;
+        _writeBusyUntil = DateTime.Now.AddSeconds(10);
+        _lastWriteOrder = msgs.Select(m => m.Frame).ToList();
+        _lastWriteVals = msgs.GroupBy(m => (m.Frame.Payload[2] << 8 | m.Frame.Payload[1], (int)m.Frame.Payload[3])).ToDictionary(g => g.Key, g => g.First().Frame);
         foreach (var m in msgs)
             _writeCrc32.Update(m.Frame.Payload.Skip(4).Take(4).ToArray());
 
@@ -679,6 +749,7 @@ internal class ParamProtocol(IDeviceConfigurable device, List<DeviceParameter> @
                     0, .. (Upstream ? BitConverter.GetBytes(_writeCrc32.Final) : new byte[4])]),
             Name = "WriteAllComplete"
         });
+        _lastComplete = msgs[^1].Frame;
 
         return msgs;
     }

@@ -373,7 +373,12 @@ public class DeviceManager(ILogger<DeviceManager> logger, ILoggerFactory loggerF
                 device.Read(frame.Id, frame.Payload, ref _requestQueue, outgoing);
                 if (device is IDeviceConfigurable { Migrate57Pending: true } mc) MigrateTo57([mc]);
                 if (outgoing.Count > 0)
+                {
+                    // replies that expect an answer (WriteAllComplete, a full WriteAll retry, the Read gap-fill) are tracked
+                    // like any queued request: untracked, one lost answer hung the write until its 30 s timeout
+                    foreach (var f in outgoing) if (!f.SendOnly) Track(f);
                     _batchTransmitCallback?.Invoke(outgoing);
+                }
                 if (frame.Id == device.BaseId) RecordConfirm(device, frame, outgoing);
                 else NoteAwake(device);
             }
@@ -403,9 +408,13 @@ public class DeviceManager(ILogger<DeviceManager> logger, ILoggerFactory loggerF
             CheckConfig(device.Guid);
             return;
         }
-        if (cmd == domain.Enums.MessageCommand.WriteAllComplete)
+        // a short WriteAll is completed by re-sending what the module listed as missed (ParamProtocol): the verdict
+        // is the WriteAllComplete after that, or the missed list when it gives up
+        if (cmd is domain.Enums.MessageCommand.WriteAllComplete or domain.Enums.MessageCommand.WriteAllMissingDone)
         {
-            if (outgoing.Any(f => f.Name == "WriteAll (retry)")) return;   // CRC short, ParamProtocol re-sends: not final
+            if (outgoing.Any(f => f.Name is "WriteAll (retry)" or "WriteAllComplete")) return;   // re-sent: not final
+            if (device is IDeviceConfigurable { WriteAllPending: true }) return;   // the missed list follows
+            cmd = domain.Enums.MessageCommand.WriteAllComplete;
             ok = device is IDeviceConfigurable { ConfigMismatch: false };    // ParamProtocol cleared it on a CRC match
         }
         else if (cmd == domain.Enums.MessageCommand.BurnParams) ok = frame.Payload[4] == 1;
@@ -492,7 +501,9 @@ public class DeviceManager(ILogger<DeviceManager> logger, ILoggerFactory loggerF
             for (var attempt = 0; attempt < 4 && !kd.ParamSet.FromModule; attempt++)
             {
                 ReadDeviceConfig(deviceId);
-                for (var t = 0; t < 80 && !kd.ParamSet.FromModule; t++) await Task.Delay(100);   // ~1 s on a module, longer on a busy bus
+                // ~1 s on a module, longer on a busy bus; a short read still asking for its gaps gets up to 20 s (a new Read
+                // would throw that away and start over)
+                for (var t = 0; t < 200 && !kd.ParamSet.FromModule && (t < 80 || kd.ReadFillPending); t++) await Task.Delay(100);
             }
         }
         if (!ParamsKnown(d)) { logger.LogWarning("{Name}: upstream firmware, its param list is not read yet: not writing", d.Name); return false; }
@@ -795,7 +806,12 @@ public class DeviceManager(ILogger<DeviceManager> logger, ILoggerFactory loggerF
 
         //Some messages have no response, don't queue
         if (frame.SendOnly) return;
+        Track(frame);
+    }
 
+    // Retried (OnFrameTransmitted starts the timer) until its answer removes it from the queue.
+    private void Track(DeviceCanFrame frame)
+    {
         int index = frame.Frame.Payload[2] << 8 | frame.Frame.Payload[1];
         int subIndex = frame.Frame.Payload[3];
 
@@ -1449,6 +1465,7 @@ public class DeviceManager(ILogger<DeviceManager> logger, ILoggerFactory loggerF
 
         return Task.Run(async () =>
         {
+            await _luaGate.WaitAsync();
             try
             {
                 for (int off = 0; off < bytes.Length; off += 5)
@@ -1464,7 +1481,7 @@ public class DeviceManager(ILogger<DeviceManager> logger, ILoggerFactory loggerF
                 var bad = new List<int>();
                 for (int round = 0; round < 3; round++)
                 {
-                    var back = System.Text.Encoding.ASCII.GetBytes(await ReadLua(deviceId));
+                    var back = System.Text.Encoding.ASCII.GetBytes(await ReadLuaCore(deviceId));
                     bad.Clear();
                     for (int off = 0; off < bytes.Length; off += 5)
                         for (int i = off; i < Math.Min(off + 5, bytes.Length); i++)
@@ -1503,7 +1520,19 @@ public class DeviceManager(ILogger<DeviceManager> logger, ILoggerFactory loggerF
                 logger.LogError(ex, "UploadLua failed for {Name}", device.Name);
                 return false;
             }
+            finally { _luaGate.Release(); }
         });
+    }
+
+    // One Lua upload or read at a time: they share the module's read-back buffer (each read clears it), so a write's
+    // upload overlapping another (UI + write, two writes) read back nothing, failed every round and never committed.
+    private readonly SemaphoreSlim _luaGate = new(1, 1);
+
+    public async Task<string> ReadLua(Guid deviceId)
+    {
+        await _luaGate.WaitAsync();
+        try { return await ReadLuaCore(deviceId); }
+        finally { _luaGate.Release(); }
     }
 
     /// <summary>
@@ -1511,7 +1540,7 @@ public class DeviceManager(ILogger<DeviceManager> logger, ILoggerFactory loggerF
     /// (5 bytes/reply) from offset 0 and accumulates until the null terminator.
     /// Uses a 0xFF sentinel so "not yet received" is distinct from a real '\0'.
     /// </summary>
-    public async Task<string> ReadLua(Guid deviceId)
+    private async Task<string> ReadLuaCore(Guid deviceId)
     {
         var p = GetDevice<PdmDevice>(deviceId);
         if (p == null) return "";
