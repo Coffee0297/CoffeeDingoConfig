@@ -12,6 +12,10 @@ namespace web.Api;
 public sealed class ConnectionKeeper(ICommsAdapterManager adapters, UserPreferencesManager prefs, ConfigFileManager cfg, ILogger<ConnectionKeeper> log) : BackgroundService
 {
     private volatile bool _wanted;          // the user asked for a connection and has not disconnected since
+    // "Tool present" heartbeat: while the app is on a real adapter it broadcasts this frame every loop tick, so a
+    // sleep master can count the tool as "in use" (a CAN input on 0x5AB, timeout a few seconds) and the whole car
+    // stays awake and reachable while the app is connected, whichever module carries the USB cable.
+    public const int ToolPresentId = 0x5AB;
     private readonly SemaphoreSlim _gate = new(1, 1);
 
     // Lost = the adapter manager dropped the adapter (it does on a closed port / socket). Not IsConnected: an
@@ -89,6 +93,11 @@ public sealed class ConnectionKeeper(ICommsAdapterManager adapters, UserPreferen
         while (!ct.IsCancellationRequested)
         {
             try { await Task.Delay(2000, ct); } catch (OperationCanceledException) { return; }
+            if (adapters.ActiveAdapter is { IsConnected: true } live && adapters.GetStatus().activeAdapter != "Sim")
+            {
+                try { await live.WriteAsync(new domain.Models.CanFrame(ToolPresentId, 8, [1, 0, 0, 0, 0, 0, 0, 0]), ct); }
+                catch (Exception e) { log.LogDebug("Tool-present frame not sent: {Msg}", e.Message); }
+            }
             // The module on USB is asked for its id once, at connect. Still booting then (the reconnect after a DFU
             // update) it gave none, every PDM looked CAN-only and its update went over CAN: ask until it answers.
             if (!Lost && adapters.GatewayBaseId is null && prefs.Preferences.SelectedAdapter == "USB")
