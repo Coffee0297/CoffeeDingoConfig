@@ -53,7 +53,7 @@ public class SlcanAdapter : ICommsAdapter
     private volatile int _busRate;
     private long _rateWindowStart = Environment.TickCount64;
     private int _rateCount;
-    public static double PaceFor(int busRate) => Math.Clamp((BusFramesPerSecond - busRate) / 2, 250, 1000);
+    public static double PaceFor(int busRate) => Math.Clamp((BusFramesPerSecond - busRate) / 2, 500, 1000);
 
     // The transport must actually be open to be "connected" — without this, a failed Init (port
     // closed, RxTimeDelta still at its default Zero) reported IsConnected=true with no link.
