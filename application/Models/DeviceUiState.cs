@@ -27,6 +27,10 @@ public class DeviceUiState
     public void SyncEdits(Func<bool> mismatch) { lock (Edits) if (!mismatch()) Edits.Clear(); }   // read under the lock: an edit may be landing
     // Firmware 5.6
     public bool? HasLed { get; set; }               // Identify reply (G12)
+    public bool TestReplied { get; set; }           // an OutputTest (48) reply came since the last request
+    public int? ResetFlags { get; set; }            // ResetCause reply (upstream feat/reset-cause): RCC CSR >> 24
+    // FaultLogRead replies (upstream feat/fault-history), by byte 1 (n, or n | 0x80 for the second frame)
+    public System.Collections.Concurrent.ConcurrentDictionary<int, byte[]> FaultLogRx { get; } = new();
     public bool Asleep { get; set; }                // announced "going to sleep" and quiet since (G14)
     public DateTime? AsleepSince { get; set; }
     public int? WakeReason { get; set; }            // SleepInfo: 0 power-on, 1 CAN, 2 digital input, 3 USB (G14)

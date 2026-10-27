@@ -1,7 +1,7 @@
 <script>
   // One output of one module: PDM smart output (current sensing, limits, wiring) or CANBoard low-side output.
   import { untrack } from 'svelte'
-  import { Page, PageHeader, Card, Button, Chip, StateDot, Banner, Empty, LineChart } from '../../../ui/index.js'
+  import { Page, PageHeader, Card, Button, Chip, StateDot, Banner, Empty, LineChart, Meter, Checkbox } from '../../../ui/index.js'
   import { live, defs, api, device, moduleState, isCanboard, project } from '../../../lib/live.svelte.js'
   import { href } from '../../../router.svelte.js'
   import { pinFor, boardOf } from '../../../../lib/pinmap.js'
@@ -15,7 +15,8 @@
   import SaveBar from './SaveBar.svelte'
   import { createBench } from './bench.svelte.js'
   import { signalFeed, ring } from './feeds.svelte.js'
-  import { resample, olderThan } from './util.js'
+  import { resample, olderThan, isUpstream, pwmFreqError, has, driveCaps } from './util.js'
+  import { wireLoad, wireLoadText, WARN_PCT } from './wireload.js'
 
   let { guid, n } = $props()
 
@@ -53,6 +54,14 @@
       variableDutyCycle: !!o.variableDutyCycle, dutyCycleInput: o.dutyCycleInput ?? 0, dutyCycleDenom: o.dutyCycleDenom ?? 100,
       variableFreq: !!o.variableFreq, freqInput: o.freqInput ?? 0, freqInputDenom: o.freqInputDenom ?? 1, rampDutyChanges: !!o.rampDutyChanges,
       primaryOutput: o.primaryOutput ?? -1, warnLimit: o.warnLimit ?? 0, openLoadLimit: o.openLoadLimit ?? 0, openLoadTime: o.openLoadTime ?? 1000,
+      underLimit: o.underLimit ?? 0, underTime: o.underTime ?? 1000, underTrip: !!o.underTrip,
+      clearOnReassert: !!o.clearOnReassert,
+      hardShortLimit: o.hardShortLimit ?? 0,
+      softStartTimeout: o.softStartTimeout ?? 0,
+      softStopTime: o.softStopTime ?? 0,
+      shed: !!o.shed,
+      thermalTau: o.thermalTau ?? 0,
+      stayAlive: !!o.stayAlive,
     }
   }
   // Seed once per output so the 10 Hz telemetry never overwrites an edit in progress.
@@ -61,6 +70,12 @@
   function revert() { if (src) { f = seedFrom(src); snap = JSON.stringify(f); saveErr = '' } }
 
   const rating = $derived(!isCb && dev ? outputRatingA(defs, dev.type, n) : null)
+  // PWM frequency from a signal (output subs 21-23): on upstream only where the module has it
+  const varFreq = $derived(isCb || has(dev, 0x1000 + n - 1, 21))
+  const rampDuty = $derived(isCb || has(dev, 0x1000 + n - 1, 24))
+  const ssTimeout = $derived(!isCb && isUpstream(dev) && has(dev, 0x1000 + n - 1, 30))   // upstream current-limited soft start
+  const wireTau = $derived(!isCb && isUpstream(dev) && has(dev, 0x1000 + n - 1, 33))   // upstream wire load
+  const wl = $derived(wireLoad(pdmOut))
   const overRating = $derived(rating != null && Number(f?.currentLimit) > rating)
 
   function validate() {
@@ -69,14 +84,15 @@
     if (f.pwmEnabled) {
       const minD = Math.round(+f.minDuty || 0)
       if (minD < 0 || minD > 100) return 'Lowest duty must be 0 to 100 %.'
-      if (!f.variableFreq) { const fr = Math.round(+f.freq || 0); if (fr < 15 || fr > 400) return 'PWM frequency must be 15 to 400 Hz.' }
+      const vf = varFreq && f.variableFreq
+      if (!vf && pwmFreqError(dev, f.freq)) return pwmFreqError(dev, f.freq)
       if (!f.variableDutyCycle) {
         const d = Math.round(+f.fixedDuty || 0)
         if (d < 0 || d > 100) return 'Duty must be 0 to 100 %.'
         if (minD > d) return `Lowest duty (${minD} %) cannot be above the duty (${d} %).`
       }
       if (f.variableDutyCycle && !Number(f.dutyCycleInput)) return 'Choose the signal the duty comes from.'
-      if (f.variableFreq && !Number(f.freqInput)) return 'Choose the signal the frequency comes from.'
+      if (vf && !Number(f.freqInput)) return 'Choose the signal the frequency comes from.'
     }
     return ''
   }
@@ -107,6 +123,14 @@
           VariableFreq: !!f.variableFreq, FreqInput: Number(f.freqInput) || 0, FreqInputDenom: Math.max(1, Number(f.freqInputDenom) || 1),
           RampDutyChanges: !!f.rampDutyChanges, PrimaryOutput: Number(f.primaryOutput ?? -1),
           WarnLimit: Number(f.warnLimit), OpenLoadLimit: Number(f.openLoadLimit), OpenLoadTime: Math.round(Number(f.openLoadTime)),
+          UnderLimit: Number(f.underLimit) || 0, UnderTime: Math.round(Number(f.underTime) || 0), UnderTrip: !!f.underTrip,
+          ClearOnReassert: !!f.clearOnReassert,
+          HardShortLimit: Number(f.hardShortLimit) || 0,
+          SoftStartTimeout: Math.round(Number(f.softStartTimeout) || 0),
+          SoftStopTime: Math.round(Number(f.softStopTime) || 0),
+          Shed: !!f.shed,
+          ThermalTau: Math.round(Number(f.thermalTau) || 0),
+          StayAlive: !!f.stayAlive,
         })
       }
       project.dirty = true
@@ -129,7 +153,7 @@
   // a steady scale: up to the limit (or the peak, if higher), so the limit line shows and the chart does not rescale every update
   const yMax = $derived(Math.max(Number(f?.currentLimit) || 0, peak, 1) * 1.1)
   const series = $derived.by(() => { tick; return resample(hist.samples(), 60_000, 150, Date.now(), 'max') })   // peak per bin: spikes stay visible
-  const tone = $derived(state === 'On' ? 'on' : state === 'Fault' || state === 'Overcurrent' ? 'fault' : state === 'Warning' || state === 'OpenLoad' ? 'warn' : 'off')
+  const tone = $derived(state === 'On' ? 'on' : state === 'Fault' || state === 'Overcurrent' ? 'fault' : state === 'Warning' || state === 'OpenLoad' || state === 'Undercurrent' ? 'warn' : 'off')
 
   // ---- bench test ----
   const bench = createBench({ guid: () => guid, n: () => n, connected: () => connected, current: () => (isCb ? 0 : pdmOut?.current ?? 0) })
@@ -202,14 +226,23 @@
       <div class="col">
         <OutputChain {guid} {dev} bind:f {feed} {connected} raw={src} />
         {#if !isCb}
-          <OutputProtection bind:f {rating} />
+          <OutputProtection bind:f {rating} warn={has(dev, 0x1000 + n - 1, 18)} openLoad={has(dev, 0x1000 + n - 1, 19)} under={isUpstream(dev) && has(dev, 0x1000 + n - 1, 27)} canClear={isUpstream(dev) && has(dev, 0x1000 + n - 1, 25)} retryAll={dev.retryAllInput > 0} hardShort={isUpstream(dev) && has(dev, 0x1000 + n - 1, 32)} ssTarget={ssTimeout && f.pwmEnabled && f.softStart && Number(f.softStartTimeout) > 0} canShed={dev.shedInput != null && has(dev, 0x1000 + n - 1, 26)} shedWired={dev.shedInput > 0} {wireTau} measured={amps ?? 0} />
+          <!-- upstream dingoFW feat/stay-alive-outputs (sub 34) -->
+          {#if isUpstream(dev) && has(dev, 0x1000 + n - 1, 34)}
+            <Card title="While the module sleeps" aria-label="While the module sleeps">
+              <Checkbox label="Stays on while asleep" hint="For an alarm, a tracker or courtesy lights. If it is on when the module goes to sleep it stays on, and it no longer keeps the module awake." bind:checked={f.stayAlive} data-testid="stay-alive" />
+              {#if f.stayAlive}
+                <Banner tone="warn" title="No current protection while asleep.">The module does not measure or trip this output while it sleeps: a short is limited only by the switch's own current limit and the fuse. It runs at 100 % even when set to PWM, and goes off for a moment at every wake. Paired outputs: tick it on both.</Banner>
+              {/if}
+            </Card>
+          {/if}
         {:else}
           <Card title="Protection"><p class="muted">The CANBoard switches this load to ground and cannot measure or limit current. Put a fuse in the load wire.</p></Card>
         {/if}
-        <OutputDrive {guid} bind:f />
+        <OutputDrive {guid} bind:f upstream={isUpstream(dev)} {varFreq} {rampDuty} {ssTimeout} softStop={!isCb && isUpstream(dev) && has(dev, 0x1000 + n - 1, 31)} caps={driveCaps(dev, isCb, n)} />
       </div>
       <div class="col">
-        <OutputBench {bench} {blocker} modName={dev.name} limit={isCb ? 0 : Number(f.currentLimit) || 0} inrush={Number(f.inrushLimit) || 0} inrushTime={Number(f.inrushTime) || 0} />
+        <OutputBench {bench} {blocker} modName={dev.name} pwm={!(isCb && isUpstream(dev))} minFreq={isUpstream(dev) ? 16 : 15} limit={isCb ? 0 : Number(f.currentLimit) || 0} inrush={Number(f.inrushLimit) || 0} inrushTime={Number(f.inrushTime) || 0} />
         {#if !isCb}
           <Card title="Current, last 60 s" aria-label="Current history">
             {#snippet actions()}<span class="mono muted" data-testid="peak">peak {peak.toFixed(1)} A · now {amps?.toFixed(1)} A</span>{/snippet}
@@ -229,6 +262,16 @@
               <a href={href('live', 'trips')}>Open the trip log</a>
             </p>
           </Card>
+          {#if wireTau}
+            <Card title="Wire load" aria-label="Wire load">
+              {#if !wl}<p class="muted">Set a wire time constant on the Protection card and apply it: the module then estimates how warm this wire runs.</p>
+              {:else if !connected}<p class="muted" role="status">No live data while the module is not answering.</p>
+              {:else}
+                <Meter label="Load on the wire" value={wl.pct} max={100} unit="%" warnAt={WARN_PCT / 100} />
+                <p class="small" data-testid="wire-load">{wireLoadText(wl)}. 100 % is how warm the wire gets carrying {f.currentLimit} A for good; it starts from 0 after every power-up. Nothing trips on it: a Condition on "{title} Wire Load" can act on it.</p>
+              {/if}
+            </Card>
+          {/if}
           <OutputWiring bind:f />
           <Card title="Module limits for this pin">
             <p class="muted">{#if rating != null}OUT{n} is rated <strong>{rating} A</strong> continuous on the {dev.type}{#if driver} (driver <span class="mono" data-testid="out-driver">{driver}</span>){/if}. The trip current cannot be set above it.{:else}No rating is known for this pin.{/if}</p>

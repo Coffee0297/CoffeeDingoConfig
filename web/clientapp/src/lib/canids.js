@@ -1,3 +1,4 @@
+import { has, hasBlock } from '../next/screens/hardware/parts/util.js'
 // CAN-ID allocation helpers - the in-UI counterpart of tools/canfree.py, operating on the
 // live project fleet. Single source for the per-type ID footprint, used by BOTH the System
 // view overlap check and the "suggest a free base" action so they can never disagree.
@@ -19,7 +20,24 @@ export const ID_BEFORE = 1
 // (command/response), +14 the ignition state frame (firmware 5.6). dingoPDM owns base..base+30
 // (firmware ≥ 5.5.107 adds Msg 27 = table outputs at +29; +30 is the 5.6 ignition state frame; its
 // +12/+13 already fall inside that span). At the usual 0x10 / 0x20 spacing both still fit.
-export const spanAfter = (type) => (/canboard/i.test(type || '') ? 14 : 30)
+// An upstream-dingoFW PDM sends one more cyclic frame per feature it has (its param list), numbered as the firmware
+// integration does: wire load (output sub 33), tables 1-2 (0x1B00), tables 3-4, PID (0x2300) at +32, +33, … (PT-DPDM
+// one higher; integration/all-features: +32..+35), then an enabled main's ignition state (its DTO ignition.stateId,
+// + 36 there). Pass the device (`dev`).
+export const spanAfter = (type, dev = null) => {
+  if (/canboard/i.test(type || '')) return 14
+  // the backend knows what the module sends with its current settings (5.7: an appended frame only while its feature is on)
+  if (dev?.txSpan != null) return Math.max(dev.txSpan, ignSpan(dev))
+  const n = appendedFrames(dev)
+  return Math.max(n ? 31 + n + (/pt-?dpdm/i.test(type || '') ? 1 : 0) : 30, ignSpan(dev))
+}
+const appendedFrames = (dev) => dev?.family !== 'upstream' || !dev.paramRuns ? 0
+  : [has(dev, 0x1000, 33), upstreamTables(dev) >= 1, upstreamTables(dev) >= 3, hasBlock(dev, 0x2300)].filter(Boolean).length
+// number of 0x1B00 table blocks in the upstream module's param list (0 for the fork / unread)
+const upstreamTables = (dev) => dev?.family !== 'upstream' ? 0
+  : Math.min(4, new Set((dev.paramRuns ?? []).flatMap((r) => Array.from({ length: r[1] }, (_, k) => r[0] + k)).filter((i) => i >= 0x1b00 && i < 0x1c00)).size)
+// a status frame moved to its own id (ignition.statusId, 5.7 sub 23) leaves the slot free
+const ignSpan = (d) => (d?.ignition?.enabled && d.ignition.role === 'main' && !d.ignition.statusId && d.ignition.stateId > d.baseId ? d.ignition.stateId - d.baseId : 0)
 export const isModule = (type) => /pdm|canboard/i.test(type || '')
 
 export function nextPow2(n) {
@@ -27,9 +45,9 @@ export function nextPow2(n) {
 }
 
 // IDs occupied by a device of `type` at `base`, including the guard, clamped to [0, STD_MAX].
-function addFootprint(used, type, base) {
+function addFootprint(used, type, base, dev = null) {
   const lo = Math.max(0, base - ID_BEFORE)
-  const hi = Math.min(STD_MAX, base + spanAfter(type))
+  const hi = Math.min(STD_MAX, base + spanAfter(type, dev))
   for (let id = lo; id <= hi; id++) used.add(id)
 }
 
@@ -39,7 +57,8 @@ export function usedIds(devices, { reserve = true, exclude = null } = {}) {
   const used = new Set()
   for (const d of devices || []) {
     if (!isModule(d.type) || d.guid === exclude) continue
-    addFootprint(used, d.type, d.baseId)
+    addFootprint(used, d.type, d.baseId, d)
+    if (d.ignition?.enabled && d.ignition.statusId) used.add(d.ignition.statusId)
   }
   if (reserve) for (const id of OBD_RESERVED) used.add(id)
   return used
@@ -80,8 +99,8 @@ export function conflictPairs(devices) {
   for (let i = 0; i < m.length; i++) {
     for (let j = i + 1; j < m.length; j++) {
       const a = m[i], b = m[j]
-      if (a.baseId - ID_BEFORE <= b.baseId + spanAfter(b.type) &&
-          b.baseId - ID_BEFORE <= a.baseId + spanAfter(a.type)) {
+      if (a.baseId <= b.baseId + spanAfter(b.type, b) &&   // shared ids only, as clashOf
+          b.baseId <= a.baseId + spanAfter(a.type, a)) {
         out.push([a, b])
       }
     }

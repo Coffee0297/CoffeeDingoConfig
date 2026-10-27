@@ -16,15 +16,18 @@ public enum MessageCommand
     WriteAllVal = 21,
     WriteAllComplete = 22,
     WriteAllModified = 23,
+    WriteAllMissing = 24,       // upstream: one per param a failed full WriteAll did not get
     WriteAllParamNotFound = 25,
     WriteAllOutOfRange = 26,
-    
+    WriteAllMissingDone = 27,   // upstream: ends the WriteAllMissing list; [27, countLo, countHi] (0xFFFF = too many)
+
     BurnParams = 30,
     Version = 31,
     Sleep = 32,
     Bootloader = 33,
     CheckCrc = 34,
     CheckCrcRsp = 35,
+    Restart = 36,           // [36,'R','E','S','E','T'] -> echo with [6] = 1, then the module resets
 
     // Lua program upload (chunked) — matches the firmware's request_msg handler.
     LuaWrite = 40,          // [cmd, offHi, offLo, b0..b4]
@@ -47,4 +50,14 @@ public enum MessageCommand
     SleepInfo = 50,         // [cmd] -> [cmd, wakeReason, wakeSource, wakesLo, wakesHi, countdown s (0xFF none), blockers, 0]
     OvlTime = 51,           // [cmd, idx] -> [cmd, idx, t0..t3] trip time, ms since power-on
     OvlNotice = 52,         // [cmd, idx] -> [cmd, idx, out (0-based), kind 1 warning / 2 open load, t0..t3]
+
+    // Upstream dingoFW feature branches
+    FaultLogRead = 53,      // [cmd, n] -> two frames: [cmd, n, count, out|kind<<4, boot u16, A×10 u16], [cmd, n|0x80, uptime ms u32, V×100 u16]
+    FaultLogClear = 54,     // [cmd] -> [cmd, 1]
+    ResetCause = 55,        // [cmd] -> [cmd, RCC CSR >> 24 flags, 0...] why the module last reset (feat/reset-cause)
+
+    // upstream dingoFW feat/config-lock
+    Unlock = 56,            // [cmd, pw LE x4] -> [cmd, 1 ok / 0 wrong (every try within 1 s of a wrong one fails)]
+    FactoryReset = 57,      // [cmd, 'W','I','P','E'] -> [cmd, burned ok]: all defaults except base id + bitrate
+    Locked = 58,            // reply to a refused request: [cmd, idxLo, idxHi, sub, refused cmd]
 }

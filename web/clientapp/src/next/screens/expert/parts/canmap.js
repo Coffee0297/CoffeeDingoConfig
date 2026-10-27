@@ -13,7 +13,8 @@ export const RESERVED_WHY = 'The OBD-II standard keeps this range for diagnostic
 export function blocksOf(devices) {
   return devices
     .filter((d) => d.type && !/dbc|keypad/i.test(d.type) && d.baseId)
-    .map((d) => ({ name: d.name, guid: d.guid, lo: d.baseId, hi: d.baseId + (/canboard/i.test(d.type) ? 13 : 29) }))
+    // as the backend's overlap check: a 5.7 module's block reaches its last frame sent (txSpan, e.g. a PDM's status slot at +36)
+    .map((d) => ({ name: d.name, guid: d.guid, lo: d.baseId, hi: d.baseId + Math.max(d.txSpan ?? 0, /canboard/i.test(d.type) ? 13 : 29) }))
 }
 
 /** rates: { [key]: { hz, last } } with key = (ide ? 'x' : '') + id. */
@@ -56,7 +57,8 @@ export function buildRows({ map, log = [], devices = [], rates = {} }) {
     if (sharedKeys.has(e.key)) { status = 'shared'; why = 'Several modules send this id from Lua on purpose (for example a main module and its backup).' }
     if (overlapNames.has(e.id) && !e.ide) { status = 'clash'; why = `The address blocks of ${overlapNames.get(e.id).join(' and ')} overlap here. Their commands and replies would mix. Change the base ID of one of them.` }
     if (clashKeys.has(e.key)) { status = 'clash'; why = `More than one device sends this id: ${e.owners.join(' and ')}. Change one of them.` }
-    if (inObd(e.id, e.ide) && (e.owners.length || e.seen)) { status = 'clash'; why = 'This id is in the range OBD-II keeps for diagnostic tools. ' + RESERVED_WHY }
+    // the car's own ECU (a DBC) answering diagnostics in the OBD-II range is not a clash; anything else there is
+    if (inObd(e.id, e.ide) && kind !== 'ecu' && (e.owners.length || e.seen)) { status = 'clash'; why = 'This id is in the range OBD-II keeps for diagnostic tools. ' + RESERVED_WHY }
     rows.push({ id: e.id, ide: e.ide, key: e.key, owners: e.owners, kind, status, why, seen: e.seen })
   }
   for (const r of OBD) {

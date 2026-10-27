@@ -126,6 +126,8 @@ public partial class FirmwareFlashService(
                      || (code == 0 && outp.Contains("Download", StringComparison.OrdinalIgnoreCase));
             Set(ok ? "Done" : "Failed", ok ? 100 : _percent);
             log.AppendLine(ok ? "✓ Flash complete — device rebooting." : $"✗ Flash failed (exit {code}).");
+            // upstream: a relocated app only starts behind the OpenBLT bootloader; a full image overwrote sector 0
+            if (ok && dev is domain.Devices.dingoPdm.PdmDevice { Family: domain.Common.FwFamily.Upstream } up) up.OpenBlt = flashAddr == DfuImage.AppBase;
             logger.LogInformation("Firmware flash {Result} ({Len} bytes)", ok ? "ok" : "failed", binary.Length);
             return new(ok, log.ToString());
         }
@@ -169,6 +171,100 @@ public partial class FirmwareFlashService(
     }
 
     [GeneratedRegex(@"Found DFU:[^\n]*?devnum=(\d+)")] private static partial Regex DfuDevnumRegex();
+
+    // ---- SWD: a debug probe (CMSIS-DAP, ST-Link, J-Link) through pyOCD, for what USB and CAN can't reach (a CANBoard's
+    // bootloader, a bricked board). pyocd path: env var DINGO_PYOCD, else PATH. Only whole-chip targets we know.
+    /// <param name="SettingsPage">Where the board stores its settings in flash (null: in external FRAM, out of SWD's reach).</param>
+    public record SwdBoard(string Target, int FlashKb, uint? SettingsPage = null);
+    public static readonly IReadOnlyDictionary<string, SwdBoard> SwdBoards = new Dictionary<string, SwdBoard>
+    {
+        ["canboard"] = new("stm32f303k8", 64, 0x0800F800),   // STM32F303x8; settings: the last 2 KB page (CONFIG_SECTOR 31)
+        ["dingopdm"] = new("stm32f446re", 512),              // STM32F446, settings in FRAM
+        ["dingopdmmax"] = new("stm32f446re", 512),
+    };
+
+    private static string ResolvePyocd()
+    {
+        var env = Environment.GetEnvironmentVariable("DINGO_PYOCD");
+        return !string.IsNullOrWhiteSpace(env) && File.Exists(env) ? env : "pyocd";
+    }
+
+    public record SwdScan(bool ToolOk, string Tool, int Probes, string Raw);
+
+    /// <summary>The probes pyOCD sees ("pyocd list": one numbered row per probe).</summary>
+    public async Task<SwdScan> SwdScanAsync()
+    {
+        var tool = ResolvePyocd();
+        try
+        {
+            var (_, outp) = await RunAsync(tool, "list", 15_000);
+            return new(true, tool, ProbeRowRegex().Matches(outp).Count, outp.Trim());
+        }
+        catch (Exception ex) { return new(false, tool, 0, $"Could not run pyocd ({tool}): {ex.Message}. Install it with: pip install pyocd"); }
+    }
+
+    [GeneratedRegex(@"(?m)^\s+\d+\s+\S")] private static partial Regex ProbeRowRegex();
+
+    /// <summary>Write an image over SWD. pyOCD erases only the sectors the image covers, so a bootloader (0x08000000)
+    /// leaves the app alone and an app leaves the bootloader alone. A .bin goes where its reset vector says.</summary>
+    /// <param name="baseId">The ID the board starts on while it has no stored settings (patched into the image's
+    /// DINGO_BASEID= marker, see <see cref="BaseIdPatch"/>); null leaves the image's default.</param>
+    public async Task<FlashResult> SwdFlashAsync(string board, string fileName, byte[] image, int? baseId = null)
+    {
+        if (!SwdBoards.TryGetValue(board ?? "", out var b)) return new(false, $"Refused: unknown board '{board}'.");
+        var ext = Path.GetExtension(fileName ?? "").ToLowerInvariant();
+        if (ext is not (".srec" or ".hex" or ".bin" or ".elf")) return new(false, "Refused: pick a .srec, .hex, .bin or .elf file.");
+        if (image.Length < 64 || image.Length > 4 * 1024 * 1024) return new(false, $"Refused: the file is {image.Length} bytes.");
+        if (baseId is int id)
+        {
+            var (patched, newExt, why) = BaseIdPatch.Apply(image, ext, id);
+            if (patched is null) return new(false, $"Refused: {why}.");
+            (image, ext) = (patched, newExt);
+        }
+        var baseArg = "";
+        if (ext == ".bin")
+        {
+            if (image.Length > b.FlashKb * 1024) return new(false, $"Refused: {image.Length / 1024} KB does not fit the {b.FlashKb} KB flash.");
+            if (DfuImage.FlashAddress(image) is not uint a) return new(false, "Refused: not an STM32 firmware .bin (its reset vector doesn't point into flash).");
+            baseArg = $" --base-address 0x{a:X8}";
+        }
+        if (_busy) return new(false, "Refused: another flash is running.");
+
+        var tmp = Path.Combine(Path.GetTempPath(), $"dingo_swd_{Guid.NewGuid():N}{ext}");
+        await File.WriteAllBytesAsync(tmp, image);
+        var log = new StringBuilder($"pyOCD → {b.Target} ({board}), {fileName}{baseArg}" +
+            (baseId is int bid ? $"; starts on base ID 0x{bid:X3} while it has no stored settings" : "") + "\n");
+        _busy = true; Set("Writing", 15);
+        try
+        {
+            // A base ID only takes on a board with no stored settings: erase its settings page first, so it starts on it
+            // after the flash's reset (factory settings: apply its config over CAN). FRAM (a PDM) is out of SWD's reach.
+            if (baseId is int && b.SettingsPage is uint page)
+            {
+                Set("Erasing stored settings", 10);
+                var (ec, eo) = await RunAsync(ResolvePyocd(), $"erase -t {b.Target} --sector 0x{page:X8}", 60_000);
+                log.Append(eo);
+                if (ec != 0) { Set("Failed", 0); log.AppendLine($"✗ Could not erase the stored settings (exit {ec}): nothing was flashed."); return new(false, log.ToString()); }
+                log.AppendLine($"Stored settings erased (page 0x{page:X8}): the board starts on factory settings and base ID 0x{baseId:X3}.");
+            }
+            else if (baseId is int)
+                log.AppendLine($"This board keeps its settings in FRAM: with stored settings it keeps its own ID (move it with Deploy to USB).");
+            var (code, outp) = await RunAsync(ResolvePyocd(), $"flash -t {b.Target}{baseArg} \"{tmp}\"", 180_000, trackProgress: true);
+            log.Append(outp);
+            var ok = code == 0;
+            Set(ok ? "Done" : "Failed", ok ? 100 : _percent);
+            log.AppendLine(ok ? (baseId is int id2 && b.SettingsPage is not null ? $"✓ Flash complete — the board restarts on base ID 0x{id2:X3}." : "✓ Flash complete — the board restarts.")
+                : $"✗ Flash failed (exit {code}). Check the probe wiring (SWDIO, SWCLK, GND) and that the board is powered.");
+            logger.LogInformation("SWD flash {Result} ({Board}, {Len} bytes)", ok ? "ok" : "failed", board, image.Length);
+            return new(ok, log.ToString());
+        }
+        catch (Exception ex)
+        {
+            Set("Failed", _percent);
+            return new(false, log + $"\nCould not run pyocd: {ex.Message}. Install it with: pip install pyocd");
+        }
+        finally { _busy = false; try { File.Delete(tmp); } catch { /* ignore */ } }
+    }
 
     [GeneratedRegex(@"(\d{1,3})%")] private static partial Regex PercentRegex();
 

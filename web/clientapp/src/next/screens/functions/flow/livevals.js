@@ -29,6 +29,9 @@ export function liveOf(v, sig, dev, model) {
       if (v.prop === 'Current') return +o.current || 0
       if (v.prop === 'Overcurrent') return /overcurrent/i.test(o.state ?? '')
       if (v.prop === 'Fault') return /fault/i.test(o.state ?? '')
+      if (v.prop === 'Warning') return o.state === 'Warning'
+      if (v.prop === 'Open Load') return o.state === 'OpenLoad'
+      if (v.prop === 'Undercurrent') return o.state === 'Undercurrent'
       return null
     }
     case 'digitaloutput': {   // a CANBoard output
@@ -47,6 +50,8 @@ export function liveOf(v, sig, dev, model) {
       return v.prop === 'State' ? !!s.on : num(s.value)
     }
     case 'counter': case 'table': return num(sig.get(SIG_KIND[v.kind] + '|' + name)?.value)
+    // the PID status frame carries the output only; P / I / D are not on CAN
+    case 'pid': return v.prop === 'Output' ? num(sig.get('PID|' + name)?.value) : null
     default: {
       const k = SIG_KIND[v.kind]
       if (!k) return null

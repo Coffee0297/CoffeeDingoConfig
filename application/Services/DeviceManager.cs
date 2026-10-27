@@ -331,6 +331,11 @@ public class DeviceManager(ILogger<DeviceManager> logger, ILoggerFactory loggerF
         ui.CheckAskedAt = DateTime.UtcNow; ui.CheckRetries = 0;
         var msg = deviceConfigurable.GetCheckMsg();
         QueueMessage(msg);
+        // Upstream: is it locked? A Read of the lock password is refused (58) only while locked; a module without the
+        // lock answers "not found", an unlocked one 0. One frame per connect; the reply sets Lock.Locked.
+        if (deviceConfigurable.Family == domain.Common.FwFamily.Upstream && (!deviceConfigurable.ParamSet.Known || deviceConfigurable.ParamSet.Contains(domain.Devices.Functions.ConfigLock.BaseIndex, 0)))
+            QueueMessage(new DeviceCanFrame { SendOnly = true, DeviceBaseId = device.BaseId, Name = "Lock probe",
+                Frame = new CanFrame(device.BaseId + PdmDevice.ConfigTxOffset, 8, [(byte)domain.Enums.MessageCommand.Read, 0x00, 0x02, 0, 0, 0, 0, 0]) });
     }
 
     /// <summary>
@@ -356,12 +361,15 @@ public class DeviceManager(ILogger<DeviceManager> logger, ILoggerFactory loggerF
     {
         CountFrame();
         RecordWriteOutcome(frame);
+        // a PDM's appended/ignition frame on the next module's base+0..: only that PDM reads it, or a silent module looks connected
+        var sender = _devices.Values.OfType<PdmDevice>().FirstOrDefault(p => p.SendsAppended(frame.Id));
         foreach (var device in _devices.Values)
         {
-            if (device.InIdRange(frame.Id))
+            if ((sender == null || device == sender) && device.InIdRange(frame.Id))
             {
                 var outgoing = new List<DeviceCanFrame>();
                 device.Read(frame.Id, frame.Payload, ref _requestQueue, outgoing);
+                if (device is IDeviceConfigurable { Migrate57Pending: true } mc) MigrateTo57([mc]);
                 if (outgoing.Count > 0)
                     _batchTransmitCallback?.Invoke(outgoing);
                 if (frame.Id == device.BaseId) RecordConfirm(device, frame, outgoing);
@@ -378,6 +386,12 @@ public class DeviceManager(ILogger<DeviceManager> logger, ILoggerFactory loggerF
 
     private void RecordConfirm(IDevice device, CanFrame frame, List<DeviceCanFrame> outgoing)
     {
+        // the Lua commit reply is 4 bytes: [cmd, lenHi, lenLo, stored ok]
+        if (frame.Payload.Length >= 4 && frame.Payload[0] == (byte)domain.Enums.MessageCommand.LuaWriteComplete)
+        {
+            if (_confirms.TryRemove((device.BaseId, domain.Enums.MessageCommand.LuaWriteComplete), out var lc)) lc.TrySetResult(frame.Payload[3] == 1);
+            return;
+        }
         if (frame.Payload.Length != 8) return;
         var cmd = (domain.Enums.MessageCommand)frame.Payload[0];
         bool ok;
@@ -393,13 +407,28 @@ public class DeviceManager(ILogger<DeviceManager> logger, ILoggerFactory loggerF
             ok = device is IDeviceConfigurable { ConfigMismatch: false };    // ParamProtocol cleared it on a CRC match
         }
         else if (cmd == domain.Enums.MessageCommand.BurnParams) ok = frame.Payload[4] == 1;
+        else if (cmd is domain.Enums.MessageCommand.Unlock or domain.Enums.MessageCommand.FactoryReset or domain.Enums.MessageCommand.Restart)
+            ok = frame.Payload[cmd == domain.Enums.MessageCommand.Restart ? 6 : 1] == 1;
+        // config lock: a refused WriteAll gets no WriteAllComplete; end the wait now instead of after 30 s
+        else if (cmd == domain.Enums.MessageCommand.Locked)
+        {
+            var refused = frame.Payload[4] is (byte)domain.Enums.MessageCommand.WriteAll or (byte)domain.Enums.MessageCommand.WriteAllModified
+                ? domain.Enums.MessageCommand.WriteAllComplete : (domain.Enums.MessageCommand)frame.Payload[4];
+            if (_confirms.TryRemove((device.BaseId, refused), out var lt)) lt.TrySetResult(false);
+            return;
+        }
         else if (cmd == domain.Enums.MessageCommand.Identify) { GetDeviceUiState(device.Guid).HasLed = frame.Payload[2] != 0; ok = true; }
+        else if (cmd == domain.Enums.MessageCommand.OutputTest) { GetDeviceUiState(device.Guid).TestReplied = true; ok = frame.Payload[7] == 1; }
+        else if (cmd == domain.Enums.MessageCommand.ResetCause) { GetDeviceUiState(device.Guid).ResetFlags = frame.Payload[1]; ok = true; }
+        else if (cmd == domain.Enums.MessageCommand.FaultLogRead) { GetDeviceUiState(device.Guid).FaultLogRx[frame.Payload[1]] = frame.Payload.ToArray(); return; }
+        else if (cmd == domain.Enums.MessageCommand.FaultLogClear) ok = frame.Payload[1] == 1;
         else if (cmd == domain.Enums.MessageCommand.SleepInfo)
         {
             var ui = GetDeviceUiState(device.Guid);
             ui.WakeReason = frame.Payload[1]; ui.WakeSource = frame.Payload[2];
             ui.WakeCount = frame.Payload[3] | frame.Payload[4] << 8;
             ui.SleepBlockers = frame.Payload[6];
+            if (device is PdmDevice pdm) pdm.SleepInfoSeen = true;
             ui.CheckRetries = 0; ui.CheckAskedAt = DateTime.UtcNow;   // it (re)booted: unanswered config checks get another round
             // the module announces it after every boot (5.6.3) and answers when asked: log each wake once
             if (!ui.WakeLogged)
@@ -421,6 +450,7 @@ public class DeviceManager(ILogger<DeviceManager> logger, ILoggerFactory loggerF
                 1 => "nothing kept it awake (no CAN traffic, no output on) for its sleep delay",
                 2 => "its force-sleep input is on",
                 3 => "it was asked to sleep (Sleep now)",
+                4 => "the car sleeps with the ignition (ignition, door and dash off for the sleep delay)",   // firmware 5.7
                 _ => "reason not given",
             };
             ui.LogSleep("sleep", why);
@@ -428,7 +458,7 @@ public class DeviceManager(ILogger<DeviceManager> logger, ILoggerFactory loggerF
             return;
         }
         else { if (cmd == domain.Enums.MessageCommand.Write) GetDeviceUiState(device.Guid).StoredOnModule = false; return; }
-        if (ok && cmd != domain.Enums.MessageCommand.Identify) GetDeviceUiState(device.Guid).StoredOnModule = cmd == domain.Enums.MessageCommand.BurnParams;
+        if (ok && cmd is not (domain.Enums.MessageCommand.Identify or domain.Enums.MessageCommand.ResetCause or domain.Enums.MessageCommand.OutputTest or domain.Enums.MessageCommand.FaultLogClear or domain.Enums.MessageCommand.Unlock or domain.Enums.MessageCommand.Restart)) GetDeviceUiState(device.Guid).StoredOnModule = cmd == domain.Enums.MessageCommand.BurnParams;
         if (_confirms.TryRemove((device.BaseId, cmd), out var tcs)) tcs.TrySetResult(ok);
     }
 
@@ -451,10 +481,43 @@ public class DeviceManager(ILogger<DeviceManager> logger, ILoggerFactory loggerF
         // firmware the app sends only the oldest firmware's params: a write then wiped the newer settings (math
         // blocks, CAN messages, ignition…). Learn the version first; without it, do not write.
         if (!await EnsureVersionAsync(d)) { logger.LogWarning("{Name}: firmware version unknown, not writing (it would reset its newer settings)", d.Name); return false; }
+        // Upstream: the WriteAll must hold exactly the module's params, so learn them (Read) first. A record from a
+        // project file keeps its values on that Read (KeepValuesOnRead), so do it here instead of refusing the Apply.
+        if (!ParamsKnown(d) && d is IDeviceConfigurable { KeepValuesOnRead: true } kd && !OlderLine(d))
+        {
+            logger.LogInformation("{Name}: learning its list of settings (Read, the project's values are kept) before writing", d.Name);
+            ReadDeviceConfig(deviceId);
+            for (var t = 0; t < 600 && !kd.ParamSet.FromModule; t++) await Task.Delay(100);   // ~1 s on a module, longer on a busy bus
+        }
+        if (!ParamsKnown(d)) { logger.LogWarning("{Name}: upstream firmware, its param list is not read yet: not writing", d.Name); return false; }
         return await Confirmed(d, domain.Enums.MessageCommand.WriteAllComplete, () => all ? WriteAllDeviceConfig(deviceId) : WriteDeviceConfig(deviceId), 30000);
     }
 
-    public static bool VersionKnown(IDevice d) => d is IDeviceConfigurable c && domain.Common.Firmware.Of(c.Version).Major > 0;
+    public static bool VersionKnown(IDevice d) => d is IDeviceConfigurable { VersionReceived: true };
+
+    /// <summary>Upstream firmware: Apply needs the module's own param list (from a Read this session). Fork: always.</summary>
+    public static bool ParamsKnown(IDevice d) => d is not IDeviceConfigurable c || c.Family != domain.Common.FwFamily.Upstream || (c.ParamSet.FromModule && !OlderLine(d));
+
+    /// <summary>The record has the 5.7 layout (migrated) but the module reports fork 5.0-5.6: neither Read nor Apply fits.</summary>
+    public static bool OlderLine(IDevice d) => d is IDeviceConfigurable { VersionReceived: true } c && c.Family == domain.Common.FwFamily.Upstream
+        && domain.Common.Firmware.Of(c.Version) is var v && domain.Common.FwFamily.Of(v.Major, v.Minor) == domain.Common.FwFamily.Fork;
+
+    /// <summary>Convert fork-5.x records to the 5.7 layout (domain.Common.Fw57Migration): automatically when a configured fork
+    /// record's module reports 5.7+, or on demand. The report lands on each device (Migration).</summary>
+    public void MigrateTo57(IEnumerable<IDeviceConfigurable> targets)
+    {
+        var list = targets.Where(t => t.Family == domain.Common.FwFamily.Fork).ToList();
+        if (list.Count == 0) return;
+        domain.Common.Fw57Migration.Migrate(_devices.Values.ToList(), list);
+        foreach (var d in list)
+        {
+            var warn = d.Migration?.Count(n => n.Level == "warn") ?? 0;
+            logger.LogWarning("{Name}: project converted to the firmware 5.7 layout ({Warn} warning(s))", d.Name, warn);
+            foreach (var n in d.Migration ?? []) logger.LogInformation("{Name} migration [{Level}] {Text}", d.Name, n.Level, n.Text);
+            systemLogger.Notify(d.Name, $"Project converted to firmware 5.7{(warn > 0 ? $", {warn} warning(s)" : "")}: see the module's migration report. Read it, then Apply to car and Store.",
+                warn > 0 ? application.Models.LogLevel.Warning : application.Models.LogLevel.Info);
+        }
+    }
 
     /// <summary>Ask for the firmware version unless it is known, and wait up to <paramref name="ms"/> for it.</summary>
     public async Task<bool> EnsureVersionAsync(IDevice d, int ms = 4000)
@@ -475,6 +538,70 @@ public class DeviceManager(ILogger<DeviceManager> logger, ILoggerFactory loggerF
                 SendOnly = true, DeviceBaseId = d.BaseId, Name = "Identify",
                 Frame = new CanFrame(d.BaseId + PdmDevice.ConfigTxOffset, 8,
                     [Convert.ToByte(domain.Enums.MessageCommand.Identify), (byte)Math.Clamp(seconds, 1, 60), 0, 0, 0, 0, 0, 0])
+            });
+            return true;
+        }, 2000)
+        : Task.FromResult(false);
+
+    /// <summary>Upstream feat/reset-cause: ask why the module last reset; waits for the reply (2 s), which lands in
+    /// DeviceUiState.ResetFlags.</summary>
+    public Task<bool> ResetCauseConfirmed(Guid deviceId) => GetDevice(deviceId) is { } d
+        ? Confirmed(d, domain.Enums.MessageCommand.ResetCause, () =>
+        {
+            QueueMessage(new DeviceCanFrame
+            {
+                SendOnly = true, DeviceBaseId = d.BaseId, Name = "Reset cause",
+                Frame = new CanFrame(d.BaseId + PdmDevice.ConfigTxOffset, 8, [Convert.ToByte(domain.Enums.MessageCommand.ResetCause), 0, 0, 0, 0, 0, 0, 0])
+            });
+            return true;
+        }, 2000)
+        : Task.FromResult(false);
+
+    /// <summary>Upstream feat/fault-history: read the module's fault history, newest first, and its boot count.
+    /// null when the module does not answer (firmware without it).</summary>
+    public async Task<(int BootCount, List<domain.Common.FaultLogEntry> Entries)?> ReadFaultLog(Guid deviceId)
+    {
+        if (GetDevice(deviceId) is not { } d) return null;
+        var rx = GetDeviceUiState(deviceId).FaultLogRx;
+        async Task<(byte[] A, byte[] B)?> Ask(int n)
+        {
+            for (var attempt = 0; attempt < 2; attempt++)
+            {
+                rx.TryRemove(n, out _); rx.TryRemove(n | 0x80, out _);
+                QueueMessage(new DeviceCanFrame
+                {
+                    SendOnly = true, DeviceBaseId = d.BaseId, Name = "Fault log read",
+                    Frame = new CanFrame(d.BaseId + PdmDevice.ConfigTxOffset, 8, [Convert.ToByte(domain.Enums.MessageCommand.FaultLogRead), (byte)n, 0, 0, 0, 0, 0, 0])
+                });
+                for (var w = 0; w < 1000; w += 10)
+                {
+                    if (rx.TryGetValue(n, out var a) && rx.TryGetValue(n | 0x80, out var b)) return (a, b);
+                    await Task.Delay(10);
+                }
+            }
+            return null;
+        }
+        if (await Ask(0) is not { } first) return null;
+        var entries = new List<domain.Common.FaultLogEntry>();
+        var count = Math.Min(domain.Common.FaultLog.Count(first.A), domain.Common.FaultLog.Size);
+        for (var n = 0; n < count; n++)
+        {
+            var f = n == 0 ? first : await Ask(n);
+            if (f is { } x && domain.Common.FaultLog.Decode(n, x.A, x.B) is { } e) entries.Add(e);
+        }
+        // past the count the boot field is the current boot count (entry 0 already is one on an empty log)
+        var boot = count == 0 ? domain.Common.FaultLog.Boot(first.A) : await Ask(0x7F) is { } c ? domain.Common.FaultLog.Boot(c.A) : 0;
+        return (boot, entries);
+    }
+
+    /// <summary>Upstream feat/fault-history: clear the module's fault history; true once it confirmed.</summary>
+    public Task<bool> ClearFaultLogConfirmed(Guid deviceId) => GetDevice(deviceId) is { } d
+        ? Confirmed(d, domain.Enums.MessageCommand.FaultLogClear, () =>
+        {
+            QueueMessage(new DeviceCanFrame
+            {
+                SendOnly = true, DeviceBaseId = d.BaseId, Name = "Fault log clear",
+                Frame = new CanFrame(d.BaseId + PdmDevice.ConfigTxOffset, 8, [Convert.ToByte(domain.Enums.MessageCommand.FaultLogClear), 0, 0, 0, 0, 0, 0, 0])
             });
             return true;
         }, 2000)
@@ -511,21 +638,40 @@ public class DeviceManager(ILogger<DeviceManager> logger, ILoggerFactory loggerF
     private void NoteAwake(IDevice device)
     {
         var ui = GetDeviceUiState(device.Guid);
+        // status frames still in flight just after the goodbye (the module flushes ~100 ms before it stops): not a
+        // wake. Asking SleepInfo now would itself wake the module (any CAN frame does).
+        if (ui.Asleep && DateTime.UtcNow - ui.AsleepSince < TimeSpan.FromSeconds(1)) return;
         ui.Asleep = false;
         if (ui.CheckAfterWake) { ui.CheckAfterWake = false; CheckConfig(device.Guid); }
         if (device is not IDeviceConfigurable c) return;
         // version unknown (no Read since the project opened): ask once, so firmware 5.6 features show up
-        if (domain.Common.Firmware.Of(c.Version).Major == 0)
+        if (!c.VersionReceived)
         {
             if (DateTime.UtcNow - ui.VersionAskedAt > TimeSpan.FromSeconds(30)) { ui.VersionAskedAt = DateTime.UtcNow; RequestVersion(device.Guid); }
             return;
         }
-        if (!ui.SleepInfoAsked && domain.Common.Firmware.Has(c.Version, domain.Devices.Functions.MathFunction.Since))
+        // upstream dingoFW: asked too; only feat/sleep-wake-info answers (others ignore an unknown command)
+        if (!ui.SleepInfoAsked && (c.Family == domain.Common.FwFamily.Upstream || domain.Common.Firmware.Has(c.Version, domain.Devices.Functions.MathFunction.Since)))
         {
             ui.SleepInfoAsked = true;
             RequestSleepInfo(device.Guid);
         }
     }
+
+    // ---- config lock (upstream feat/config-lock) ----
+    private Task<bool> SendConfirmed(Guid deviceId, domain.Enums.MessageCommand cmd, Func<int, CanFrame> frame, string name, int ms) => GetDevice(deviceId) is { } d
+        ? Confirmed(d, cmd, () => { QueueMessage(new DeviceCanFrame { SendOnly = true, DeviceBaseId = d.BaseId, Name = name, Frame = frame(d.BaseId + PdmDevice.ConfigTxOffset) }); return true; }, ms)
+        : Task.FromResult(false);
+    /// <summary>Unlock until the module's next restart. False: wrong password, a try within 1 s of a wrong one, or no answer.</summary>
+    public Task<bool> UnlockConfirmed(Guid deviceId, uint password) =>
+        SendConfirmed(deviceId, domain.Enums.MessageCommand.Unlock, id => domain.Devices.Functions.ConfigLock.UnlockFrame(id, password), "Unlock", 2000);
+    /// <summary>Every param to its default except base id and bitrate (password and contact too), applied at once and stored.
+    /// True only when the module reports the defaults stored.</summary>
+    public Task<bool> FactoryResetConfirmed(Guid deviceId) =>
+        SendConfirmed(deviceId, domain.Enums.MessageCommand.FactoryReset, domain.Devices.Functions.ConfigLock.FactoryResetFrame, "Factory reset", 5000);
+    /// <summary>Restart the module (unstored settings are lost; a stored lock takes effect).</summary>
+    public Task<bool> RestartConfirmed(Guid deviceId) =>
+        SendConfirmed(deviceId, domain.Enums.MessageCommand.Restart, domain.Devices.Functions.ConfigLock.RestartFrame, "Restart", 2000);
 
     /// <summary>Burn and wait for the module's burn reply; false if it reported a failure or never answered (10 s).</summary>
     public Task<bool> BurnSettingsConfirmed(Guid deviceId) => GetDevice(deviceId) is { } d
@@ -712,8 +858,8 @@ public class DeviceManager(ILogger<DeviceManager> logger, ILoggerFactory loggerF
 
     /// <summary>The (index, sub) of every device param of one function slot, as WriteFunctionParams writes them.</summary>
     public IReadOnlyList<(int Index, int SubIndex)> FunctionParamKeys(Guid deviceId, int index) =>
-        (GetDevice(deviceId) as IDeviceConfigurable)?.Params.Where(p => p.Index == index && !p.LocalOnly)
-            .Select(p => (p.Index, p.SubIndex)).ToList() ?? [];
+        (GetDevice(deviceId) as IDeviceConfigurable) is { } c ? c.Params.Where(p => p.Index == index && !p.LocalOnly && domain.Common.FwFamily.Sends(c, p))
+            .Select(p => (p.Index, p.SubIndex)).ToList() : [];
 
     private void StartMessageTimer((int, int, int) key, DeviceCanFrame frame)
     {
@@ -846,6 +992,7 @@ public class DeviceManager(ILogger<DeviceManager> logger, ILoggerFactory loggerF
         foreach (var p in ps)
         {
             if (p.LocalOnly) continue;   // label-only setting, nothing to send over CAN
+            if (device is IDeviceConfigurable dc && !domain.Common.FwFamily.Sends(dc, p)) continue;   // upstream: not on this module
             if (GetDevice(deviceId) == null) return n;   // device removed mid-write
             var waits = 0;
             while (_requestQueue.Count >= window && waits++ < 400)
@@ -893,7 +1040,7 @@ public class DeviceManager(ILogger<DeviceManager> logger, ILoggerFactory loggerF
         var device = GetDevice(deviceId);
         if (device is not IDeviceConfigurable cfg) return;
 
-        var paramList = cfg.Params.Where(p => !p.LocalOnly).ToList();
+        var paramList = cfg.Params.Where(p => !p.LocalOnly && domain.Common.FwFamily.Sends(cfg, p)).ToList();
         var ui = GetDeviceUiState(deviceId);
         ui.NeedsRead = false;
         ui.Reading = true;
@@ -941,7 +1088,7 @@ public class DeviceManager(ILogger<DeviceManager> logger, ILoggerFactory loggerF
         var device = GetDevice(deviceId);
         if (device is not IDeviceConfigurable cfg) return;
 
-        var ps = cfg.Params.Where(p => p.Index == index && !p.LocalOnly).ToList();
+        var ps = cfg.Params.Where(p => p.Index == index && !p.LocalOnly && domain.Common.FwFamily.Sends(cfg, p)).ToList();
         if (ps.Count == 0) return;
 
         Task.Run(() =>
@@ -984,7 +1131,7 @@ public class DeviceManager(ILogger<DeviceManager> logger, ILoggerFactory loggerF
         if (device is not IDeviceConfigurable cfg) return;
 
         var paramList = cfg.Params
-            .Where(p => !p.LocalOnly && (!modifiedOnly || p.IsModified))
+            .Where(p => !p.LocalOnly && (!modifiedOnly || p.IsModified) && domain.Common.FwFamily.Sends(cfg, p))
             .ToList();
 
         Task.Run(() =>
@@ -1217,6 +1364,17 @@ public class DeviceManager(ILogger<DeviceManager> logger, ILoggerFactory loggerF
         return true;
     }
 
+    /// <summary>Bench test and wait for the module's echo (byte 7 = accepted). true accepted, false refused, null no
+    /// reply: the firmware has no output test (upstream dingoFW without feat/output-bench-test).</summary>
+    public async Task<bool?> TestOutputConfirmed(Guid deviceId, int number, int mode, int duty, int freq, int holdSec, int timeoutMs = 1000)
+    {
+        if (GetDevice(deviceId) is not { } d) return null;
+        var ui = GetDeviceUiState(deviceId);
+        ui.TestReplied = false;
+        var ok = await Confirmed(d, domain.Enums.MessageCommand.OutputTest, () => TestOutput(deviceId, number, mode, duty, freq, holdSec), timeoutMs);
+        return ok ? true : ui.TestReplied ? false : null;
+    }
+
     /// <summary>
     /// Upload one assembled Lua program to the device, chunked (5 source bytes per
     /// frame) and paced so the device's RX mailbox can't overflow. The firmware
@@ -1235,6 +1393,9 @@ public class DeviceManager(ILogger<DeviceManager> logger, ILoggerFactory loggerF
 
     /// <summary>Upload and wait for the read-back verify + commit. False when refused, not verified, or not done
     /// within 90 s — the module then keeps its previous program. Uploads must not overlap: run them one at a time.</summary>
+    /// <summary>Firmware LUA_SCRIPT_MAX; upstream / 5.7 stores at most 4095 bytes (it clamps the length).</summary>
+    public static int LuaMax(PdmDevice p) => p.Family == domain.Common.FwFamily.Upstream ? 4095 : 4096;
+
     public async Task<bool> UploadLuaAsync(Guid deviceId, string source)
     {
         var up = StartLuaUpload(deviceId, source);
@@ -1254,14 +1415,15 @@ public class DeviceManager(ILogger<DeviceManager> logger, ILoggerFactory loggerF
         // Only the PDMs run an embedded Lua engine (firmware HAS_LUA). A CANBoard / DBC / keypad
         // has none — refuse here so no path (cross-module deploy, drawer, MCP) can ever push Lua
         // frames to a device that would silently ignore or mis-parse them.
-        if (device is not PdmDevice)
+        // Upstream dingoFW: only once the module answered a Lua command (feat/lua-scripting firmware).
+        if (device is not PdmDevice { RunsLua: true } pdm)
         {
             logger.LogWarning("UploadLua refused: {Name} ({Type}) has no Lua engine", device.Name, device.Type);
             return null;
         }
 
         var bytes = System.Text.Encoding.ASCII.GetBytes(source ?? string.Empty);
-        if (bytes.Length > 4096) return null;   // matches firmware LUA_SCRIPT_MAX
+        if (bytes.Length > LuaMax(pdm)) return null;
         int txId = device.BaseId + 1;             // ConfigTxOffset — device RX channel
 
         logger.LogInformation("UploadLua starting: {Len} bytes to {Name} (txId 0x{TxId:X})", bytes.Length, device.Name, txId);
@@ -1309,12 +1471,23 @@ public class DeviceManager(ILogger<DeviceManager> logger, ILoggerFactory loggerF
                     logger.LogError("UploadLua failed for {Name}: {Count} chunk(s) still wrong after 3 re-sends; not committed, the device keeps its previous program", device.Name, bad.Count);
                     return false;
                 }
-                QueueMessage(new DeviceCanFrame
+                // wait for the module to store it: it writes its config then (seconds on a slow store), and a read
+                // started before that finished got no answer and came back empty
+                var stored = await Confirmed(device, domain.Enums.MessageCommand.LuaWriteComplete, () =>
                 {
-                    DeviceBaseId = device.BaseId, SendOnly = true, Name = "LuaWriteComplete",
-                    Frame = new CanFrame(txId, 8,
-                        [(byte)domain.Enums.MessageCommand.LuaWriteComplete, (byte)(bytes.Length >> 8), (byte)(bytes.Length & 0xFF), 0, 0, 0, 0, 0])
-                });
+                    QueueMessage(new DeviceCanFrame
+                    {
+                        DeviceBaseId = device.BaseId, SendOnly = true, Name = "LuaWriteComplete",
+                        Frame = new CanFrame(txId, 8,
+                            [(byte)domain.Enums.MessageCommand.LuaWriteComplete, (byte)(bytes.Length >> 8), (byte)(bytes.Length & 0xFF), 0, 0, 0, 0, 0])
+                    });
+                    return true;
+                }, 10000);
+                if (!stored)
+                {
+                    logger.LogError("UploadLua: {Name} did not confirm storing the program", device.Name);
+                    return false;
+                }
                 logger.LogInformation("UploadLua done: {Len} bytes to {Name}, verified by read-back", bytes.Length, device.Name);
                 return true;
             }
@@ -1401,7 +1574,8 @@ public class DeviceManager(ILogger<DeviceManager> logger, ILoggerFactory loggerF
     /// waveform, chunked over CAN. The device records these autonomously so a trip
     /// that happened while disconnected is still here for troubleshooting.
     /// </summary>
-    public async Task<List<OverloadLogEntry>> ReadOverloadLog(Guid deviceId)
+    /// <returns>null when the module never answered the count request (upstream firmware without the trip log).</returns>
+    public async Task<List<OverloadLogEntry>?> ReadOverloadLog(Guid deviceId)
     {
         var result = new List<OverloadLogEntry>();
         var p = GetDevice<PdmDevice>(deviceId);
@@ -1411,7 +1585,7 @@ public class DeviceManager(ILogger<DeviceManager> logger, ILoggerFactory loggerF
         QueueMessage(p.GetOvlCountMsg());
         int waited = 0;
         while (p.OvlCountRx < 0 && waited < 500) { await Task.Delay(10); waited += 10; }
-        if (p.OvlCountRx < 0) return result;
+        if (p.OvlCountRx < 0) return null;
         // 5.6: a time in the module's uptime becomes a clock time against the uptime it just reported
         var answeredAt = DateTime.UtcNow;
         long uptime = p.OvlUptimeRx;

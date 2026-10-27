@@ -12,8 +12,10 @@
   import { postAction, waitRead } from '../../../shell/parts/act.js'
   import { parseId, hexId, clashOf, freeBases, hitsObd, spanText, fwText, busIds } from './ids.js'
   import { deployToUsb } from './deploy.js'
+  import ModuleLock from './ModuleLock.svelte'
   import { loadCar, carLinks } from '../../functions/flow/car.js'
   import { linkRemote } from '../../functions/flow/net.js'
+  import { noSleepWhy } from '../../power/parts/sleepLogic.js'
 
   let { guid, full = false, onremoved } = $props()
 
@@ -215,9 +217,9 @@
         {#if edited}<Button onclick={() => (draft = hexId(d.baseId))}>Undo edit</Button>{/if}
       </div>
       {#if clash}
-        <Banner tone="fault" title="CAN ID clash. Setting it is blocked.">{spanText(d.type, base)} overlaps {clash.name} ({spanText(clash.type, clash.baseId)}). Both would answer the same messages. Pick another ID.</Banner>
+        <Banner tone="fault" title="CAN ID clash. Setting it is blocked.">{spanText(d.type, base, d)} overlaps {clash.name} ({spanText(clash.type, clash.baseId, clash)}). Both would answer the same messages. Pick another ID.</Banner>
       {:else if edited && base != null}
-        <p class="ok" role="status">✓ {spanText(d.type, base)} is free. No other module uses it.</p>
+        <p class="ok" role="status">✓ {spanText(d.type, base, d)} is free. No other module uses it.</p>
       {/if}
       {#if obd}<p class="warn" role="status">▲ {hexId(base)} is in the OBD-II range 0x7DF to 0x7EF.</p>{/if}
       <div class="row">
@@ -257,9 +259,11 @@
         {#if !d.canBootloader}<p class="muted sm">This module reports no CAN bootloader, so the bootloader restart is off.</p>{/if}
       </section>
 
+      <ModuleLock {guid} />
+
       <section aria-label="Sleep and wake" class="blk">
         <div class="bh"><strong>Sleep and wake</strong></div>
-        <p class="muted">{d.canSleep === false ? `${d.name} cannot sleep: its firmware is older than 5.5.111.` : `Sleep timeout, wake sources and the shutdown sequence live on the Sleep and wake screen.`}</p>
+        <p class="muted">{d.canSleep === false ? `${d.name} cannot sleep: ${noSleepWhy(d)}.` : `Sleep timeout, wake sources and the shutdown sequence live on the Sleep and wake screen.`}</p>
         <div class="row"><Button href={href('power', 'sleep')} data-testid="to-sleep">Open Sleep and wake</Button></div>
       </section>
     {/if}

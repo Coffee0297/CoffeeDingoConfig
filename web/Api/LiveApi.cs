@@ -24,7 +24,7 @@ public record OutputDto(int Number, string Name, string State, double Current, i
     double WarnLimit, double OpenLoadLimit, int OpenLoadTime, string WireColor, string WireStripe, double WireLength, double WireGaugeMm2,
     bool VariableDutyCycle = false, int DutyCycleInput = 0, int DutyCycleDenom = 100,
     bool VariableFreq = false, int FreqInput = 0, int FreqInputDenom = 1, bool RampDutyChanges = false,
-    int PrimaryOutput = -1);
+    int PrimaryOutput = -1, double UnderLimit = 0, int UnderTime = 1000, bool UnderTrip = false, bool ClearOnReassert = false, double HardShortLimit = 0.0, int SoftStartTimeout = 0, int SoftStopTime = 0, bool Shed = false, int ThermalTau = 0, double WireLoad = 0, bool StayAlive = false);
 public record DeviceDto(string Guid, string Name, string Type, int BaseId, bool Connected,
     double Battery, double Current, double Temp, string State, string Version, string Bitrate, OutputDto[] Outputs,
     bool Reading, int ReadDone, int ReadTotal, bool SleepEnabled, int SleepTimeoutMs,
@@ -47,16 +47,46 @@ public record DeviceDto(string Guid, string Name, string Type, int BaseId, bool 
     int? SleepBlockers = null,           // G14: bit0 sleep off, bit1 outputs on, bit2 USB, bit3 CAN traffic
     IgnitionDto? Ignition = null,
     // CANBoard: its digital outputs (a PDM's are Outputs), live: number, enabled, on
-    DigitalOutDto[]? DigitalOut = null);
+    DigitalOutDto[]? DigitalOut = null,
+    // "fork" (dingoFW 5.x) or "upstream" (dingoFW 0.x). Upstream: ParamsRead = its param list came from a Read this
+    // session (Apply needs it); ParamRuns = that list, [firstIndex, indexCount, sub…] (see util.js has/hasBlock).
+    string Family = "fork", bool ParamsRead = false, int[][]? ParamRuns = null,
+    // upstream feat/fault-clear: the signal that retries every tripped output (null = this module has none)
+    int? RetryAllInput = null,
+    // upstream feat/load-shed: the signal that sheds the opted-in outputs (null = this module has none)
+    int? ShedInput = null,
+    // upstream feat/wake-on-frame: the wake frame, when the module's Read listed 0x0100 (null otherwise)
+    domain.Devices.Functions.WakeFrame? WakeFrame = null,
+    // upstream feat/config-lock (null: no lock in this firmware, or not known yet)
+    LockDto? Lock = null,
+    // runs Lua: a PDM on the fork, or an upstream PDM that answered a Lua command (feat/lua-scripting)
+    bool HasLua = false,
+    // the last firmware 5.7 / 5.8 migration report (null: never migrated); KeepValuesOnRead: the next Read keeps the project;
+    // Layout58: the project holds firmware 5.8's signal numbers
+    List<domain.Common.MigrationNote>? Migration = null, bool KeepValuesOnRead = false, bool Layout58 = false,
+    // upstream / 5.7 PDM: the highest id offset it sends with its current settings (the appended frames go out only while
+    // their feature is on); the CAN ID map and the clash checks use it. Null: the fixed fork / CANBoard span.
+    int? TxSpan = null,
+    // the version it reported last time it answered, saved in the project (shown while it is not answering)
+    string? LastFirmware = null);
+// Has: the module has the lock (its Read listed 0x0200, or it refused a request as locked). PasswordSet: the
+// project holds a password, sent on every write. The password itself never goes to the UI.
+public record LockDto(bool Has, bool Locked, string Contact, bool PasswordSet);
+public record LockReq(string? Contact, uint? Password, bool ClearPassword = false);
+public record UnlockReq(uint Password);
+public record FactoryResetReq(string? Confirm);
 public record DigitalOutDto(int Number, string Name, bool Enabled, bool On, int Input);
 public record WakeDto(string Reason, int Source, int Count);
-public record IgnitionDto(bool Enabled, string Role, string State, bool Dash, int MainStateId, int StateId, bool Live);
+// Role main / follower / standalone. Status: the 5.7 status frame (any role), null before one is heard or on older firmware.
+// StateId: the frame's own slot; StatusId: the custom id it goes out on instead (0x1E00 sub 23), null = the slot.
+public record IgnitionDto(bool Enabled, string Role, string State, bool Dash, int MainStateId, int StateId, bool Live, domain.Devices.Functions.IgnitionStatus? Status = null, int? StatusId = null);
 public record AdaptersDto(string[] Adapters, string[] Ports, bool Connected, string? ActiveAdapter, string? ActivePort, int? GatewayBaseId, bool ProgrammingAllowed,
     // G10: link state and the remembered connection
     bool Reconnecting = false, bool AutoConnect = false, bool AutoReconnect = true, object? Last = null);
 public record ConnectionOptionsReq(bool? AutoConnect, bool? AutoReconnect);
 public record TelemetryDto(bool Connected, string? Adapter, long CanTotal, long CanRate, int[] Ids, DeviceDto[] Devices, bool ProgrammingAllowed, bool Reconnecting = false,
-    int AgentPending = 0, string? AgentPendingId = null);   // G22: AI agent requests waiting for the operator, and the oldest
+    int AgentPending = 0, string? AgentPendingId = null,   // G22: AI agent requests waiting for the operator, and the oldest
+    int? UsbBaseId = null);   // the base ID the module on USB answers on (null: a plain adapter, or not known yet)
 public record ConnectReq(string Adapter, string Port, string Bitrate);
 public record AddDeviceReq(string Type, string Name, string BaseId);
 public record ModifyReq(string Name, string BaseId);
@@ -70,8 +100,9 @@ public record ProbeReq(string Base);
 public record SetOutputReq(int Number, double CurrentLimit);
 /// <summary>Output bench test: mode on | pwm | off; duty %, freq Hz (0 = the output's own), hold s (1–30).</summary>
 public record OutputTestReq(string? Mode, int Duty = 100, int Freq = 0, int Hold = 5);
+public record CanForceReq(int Id, bool Ide, string? Data, int PeriodMs = 50, int HoldSec = 10);
 /// <summary>The module's own var-map inputs (device params 0x0000:10 / :11); null = leave unchanged, 0 = unwired.</summary>
-public record DeviceInputsReq(int? ForceSleepInput, int? MuteTxInput);
+public record DeviceInputsReq(int? ForceSleepInput, int? MuteTxInput, int? RetryAllInput = null, int? ShedInput = null);
 // Everything but Number is optional: a field left out of the body keeps the output's current value, so a
 // partial body (what the MCP set_output_config tool sends) merges instead of zeroing Enabled/Input/limits.
 // The SPA's _binBody always sends every field, so its saves are unchanged.
@@ -82,7 +113,7 @@ public record OutputConfigReq(int Number, bool? Enabled = null, int? Input = nul
     string? WireColor = null, string? WireStripe = null, double? WireLength = null, double? WireGaugeMm2 = null,
     bool? VariableDutyCycle = null, int? DutyCycleInput = null, int? DutyCycleDenom = null,
     bool? VariableFreq = null, int? FreqInput = null, int? FreqInputDenom = null, bool? RampDutyChanges = null,
-    int? PrimaryOutput = null);
+    int? PrimaryOutput = null, double? UnderLimit = null, int? UnderTime = null, bool? UnderTrip = null, bool? ClearOnReassert = null, double? HardShortLimit = null, int? SoftStartTimeout = null, int? SoftStopTime = null, bool? Shed = null, int? ThermalTau = null, bool? StayAlive = null);
 public record ApplyProfileReq(string Source);
 public record RenameReq(string Name);
 public record ReadParamReq(int Index, int Sub);
@@ -92,6 +123,7 @@ public record SdoWriteReq(int Node, int Index, int Sub, uint Value, int Size);
 public record SdoNodeReq(int Node);
 // Client (G4): the app's own project state to store in the file; null keeps the one already held.
 public record ProjReq(string FileName, System.Text.Json.JsonElement? Client = null);
+public record FolderReq(string? Dir);
 public record LuaReq(string Source);
 public record LinkRemoteReq(int CanInput, string SourceGuid, string Signal, bool? NewRule = null);   // NewRule: State = (value != 0) even on a slot in use
 public record CrossTrigReq(string Guid, int? VarIndex);
@@ -117,12 +149,15 @@ public static class FunctionMap
                 "condition" or "cmp"  => (p.Conditions.FirstOrDefault(x => x.Number == number), Condition.BaseIndex + n),
                 "counter" or "cnt"    => (p.Counters.FirstOrDefault(x => x.Number == number), Counter.BaseIndex + n),
                 "flasher" or "fl"     => (p.Flashers.FirstOrDefault(x => x.Number == number), Flasher.BaseIndex + n),
-                "timer" or "tmr"      => (p.Timers.FirstOrDefault(x => x.Number == number), TimerFunction.BaseIndex + n),
-                "table" or "tbl"      => (p.Tables.FirstOrDefault(x => x.Number == number), LookupTable.BaseIndex + n),
+                "timer" or "tmr"      => (p.Timers.FirstOrDefault(x => x.Number == number), TimerFunction.BaseFor(p.Family) + n),
+                "table" or "tbl"      => (p.Tables.FirstOrDefault(x => x.Number == number), LookupTable.BaseFor(p.Family) + n),
                 "math"                => (p.Maths.FirstOrDefault(x => x.Number == number), MathFunction.BaseIndex + n),
                 "canmsg"              => (p.CanMessages.FirstOrDefault(x => x.Number == number), CanMessage.BaseIndex + n),
+                "curve"               => (p.Curves.FirstOrDefault(x => x.Number == number), CurveFunction.BaseIndex + n),
+                "latchgate" or "lg"   => (p.LatchGates.FirstOrDefault(x => x.Number == number), LatchGateFunction.BaseIndex + n),
                 "ignition"            => (p.Ignition, Ignition.BaseIndex),
                 "comfortblink"        => (p.ComfortBlink, ComfortBlink.BaseIndex),
+                "pid"                 => (p.Pids.FirstOrDefault(x => x.Number == number), PidFunction.BaseIndex + n),
                 "canoutput" or "cout" => (p.CanOutputs.FirstOrDefault(x => x.Number == number), CanOutput.BaseIndex + n),
                 "wiper" or "wip"      => (p.Wipers, Wiper.BaseIndex),
                 "starterdisable" or "std" => (p.StarterDisable, StarterDisable.BaseIndex),
@@ -142,12 +177,13 @@ public static class FunctionMap
                 "condition" or "cmp"  => (c.Conditions.FirstOrDefault(x => x.Number == number), Condition.BaseIndex + n),
                 "counter" or "cnt"    => (c.Counters.FirstOrDefault(x => x.Number == number), Counter.BaseIndex + n),
                 "flasher" or "fl"     => (c.Flashers.FirstOrDefault(x => x.Number == number), Flasher.BaseIndex + n),
-                "timer" or "tmr"      => (c.Timers.FirstOrDefault(x => x.Number == number), TimerFunction.BaseIndex + n),
+                "timer" or "tmr"      => (c.Timers.FirstOrDefault(x => x.Number == number), TimerFunction.BaseFor(c.Family) + n),
                 "canoutput" or "cout" => (c.CanOutputs.FirstOrDefault(x => x.Number == number), CanOutput.BaseIndex + n),
                 "math"                => (c.Maths.FirstOrDefault(x => x.Number == number), MathFunction.BaseIndex + n),
                 "canmsg"              => (c.CanMessages.FirstOrDefault(x => x.Number == number), CanMessage.BaseIndex + n),
                 "ignition"            => (c.Ignition, Ignition.BaseIndex),
                 "comfortblink"        => (c.ComfortBlink, ComfortBlink.BaseIndex),
+                "pid"                 => (c.Pids.FirstOrDefault(x => x.Number == number), PidFunction.BaseIndex + n),
                 _ => (null, -1)
             };
         return (null, -1);
@@ -324,12 +360,14 @@ public static class DingoMap
         s.Name, s.Id, ide = s.IsExtended, s.MessageName, s.StartBit, s.Length,
         byteOrder = (int)s.ByteOrder, s.IsSigned, s.Factor, s.Offset, s.Unit, s.Min, s.Max, s.Value };
 
+    static LockDto? LockOf(IDeviceConfigurable c) => c.Family == domain.Common.FwFamily.Upstream && (c.Lock.Locked || c.ParamSet.Contains(domain.Devices.Functions.ConfigLock.BaseIndex, 0))
+        ? new LockDto(true, c.Lock.Locked, c.Lock.Contact, c.Lock.Password != 0) : null;
     static WakeDto? Wake(DeviceUiState? ui) => ui?.WakeReason is int r
-        ? new WakeDto(r switch { 1 => "can", 2 => "input", 3 => "usb", _ => "power-on" }, ui.WakeSource, ui.WakeCount) : null;
-    static IgnitionDto? Ign(domain.Devices.Functions.Ignition? g, int baseId, string? type) => g is null ? null
-        : new IgnitionDto(g.Enabled, g.Role == domain.Devices.Functions.IgnitionRole.Main ? "main" : "follower",
-            g.State.ToString().ToLowerInvariant(), g.Dash, g.MainStateId, baseId + domain.Devices.Functions.Ignition.StateOffsetFor(type),
-            (DateTime.UtcNow - g.LastStateFrame).TotalMilliseconds < 1000);
+        ? new WakeDto(r switch { 1 => "can", 2 => "input", 3 => "usb", 4 => "other", _ => "power-on" }, ui.WakeSource, ui.WakeCount) : null;
+    static IgnitionDto? Ign(domain.Devices.Functions.Ignition? g, int stateId) => g is null ? null
+        : new IgnitionDto(g.Enabled, g.Role.ToString().ToLowerInvariant(),
+            g.State.ToString().ToLowerInvariant(), g.Dash, g.MainStateId, stateId,
+            (DateTime.UtcNow - g.LastStateFrame).TotalMilliseconds < 1000, g.Status, g.StatusId != 0 ? g.StatusId : null);
 
     public static DeviceDto ToDto(IDevice d, DeviceUiState? ui = null)
     {
@@ -345,7 +383,7 @@ public static class DingoMap
                 o.PwmEnabled, o.Frequency, o.FixedDutyCycle, o.MinDutyCycle, o.SoftStartEnabled, o.SoftStartRampTime,
                 o.WarnLimit, o.OpenLoadLimit, o.OpenLoadTime, o.WireColor, o.WireStripe, o.WireLength, o.WireGaugeMm2,
                 o.VariableDutyCycle, o.DutyCycleInput, o.DutyCycleDenominator, o.VariableFreq, o.FreqInput, o.FreqInputDenom, o.RampDutyChanges,
-                o.PrimaryOutput)).ToArray();
+                o.PrimaryOutput, o.UnderLimit, o.UnderTime, o.UnderTrip, o.ClearOnReassert, o.HardShortLimit, o.SoftStartTimeout, o.SoftStopTime, o.Shed, o.ThermalTau, o.WireLoad, o.StayAlive)).ToArray();
             return new DeviceDto(p.Guid.ToString(), p.Name, p.Type, p.BaseId, p.Connected,
                 p.BatteryVoltage, p.TotalCurrent, p.BoardTempC, p.DeviceState.ToString(),
                 p.Version, BitrateLabel(p.BitRate), outs, reading, readDone, readTotal,
@@ -353,7 +391,10 @@ public static class DingoMap
                 p.CanBootloader, p.Connected && p.ConfigMismatch, p.LastConfigDiff.Count, false,
                 p.CanFiltersEnabled, p.ConnectUsbToCan, StoredOnModule: ui?.StoredOnModule, InBootloader: !p.Connected && ui?.InBootloader == true, PendingEdits: p.ConfigMismatch ? ui?.PendingEdits ?? 0 : 0,
                 HasLed: ui?.HasLed, Asleep: ui?.Asleep == true && !p.Connected, LastWake: Wake(ui), SleepCountdownS: p.SleepCountdownS,
-                SleepBlockers: ui?.SleepBlockers, Ignition: Ign(p.Ignition, p.BaseId, p.Type));
+                SleepBlockers: ui?.SleepBlockers, Ignition: Ign(p.Ignition, p.BaseId + (p.IgnitionStateOffset ?? domain.Devices.Functions.Ignition.StateOffsetFor(p.Type, p.Family, p.PdmType))),
+                Family: p.Family, ParamsRead: p.ParamSet.FromModule, ParamRuns: p.ParamRuns, RetryAllInput: p.HasRetryAll ? p.RetryAllInput : null, ShedInput: p.HasShed ? p.ShedInput : null,
+                WakeFrame: p.ParamSet.Contains(domain.Devices.Functions.WakeFrame.Index, 0) ? p.WakeFrame : null, Lock: LockOf(p), HasLua: p.RunsLua, Migration: p.Migration, KeepValuesOnRead: p.KeepValuesOnRead, Layout58: p.Layout58,
+                TxSpan: p.Family == domain.Common.FwFamily.Upstream ? domain.Common.Fw57Migration.Span(p) : null, LastFirmware: p.LastFirmware);
         }
         if (d is domain.Devices.Canboard.CanboardDevice cb)
             // CANBoard has no battery/total-current sensing (those are PDM smart-output features) — leave
@@ -365,8 +406,9 @@ public static class DingoMap
                 cb.SleepEnabled, cb.SleepTimeoutMs, cb.SleepIgnoreAlwaysOn, cb.ForceSleepInput, cb.MuteTxInput, cb.WakeDigInputMask, cb.WakeOnCan,
                 cb.CanBootloader, cb.Connected && cb.ConfigMismatch, cb.LastConfigDiff.Count, CanSleep: cb.CanSleep, StoredOnModule: ui?.StoredOnModule, InBootloader: !cb.Connected && ui?.InBootloader == true, PendingEdits: cb.ConfigMismatch ? ui?.PendingEdits ?? 0 : 0,
                 HasLed: ui?.HasLed, Asleep: ui?.Asleep == true && !cb.Connected, LastWake: Wake(ui), SleepCountdownS: cb.SleepCountdownS,
-                SleepBlockers: cb.SleepCountdownS != null ? cb.SleepBlockersRaw : ui?.SleepBlockers, Ignition: Ign(cb.Ignition, cb.BaseId, cb.Type),
-                DigitalOut: cb.DigitalOutputs.Select(o => new DigitalOutDto(o.Number, o.Name, o.Enabled, o.State, o.Input)).ToArray());
+                SleepBlockers: cb.SleepCountdownS != null ? cb.SleepBlockersRaw : ui?.SleepBlockers, Ignition: Ign(cb.Ignition, cb.BaseId + (cb.IgnitionStateOffset ?? domain.Devices.Functions.Ignition.StateOffsetFor(cb.Type))),
+                DigitalOut: cb.DigitalOutputs.Select(o => new DigitalOutDto(o.Number, o.Name, o.Enabled, o.State, o.Input)).ToArray(),
+                Family: cb.Family, ParamsRead: cb.ParamSet.FromModule, ParamRuns: cb.ParamRuns, Lock: LockOf(cb), Migration: cb.Migration, KeepValuesOnRead: cb.KeepValuesOnRead, Layout58: cb.Layout58, LastFirmware: cb.LastFirmware);
         return new DeviceDto(d.Guid.ToString(), d.Name, d.Type, d.BaseId, d.Connected,
             0, 0, 0, "", "", "", Array.Empty<OutputDto>(), reading, readDone, readTotal, false, 30000, true, 0, 0, 0, true,
             (d as IDeviceConfigurable)?.CanBootloader ?? false, CanSleep: false);   // an ECU (DBC) or other device: nothing to put to sleep
@@ -429,7 +471,7 @@ public class TelemetryBroadcaster(
                         return isGateway ? dto with { IsGateway = true } : dto;
                     }).ToArray();
                 var dto = new TelemetryDto(status.isConnected, status.activeAdapter, _total, _rate, ids, devices, !LiveApi.IsSim(adapterManager), keeper.Reconnecting,
-                    AgentGuard.PendingCount, AgentGuard.OldestPendingId);
+                    AgentGuard.PendingCount, AgentGuard.OldestPendingId, adapterManager.GatewayBaseId);
 
                 await hub.Clients.All.SendAsync("telemetry", dto, ct);
               }
@@ -459,13 +501,15 @@ public static class LiveApi
     static void MarkClean(ConfigFileManager cfg, DeviceManager dm) => _cleanProject = cfg.SerializeDevices(dm.GetDevices());
     const string SimRefusal = "Sim adapter: programming disabled";
     static readonly System.Text.RegularExpressions.Regex ProgrammingRoute = new(
-        @"^/api/(devices/[^/]+/(write|writeall|burn|bootloader|uploadlua|lua|flash|flash-can|apply-profile|output/\d+/test)|flash/blank|system/cross-module/deploy|sdo/(write|store))$",
+        @"^/api/(devices/[^/]+/(write|writeall|burn|bootloader|uploadlua|lua|flash|flash-can|apply-profile|output/\d+/test)|flash/blank|system/cross-module/deploy|sdo/(write|store)|can/force)$",
         System.Text.RegularExpressions.RegexOptions.IgnoreCase);
     internal static bool IsSim(ICommsAdapterManager m)
     {
         var (connected, active, _) = m.GetStatus();
         return connected && string.Equals(active, "Sim", StringComparison.OrdinalIgnoreCase);
     }
+    static readonly object IgnUndoLock = new();
+    static domain.Common.ValuesSnapshot? _ignUndo;   // the last "make … the ignition main", for its Undo
     // G20: module count per project file, keyed by path + write time so the 5 s poll reads each file once.
     static readonly System.Collections.Concurrent.ConcurrentDictionary<string, (DateTime At, int? Count)> _fileCounts = new();
     static int? ModuleCount(FileInfo f) => _fileCounts.AddOrUpdate(f.FullName,
@@ -586,7 +630,7 @@ public static class LiveApi
 
         // Identify devices on the bus. Discovery is passive (broadcast signature); device type is
         // then confirmed actively by sending a Version request to each candidate base and reading
-        // the BOARD_ID byte (data8[1]) of the reply — 0=dingoPDM, 1=PDM-MAX, 2=CANBoard. Firmware
+        // the BOARD_ID byte (data8[1]) of the reply — 0=dingoPDM, 1=PDM-MAX, 2=CANBoard, 3=PT-DPDM4 (upstream). Firmware
         // older than the BOARD_ID change replies 0, so detection falls back to the run-length
         // heuristic. CANopen keypads emit heartbeat 0x700+node + buttons 0x180+node. DBC reader
         // devices are passive and can't be detected — add those by hand.
@@ -681,19 +725,29 @@ public static class LiveApi
                     var reply = sum.FirstOrDefault(x =>
                         x.Id == baseId && x.Direction == DataDirection.Rx &&
                         x.Payload is { Length: >= 2 } p && p[0] == (byte)MessageCommand.Version);
-                    if (reply?.Payload is not { Length: >= 2 } pl || pl[1] > 2) continue;
+                    if (reply?.Payload is not { Length: >= 2 } pl || pl[1] > 3) continue;
                     int boardId = pl[1];
+                    // Upstream dingoFW (major 0) sends no board id (0) unless built with feat/board-id-and-image-markers
+                    // (1 Max, 2 CANBoard, 3 PT-DPDM4; a dingoPDM is 0 either way). Without one: a PDM always broadcasts
+                    // its first 5 status frames and says its type in Msg 0 byte 1 (high nibble), a CANBoard only 3.
+                    var upstream = pl.Length >= 8 && pl[4] == 0;
+                    var guessed = upstream && boardId == 0;
+                    if (guessed)
+                        boardId = runLen < 5 ? 2
+                            : sum.FirstOrDefault(x => x.Id == statusId && x.Direction == DataDirection.Rx)?.Payload is { Length: >= 2 } st && st[1] >> 4 is 1 or 2 ? 10 + (st[1] >> 4) : 0;
                     var (type, label) = boardId switch
                     {
                         2 => ("canboard", "CANBoard"),
-                        1 => ("pdm", "dingoPDM-Max"),
+                        1 or 11 => ("pdm", "dingoPDM-Max"),
+                        3 or 12 => ("pdm:2", "PT-DPDM"),
                         _ => ("pdm", "dingoPDM"),
                     };
                     // G8: the same reply carries the firmware version (bytes 4..7, as the device classes read it)
                     var version = pl.Length >= 8 ? $"v{pl[4]}.{pl[5]}.{(pl[6] << 8) + pl[7]}" : null;
                     found.Add(new {
                         type, baseId, hex = "0x" + baseId.ToString("X3"), label, confidence = "high", version,
-                        detail = $"identified via BOARD_ID {boardId} at 0x{baseId:X3} ({runLen} status frames)"
+                        detail = guessed ? $"upstream dingoFW at 0x{baseId:X3}, board told by its status frames ({runLen}): check the type"
+                            : $"identified via BOARD_ID {boardId} at 0x{baseId:X3} ({runLen} status frames)"
                     });
                 }
             }
@@ -803,7 +857,18 @@ public static class LiveApi
                     ? $"output {n} is disabled — enable it and set its current limit first; the test runs under that protection"
                     : $"output {n} is disabled — enable it and Save first" });
             var hold = Math.Clamp(r.Hold, 1, 30);
-            dm.TestOutput(g, n, mode, Math.Clamp(r.Duty, 0, 100), Math.Clamp(r.Freq, 0, 400), hold);
+            if (dev is IDeviceConfigurable { Family: domain.Common.FwFamily.Upstream })
+            {
+                // Upstream: only feat/output-bench-test firmware has the command, so wait for its echo (none = no
+                // test); it needs a real frequency for PWM (0 = the output's own) and refuses what OutputTestRules lists.
+                var freq = r.Freq > 0 ? r.Freq : (dev as PdmDevice)?.Outputs.First(x => x.Number == n).Frequency ?? 0;
+                if (domain.Common.OutputTestRules.Refusals(dev, n, mode, freq) is { Count: > 0 } why)
+                    return Results.Json(new { ok = false, error = $"The module would refuse this test: {string.Join("; ", why)}." }, statusCode: 409);
+                var ok = await dm.TestOutputConfirmed(g, n, mode, Math.Clamp(r.Duty, 0, 100), Math.Clamp(freq, 0, 400), hold);
+                if (ok == null) return Results.Json(new { ok = false, error = "No answer from the module: its firmware has no output test command (upstream dingoFW without the bench test)." }, statusCode: 409);
+                if (ok == false) return Results.Json(new { ok = false, error = $"The module refused the test. It runs only on an output that is enabled on the module (Apply first), not tripped, not paired, while the module runs normally{(mode == 2 ? $", at {domain.Common.OutputTestRules.MinPwmHz}-{domain.Common.OutputTestRules.MaxPwmHz} Hz and up to 100 %" : "")}." }, statusCode: 409);
+            }
+            else dm.TestOutput(g, n, mode, Math.Clamp(r.Duty, 0, 100), Math.Clamp(r.Freq, 0, 400), hold);
             return Results.Ok(new { ok = true, output = n, mode = mode == 1 ? "on" : mode == 2 ? "pwm" : "off", holdSec = hold });
         });
 
@@ -816,6 +881,7 @@ public static class LiveApi
             var o = d?.Outputs.FirstOrDefault(x => x.Number == r.Number);
             if (o == null) return Results.NotFound();
             var track = Track("output", o.Number, string.IsNullOrWhiteSpace(o.Name) ? $"o{o.Number}" : $"o{o.Number} {o.Name}", o);
+            var prevDutyInput = o.DutyCycleInput;
             if (r.Name != null) o.Name = r.Name;          // label only — not written over CAN
             if (r.WireColor != null) o.WireColor = r.WireColor;    // documentation labels only
             if (r.WireStripe != null) o.WireStripe = r.WireStripe;
@@ -845,9 +911,22 @@ public static class LiveApi
             if (r.FreqInputDenom is { } fid) o.FreqInputDenom = fid;
             if (r.RampDutyChanges is { } rdc) o.RampDutyChanges = rdc;
             if (r.PrimaryOutput is { } po) o.PrimaryOutput = po;
+            if (r.StayAlive is { } sa) o.StayAlive = sa;
             if (r.WarnLimit is { } wl) o.WarnLimit = wl;
             if (r.OpenLoadLimit is { } oll) o.OpenLoadLimit = oll;
             if (r.OpenLoadTime is { } olt) o.OpenLoadTime = olt;
+            if (r.UnderLimit is { } ul) o.UnderLimit = ul;
+            if (r.UnderTime is { } ut) o.UnderTime = ut;
+            if (r.UnderTrip is { } utr) o.UnderTrip = utr;
+            if (r.ClearOnReassert is { } cor) o.ClearOnReassert = cor;
+            if (r.HardShortLimit is { } nv32) o.HardShortLimit = nv32;
+            if (r.SoftStartTimeout is { } nv30) o.SoftStartTimeout = nv30;
+            if (r.SoftStopTime is { } nv31) o.SoftStopTime = nv31;
+            if (r.Shed is { } sh) o.Shed = sh;
+            if (r.ThermalTau is { } nv33) o.ThermalTau = nv33;
+            // duty % = signal ÷ denominator and a PID output already is the duty in %: wiring a PID in sets it to 1
+            if (o.DutyCycleInput != prevDutyInput && d!.VarMap.FirstOrDefault(v => v.VariableIndex == o.DutyCycleInput)?.OwnerKind == "pid")
+                o.DutyCycleDenominator = 1;
             // The record edit above always persists (offline config authoring). Only push to the
             // module over CAN when it is actually live; report which happened so the UI can say
             // "written to device" vs "saved to project".
@@ -904,26 +983,36 @@ public static class LiveApi
         api.MapGet("/devices/{guid}/functions", (string guid, DeviceManager dm) =>
         {
             if (!Guid.TryParse(guid, out var g)) return Results.Ok(new { });
+            // Upstream dingoFW: a block the module doesn't have is left out (null), so the UI shows "not on this
+            // board". FEATURE BRANCHES: gate your block here by its param base (stock = in upstream's own layout).
+            bool Has(IDeviceConfigurable d, int b, bool stock = false) => d.Family == domain.Common.FwFamily.Fork || domain.Common.FwFamily.HasBlock(d, b, stock);
             if (dm.GetDevice(g) is PdmDevice p)
                 return Results.Ok(new
                 {
                     inputs = p.Inputs, canInputs = p.CanInputs, virtualInputs = p.VirtualInputs,
                     conditions = p.Conditions, counters = p.Counters, flashers = p.Flashers,
-                    timers = p.Timers, tables = p.Tables,
-                    maths = p.Maths, canMessages = p.CanMessages, ignition = p.Ignition,   // firmware 5.6
-                    comfortBlinks = new[] { p.ComfortBlink },   // 5.6.1 (one; an array for the flow builder)
+                    timers = Has(p, TimerFunction.BaseFor(p.Family), true) ? p.Timers : null,
+                    tables = Has(p, LookupTable.BaseFor(p.Family)) ? p.Tables.Take(p.TableCount).ToList() : null,
+                    maths = Has(p, MathFunction.BaseIndex) ? p.Maths : null, canMessages = Has(p, CanMessage.BaseIndex) ? p.CanMessages : null,
+                    curves = p.Family == domain.Common.FwFamily.Upstream && Has(p, CurveFunction.BaseIndex) ? p.Curves : null,   // upstream feat/curve-block only
+                    latchGates = p.Family == domain.Common.FwFamily.Upstream && Has(p, LatchGateFunction.BaseIndex) ? p.LatchGates : null,   // upstream feat/latch-gate-block only
+                    ignition = p.Ignition,   // firmware 5.6
+                    comfortBlinks = Has(p, ComfortBlink.BaseIndex) ? new[] { p.ComfortBlink } : null,   // 5.6.1 (one; an array for the flow builder)
+                    pids = p.Family == domain.Common.FwFamily.Upstream && Has(p, PidFunction.BaseIndex) ? p.Pids : null,   // upstream feat/pid only
                     canOutputs = p.CanOutputs, wiper = p.Wipers, starterDisable = p.StarterDisable,
                     keypads = p.Keypads,
-                    device = new { forceSleepInput = p.ForceSleepInput, muteTxInput = p.MuteTxInput, canSleep = p.CanSleep },
+                    device = new { forceSleepInput = p.ForceSleepInput, muteTxInput = p.MuteTxInput, canSleep = p.CanSleep, retryAllInput = p.HasRetryAll ? p.RetryAllInput : (int?)null, shedInput = p.HasShed ? p.ShedInput : (int?)null },
                 });
             if (dm.GetDevice(g) is CanboardDevice c)
                 return Results.Ok(new
                 {
                     analogIn = c.AnalogInputs, digitalIn = c.DigitalInputs, digitalOut = c.DigitalOutputs,
                     canInputs = c.CanInputs, virtualInputs = c.VirtualInputs, conditions = c.Conditions,
-                    counters = c.Counters, flashers = c.Flashers, timers = c.Timers, canOutputs = c.CanOutputs,
-                    maths = c.Maths, canMessages = c.CanMessages, ignition = c.Ignition,   // firmware 5.6
-                    comfortBlinks = new[] { c.ComfortBlink },   // 5.6.1
+                    counters = c.Counters, flashers = c.Flashers, timers = Has(c, TimerFunction.BaseFor(c.Family)) ? c.Timers : null, canOutputs = c.CanOutputs,
+                    maths = Has(c, MathFunction.BaseIndex) ? c.Maths : null, canMessages = Has(c, CanMessage.BaseIndex) ? c.CanMessages : null,
+                    ignition = c.Ignition,   // firmware 5.6
+                    comfortBlinks = Has(c, ComfortBlink.BaseIndex) ? new[] { c.ComfortBlink } : null,   // 5.6.1
+                    pids = c.Family == domain.Common.FwFamily.Upstream && Has(c, PidFunction.BaseIndex) ? c.Pids : null,   // 5.7 line
                     device = new { forceSleepInput = c.ForceSleepInput, muteTxInput = c.MuteTxInput, canSleep = c.CanSleep },
                 });
             return Results.Ok(new { });
@@ -948,8 +1037,21 @@ public static class LiveApi
             if (r.ForceSleepInput is { } fs && !cfg.CanSleep) return Results.BadRequest(new { ok = false, error = "this module's firmware cannot sleep (a CANBoard sleeps from 5.5.111): it has no force-sleep input" });
             if (Check(r.ForceSleepInput, "force-sleep input") is { } e1) return Results.BadRequest(new { ok = false, error = e1 });
             if (Check(r.MuteTxInput, "mute-TX input") is { } e2) return Results.BadRequest(new { ok = false, error = e2 });
+            if (r.RetryAllInput is { } ra)
+            {
+                if (dev is not PdmDevice { HasRetryAll: true }) return Results.BadRequest(new { ok = false, error = "this module's firmware has no retry-all input (upstream dingoFW with fault clear, PDMs only)" });
+                if (ra != 0 && !cfg.VarMap.Any(x => x.VariableIndex == ra)) return Results.BadRequest(new { ok = false, error = $"signal #{ra} is not in this module's var map" });
+            }
+            if (r.ShedInput is { } sh)
+            {
+                if (dev is not PdmDevice { HasShed: true }) return Results.BadRequest(new { ok = false, error = "this module's firmware has no load-shed input (upstream dingoFW with load shedding, PDMs only)" });
+                var sv = cfg.VarMap.FirstOrDefault(x => x.VariableIndex == sh);
+                if (sh != 0 && sv == null) return Results.BadRequest(new { ok = false, error = $"signal #{sh} is not in this module's var map" });
+                // a module signal (Always On, battery volts, …) is never 0 on a running module: it would shed for good
+                if (sh != 0 && sv?.OwnerKind == "sys") return Results.BadRequest(new { ok = false, error = $"\"{DingoMap.VarLabel(sv)}\" is never off on a running module: as the shed input it would keep the opted-in outputs off for good; use a condition (e.g. battery below a voltage)" });
+            }
             Dictionary<string, string> DevSnap() => dev is PdmDevice q
-                ? new() { ["forceSleepInput"] = q.ForceSleepInput.ToString(), ["muteTxInput"] = q.MuteTxInput.ToString() }
+                ? new() { ["forceSleepInput"] = q.ForceSleepInput.ToString(), ["muteTxInput"] = q.MuteTxInput.ToString(), ["retryAllInput"] = q.RetryAllInput.ToString(), ["shedInput"] = q.ShedInput.ToString() }
                 : new() { ["forceSleepInput"] = ((CanboardDevice)dev).ForceSleepInput.ToString(), ["muteTxInput"] = ((CanboardDevice)dev).MuteTxInput.ToString() };
             var track = new EditTrack("device", 0, "Module", DevSnap);
             switch (dev)
@@ -957,6 +1059,8 @@ public static class LiveApi
                 case PdmDevice p:
                     if (r.ForceSleepInput is { } a) p.ForceSleepInput = a;
                     if (r.MuteTxInput is { } b) p.MuteTxInput = b;
+                    if (r.RetryAllInput is { } ra2) p.RetryAllInput = ra2;
+                    if (r.ShedInput is { } sh2) p.ShedInput = sh2;
                     break;
                 case CanboardDevice c:
                     if (r.ForceSleepInput is { } f) c.ForceSleepInput = f;
@@ -967,13 +1071,19 @@ public static class LiveApi
             List<DeviceManager.WriteResult>? res = null;
             if (live)
             {
+                // fork 0x0000:10 / :11, upstream :8 / :7: take them from the module's own param list
+                int SubOf(string n) => cfg.Params.First(p => p.Name == n).SubIndex;
                 var keys = new List<(int, int)>();
-                if (r.ForceSleepInput is not null) keys.Add((0x0000, 10));
-                if (r.MuteTxInput is not null) keys.Add((0x0000, 11));
+                if (r.ForceSleepInput is not null) keys.Add((0x0000, SubOf("device.forceSleepInput")));
+                if (r.MuteTxInput is not null) keys.Add((0x0000, SubOf("device.muteTxInput")));
+                if (r.RetryAllInput is not null) keys.Add((0x0000, SubOf("device.retryAllInput")));
+                if (r.ShedInput is not null) keys.Add((0x0000, SubOf("device.shedInput")));
                 res = await dm.WriteAndConfirm(g, keys, () =>
                 {
-                    if (r.ForceSleepInput is { } a) dm.WriteParam(g, 0x0000, 10, (uint)a);
-                    if (r.MuteTxInput is { } b) dm.WriteParam(g, 0x0000, 11, (uint)b);
+                    if (r.ForceSleepInput is { } a) dm.WriteParam(g, 0x0000, SubOf("device.forceSleepInput"), (uint)a);
+                    if (r.MuteTxInput is { } b) dm.WriteParam(g, 0x0000, SubOf("device.muteTxInput"), (uint)b);
+                    if (r.RetryAllInput is { } c) dm.WriteParam(g, 0x0000, SubOf("device.retryAllInput"), (uint)c);
+                    if (r.ShedInput is { } e) dm.WriteParam(g, 0x0000, SubOf("device.shedInput"), (uint)e);
                 });
             }
             var (fsNow, mtNow) = dev is PdmDevice pp ? (pp.ForceSleepInput, pp.MuteTxInput) : (((CanboardDevice)dev).ForceSleepInput, ((CanboardDevice)dev).MuteTxInput);
@@ -989,7 +1099,18 @@ public static class LiveApi
             if (fn == null || paramIndex < 0) return Results.NotFound(new { error = $"unknown function {kind} #{number}" });
             using var doc = await JsonDocument.ParseAsync(req.Body);
             var track = Track(CanonKind(kind), number, FnLabel(kind, number, fn), fn);
+            var before = fn is PidFunction ? JsonSerializer.SerializeToElement(fn, fn.GetType()) : default;
+            var prevDuty = (fn as DigitalOutput)?.DutyCycleInput;
             var rejected = FunctionMap.ApplyJson(fn, doc.RootElement);
+            // CANBoard DO: a PID output already is the duty in %, so wiring one in sets the denominator to 1 (as /outputconfig)
+            if (fn is DigitalOutput dout && dout.DutyCycleInput != prevDuty && dev.VarMap.FirstOrDefault(v => v.VariableIndex == dout.DutyCycleInput)?.OwnerKind == "pid")
+                dout.DutyCycleDenominator = 1;
+            // the firmware refuses out-of-range values and runs crossed limits as "disabled": refuse them here
+            if (rejected.Count == 0 && fn is PidFunction pid && pid.Problem() is { } why)
+            {
+                FunctionMap.ApplyJson(fn, before);
+                return Results.BadRequest(new { ok = false, error = why + " — nothing was written to the device" });
+            }
             // A field the model couldn't take (bad enum value, wrong type) must not become a silent
             // "saved": refuse, and don't push a half-applied slot to the device.
             if (rejected.Count > 0)
@@ -1006,6 +1127,10 @@ public static class LiveApi
             // Store on the device record (persists in the project JSON, offline-safe), then push over
             // CAN only when the module is live — same model as output/function params. Push it later
             // with device_action "uploadlua" once the module is online.
+            if (await NoLuaAsync(g, dm, adapters) is { } nl) return nl;
+            // too big: refuse before it lands in the project, or every later Apply of this module failed on it
+            if (dm.GetDevice(g) is PdmDevice lp && System.Text.Encoding.ASCII.GetByteCount(r.Source ?? "") is var n && n > DeviceManager.LuaMax(lp))
+                return Results.BadRequest(new { ok = false, error = string.Format(System.Globalization.CultureInfo.InvariantCulture, "The script is {0:N0} bytes; {1} stores at most {2:N0}. Nothing was saved or sent.", n, lp.Name, DeviceManager.LuaMax(lp)) });
             dm.StoreLua(g, r.Source ?? "");
             var live = await IsLiveModuleAsync(g, dm, adapters);
             if (live)
@@ -1031,7 +1156,7 @@ public static class LiveApi
             if (stored == true) return Results.Ok(new { source = dm.GetStoredLua(g), live = false });
             // Live: read the running program off the device. Offline: return the stored program from
             // the project record (so cross-module / authored Lua is visible without a live module).
-            if (await IsLiveModuleAsync(g, dm, adapters))
+            if (dm.GetDevice(g) is PdmDevice { RunsLua: true } && await IsLiveModuleAsync(g, dm, adapters))
                 return Results.Ok(new { source = await dm.ReadLua(g), live = true });
             return Results.Ok(new { source = dm.GetStoredLua(g), live = false });
         });
@@ -1041,6 +1166,7 @@ public static class LiveApi
         {
             if (!Guid.TryParse(guid, out var g)) return Results.BadRequest();
             if (await RequireLiveModuleAsync(g, dm, adapters, "read the error state from") is { } bad) return bad;
+            if (await NoLuaAsync(g, dm, adapters) is { } nl) return nl;
             var error = await dm.ReadLuaError(g);
             return Results.Ok(new { error });
         });
@@ -1051,7 +1177,10 @@ public static class LiveApi
             if (!Guid.TryParse(guid, out var g)) return Results.BadRequest();
             if (await RequireLiveModuleAsync(g, dm, adapters, "read trips from") is { } bad) return bad;
             var events = await dm.ReadOverloadLog(g);
-            return Results.Ok(new { events });
+            // Upstream dingoFW has the trip log only with feat/overload-trip-log: no answer to the count = no log.
+            if (events is null && dm.GetDevice(g) is IDeviceConfigurable { Family: domain.Common.FwFamily.Upstream })
+                return Results.Json(new { ok = false, error = "This module's firmware (upstream dingoFW) has no trip log." }, statusCode: 409);
+            return Results.Ok(new { events = events ?? [] });
         });
 
         // Clear the on-device overload log.
@@ -1066,13 +1195,16 @@ public static class LiveApi
         // In-app firmware update over USB DFU (raw .bin body): commands the module on USB into DFU and flashes
         // it with dfu-util at the address the image's vector table calls for (relocated app → 0x08004000, the
         // OpenBLT bootloader in sector 0 kept; full image → 0x08000000).
-        api.MapPost("/devices/{guid}/flash", async (string guid, HttpRequest req, FirmwareFlashService flasher) =>
+        api.MapPost("/devices/{guid}/flash", async (string guid, HttpRequest req, FirmwareFlashService flasher, FlashBaseIdRestore restore, DeviceManager dm, ICommsAdapterManager adapters) =>
         {
             if (!Guid.TryParse(guid, out var g)) return Results.BadRequest();
             using var ms = new MemoryStream();
             await req.Body.CopyToAsync(ms);
+            // the ID the module on USB answers on now: it gets it back if the new firmware starts on its default
+            var saved = (adapters.ActiveAdapter is { } usb ? await usb.IdentifyBridgeBaseIdAsync() : null) ?? dm.GetDevice(g)?.BaseId;
             var res = await flasher.FlashAsync(g, ms.ToArray());
-            return Results.Ok(new { ok = res.Ok, log = res.Log });
+            var log = res.Ok && saved is int s ? res.Log + await restore.RestoreAsync(g, s, viaUsb: true) + "\n" : res.Log;
+            return Results.Ok(new { ok = res.Ok, log });
         });
 
         // Flash a new module that isn't in the project (Guid.Empty). If it runs dingo firmware and answers on
@@ -1099,6 +1231,20 @@ public static class LiveApi
             return Results.Ok(new { utilOk = s.UtilOk, util = s.Util, devices = s.DfuDevices, raw = s.Raw });
         });
 
+        // SWD through a debug probe (pyOCD): list the probes, and flash an image (raw body) for one board type.
+        api.MapGet("/flash/swd", async (FirmwareFlashService flasher) =>
+        {
+            var s = await flasher.SwdScanAsync();
+            return Results.Ok(new { toolOk = s.ToolOk, tool = s.Tool, probes = s.Probes, raw = s.Raw });
+        });
+        api.MapPost("/flash/swd", async (string board, string name, int? baseId, HttpRequest req, FirmwareFlashService flasher) =>
+        {
+            using var ms = new MemoryStream();
+            await req.Body.CopyToAsync(ms);
+            var res = await flasher.SwdFlashAsync(board, name, ms.ToArray(), baseId);
+            return Results.Ok(new { ok = res.Ok, log = res.Log });
+        });
+
         // In-app firmware update over CAN (OpenBLT XCP). Upload a .srec (raw body); commands the
         // module into its CAN bootloader and programs it over the live SLCAN link — no USB/DFU.
         // G9: which silent modules sit in their OpenBLT bootloader (after a failed or stopped update). Sends one
@@ -1109,13 +1255,16 @@ public static class LiveApi
             if (!adapters.GetStatus().isConnected) return Results.BadRequest(new { error = "Not connected to a CAN adapter — connect first." });
             if (can.Status().Busy) return Results.Json(new { error = "A CAN update is running." }, statusCode: 409);
             var found = new List<object>();
-            foreach (var d in dm.GetAllDevices().OfType<IDeviceConfigurable>().Where(d => d.CanBootloader))
+            // every silent module, not only those already known to have the bootloader: after a reload nothing is known
+            // (version unheard), and a module that answers XCP CONNECT proves it has one. That is what marks it below.
+            foreach (var d in dm.GetAllDevices().OfType<IDeviceConfigurable>())
             {
                 d.UpdateIsConnected();
                 var ui = dm.GetDeviceUiState(d.Guid);
                 if (d.Connected) { ui.InBootloader = false; continue; }
                 using var xcp = new application.Services.XcpCanMaster(adapters, d.BaseId);
                 ui.InBootloader = await xcp.ConnectAsync(2, CancellationToken.None);
+                if (ui.InBootloader && d is domain.Devices.dingoPdm.PdmDevice up) up.OpenBlt = true;
                 if (ui.InBootloader) await xcp.DisconnectAsync(CancellationToken.None);
                 found.Add(new { guid = d.Guid, name = d.Name, inBootloader = ui.InBootloader });
             }
@@ -1141,25 +1290,113 @@ public static class LiveApi
             if (await RequireLiveModuleAsync(g, dm, adapters, "identify") is { } bad) return bad;
             if (dm.GetDevice(g) is not IDeviceConfigurable c) return Results.BadRequest();
             // version not read yet (no Read since the project opened): ask once, up to ~1 s
-            for (int i = 0; i < 10 && domain.Common.Firmware.Of(c.Version).Major == 0; i++)
+            for (int i = 0; i < 10 && !c.VersionReceived; i++)
             {
                 if (i == 0) dm.RequestVersion(g);
                 await Task.Delay(100);
             }
-            if (!domain.Common.Firmware.Has(c.Version, domain.Devices.Functions.MathFunction.Since))
+            // upstream dingoFW: only builds with feat/identify have it; the reply tells (others ignore an unknown command)
+            var upstream = c.Family == domain.Common.FwFamily.Upstream;
+            if (!upstream && !domain.Common.Firmware.Has(c.Version, domain.Devices.Functions.MathFunction.Since))
                 return Results.Json(new { ok = false, error = "Needs firmware 5.6: older firmware has no identify command." }, statusCode: 409);
             var ok = await dm.IdentifyConfirmed(g, seconds ?? 10);
             return ok ? Results.Ok(new { ok, hasLed = dm.GetDeviceUiState(g).HasLed })
-                      : Results.Json(new { ok, error = "The module did not answer." }, statusCode: 409);
+                      : Results.Json(new { ok, error = upstream ? "No answer: this upstream dingoFW has no identify command." : "The module did not answer." }, statusCode: 409);
         });
 
-        api.MapPost("/devices/{guid}/flash-can", async (string guid, HttpRequest req, CanFlashService flasher) =>
+        // Why the module last reset (upstream feat/reset-cause, request 55): power-on, brown-out, pin, software, watchdog.
+        api.MapGet("/devices/{guid}/resetcause", async (string guid, DeviceManager dm, ICommsAdapterManager adapters) =>
+        {
+            if (!Guid.TryParse(guid, out var g)) return Results.BadRequest();
+            if (await RequireLiveModuleAsync(g, dm, adapters, "read the reset cause") is { } bad) return bad;
+            if (dm.GetDevice(g) is not IDeviceConfigurable c) return Results.BadRequest();
+            if (c.Family != domain.Common.FwFamily.Upstream)
+                return Results.Json(new { ok = false, error = "This firmware (dingoFW 5.x) does not report why it reset." }, statusCode: 409);
+            if (!await dm.ResetCauseConfirmed(g) || dm.GetDeviceUiState(g).ResetFlags is not int f)
+                return Results.Json(new { ok = false, error = "No answer: this firmware does not report why it reset." }, statusCode: 409);
+            var cb = c is CanboardDevice;
+            return Results.Ok(new { ok = true, flags = f, cause = domain.Common.ResetCause.Decode(f, cb), names = domain.Common.ResetCause.Flags(f, cb) });
+        });
+
+        // The module's fault history in FRAM (upstream feat/fault-history, PDMs): newest first, survives power-off.
+        IResult? NoFaultLog(IDevice? dev) => dev switch
+        {
+            PdmDevice { Family: domain.Common.FwFamily.Upstream } => null,
+            PdmDevice => Results.Json(new { ok = false, error = "This firmware (dingoFW 5.x) keeps no fault history: see its trip log." }, statusCode: 409),
+            _ => Results.Json(new { ok = false, error = "Only a PDM keeps a fault history." }, statusCode: 409),
+        };
+        api.MapGet("/devices/{guid}/faultlog", async (string guid, DeviceManager dm, ICommsAdapterManager adapters) =>
+        {
+            if (!Guid.TryParse(guid, out var g)) return Results.BadRequest();
+            if (await RequireLiveModuleAsync(g, dm, adapters, "read the fault history") is { } bad) return bad;
+            if (NoFaultLog(dm.GetDevice(g)) is { } no) return no;
+            if (await dm.ReadFaultLog(g) is not { } log)
+                return Results.Json(new { ok = false, error = "No answer: this firmware keeps no fault history." }, statusCode: 409);
+            return Results.Ok(new { ok = true, bootCount = log.BootCount, entries = log.Entries });
+        });
+        api.MapPost("/devices/{guid}/faultlog/clear", async (string guid, DeviceManager dm, ICommsAdapterManager adapters) =>
+        {
+            if (!Guid.TryParse(guid, out var g)) return Results.BadRequest();
+            if (await RequireLiveModuleAsync(g, dm, adapters, "clear the fault history") is { } bad) return bad;
+            if (NoFaultLog(dm.GetDevice(g)) is { } no) return no;
+            return await dm.ClearFaultLogConfirmed(g) ? Results.Ok(new { ok = true })
+                : Results.Json(new { ok = false, error = "The module did not confirm the clear." }, statusCode: 409);
+        });
+
+        // ---- config lock (upstream feat/config-lock, 0x0200) ----
+        // The project's password + contact text (no CAN: Apply / Write sends them, a lock takes effect after Store + Restart).
+        api.MapPost("/devices/{guid}/lock", (string guid, LockReq r, DeviceManager dm) =>
+        {
+            if (!Guid.TryParse(guid, out var g) || dm.GetDevice(g) is not IDeviceConfigurable c) return Results.BadRequest();
+            if (r.Contact is { } t)
+            {
+                if (t.Length > domain.Devices.Functions.ConfigLock.ContactChars || domain.Devices.Functions.ConfigLock.Clean(t) != t)
+                    return Results.Json(new { ok = false, error = "The contact text is at most 32 plain characters (letters, digits, spaces, punctuation)." }, statusCode: 400);
+                c.Lock.Contact = t;
+            }
+            if (r.ClearPassword) c.Lock.Password = 0;
+            else if (r.Password is { } pw) c.Lock.Password = pw;
+            c.ConfigMismatch = true;   // the module does not hold it until the next write
+            return Results.Ok(new { ok = true, passwordSet = c.Lock.Password != 0 });
+        });
+        api.MapPost("/devices/{guid}/unlock", async (string guid, UnlockReq r, DeviceManager dm, ICommsAdapterManager adapters) =>
+        {
+            if (!Guid.TryParse(guid, out var g)) return Results.BadRequest();
+            if (await RequireLiveModuleAsync(g, dm, adapters, "unlock") is { } bad) return bad;
+            return await dm.UnlockConfirmed(g, r.Password) ? Results.Ok(new { ok = true })
+                : Results.Json(new { ok = false, error = "Not unlocked: wrong password (after a wrong one, wait a second before the next try)." }, statusCode: 409);
+        });
+        // Wipes the configuration (password and contact too), keeps base id + bitrate. Every output turns off at once.
+        api.MapPost("/devices/{guid}/factoryreset", async (string guid, FactoryResetReq r, DeviceManager dm, ICommsAdapterManager adapters) =>
+        {
+            if (!Guid.TryParse(guid, out var g)) return Results.BadRequest();
+            if (r.Confirm != "WIPE") return Results.Json(new { ok = false, error = "Type WIPE to confirm a factory reset." }, statusCode: 400);
+            if (await RequireLiveModuleAsync(g, dm, adapters, "factory reset") is { } bad) return bad;
+            if (dm.GetDevice(g) is not IDeviceConfigurable { Family: domain.Common.FwFamily.Upstream } c || !(c.Lock.Locked || c.ParamSet.Contains(domain.Devices.Functions.ConfigLock.BaseIndex, 0)))
+                return Results.Json(new { ok = false, error = "This module's firmware has no factory reset." }, statusCode: 409);
+            return await dm.FactoryResetConfirmed(g) ? Results.Ok(new { ok = true })
+                : Results.Json(new { ok = false, error = "The module did not confirm that it stored the defaults (see Logs): after a power cycle it may come back with its old configuration. Try again." }, statusCode: 409);
+        });
+
+        // Upstream dingoFW: the operator says whether this PDM has the OpenBLT CAN bootloader (no command can tell, and a
+        // plain upstream app answers a CAN-update request by jumping to USB-DFU). Saved in the project.
+        api.MapPost("/devices/{guid}/openblt", (string guid, bool on, DeviceManager dm) =>
+        {
+            if (!Guid.TryParse(guid, out var g) || dm.GetDevice(g) is not PdmDevice { Family: domain.Common.FwFamily.Upstream } p)
+                return Results.BadRequest(new { ok = false, error = "Only an upstream dingoFW PDM is marked by hand." });
+            p.OpenBlt = on;
+            return Results.Ok(new { ok = true, canBootloader = p.CanBootloader });
+        });
+
+        api.MapPost("/devices/{guid}/flash-can", async (string guid, HttpRequest req, CanFlashService flasher, FlashBaseIdRestore restore, DeviceManager dm) =>
         {
             if (!Guid.TryParse(guid, out var g)) return Results.BadRequest();
             using var ms = new MemoryStream();
             await req.Body.CopyToAsync(ms);
+            var saved = dm.GetDevice(g)?.BaseId;   // over CAN the module answers on its project ID
             var res = await flasher.FlashAsync(g, ms.ToArray());
-            return Results.Ok(new { ok = res.Ok, log = res.Log, version = res.Version });
+            var log = res.Ok && saved is int s ? res.Log + await restore.RestoreAsync(g, s, viaUsb: false) + "\n" : res.Log;
+            return Results.Ok(new { ok = res.Ok, log, version = res.Version, started = res.Started });
         });
 
         // Live CAN-flash progress (polled by the UI while a CAN flash is in flight).
@@ -1339,11 +1576,21 @@ public static class LiveApi
             {
                 var isDbc = d is DbcDevice;
                 foreach (var (mid, sig) in d.GetStatusSigs())
+                    if (d is not (PdmDevice or CanboardDevice) || mid - d.BaseId <= domain.Common.Fw57Migration.Span(d))   // a 5.7 frame whose feature is off is not sent
                     Claim(mid, sig.IsExtended, $"{d.Name}: {(isDbc ? "ECU " + (string.IsNullOrEmpty(sig.MessageName) ? "msg" : sig.MessageName) : "broadcast")}");
+                // the ignition status frame: on its slot (not a status signal, so claimed here: the next PDM 0x20 up has
+                // its base+4 there) or moved off it (0x1E00 sub 23)
+                if (d is IDeviceConfigurable ic && domain.Common.IgnitionMain.Ign(ic) is { } sg && domain.Common.Fw57Migration.IgnFrame(ic)
+                    && sg.FrameId(d.BaseId, d switch { PdmDevice p => p.IgnitionStateOffset, CanboardDevice c => c.IgnitionStateOffset, _ => null }) is { } sid)
+                    Claim(sid, false, $"{d.Name}: ignition status");
+                // a 5.7 main's sync frame (fixed id or base + offset): on another module's frame it is a clash too
+                if (d is IDeviceConfigurable im && domain.Common.IgnitionMain.Ign(im) is { Enabled: true, Role: domain.Devices.Functions.IgnitionRole.Main } mg && domain.Devices.Functions.Ignition.HasSync(im))
+                    Claim(mg.SyncMode == domain.Devices.Functions.IgnitionSyncMode.BaseOffset ? d.BaseId + mg.MainStateId : mg.MainStateId, false, $"{d.Name}: ignition sync");
                 var couts = d switch { PdmDevice p => p.CanOutputs, CanboardDevice c => c.CanOutputs, _ => (IEnumerable<domain.Devices.Functions.CanOutput>?)null };
                 if (couts != null)
-                    foreach (var co in couts.Where(x => x.Enabled))
-                        Claim(co.Id, co.Ide, $"{d.Name}: CAN out '{co.Name}'");
+                    // a module packs its CAN outputs on one id into one frame (signals, counter, checksum): one sender
+                    foreach (var co in couts.Where(x => x.Enabled).GroupBy(x => (x.Id, x.Ide)))
+                        Claim(co.Key.Id, co.Key.Ide, $"{d.Name}: CAN out {string.Join(", ", co.Select(x => $"'{x.Name}'"))}");
                 // A Lua program's txCan(bus, id, ext, …) frames are transmissions as well — without them a future module
                 // placed on those ids would overlap silently.
                 if (d is PdmDevice lp && !string.IsNullOrWhiteSpace(lp.LuaProgram))
@@ -1356,7 +1603,7 @@ public static class LiveApi
                 // Span = the module's real TX footprint (same figures as clientapp canids.js and docs/can-frame-map.md):
                 // a PDM's 28 cyclic frames sit at base+2..base+29; a CANBoard's 10 at base+2..base+11 plus its
                 // OpenBLT bootloader ids at +12/+13.
-                if (!isDbc && d is IDeviceConfigurable) ranges.Add((d.Name, d.BaseId, d.BaseId + (d is CanboardDevice ? 13 : 29)));
+                if (!isDbc && d is IDeviceConfigurable) ranges.Add((d.Name, d.BaseId, d.BaseId + Math.Max(domain.Common.Fw57Migration.Span(d), d is CanboardDevice ? 13 : 29)));
             }
             // An id sent ONLY by Lua txCan calls on several modules is a deliberate shared id (e.g. a master
             // PDM broadcasts a state and backups take over when it goes quiet): report it as `shared`, not as
@@ -1381,7 +1628,7 @@ public static class LiveApi
         // ---- Sim playback: replay a CAN-log CSV onto the simulated bus (connect the "Sim" adapter).
         // CSV format is the app's own CAN-log export: header row, then
         //   timestamp(yyyy-MM-dd HH:mm:ss.fff), Rx|Tx, id(hex), length, data(space-separated hex bytes)
-        api.MapPost("/sim/load", async (HttpRequest req, application.Services.SimPlayback pb) =>
+        api.MapPost("/sim/load", async (HttpRequest req, string? name, application.Services.SimPlayback pb) =>
         {
             // No upload size limit — replay logs can be hundreds of MB. Stream straight to a temp file
             // (never the whole body in memory), then stream-parse it.
@@ -1392,7 +1639,7 @@ public static class LiveApi
             {
                 await using (var fs = File.Create(tmp))
                     await req.Body.CopyToAsync(fs);
-                var (ok, err) = await pb.LoadFile(tmp);
+                var (ok, err) = await pb.LoadFile(tmp, name);   // the user's file name, not the temp one
                 return ok ? Results.Ok(new { ok, total = pb.TotalMessages, fileName = pb.CurrentFileName })
                           : Results.BadRequest(new { ok, error = err });
             }
@@ -1536,6 +1783,7 @@ public static class LiveApi
             {
                 if (!Guid.TryParse(gs, out var g) || dm.GetDevice(g) is not { } dev) { Fail(gs, "device not in project"); continue; }
                 if (dev is not PdmDevice pdm) { Fail(dev.Name, $"{dev.Name} has no Lua engine — only dingoPDM/-Max run Lua. Use link_remote_signal for a CANBoard target."); continue; }
+                if (!pdm.RunsLua) { Fail(dev.Name, $"{dev.Name} runs upstream dingoFW without Lua (it never answered a Lua command)."); continue; }
                 try
                 {
                     // Offline-safe: store Lua + bindings on the device record (persists in the project),
@@ -1583,7 +1831,9 @@ public static class LiveApi
                 foreach (var c in p.Counters) s.Add(new("Counter", c.Name, c.Value.ToString(), c.Value != 0, c.Enabled, N: c.Number));
                 foreach (var f in p.Flashers) s.Add(new("Flasher", f.Name, f.Value ? "on" : "off", f.Value, f.Enabled, N: f.Number));
                 foreach (var t in p.Timers) s.Add(new("Timer", t.Name, t.Value ? "on" : "off", t.Value, t.Enabled, N: t.Number));
-                foreach (var t in p.Tables) s.Add(new("Table", t.Name, t.Value.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture), t.Value != 0, t.Enabled, N: t.Number));
+                foreach (var t in p.Tables.Take(p.TableCount)) s.Add(new("Table", t.Name, t.Value.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture), t.Value != 0, t.Enabled, N: t.Number));
+                if (p.Family == domain.Common.FwFamily.Upstream && domain.Common.FwFamily.HasBlock(p, PidFunction.BaseIndex, false))
+                    foreach (var c in p.Pids) s.Add(new("PID", c.Name, c.Value.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture), c.Value != 0, c.Enabled, N: c.Number));
                 foreach (var o in p.Outputs) s.Add(new("Output", o.Name, o.State.ToString(), o.State.ToString() == "On", o.Enabled, N: o.Number));
             }
             else if (dm.GetDevice(g) is CanboardDevice cb)
@@ -1607,6 +1857,8 @@ public static class LiveApi
                 foreach (var c in cb.Counters) s.Add(new("Counter", c.Name, c.Value.ToString(), c.Value != 0, c.Enabled, N: c.Number));
                 foreach (var f in cb.Flashers) s.Add(new("Flasher", f.Name, f.Value ? "on" : "off", f.Value, f.Enabled, N: f.Number));
                 foreach (var t in cb.Timers) s.Add(new("Timer", t.Name, t.Value ? "on" : "off", t.Value, t.Enabled, N: t.Number));
+                if (cb.Family == domain.Common.FwFamily.Upstream && domain.Common.FwFamily.HasBlock(cb, PidFunction.BaseIndex, false))
+                    foreach (var c in cb.Pids) s.Add(new("PID", c.Name, c.Value.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture), c.Value != 0, c.Enabled, N: c.Number));
             }
             else if (dm.GetDevice(g) is DbcDevice dbc)
             {
@@ -1702,7 +1954,68 @@ public static class LiveApi
             }
         });
 
-        api.MapPost("/project/new", (ConfigFileManager cfg, DeviceManager dm, CrossModuleStore xmod) =>
+        // Convert every fork-5.x module record of the project to the firmware 5.7 layout (Fw57Migration); the report is
+        // on each device (DTO migration). Save the project afterwards (a copy is safest).
+        api.MapPost("/project/migrate57", (DeviceManager dm) =>
+        {
+            var targets = dm.GetAllDevices().OfType<IDeviceConfigurable>().Where(d => d.Family == domain.Common.FwFamily.Fork).ToList();
+            dm.MigrateTo57(targets);
+            return Results.Ok(targets.Select(d => new { guid = d.Guid, name = d.Name, migration = d.Migration }));
+        });
+
+        // Make a CANBoard the ignition main (domain.Common.IgnitionMain): ?preview=true reports what would change and
+        // changes nothing; otherwise it is done and /ignition/main/undo puts every setting back (one step).
+        api.MapPost("/ignition/main/undo", () =>
+        {
+            lock (IgnUndoLock)
+            {
+                if (_ignUndo is null) return Results.NotFound(new { error = "Nothing to undo." });
+                _ignUndo.Restore(); _ignUndo = null;
+                return Results.Ok(new { ok = true });
+            }
+        });
+        api.MapPost("/ignition/main/{guid:guid}", (Guid guid, bool? preview, DeviceManager dm) =>
+        {
+            lock (IgnUndoLock)
+            {
+                var all = dm.GetAllDevices().ToList();
+                if (all.FirstOrDefault(d => d.Guid == guid) is not domain.Devices.Canboard.CanboardDevice cb)
+                    return Results.NotFound(new { error = "No such CANBoard in the project." });
+                var snap = new domain.Common.ValuesSnapshot(all);
+                var r = domain.Common.IgnitionMain.MoveTo(all, cb);
+                var changes = snap.Changes();
+                if (preview == true || !r.Ok) snap.Restore();
+                else _ignUndo = snap;
+                return Results.Ok(new { ok = r.Ok, error = r.Error, notes = r.Notes, changes, done = r.Ok && preview != true });
+            }
+        });
+
+        // Firmware 5.7: copy the main module's sync setting to every module whose ignition role is follower (nothing else
+        // is touched); staged in the project, Apply to car sends it.
+        api.MapPost("/ignition/sync/{guid:guid}", (Guid guid, DeviceManager dm) =>
+        {
+            var all = dm.GetAllDevices().ToList();
+            if (all.FirstOrDefault(d => d.Guid == guid) is not IDeviceConfigurable main) return Results.NotFound(new { error = "No such module in the project." });
+            var r = domain.Common.IgnitionMain.SyncFollowers(all, main);
+            return r.Error is { } e ? Results.BadRequest(new { ok = false, error = e })
+                : Results.Ok(new { ok = true, changed = r.Changed.Select(d => d.Name), skipped = r.Skipped });
+        });
+
+        // The project folder (kept in the user preferences). The open project stays open but forgets its file name,
+        // so a Save cannot overwrite a same-named file in the new folder without asking.
+        api.MapPost("/project/folder", (FolderReq r, ConfigFileManager cfg, UserPreferencesManager prefs) =>
+        {
+            var dir = r.Dir?.Trim() ?? "";
+            if (!Path.IsPathFullyQualified(dir)) return Results.BadRequest(new { ok = false, error = "Give the full path of a folder, like C:\\Users\\you\\Documents\\dingoConfig." });
+            try { Directory.CreateDirectory(dir); }
+            catch (Exception e) { return Results.BadRequest(new { ok = false, error = $"Cannot use that folder: {e.Message}" }); }
+            if (!string.Equals(Path.GetFullPath(dir).TrimEnd('\\', '/'), Path.GetFullPath(cfg.WorkingDirectory).TrimEnd('\\', '/'), StringComparison.OrdinalIgnoreCase)) cfg.NewFile();
+            cfg.WorkingDirectory = dir;
+            prefs.Preferences.WorkingDirectory = dir; prefs.Save();
+            return Results.Ok(new { ok = true, dir });
+        });
+
+        api.MapPost("/project/new",(ConfigFileManager cfg, DeviceManager dm, CrossModuleStore xmod) =>
         {
             dm.ClearDevices(); xmod.Clear(); cfg.NewFile(); cfg.ClientState = null; TemplateApi.LoadInstances(null); GroupApi.Load(null); MarkClean(cfg, dm); return Results.Ok(new { ok = true });
         });
@@ -1765,6 +2078,24 @@ public static class LiveApi
             return Results.File(System.Text.Encoding.UTF8.GetBytes(sb.ToString()), "text/csv", "canlog.csv");
         });
 
+        // ---- Force a CAN-input value: the app sends the input's source frame until the hold runs out (max 30 s)
+        // or /stop. Only a CAN-sourced value can be forced without firmware support. Refused on the Sim (ProgrammingRoute).
+        api.MapPost("/can/force", (CanForceReq r, CanForcer f) =>
+        {
+            byte[] data;
+            try { data = Convert.FromHexString((r.Data ?? "").Replace(" ", "")); }
+            catch (FormatException) { return Results.BadRequest(new { ok = false, error = "data must be hex bytes" }); }
+            var err = f.Start(new CanFrame(r.Id, data.Length, data, r.Ide), r.PeriodMs, r.HoldSec);
+            return err is null ? Results.Ok(new { ok = true, untilMs = (long)(f.Until - DateTime.UtcNow).TotalMilliseconds }) : Results.BadRequest(new { ok = false, error = err });
+        });
+        api.MapPost("/can/force/stop", (CanForcer f) => { f.Stop(); return Results.Ok(new { ok = true }); });
+        api.MapGet("/can/force/status", (CanForcer f) =>
+        {
+            var fr = f.Frame;
+            return Results.Ok(new { active = f.Active && fr != null, id = fr?.Id, ide = fr?.IsExtended, data = fr is null ? null : Convert.ToHexString(fr.Payload),
+                remainingMs = fr is null ? 0 : Math.Max(0, (long)(f.Until - DateTime.UtcNow).TotalMilliseconds), sent = f.Sent });
+        });
+
         // ---- CAN recorder (SavvyCAN-style): record every frame to a CSV and save it to the PC.
         // Gated on a REAL CAN interface — the simulator can't be recorded.
         api.MapPost("/canlog/record/start", (CanMsgLogger log, ICommsAdapterManager adapters) =>
@@ -1825,9 +2156,11 @@ public static class LiveApi
             // These talk to live hardware over CAN. The writes are fire-and-forget, so without
             // a guard they "succeed" silently against an empty bus. Refuse unless the adapter is
             // connected AND the target module is actually broadcasting (seen within ~500 ms).
-            string[] liveActions = ["read", "readall", "write", "writeall", "burn", "sleep", "bootloader", "version", "uploadlua"];
+            string[] liveActions = ["read", "readall", "write", "writeall", "burn", "sleep", "bootloader", "version", "uploadlua", "restart"];
             if (liveActions.Contains(action) && await RequireLiveModuleAsync(g, dm, adapters, action) is { } bad) return bad;
             // Wake up is for a module that is NOT answering (asleep, or woken by CAN and still quiet): only the adapter must be there
+            if (action is "read" or "readall" or "write" or "writeall" && dm.GetDevice(g) is IDeviceConfigurable od && DeviceManager.OlderLine(od))
+                return Results.Json(new { ok = false, error = $"{od.Name} runs {od.Version}, but this project was converted for firmware 5.7. Flash 5.7 first. Nothing was read or written." }, statusCode: 409);
             if (action == "wakeup" && !adapters.GetStatus().isConnected) return Results.Text("Not connected to a CAN adapter — connect first.", "text/plain", null, 400);
 
             switch (action)
@@ -1841,9 +2174,13 @@ public static class LiveApi
                     if (!await dm.WriteDeviceConfigConfirmed(g, all: action == "writeall"))
                         return Results.Json(new { ok = false, error = dm.GetDevice(g) is { } wd && !DeviceManager.VersionKnown(wd)
                             ? "The module hasn't said which firmware it runs, so nothing was written (a write now could reset its newer settings). Try again in a moment."
+                            : dm.GetDevice(g) is { } ud && !DeviceManager.ParamsKnown(ud)
+                            ? "Read the module first: on firmware 5.7 (and upstream dingoFW) the app learns the module's list of settings from a Read before it can write them. Nothing was written."
+                            : dm.GetDevice(g) is IDeviceConfigurable { Lock.Locked: true }
+                            ? "The module is locked by its installer: Unlock it first. Nothing was written."
                             : "The module didn't confirm the write (see Logs) — it keeps its previous config" }, statusCode: 409);
                     // the project's Lua belongs to the config: send it unless this app already saw it on the module
-                    if (dm.GetDevice(g) is PdmDevice && dm.GetDeviceUiState(g).LuaOnModule != dm.GetStoredLua(g)
+                    if (dm.GetDevice(g) is PdmDevice { RunsLua: true } && dm.GetDeviceUiState(g).LuaOnModule != dm.GetStoredLua(g)
                         && !await dm.UploadLuaAsync(g, dm.GetStoredLua(g)))
                         return Results.Json(new { ok = false, error = "Settings written, but the Lua program didn't verify on the module (see Logs) — it keeps its previous program" }, statusCode: 409);
                     break;
@@ -1856,6 +2193,12 @@ public static class LiveApi
                 // ?can=true: the OpenBLT CAN-update entry (it waits there for a tool, G9); default: the USB-DFU entry
                 case "bootloader": dm.RequestBootloader(g, canUpdate: can == true); break;
                 case "version": dm.RequestVersion(g); break;
+                // upstream: restart (unstored settings are lost; a stored config lock takes effect)
+                case "restart":
+                    if (dm.GetDevice(g) is not IDeviceConfigurable { Family: domain.Common.FwFamily.Upstream })
+                        return Results.Json(new { ok = false, error = "Restart over CAN is an upstream dingoFW command." }, statusCode: 409);
+                    if (!await dm.RestartConfirmed(g)) return Results.Json(new { ok = false, error = "The module did not confirm the restart." }, statusCode: 409);
+                    break;
                 // Push the Lua program stored on the record (e.g. an offline cross-module deploy) to the
                 // now-live module. Pair with "writeall" to also push the output bindings (params).
                 case "uploadlua":
@@ -1873,10 +2216,21 @@ public static class LiveApi
     // short-circuit with, or null when it's safe to proceed. Mirrors the /{action} guard so every
     // CAN-commit path fails loud and consistent instead of "succeeding" against an empty bus.
     // (Base-ID/rename are offline-safe and firmware/DFU runs over USB — neither uses this.)
+    // Upstream dingoFW runs Lua only with feat/lua-scripting, which no param shows: a live module that has not answered a
+    // Lua command yet is asked once (the reply sets HasLua and adds the Lua slots to its var map).
+    private static async Task<IResult?> NoLuaAsync(Guid g, DeviceManager dm, ICommsAdapterManager adapters)
+    {
+        if (dm.GetDevice(g) is not PdmDevice { Family: domain.Common.FwFamily.Upstream } p || p.RunsLua) return null;
+        if (await IsLiveModuleAsync(g, dm, adapters)) await dm.ReadLuaError(g);
+        return p.RunsLua ? null : Results.Json(new { ok = false, error = "This module runs upstream dingoFW without Lua (it did not answer a Lua command)." }, statusCode: 409);
+    }
     private static async Task<IResult?> RequireLiveModuleAsync(Guid g, DeviceManager dm, ICommsAdapterManager adapters, string verb)
     {
         if (!adapters.GetStatus().isConnected)
             return Results.Text("Not connected to a CAN adapter — connect first.", "text/plain", null, 400);
+        // a replayed log has frames but no module listening: nothing sent can be answered
+        if (IsSim(adapters))
+            return Results.Text($"Sim adapter: a log is playing back, there is no module to {verb}. Connect to the car first.", "text/plain", null, 400);
         var dev = dm.GetDevice(g);
         if (dev == null) return Results.NotFound();
         if (!await SeenAsync(dev, waitAlways: true))
@@ -1912,7 +2266,8 @@ public static class LiveApi
 
     private static async Task<bool> IsLiveEditAsync(HttpContext http, Guid g, DeviceManager dm, ICommsAdapterManager adapters, EditTrack? t = null)
     {
-        if (!Staged(http) && await IsLiveModuleAsync(g, dm, adapters))
+        // upstream dingoFW before a Read: the app can't tell which of the slot's params it has, so the edit waits for Apply
+        if (!Staged(http) && dm.GetDevice(g) is { } ld && DeviceManager.ParamsKnown(ld) && await IsLiveModuleAsync(g, dm, adapters))
         {
             // written to the module now, the whole slot: its waiting rows are no longer waiting
             if (t != null) { var u = dm.GetDeviceUiState(g); lock (u.Edits) u.Edits.RemoveAll(e => e.Kind == t.Kind && e.Number == t.Number); }
@@ -1994,8 +2349,8 @@ public static class LiveApi
     {
         ["input"] = "Input", ["pin"] = "Input", ["caninput"] = "CAN input", ["can"] = "CAN input", ["virtualinput"] = "Logic", ["cmb"] = "Logic",
         ["condition"] = "Condition", ["cmp"] = "Condition", ["counter"] = "Counter", ["cnt"] = "Counter", ["flasher"] = "Flasher", ["fl"] = "Flasher",
-        ["timer"] = "Timer", ["tmr"] = "Timer", ["table"] = "Table", ["tbl"] = "Table", ["math"] = "Math", ["canmsg"] = "CAN message",
-        ["ignition"] = "Ignition", ["comfortblink"] = "Comfort blink", ["canoutput"] = "CAN output", ["cout"] = "CAN output",
+        ["timer"] = "Timer", ["tmr"] = "Timer", ["table"] = "Table", ["tbl"] = "Table", ["math"] = "Math", ["curve"] = "Curve", ["latchgate"] = "Latch / Gate", ["lg"] = "Latch / Gate", ["canmsg"] = "CAN message",
+        ["ignition"] = "Ignition", ["comfortblink"] = "Comfort blink", ["pid"] = "PID", ["canoutput"] = "CAN output", ["cout"] = "CAN output",
         ["wiper"] = "Wiper", ["wip"] = "Wiper", ["starterdisable"] = "Starter disable", ["std"] = "Starter disable", ["keypad"] = "Keypad",
         ["keypadbutton"] = "Keypad button", ["keypaddial"] = "Keypad dial", ["digitaloutput"] = "Output", ["dout"] = "Output",
         ["analoginput"] = "Analog input", ["ain"] = "Analog input",
@@ -2021,6 +2376,8 @@ public static class LiveApi
                 {
                     case (PdmDevice p, "forceSleepInput"): p.ForceSleepInput = v; break;
                     case (PdmDevice p, "muteTxInput"): p.MuteTxInput = v; break;
+                    case (PdmDevice p, "retryAllInput"): p.RetryAllInput = v; break;
+                    case (PdmDevice p, "shedInput"): p.ShedInput = v; break;
                     case (CanboardDevice c, "muteTxInput"): c.MuteTxInput = v; break;
                     default: return "that setting can't be put back";
                 }
@@ -2037,7 +2394,8 @@ public static class LiveApi
 
     private static async Task<bool> IsLiveModuleAsync(Guid g, DeviceManager dm, ICommsAdapterManager adapters)
     {
-        if (!adapters.GetStatus().isConnected) return false;
+        // under the Sim adapter a module "seen" in a replayed log cannot receive: edits stay in the project
+        if (!adapters.GetStatus().isConnected || IsSim(adapters)) return false;
         var dev = dm.GetDevice(g);
         return dev != null && await SeenAsync(dev, waitAlways: false);
     }
@@ -2080,7 +2438,8 @@ public static class LiveApi
         foreach (var t in p.GetTimers()) used.Add(t.Input);
         foreach (var t in p.GetTables()) { used.Add(t.XInput); used.Add(t.YInput); }
         foreach (var c in p.GetCanOutputs()) used.Add(c.Input);
-        used.Add(p.ForceSleepInput); used.Add(p.MuteTxInput);
+        foreach (var c in p.Pids) { used.Add(c.SetpointInput); used.Add(c.ProcessInput); used.Add(c.ActivateInput); used.Add(c.FeedFwdInput); }
+        used.Add(p.ForceSleepInput); used.Add(p.MuteTxInput); used.Add(p.RetryAllInput); used.Add(p.ShedInput);
         var luaVars = p.VarMap.Where(v => v.OwnerKind == "lua").ToList();   // OwnerNumber = slot + 1
         var consumedSlots = luaVars.Where(v => used.Contains(v.VariableIndex)).Select(v => v.OwnerNumber - 1).ToHashSet();
         foreach (var s in written.Where(s => !consumedSlots.Contains(s)).OrderBy(s => s))
@@ -2112,6 +2471,7 @@ public static class LiveApi
                 "Flasher" => p.GetFlashers().FirstOrDefault(x => x.Number == n)?.Name,
                 "Timer" => p.GetTimers().FirstOrDefault(x => x.Number == n)?.Name,
                 "Table" => p.GetTables().FirstOrDefault(x => x.Number == n)?.Name,
+                "Pid" => p.Pids.FirstOrDefault(x => x.Number == n)?.Name,
                 _ => null,
             },
             CanboardDevice c => kind switch
@@ -2125,6 +2485,7 @@ public static class LiveApi
                 "Counter" => c.GetCounters().FirstOrDefault(x => x.Number == n)?.Name,
                 "Flasher" => c.GetFlashers().FirstOrDefault(x => x.Number == n)?.Name,
                 "Timer" => c.GetTimers().FirstOrDefault(x => x.Number == n)?.Name,
+                "Pid" => c.Pids.FirstOrDefault(x => x.Number == n)?.Name,
                 _ => null,
             },
             _ => null,
@@ -2152,6 +2513,9 @@ public static class LiveApi
                 "flasher" => p.GetFlashers().FirstOrDefault(x => x.Number == n)?.Enabled ?? true,
                 "timer" => p.GetTimers().FirstOrDefault(x => x.Number == n)?.Enabled ?? true,
                 "table" => p.GetTables().FirstOrDefault(x => x.Number == n)?.Enabled ?? true,
+                "curve" => p.Curves.FirstOrDefault(x => x.Number == n)?.Enabled ?? true,
+                "latchgate" => p.LatchGates.FirstOrDefault(x => x.Number == n)?.Enabled ?? true,
+                "pid" => p.Pids.FirstOrDefault(x => x.Number == n)?.Enabled ?? true,
                 "output" => p.GetOutputs().FirstOrDefault(x => x.Number == n)?.Enabled ?? true,
                 "wiper" => p.GetWipers()?.Enabled ?? false,
                 "keypad" => p.GetKeypads().FirstOrDefault(x => x.Number == n)?.Enabled ?? true,
@@ -2173,6 +2537,7 @@ public static class LiveApi
                 "condition" => c.GetConditions().FirstOrDefault(x => x.Number == n)?.Enabled ?? true,
                 "counter" => c.GetCounters().FirstOrDefault(x => x.Number == n)?.Enabled ?? true,
                 "flasher" => c.GetFlashers().FirstOrDefault(x => x.Number == n)?.Enabled ?? true,
+                "pid" => c.Pids.FirstOrDefault(x => x.Number == n)?.Enabled ?? true,
                 "timer" => c.GetTimers().FirstOrDefault(x => x.Number == n)?.Enabled ?? true,
                 _ => true,
             },
@@ -2201,6 +2566,7 @@ public static class LiveApi
                 "Flasher" => p.GetFlashers().FirstOrDefault(x => x.Number == n)?.Enabled ?? false,
                 "Timer" => p.GetTimers().FirstOrDefault(x => x.Number == n)?.Enabled ?? false,
                 "Table" => p.GetTables().FirstOrDefault(x => x.Number == n)?.Enabled ?? false,
+                "Pid" => p.Pids.FirstOrDefault(x => x.Number == n)?.Enabled ?? false,
                 "Wiper" => p.GetWipers()?.Enabled ?? false,
                 _ => true,
             };
@@ -2217,6 +2583,7 @@ public static class LiveApi
                 "Counter" => c.GetCounters().FirstOrDefault(x => x.Number == n)?.Enabled ?? false,
                 "Flasher" => c.GetFlashers().FirstOrDefault(x => x.Number == n)?.Enabled ?? false,
                 "Timer" => c.GetTimers().FirstOrDefault(x => x.Number == n)?.Enabled ?? false,
+                "Pid" => c.Pids.FirstOrDefault(x => x.Number == n)?.Enabled ?? false,
                 _ => true,
             };
         return true;

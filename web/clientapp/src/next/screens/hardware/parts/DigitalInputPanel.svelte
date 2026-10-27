@@ -7,7 +7,7 @@
   import { pinFor, ioTag } from '../../../../lib/pinmap.js'
   import { inputModel } from './input.svelte.js'
   import { signalFeed, ring } from './feeds.svelte.js'
-  import { resample } from './util.js'
+  import { resample, has, isUpstream } from './util.js'
   import SaveBar from './SaveBar.svelte'
   import UsedBy from './UsedBy.svelte'
 
@@ -27,6 +27,8 @@
   const pwmIn = $derived(isCanboard(dev)
     ? { board: 'CANBoard', maxHz: 5000, text: 'A 10 kΩ series resistor and no filter capacitor, so up to about 5 kHz. Nothing filters noise on a long wire: a glitch filter of 20 to 50 µs is a good start.' }
     : { board: 'dingoPDM', maxHz: 1000, text: 'A 4.7 kΩ and 10 nF filter, so up to about 1 kHz from a driven source and about 100 Hz from an open-collector one. The filter already removes short spikes.' })
+  // upstream dingoFW: PWM measurement only where the module has 0x1200 sub 5 (feat/digital-input-pwm; the CANBoard from 5.7)
+  const pwmOk = $derived(has(dev, 0x1200, 5))
   const problem = $derived.by(() => {
     if (!f || !dirty) return ''
     if (!String(f.name).trim()) return 'Give the input a name.'
@@ -128,7 +130,7 @@
       <Banner tone="fault" title="Wiring check: nothing changed in 10 s">The pin did not change. Check the wire, the switch and the pull resistor, then test again.</Banner>
     {/if}
 
-    <Segmented label="Use this input as" items={[{ value: 'switch', label: 'On / off switch' }, { value: 'pwm', label: 'PWM measurement' }]} bind:value={useVal} onchange={(v) => { f.pwm = v === 'pwm'; if (!f.enabled) f.enabled = true }} />
+    {#if pwmOk || f.pwm}<Segmented label="Use this input as" items={[{ value: 'switch', label: 'On / off switch' }, { value: 'pwm', label: 'PWM measurement' }]} bind:value={useVal} onchange={(v) => { f.pwm = v === 'pwm'; if (!f.enabled) f.enabled = true }} />{/if}
 
     <div class="cols">
       <div class="col">
@@ -183,7 +185,7 @@
             <Stepper label="Glitch filter" bind:value={f.pwmMinPulseUs} min={0} max={10000} step={10} unit="µs" data-testid="glitch" />
             <span class="muted small">Ignores pulses shorter than this. Keep it well under the shortest real pulse (1 % at 1 kHz is 10 µs).</span>
             <Checkbox bind:checked={f.invert} label="Invert (duty = time low)" />
-            <p class="muted small"><strong>{pwmIn.board} input.</strong> {pwmIn.text} In this mode the pin no longer works as an on / off switch.</p>
+            <p class="muted small"><strong>{pwmIn.board} input.</strong> {pwmIn.text} In this mode the pin no longer works as an on / off switch{isUpstream(dev) ? ': its own variable means "signal present".' : '.'}</p>
           {/if}
         </Card>
         <UsedBy {guid} items={M.usedBy} hint="Edits here change every function that uses this input." />

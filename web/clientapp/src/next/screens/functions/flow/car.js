@@ -30,7 +30,7 @@ export function remoteSource(ci, self, devices, bcBy, idMap) {
     for (const d of devices) {
       if (d.guid === self?.guid || !isModule(d.type)) continue
       const off = ci.id - (d.baseId ?? 0)
-      if (off < 0 || off > spanAfter(d.type)) continue
+      if (off < 0 || off > spanAfter(d.type, d)) continue
       const sig = (bcBy[d.guid] ?? []).find((s) => s.offset === off && s.startBit === ci.startBit && s.bitLength === ci.bitLength)
       return { kind: 'module', dev: d, sig, node: sig ? bcNode(sig.name) : null, label: `${d.name} · ${sig ? (sig.label ?? sig.name).replace(/ · /g, ' ') : 'frame +' + off}` }
     }

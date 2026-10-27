@@ -15,6 +15,7 @@ const mkApi = (host) => {
     broadcastSignals: (g, inUse = false) => j('GET', `/api/devices/${g}/broadcast-signals${inUse ? '?inUse=true' : ''}`),
     setFunction: (g, kind, n, body) => j('POST', `/api/devices/${g}/function/${kind}/${n}`, body),
     outputConfig: (g, body) => j('POST', `/api/devices/${g}/outputconfig`, body),
+    deviceInputs: (g, body) => j('POST', `/api/devices/${g}/device-inputs`, body),
   }
 }
 
@@ -49,7 +50,7 @@ export async function preview(host, reqJson) {
 // An edit starts from the applied instance: its stored picks/settings/relays, overridden by what req sends
 // ('' clears an optional pick).
 export function merged(old, req) {
-  const tpl = TEMPLATES.find((t) => t.key === old.key), isPick = (f) => ['out', 'bool', 'num'].includes(f.t)
+  const tpl = TEMPLATES.find((t) => t.key === old.key), isPick = (f) => ['out', 'bool', 'num', 'module'].includes(f.t)
   const from = (keep) => Object.fromEntries(tpl.fields.filter((f) => keep(f) && !blank(old.sel?.[f.k])).map((f) => [f.k, old.sel[f.k]]))
   return { ...req, key: old.key, name: req.name ?? old.name, picks: { ...from(isPick), ...req.picks }, settings: { ...from((f) => !isPick(f)), ...req.settings }, relays: { ...old.relays, ...req.relays } }
 }
@@ -62,7 +63,7 @@ export async function apply(host, reqJson, instancesJson, newId) {
   const { api, devices, p } = await plan(host, old ? merged(old, req) : req, old)
   const outKey = (i, w) => (/^\d+$/.test(String(w)) ? `${i.guid}:${w}` : String(w))   // older instances: bare n on the logic module
   const mine = old ? (old.wired ?? []).map((w) => outKey(old, w)) : []
-  const taken = p.tpl ? p.tpl.fields.filter((f) => f.t === 'out' && p.outOpts.find((o) => o.value === p.sel[f.k])?.used && !mine.includes(p.sel[f.k])).map((f) => p.resolved[f.k]) : []
+  const taken = p.tpl ? p.tpl.fields.filter((f) => f.t === 'out' && !p.tpl.keepsRule && p.outOpts.find((o) => o.value === p.sel[f.k])?.used && !mine.includes(p.sel[f.k])).map((f) => p.resolved[f.k]) : []
   if (p.errors.length) throw new Error(p.errors.join('; '))
   if (taken.length && !req.takeOver) throw new Error(`already driven by something else: ${taken.join(', ')} — pass takeOver: true to take ${taken.length > 1 ? 'them' : 'it'} over (remove_template gives ${taken.length > 1 ? 'them' : 'it'} back)`)
   const others = instances.filter((i) => i.id !== req.id)

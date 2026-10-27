@@ -1,0 +1,27 @@
+VERSION ""
+
+NS_ :
+
+BS_:
+
+BU_: ECU
+
+BO_ 513 BASE1: 8 ECU
+ SG_ RPM : 0|16@1+ (1,0) [0|65535] "rpm" Vector__XXX
+ SG_ VehicleSpeed : 48|8@1+ (1,0) [0|255] "km/h" Vector__XXX
+
+BO_ 514 BASE2: 8 ECU
+ SG_ TPS1 : 16|16@1- (0.01,0) [0|100] "%" Vector__XXX
+
+BO_ 515 BASE3: 8 ECU
+ SG_ MAP : 0|16@1+ (0.03333333,0) [0|2184] "kPa" Vector__XXX
+ SG_ CoolantTemp : 16|8@1+ (1,-40) [-40|215] "degC" Vector__XXX
+ SG_ IntakeTemp : 24|8@1+ (1,-40) [-40|215] "degC" Vector__XXX
+
+BO_ 516 BASE4: 8 ECU
+ SG_ OilPress : 16|16@1+ (0.03333333,0) [0|2184] "kPa" Vector__XXX
+ SG_ OilTemperature : 32|8@1+ (1,-40) [-40|215] "degC" Vector__XXX
+ SG_ BattVolt : 48|16@1+ (0.001,0) [0|65.535] "V" Vector__XXX
+
+CM_ "rusEFI verbose CAN broadcast (enableVerboseCanTx), default base 0x200: these ids assume the default base. Little endian. A subset of the upstream file.";
+CM_ "Sources: rusEFI firmware/controllers/can/rusEFI_CAN_verbose.dbc (github.com/rusefi/rusefi, commit bfde8f49, 2025-11-20) and https://wiki.rusefi.com/CAN-Broadcast-for-Dashboards. BattVolt unit corrected to V (upstream says mV with factor 0.001).";

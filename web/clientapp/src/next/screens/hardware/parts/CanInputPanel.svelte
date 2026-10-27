@@ -9,10 +9,11 @@
   import { inputModel } from './input.svelte.js'
   import { linkRemote } from '../../functions/flow/net.js'
   import { signalFeed, ring } from './feeds.svelte.js'
-  import { resample, olderThan } from './util.js'
+  import { resample, lacks, has, isUpstream } from './util.js'
   import SaveBar from './SaveBar.svelte'
   import UsedBy from './UsedBy.svelte'
   import LearnSwitch from './LearnSwitch.svelte'
+  import { signalBits, decode, compare, parseBytes } from './canbits.js'
 
   let { guid, n } = $props()
   const M = inputModel(() => guid, () => 'caninput', () => n)
@@ -23,7 +24,7 @@
   // ---- form ----
   let f = $state(null), snap = $state(''), learnedNote = $state(false)
   const seed = (r) => ({ name: r.name ?? '', enabled: !!r.enabled, id: r.id ?? 0, ide: !!r.ide, startBit: r.startBit ?? 0, bitLength: r.bitLength ?? 8, byteOrder: r.byteOrder ?? 0, signed: !!r.signed,
-    factor: r.factor ?? 1, offset: r.offset ?? 0, operator: r.operator ?? 0, operand: r.operand ?? 0, timeoutEnabled: !!r.timeoutEnabled, timeout: r.timeout ?? 1000, timeoutValue: r.timeoutValue ?? 0, idText: hex(r.id ?? 0) })
+    factor: r.factor ?? 1, offset: r.offset ?? 0, operator: r.operator ?? 0, operand: r.operand ?? 0, timeoutEnabled: !!r.timeoutEnabled, timeout: r.timeout ?? 1000, timeoutValue: r.timeoutValue ?? 0, timeoutUseValue: !!r.timeoutUseValue, idText: hex(r.id ?? 0) })
   $effect(() => { if (!f && row) { f = seed(row); snap = JSON.stringify(f) } })
   const dirty = $derived(!!f && JSON.stringify(f) !== snap)
   function revert() { if (row) { f = seed(row); snap = JSON.stringify(f); M.state.saveErr = ''; learnedNote = false } }
@@ -45,7 +46,7 @@
     const body = { name: String(f.name).trim(), enabled: f.enabled, id: parsedId, ide: f.ide, startBit: Math.trunc(Number(f.startBit)), bitLength: Math.trunc(Number(f.bitLength)),
       byteOrder: Number(f.byteOrder), signed: f.signed, factor: Number(f.factor), offset: Number(f.offset), operator: Number(f.operator), operand: Number(f.operand),
       timeoutEnabled: f.timeoutEnabled, timeout: Math.max(0, Math.round(Number(f.timeout) || 0)),
-      ...(firmwareOld ? {} : { timeoutValue: Number(f.timeoutValue) || 0 }) }
+      ...(firmwareOld ? {} : { timeoutValue: Number(f.timeoutValue) || 0 }), ...(useFlag ? { timeoutUseValue: f.timeoutUseValue } : {}) }
     if (await M.save(body)) { snap = JSON.stringify(f); learnedNote = false }
   }
 
@@ -152,16 +153,19 @@
   let frame = $state(null), lastSeen = $state(0), period = $state(0), prevCount = 0, prevAt = 0
   $effect(() => {
     const r = row
-    if (!r || !r.id) { frame = null; return }
+    if (!r) { frame = null; return }
     let alive = true, busy = false
     prevCount = 0; prevAt = 0
     const poll = async () => {
       if (busy) return
       busy = true
       try {
+        // the ID typed in the form once it parses, else the saved one
+        const id = Number.isInteger(parsedId) && parsedId > 0 ? parsedId : r.id, ide = f ? !!f.ide : !!r.ide
+        if (!id) { frame = null; return }
         const list = await api.canlog()
         if (!alive) return
-        const e = (list ?? []).find((x) => x.id === r.id && !!x.ide === !!r.ide && x.dir === 'Rx') ?? null
+        const e = (list ?? []).find((x) => x.id === id && !!x.ide === ide && x.dir === 'Rx') ?? null
         frame = e
         const t = Date.now()
         if (e && e.count !== prevCount) {
@@ -192,13 +196,27 @@
   const pillTone = $derived(!live.connected ? 'stale' : !dev?.connected ? 'stale' : !row?.enabled ? 'off' : timedOut ? 'fault' : val == null ? 'stale' : val ? 'on' : 'off')
   const pillText = $derived(!live.connected ? 'No connection' : !dev?.connected ? 'Module offline' : !row?.enabled ? 'Not in use' : timedOut ? 'Signal lost' : val == null ? 'Reading…' : `${decoded} · ${f?.idText}`)
 
+  // ---- test bytes: type a frame (or follow the last one received) and see what the input reads ----
+  let test = $state(['00', '00', '00', '00', '00', '00', '00', '00'])
+  let useLive = $state(false)
+  $effect(() => { if (useLive && frame?.data) test = parseBytes(frame.data).map((b) => b.toString(16).toUpperCase().padStart(2, '0')) })
+  const testBytes = $derived(test.map((t) => (/^[0-9a-f]{1,2}$/i.test(String(t).trim()) ? parseInt(String(t).trim(), 16) : NaN)))
+  const testBad = $derived(testBytes.some((b) => Number.isNaN(b)))
+  const sigBits = $derived(f ? signalBits(f.startBit, f.bitLength, f.byteOrder) : [])
+  const sigSet = $derived(new Set(sigBits))
+  const testDec = $derived(f && !testBad ? decode(testBytes, f) : null)
+  const testVal = $derived(testDec == null ? '' : Number.isInteger(testDec.value) ? String(testDec.value) : String(Math.round(testDec.value * 1000) / 1000))
+  const testOn = $derived(testDec != null && compare(testDec.value, f.operator, f.operand))
+
   const OPS = ['is', 'is not', 'is above', 'is below', 'is at least', 'is at most', 'has bits', 'lacks bits'].map((label, i) => ({ value: String(i), label }))
   let srcVal = $state(''), opVal = $state('0'), orderVal = $state('0'), idtVal = $state('std'), modSel = $state(''), dbcSel = $state('')
   $effect(() => { srcVal = source })
   $effect(() => { if (f) { opVal = String(f.operator); orderVal = String(f.byteOrder); idtVal = f.ide ? 'ext' : 'std' } })
   $effect(() => { modSel = modGuid; dbcSel = dbcGuid })
   const title = $derived(f?.name?.trim() || `CAN input ${n}`)
-  const firmwareOld = $derived(olderThan(dev?.version, [5, 6, 0]))   // value-on-timeout: firmware 5.6 (0x1300 sub 14)
+  const firmwareOld = $derived(lacks(dev, [5, 6, 0], 0x1300, 14))   // value-on-timeout: firmware 5.6 (0x1300 sub 14)
+  // upstream dingoFW (feat/can-input-timeout-value) also has the flag (sub 15); without it the input reads 0. The fork has none.
+  const useFlag = $derived(!firmwareOld && isUpstream(dev) && has(dev, 0x1300 + (row?.number ?? 1) - 1, 15))
 </script>
 
 <Page>
@@ -301,6 +319,29 @@
             <Field label="This number" type="number" step="any" bind:value={f.operand} />
           </div>
         </Card>
+
+        <Card title="Test bytes" subtitle="type a frame and see what this input reads" aria-label="Test bytes">
+          {#snippet actions()}<Switch bind:checked={useLive} label="Use live data" disabled={!online} data-testid="test-live" />{/snippet}
+          <div class="tb" role="group" aria-label={`Test frame. Signal bits: ${sigBits.length ? sigBits.map((p) => `byte ${p >> 3} bit ${p & 7}`).join(', ') : 'none'}`}>
+            {#each test as _, i (i)}
+              <div class="tbyte">
+                <label class="nx-label" for={'tb' + i}>Byte {i}</label>
+                <input id={'tb' + i} class="nx-input mono" bind:value={test[i]} maxlength="2" disabled={useLive} aria-invalid={Number.isNaN(testBytes[i])} data-testid={'test-byte-' + i} />
+                <div class="bits" aria-hidden="true">
+                  {#each [7, 6, 5, 4, 3, 2, 1, 0] as k (k)}
+                    <span class:sig={sigSet.has(i * 8 + k)} class:msb={sigBits[0] === i * 8 + k} title={`bit ${i * 8 + k}`}>{Number.isNaN(testBytes[i]) ? '·' : (testBytes[i] >> k) & 1}</span>
+                  {/each}
+                </div>
+              </div>
+            {/each}
+          </div>
+          <p role="status" data-testid="test-decoded">
+            {#if testBad}A byte is not hex (00 to FF).
+            {:else if !sigBits.length}Set a start bit and a length to see the value.
+            {:else}raw <span class="mono">{testDec.raw}</span> × {f.factor}{Number(f.offset) ? (Number(f.offset) > 0 ? ' + ' : ' − ') + Math.abs(Number(f.offset)) : ''} = <strong class="mono">{testVal}</strong> · reads as <strong>{testOn ? 'ON' : 'OFF'}</strong>{/if}
+          </p>
+          <p class="muted small">{useLive ? (frame ? `Following the last frame with ID ${f.idText}.` : `No frame with ID ${f.idText} seen yet.`) : 'Highlighted bits hold the signal; the outlined one is its most significant bit. Turn on live data to fill the bytes from the bus.'}</p>
+        </Card>
       </div>
 
       <div class="col">
@@ -323,7 +364,8 @@
             <input id="tval" class="nx-input" disabled value="0" />
             <span class="muted small">{dev.name} runs {dev.version && dev.version !== 'v0.0.0' ? dev.version.replace(/^v/, '') : 'its current firmware'}. Until it has firmware 5.6 the input reads 0 after a timeout. <a href={href('hardware', 'firmware')}>Update firmware</a></span>
             {:else}
-            <input id="tval" class="nx-input" type="number" step="any" bind:value={f.timeoutValue} disabled={!f.timeoutEnabled} data-testid="timeout-value" />
+            {#if useFlag}<Checkbox bind:checked={f.timeoutUseValue} label="Use a value instead of 0" hint="Off: the input reads 0 and off, as before." disabled={!f.timeoutEnabled} data-testid="timeout-use-value" />{/if}
+            <input id="tval" class="nx-input" type="number" step="any" bind:value={f.timeoutValue} disabled={!f.timeoutEnabled || (useFlag && !f.timeoutUseValue)} data-testid="timeout-value" />
             <span class="muted small">What the input reads while the frame is missing, for example 0 for "off" or a safe temperature. The on/off result follows the same test.</span>
             {/if}
           </div>
@@ -360,6 +402,14 @@
   .bytes span { display: flex; flex-direction: column; align-items: center; padding: 4px; border-radius: var(--radius-sm); background: var(--color-raised); border: 1px solid var(--color-line); }
   .bytes span.hl { border-color: var(--color-on); background: var(--color-on-soft); }
   .bytes small { font-size: 11px; color: var(--color-text-muted); }
+  .tb { display: grid; grid-template-columns: repeat(auto-fit, minmax(84px, 1fr)); gap: var(--space-2); }
+  .tbyte { display: flex; flex-direction: column; gap: 4px; }
+  .tbyte input { width: 100%; text-align: center; text-transform: uppercase; }
+  .tbyte input[aria-invalid='true'] { border-color: var(--color-fault); }
+  .bits { display: grid; grid-template-columns: repeat(8, 1fr); font-family: var(--font-mono); font-size: 11px; text-align: center; }
+  .bits span { border: 1px solid transparent; border-radius: 2px; color: var(--color-text-muted); }
+  .bits span.sig { background: var(--color-on-soft); color: var(--color-text); font-weight: 700; }
+  .bits span.msb { border-color: var(--color-on); }
   .tv { display: flex; flex-direction: column; gap: var(--space-2); }
   .small { font-size: var(--text-xs); }
 </style>

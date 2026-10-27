@@ -5,6 +5,9 @@
   import { Card, Button, Chip, Banner, Dialog, Empty, Field, Segmented, Select, Checkbox } from '../../../ui/index.js'
   import { live, api, toast, project, isPdm, isCanboard, hex } from '../../../lib/live.svelte.js'
   import { buildDbc } from './dbcexport.js'
+  import { ECU_TEMPLATES, ROLES } from '../../../../lib/ecutemplates.js'
+  import { addCanInputFromFrame } from '../../../../lib/apply.js'
+  const ECU_DBC = import.meta.glob('../../../../lib/ecu-dbc/*.dbc', { query: '?raw', import: 'default', eager: true })
 
   let devs = $state([]) // DBC devices { guid, name, baseId, type }
   let counts = $state({}) // guid -> signal count
@@ -112,6 +115,43 @@
     } catch (e) { impErr = e.message } finally { impBusy = false }
   }
 
+  // ---- add an ECU from the shipped library, and read its engine values on a module ----
+  let lib = $state(false)
+  let libKey = $state(ECU_TEMPLATES[0].key)
+  let libTarget = $state('')
+  let libRoles = $state({ rpm: true, coolant: true, oil: true })
+  let libBusy = $state(false)
+  let libErr = $state('')
+  const libT = $derived(ECU_TEMPLATES.find((t) => t.key === libKey))
+  function openLib() { lib = true; libErr = ''; if (!consumers.some((c) => c.guid === libTarget)) libTarget = consumers[0]?.guid ?? '' }
+  async function doLib() {
+    const t = libT, mod = consumers.find((c) => c.guid === libTarget)
+    const text = ECU_DBC[`../../../../lib/ecu-dbc/${t.file}`]
+    if (!text) { libErr = 'This template is missing from the app.'; return }
+    libBusy = true; libErr = ''
+    try {
+      // reuse a device already imported under this name instead of adding a second copy
+      let guid = devs.find((d) => d.name === t.name)?.guid
+      if (!guid) { guid = (await api.dbcImport(t.name, text, 0, false)).guid; project.dirty = true; await loadDevs() }
+      sel = guid
+      const done = [], failed = []
+      if (mod) for (const r of ROLES.filter((r) => libRoles[r.key])) {
+        const name = t.roles[r.key][0]
+        try {
+          const s = ((await api.dbcSearch(guid, name, 20))?.items ?? []).find((x) => x.name === name)
+          if (!s) throw new Error(`${name} is not in the file`)
+          const a = await addCanInputFromFrame(api, mod.guid, s)
+          project.dirty = true
+          done.push(`${r.label} → CAN input ${a.number}${a.reused ? ' (already there)' : ''}`)
+        } catch (e) { failed.push(`${r.label}: ${e.message}`) }
+      }
+      if (failed.length) { libErr = `Added ${t.name}${done.length ? `, ${done.join(', ')}` : ''}. Not mapped: ${failed.join('; ')}.`; loadSlots(); return }
+      lib = false
+      toast(`Added ${t.name}${mod && done.length ? ` and on ${mod.name}: ${done.join(', ')}` : ''}. Apply to car to send it.`, 'info', 6000)
+      loadSlots()
+    } catch (e) { libErr = e.message } finally { libBusy = false }
+  }
+
   // ---- open another file into the selected device ----
   let openBusy = $state(false)
   async function openInto(e) {
@@ -188,7 +228,10 @@
 
 <div class="cols">
   <Card title="DBC devices" subtitle="From .dbc files">
-    {#snippet actions()}<Button variant="primary" onclick={() => { imp = true; impErr = '' }} data-testid="dbc-import">Import a DBC file…</Button>{/snippet}
+    {#snippet actions()}
+      <Button onclick={openLib} data-testid="ecu-lib">Add an ECU from the library…</Button>
+      <Button variant="primary" onclick={() => { imp = true; impErr = '' }} data-testid="dbc-import">Import a DBC file…</Button>
+    {/snippet}
     {#if !devs.length}
       <Empty title="No DBC file imported yet" text="Import a .dbc file to read an ECU's signals, check its ids for clashes and use them as inputs." />
     {:else}
@@ -291,6 +334,25 @@
   {/snippet}
 </Dialog>
 
+<Dialog bind:open={lib} title="Add an ECU from the library" description="Adds the ECU's CAN stream as a DBC device, and the values you tick as CAN inputs on a module. Nothing is sent to the car until you apply.">
+  <div class="dlg">
+    <Select label="ECU" items={ECU_TEMPLATES.map((t) => ({ value: t.key, label: t.name }))} bind:value={libKey} data-testid="ecu-lib-pick" />
+    <p class="muted" data-testid="ecu-lib-note">{libT?.note}</p>
+    <Select label="Read the values on" items={consumers.map((c) => ({ value: c.guid, label: c.name }))} bind:value={libTarget} placeholder="No module in the project" disabled={!consumers.length} data-testid="ecu-lib-target" />
+    <fieldset class="roles">
+      <legend class="nx-label">Make CAN inputs for</legend>
+      {#each ROLES as r (r.key)}
+        <Checkbox bind:checked={libRoles[r.key]} label={r.label} hint={libT ? `${libT.roles[r.key][0]}, ${libT.roles[r.key][1]}` : ''} disabled={!consumers.length} />
+      {/each}
+    </fieldset>
+    {#if libErr}<Banner tone="fault" data-testid="ecu-lib-error">{libErr}</Banner>{/if}
+  </div>
+  {#snippet footer()}
+    <Button onclick={() => (lib = false)}>Cancel</Button>
+    <Button variant="primary" onclick={doLib} busy={libBusy} data-testid="ecu-lib-go">Add</Button>
+  {/snippet}
+</Dialog>
+
 <Dialog bind:open={rm} title={`Remove ${cur?.name ?? 'this device'}?`} description="Its signals are removed from the project. CAN inputs that already decode its frames keep working.">
   {#snippet footer()}
     <Button onclick={() => (rm = false)}>Cancel</Button>
@@ -315,4 +377,5 @@
   .form { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: var(--space-3); }
   .row { display: flex; align-items: center; gap: var(--space-4); flex-wrap: wrap; }
   .dlg { display: flex; flex-direction: column; gap: var(--space-3); }
+  .roles { border: 0; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--space-2); }
 </style>

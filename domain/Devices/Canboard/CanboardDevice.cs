@@ -32,12 +32,17 @@ public class CanboardDevice : IDeviceConfigurable
     [JsonIgnore] protected int NumTimers { get; private set; } = 4;
     [JsonIgnore] protected int NumMath { get; private set; } = 4;
     [JsonIgnore] protected int NumCanMessages { get; private set; } = 2;
+    [JsonIgnore] protected int NumPids { get; private set; } = 2;   // 5.7 line (integrate: pid on the canboard)
     
     // Firmware 5.5.111 put the CANBoard to sleep (STOP) like the PDM; older firmware only goes quiet (mute TX).
     // Version not read yet: assumed able, like a PDM, so the sleep settings do not vanish until it answers.
     [JsonIgnore] public static readonly Version SleepSince = new(5, 5, 111);
-    [JsonIgnore] public bool CanSleep => domain.Common.Firmware.Of(Version).Major == 0 || domain.Common.Firmware.Has(Version, SleepSince);
-    [JsonPropertyName("canBootloader")] public bool CanBootloader { get; } = true;   // OpenBLT XCP-over-CAN bootloader
+    // Upstream dingoFW: stock CANBoards are built without CAN_SLEEP; feat/canboard-sleep turns it on.
+    // shortcut: a stock upstream CANBoard lists 0x0000 sub 2 too (shared device params) and just never sleeps; no
+    // param or version tells the two apart, upgrade once the firmware reports its features.
+    [JsonIgnore] public bool CanSleep => !VersionReceived || (Family == FwFamily.Fork ? domain.Common.Firmware.Has(Version, SleepSince) : ParamSet.Contains(BaseIndex, 2));
+    // OpenBLT XCP-over-CAN bootloader; upstream dingoFW has no CANBoard port of it (the -O0 app does not fit behind it), the 5.7 line has
+    [JsonIgnore] public bool CanBootloader => Family != FwFamily.Upstream || FwFamily.OwnLine(this);
 
     [JsonIgnore] public const int BaseIndex = 0x0000;
     [JsonPropertyName("canboardType")] public int CanboardType { get; set; }
@@ -69,6 +74,19 @@ public class CanboardDevice : IDeviceConfigurable
     [JsonIgnore][Plotable(displayName:"Heartbeat", unit:" ")] public int Heartbeat { get; private set; }
     
     [JsonIgnore] public string Version { get; private set; } = "v0.0.0";
+    /// <summary>The version the module reported last time it answered, saved in the project (Version is what it runs now).</summary>
+    [JsonPropertyName("lastFirmware")] public string? LastFirmware { get; set; }
+    [JsonIgnore] public bool VersionReceived { get; private set; }
+    // Fork (dingoFW 5.x) or upstream (dingoFW 0.x): picks the param numbering, var map and status frames.
+    [JsonPropertyName("family")] public string Family { get; set; } = FwFamily.Fork;
+    [JsonIgnore] public DeviceParamSet ParamSet { get; } = new();
+    // Upstream: the module's param list, saved so the project reloads with its layout (Apply still needs a Read).
+    // Upstream family: the record's var-map indices and calibrated rotary params are firmware 5.8's (false = 5.7's).
+    // Saved: a project's stored signal numbers mean that layout until Fw58Migration converts them.
+    [JsonPropertyName("layout58"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public bool Layout58 { get; set; }
+    [JsonPropertyName("paramRuns"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int[][]? ParamRuns { get => Family == FwFamily.Upstream ? ParamSet.Runs : null; set => ParamSet.Runs = value; }
     public event Action<string>? SuccessNotification;
     public event Action<string>? ErrorNotification;
     public event Action? WriteAllIncomplete;
@@ -121,9 +139,12 @@ public class CanboardDevice : IDeviceConfigurable
     [JsonIgnore] public int? SleepCountdownS => domain.Common.Firmware.Has(Version, Functions.MathFunction.Since) && SleepCountdownRaw < 255 ? SleepCountdownRaw : null;
     // firmware 5.6
     [JsonPropertyName("maths")] public List<MathFunction> Maths { get; init; } = [];
+    [JsonPropertyName("pids")] public List<PidFunction> Pids { get; init; } = [];   // upstream family (5.7) only
     [JsonPropertyName("canMessages")] public List<CanMessage> CanMessages { get; init; } = [];
     [JsonPropertyName("ignition")] public Ignition Ignition { get; set; } = null!;
     [JsonPropertyName("comfortBlink")] public ComfortBlink ComfortBlink { get; set; } = null!;   // 5.6.1
+    // upstream dingoFW feat/config-lock (0x0200); the fork has none
+    [JsonPropertyName("lock")] public ConfigLock Lock { get; set; } = new();
 
     [JsonIgnore] private Dictionary<int, List<(DbcSignal Signal, Action<double> SetValue)>> StatusSigs { get; set; } = null!;
 
@@ -163,7 +184,11 @@ public class CanboardDevice : IDeviceConfigurable
 
         InitFunctions();
         ApplyDefinition(definition);
+        _asBuilt = [.. Params.Select(p => p.GetValue())];
     }
+
+    // The values a fresh record was built with, until its module first reports its version (FwFamily.TakeDefaults)
+    private List<object>? _asBuilt;
     
     public void SetLogger(ILogger<CanboardDevice> logger)
     {
@@ -189,6 +214,7 @@ public class CanboardDevice : IDeviceConfigurable
         NumCounters = definition.NumCounters;
         NumConditions = definition.NumConditions;
         NumTimers = Timers.Count;
+        NumPids = Pids.Count;
         NumMath = Maths.Count;
         NumCanMessages = CanMessages.Count;
 
@@ -233,6 +259,8 @@ public class CanboardDevice : IDeviceConfigurable
             Maths.Add(new MathFunction(i + 1, "math" + (i + 1)));
         for (var i = 0; i < NumCanMessages; i++)
             CanMessages.Add(new CanMessage(i + 1, "canMessage" + (i + 1)));
+        for (var i = 0; i < NumPids; i++)
+            Pids.Add(new PidFunction(i + 1, "pid" + (i + 1)));
         Ignition = new Ignition("ignition");
         ComfortBlink = new ComfortBlink("Comfort blink");
 
@@ -297,7 +325,8 @@ public class CanboardDevice : IDeviceConfigurable
             ));
         }
 
-        // Timers 1-4 (1-bit each, upper nibble of byte 3: bits 28-31), firmware >= 5.5.107
+        // Timers 1-4 (1-bit each, upper nibble of byte 3: bits 28-31), firmware >= 5.5.107; upstream with
+        // feat/canboard-timers (the nibble is always 0 on a stock upstream CANBoard, which has no timers)
         for (var i = 0; i < NumTimers && i < 4; i++)
         {
             var index = i;
@@ -418,7 +447,22 @@ public class CanboardDevice : IDeviceConfigurable
         }
 
         MaxCyclicId = 11; // last frame = BaseId+11 (firmware NUM_TX_MSGS=10 → offsets +2..+11)
+
+        // 5.7 line Msg 11 (BaseId + 13): PID 1-2 outputs, int16 LE x10 (saturated), sent while a PID is enabled.
+        // (Msg 10 = + 12, the ignition state, is decoded in Read().)
+        if (Family == FwFamily.Upstream && FwFamily.HasBlock(this, PidFunction.BaseIndex, false))
+        {
+            StatusSigs[PidFrameOffset] = [];
+            for (var i = 0; i < NumPids; i++)
+            {
+                var index = i;
+                StatusSigs[PidFrameOffset].Add((new DbcSignal { Name = $"Pid{index + 1}.Output", StartBit = i * 16, Length = 16, IsSigned = true, Factor = 0.1 },
+                    val => Pids[index].Value = val));
+            }
+            MaxCyclicId = PidFrameOffset;
+        }
     }
+    [JsonIgnore] public const int PidFrameOffset = 13;
     
     private void InitVarMap()
     {
@@ -531,7 +575,7 @@ public class CanboardDevice : IDeviceConfigurable
                     VariableIndex = index++,
                     SingleVariable = false
                 });
-                VarMap.Add(new DeviceVariable
+                if (Family == FwFamily.Fork) VarMap.Add(new DeviceVariable   // upstream has 4 per analog input
                 {
                     GetName  = () => AnalogInputs[num].Name,
                     OwnerKind = "analoginput", OwnerNumber = num + 1,
@@ -637,6 +681,8 @@ public class CanboardDevice : IDeviceConfigurable
             }
         }
 
+        if (Family == FwFamily.Upstream) { AddUpstreamTail(ref index); return; }
+
         // Timers are appended last, mirroring the firmware var map (no Lua / tables on a CANBoard).
         for (var i = 0; i < NumTimers; i++)
         {
@@ -691,11 +737,86 @@ public class CanboardDevice : IDeviceConfigurable
                 PropertyName = side, DataType = "bool", VariableIndex = index++, SingleVariable = false, MinFirmware = Functions.ComfortBlink.Since });
     }
 
+    // Upstream dingoFW var map: same order as the fork's up to here (InitVarMap in core/device.cpp), then the timers
+    // (if the module has the 0x1A00 timer block), then the blocks the 5.7 / 5.8 line appends after them. No Lua slots.
+    // FEATURE BRANCHES: add your block as a local function below and put it in both orders, guarded by
+    // FwFamily.HasBlock(this, <your param base>, false) so a module without the block keeps its indices.
+    private void AddUpstreamTail(ref int index)
+    {
+        var n = index;
+        void Add(Func<string> name, string kind, int num, string prop, string type) =>
+            VarMap.Add(new DeviceVariable { GetName = name, OwnerKind = kind, OwnerNumber = num, PropertyName = prop,
+                DataType = type, VariableIndex = n++, SingleVariable = false });
+
+        if (FwFamily.HasBlock(this, TimerFunction.UpstreamBaseIndex, false /* stock upstream CANBoard: NUM_TIMERS 0 */))
+            for (var i = 0; i < NumTimers; i++) { var num = i; Add(() => Timers[num].Name, "timer", num + 1, "State", "bool"); }
+
+        // feat/digital-input-pwm (0x1200 sub 5): per DI duty %, Hz (5.7 line: back on the CANBoard)
+        void DiPwm()
+        {
+            if (!ParamSet.Contains(DigitalInput.BaseIndex, 5)) return;
+            for (var i = 0; i < NumDigitalInputs; i++)
+            {
+                var num = i;
+                Add(() => DigitalInputs[num].Name, "input", num + 1, "PWM Duty", "float");
+                Add(() => DigitalInputs[num].Name, "input", num + 1, "PWM Frequency", "float");
+            }
+        }
+        // feat/analog-linear-scaling: one scaled value per analog input (0x2200 sub 10; the block itself always exists)
+        void Scaled()
+        {
+            if (ParamSet.Contains(AnalogInput.BaseIndex, 10))
+                for (var i = 0; i < NumAnalogInputs; i++) { var num = i; Add(() => AnalogInputs[num].Name, "analoginput", num + 1, "Scaled Value", "float"); }
+        }
+        // feat/math-block: one value per math block
+        void MathVals()
+        {
+            if (FwFamily.HasBlock(this, MathFunction.BaseIndex, false))
+                for (var i = 0; i < NumMath; i++) { var num = i; Add(() => Maths[num].Name, "math", num + 1, "Value", "float"); }
+        }
+        // integration 5.7 (integrate: ignition on the canboard): the seven ignition roles
+        void Ign()
+        {
+            if (FwFamily.HasBlock(this, Functions.Ignition.BaseIndex, false))
+                foreach (var role in new[] { "Ignition", "Accessory", "Cranking", "Running", "Ready", "Dash", "Link OK" })
+                    Add(() => "Ignition", "ignition", 1, role, "bool");
+        }
+        // ignition parity (5.7): DashShutdown (5.7: last of all; 5.8: right after the seven roles)
+        void DashShutdown()
+        {
+            if (ParamSet.Contains(Functions.Ignition.BaseIndex, 19)) Add(() => "Ignition", "ignition", 1, "Dash Shutdown", "bool");
+        }
+        // feat/comfort-blink: "indicator on" per side
+        void Blink()
+        {
+            if (FwFamily.HasBlock(this, Functions.ComfortBlink.BaseIndex, false))
+                foreach (var side in new[] { "Left", "Right" }) Add(() => ComfortBlink.Name, "comfortblink", 1, side, "bool");
+        }
+        // feat/pid (integrate: pid on the canboard): per PID output, P, I, D
+        void Pid()
+        {
+            if (FwFamily.HasBlock(this, PidFunction.BaseIndex, false))
+                for (var i = 0; i < NumPids; i++)
+                {
+                    var num = i;
+                    foreach (var prop in new[] { "Output", "P", "I", "D" }) Add(() => Pids[num].Name, "pid", num + 1, prop, "float");
+                }
+        }
+
+        // The firmware's InitVarMap after the timers: 5.7 = status/integration-order.txt (merge order), 5.8 regrouped it.
+        Action[] order = Layout58
+            ? [MathVals, Blink, Pid, Scaled, DiPwm, Ign, DashShutdown]
+            : [DiPwm, Scaled, MathVals, Ign, Blink, Pid, DashShutdown];
+        foreach (var block in order) block();
+        index = n;
+    }
+
     private void InitParams()
     {
         var allParams = new List<DeviceParameter>();
         var subIndex = 0;
-        allParams.AddRange(
+        if (Family == FwFamily.Upstream) allParams.AddRange([.. UpstreamDeviceParams(), .. Lock.Params(Name)]);   // lock only where the Read lists it
+        else allParams.AddRange(
         [
             new DeviceParameter
             {
@@ -774,19 +895,20 @@ public class CanboardDevice : IDeviceConfigurable
         WakeDigInputMask &= (1 << NumDigitalInputs) - 1;
 
         foreach (var input in DigitalInputs) allParams.AddRange(input.Params);
-        foreach (var canInput in CanInputs) allParams.AddRange(canInput.Params);
+        foreach (var canInput in CanInputs) allParams.AddRange(Family == FwFamily.Upstream ? canInput.UpstreamParams : canInput.Params);
         foreach (var virtualInput in VirtualInputs) allParams.AddRange(virtualInput.Params);
-        foreach (var condition in Conditions) allParams.AddRange(condition.Params);
+        foreach (var condition in Conditions) allParams.AddRange(Family == FwFamily.Upstream ? condition.UpstreamParams : condition.Params);
         foreach (var counter in Counters) allParams.AddRange(counter.Params);
         foreach (var flasher in Flashers) allParams.AddRange(flasher.Params);
-        foreach (var timer in Timers) allParams.AddRange(timer.Params);
+        foreach (var timer in Timers) allParams.AddRange(Family == FwFamily.Upstream ? timer.UpstreamParams : timer.Params);
         foreach (var m in Maths) allParams.AddRange(m.Params);
-        foreach (var m in CanMessages) allParams.AddRange(m.Params);
-        allParams.AddRange(Ignition.Params);
+        foreach (var m in CanMessages) allParams.AddRange(Family == FwFamily.Upstream ? m.UpstreamParams : m.Params);
+        allParams.AddRange(Family == FwFamily.Upstream ? Ignition.UpstreamParams(0) : Ignition.Params);
         allParams.AddRange(ComfortBlink.Params);
-        foreach (var canOutput in CanOutputs) allParams.AddRange(canOutput.Params);
+        if (Family == FwFamily.Upstream) foreach (var pid in Pids) allParams.AddRange(pid.Params);   // the fork CANBoard has no PID
+        foreach (var canOutput in CanOutputs) allParams.AddRange(Family == FwFamily.Upstream ? canOutput.UpstreamParams : canOutput.Params);
         foreach (var digitalOutput in DigitalOutputs) allParams.AddRange(digitalOutput.Params);
-        foreach (var analogInput in AnalogInputs) allParams.AddRange(analogInput.Params);
+        foreach (var analogInput in AnalogInputs) allParams.AddRange(Family == FwFamily.Upstream ? analogInput.UpstreamParamsFor(Layout58) : analogInput.Params);
         
         Params = allParams;
 
@@ -794,9 +916,46 @@ public class CanboardDevice : IDeviceConfigurable
         {
             NotifySuccess = msg => SuccessNotification?.Invoke(msg),
             NotifyError = msg => ErrorNotification?.Invoke(msg),
-            WriteAllFailed = () => { var h = WriteAllIncomplete; h?.Invoke(); return h != null; }
+            WriteAllFailed = () => { var h = WriteAllIncomplete; h?.Invoke(); return h != null; },
+            // upstream: which blocks the module has decides the var map tail (and the ignition frame); after a 5.7
+            // migration the project's bindings move from the assumed layout to the learned one
+            ParamSetLearned = () => { var before = KeepValuesOnRead ? VarMap.ToList() : null; InitVarMap(); InitStatusSigs(); if (before != null) Fw57Migration.Relearned(this, before); }
         };
     }
+
+    // Upstream dingoFW device params (0x0000 sub 0-8, 9-11 with feat/sleep-config). The wake bools map onto the fork's wake mask / wake-on-CAN
+    // and the mute / force-sleep inputs keep their names, so the same UI drives both families.
+    private List<DeviceParameter> UpstreamDeviceParams() =>
+    [
+        new() { ParentName = Name, Name = "device.baseId", Index = BaseIndex, SubIndex = 0,
+            GetValue = () => BaseId, SetValue = val => BaseId = (int)val, ValueType = typeof(int), DefaultValue = DefaultId },
+        new() { ParentName = Name, Name = "device.canSpeed", Index = BaseIndex, SubIndex = 1,
+            GetValue = () => BitRate, SetValue = val => BitRate = (CanBitRate)val, ValueType = typeof(CanBitRate), DefaultValue = CanBitRate.BitRate500K },
+        new() { ParentName = Name, Name = "device.sleepEnabled", Index = BaseIndex, SubIndex = 2,
+            GetValue = () => SleepEnabled, SetValue = val => SleepEnabled = (bool)val, ValueType = typeof(bool), DefaultValue = false },
+        new() { ParentName = Name, Name = "device.canFiltersEnabled", Index = BaseIndex, SubIndex = 3,
+            GetValue = () => CanFiltersEnabled, SetValue = val => CanFiltersEnabled = (bool)val, ValueType = typeof(bool), DefaultValue = false },
+        new() { ParentName = Name, Name = "device.disableDigInWake", Index = BaseIndex, SubIndex = 4,
+            GetValue = () => WakeDigInputMask == 0, SetValue = val => WakeDigInputMask = (bool)val ? 0 : (1 << NumDigitalInputs) - 1, ValueType = typeof(bool), DefaultValue = false },
+        new() { ParentName = Name, Name = "device.disableCanWake", Index = BaseIndex, SubIndex = 5,
+            GetValue = () => !WakeOnCan, SetValue = val => WakeOnCan = !(bool)val, ValueType = typeof(bool), DefaultValue = false },
+        new() { ParentName = Name, Name = "device.connectUsbToCan", Index = BaseIndex, SubIndex = 6,
+            GetValue = () => ConnectUsbToCan, SetValue = val => ConnectUsbToCan = (bool)val, ValueType = typeof(bool), DefaultValue = true },
+        new() { ParentName = Name, Name = "device.muteTxInput", Index = BaseIndex, SubIndex = 7,
+            GetValue = () => MuteTxInput, SetValue = val => MuteTxInput = (int)val, ValueType = typeof(int), DefaultValue = 0 },
+        new() { ParentName = Name, Name = "device.forceSleepInput", Index = BaseIndex, SubIndex = 8,
+            GetValue = () => ForceSleepInput, SetValue = val => ForceSleepInput = (int)val, ValueType = typeof(int), DefaultValue = 0 },
+        // feat/sleep-config (only sent when the module has them): timeout, ignore always-on, per-pin wake mask. Sub 4
+        // stays the master switch: mask 0 = sub 4 set; sub 11 comes after sub 4 in a ReadAll, so it must not undo it.
+        new() { ParentName = Name, Name = "device.sleepTimeoutMs", Index = BaseIndex, SubIndex = 9,
+            GetValue = () => SleepTimeoutMs, SetValue = val => SleepTimeoutMs = (int)val, ValueType = typeof(int), DefaultValue = 30000 },
+        new() { ParentName = Name, Name = "device.sleepIgnoreAlwaysOn", Index = BaseIndex, SubIndex = 10,
+            GetValue = () => SleepIgnoreAlwaysOn, SetValue = val => SleepIgnoreAlwaysOn = (bool)val, ValueType = typeof(bool), DefaultValue = false },
+        new() { ParentName = Name, Name = "device.wakeDigInputMask", Index = BaseIndex, SubIndex = 11,
+            GetValue = () => WakeDigInputMask == 0 ? (1 << NumDigitalInputs) - 1 : WakeDigInputMask,
+            SetValue = val => { if (WakeDigInputMask != 0) WakeDigInputMask = (int)val & ((1 << NumDigitalInputs) - 1); },
+            ValueType = typeof(int), DefaultValue = (1 << NumDigitalInputs) - 1 },
+    ];
 
     private void Clear()
     {
@@ -830,10 +989,15 @@ public class CanboardDevice : IDeviceConfigurable
         return Connected & !lastConnected;
     }
 
+    /// <summary>The ignition state frame's offset: fork + 14; the 5.7 line Msg 10 = + 12 (a module whose list has the
+    /// 0x1E00 block; none on stock upstream).</summary>
+    [JsonIgnore] public int? IgnitionStateOffset => Family == FwFamily.Fork ? Functions.Ignition.StateOffsetFor(Type)
+        : FwFamily.HasBlock(this, Functions.Ignition.BaseIndex, false) ? 12 : null;
+
     public bool InIdRange(int id)
     {
         // + the ignition state frame (firmware 5.6), the first id after the module's own range
-        return (id >= BaseId) && (id <= MaxCyclicId + BaseId || id == BaseId + Functions.Ignition.StateOffsetFor(Type));
+        return (id >= BaseId && id <= MaxCyclicId + BaseId) || id == Ignition.FrameId(BaseId, IgnitionStateOffset);
     }
 
     public void Read(int id, byte[] data, 
@@ -842,14 +1006,8 @@ public class CanboardDevice : IDeviceConfigurable
     {
         var offset = id - BaseId;
 
-        // Ignition state frame (firmware 5.6), sent by a main module: ['I', state, flags]
-        if (offset == Functions.Ignition.StateOffsetFor(Type) && data.Length >= 3 && data[0] == 'I')
-        {
-            Ignition.State = (Functions.IgnitionState)data[1];
-            Ignition.Dash = (data[2] & 0x10) != 0;
-            Ignition.LastStateFrame = DateTime.UtcNow;
-            return;
-        }
+        // Ignition frame: fork / 0.x state ['I', state, flags] from a main module, 5.7 status from any role
+        if (id == Ignition.FrameId(BaseId, IgnitionStateOffset) && Ignition.ReadFrame(data)) return;
 
         // Use dictionary lookup for status messages
         if (StatusSigs.TryGetValue(offset, out var signals))
@@ -935,6 +1093,8 @@ public class CanboardDevice : IDeviceConfigurable
 
     public List<DeviceCanFrame> GetReadMsgs(bool allParams)
     {
+        // Upstream: a full ReadAll is how the app learns the module's param list (a modified-only read can't tell it)
+        if (Family == FwFamily.Upstream && !ParamSet.FromModule) allParams = true;
         var cmd = allParams ? MessageCommand.ReadAll : MessageCommand.ReadAllModified;
         var name = allParams ? "ReadAll" : "ReadAllModified";
         
@@ -958,6 +1118,9 @@ public class CanboardDevice : IDeviceConfigurable
 
     public List<DeviceCanFrame> GetWriteMsgs(bool allParams)
     {
+        // Upstream: always the full WriteAll. A modified-only one resets every param not sent to the FIRMWARE's
+        // default, and the full one is checked by count + CRC and answered with the list of params it missed.
+        if (Family == FwFamily.Upstream) allParams = true;
         var cmd = allParams ? MessageCommand.WriteAll : MessageCommand.WriteAllModified;
         var name = allParams ? "WriteAll" : "WriteAllModified";
         
@@ -1036,10 +1199,14 @@ public class CanboardDevice : IDeviceConfigurable
         };
     }
 
-    public DeviceCanFrame? GetSleepMsg()
-    {
-        return null;
-    }
+    // Upstream with sleep: the same Sleep request as the PDM ([32,'QUIT']). Fork CANBoards: unchanged (none).
+    public DeviceCanFrame? GetSleepMsg() => Family == FwFamily.Upstream && CanSleep
+        ? new DeviceCanFrame
+        {
+            SendOnly = true, DeviceBaseId = BaseId, Name = "Sleep",
+            Frame = new CanFrame(Id: BaseId + ConfigTxOffset, Len: 8, Payload: [Convert.ToByte(MessageCommand.Sleep), (byte)'Q', (byte)'U', (byte)'I', (byte)'T', 0, 0, 0])
+        }
+        : null;
     
     public DeviceCanFrame GetVersionMsg()
     {
@@ -1096,7 +1263,7 @@ public class CanboardDevice : IDeviceConfigurable
 
         var version = $"v{data[4]}.{data[5]}.{(data[6] << 8) + (data[7])}";
 
-        if (!CheckVersion(data[4], data[5], (data[6] << 8) + (data[7])))
+        if (data[4] != 0 && !CheckVersion(data[4], data[5], (data[6] << 8) + (data[7])))
         {
             Logger.LogError("{Name} ID: {BaseId}, Firmware needs to be updated. V{MinMajorVersion}.{MinMinorVersion}.{MinBuildVersion} or greater",
                 name, baseId, MinMajorVersion, MinMinorVersion, MinBuildVersion);
@@ -1111,7 +1278,58 @@ public class CanboardDevice : IDeviceConfigurable
 
         Logger.LogInformation("{Name} FW version received: {Version}", name, version);
 
+        var family = FwFamily.Of(data[4], data[5]);
+        var was = Version;
         Version = version;
+        if (data[4] != 0 || data[5] != 0) LastFirmware = version;
+        var to58 = Fw58Migration.Is58(data[4], data[5]);
+        // a 5.7 project on a 5.8 module (or back): renumber its stored signals to that layout (before the Lua slots are re-asked)
+        if (family == FwFamily.Upstream && Family == FwFamily.Upstream && Layout58 != to58)
+        {
+            Fw58Migration.Convert(this, to58);
+            var warn = Migration!.Count(m => m.Level == "warn");
+            SuccessNotification?.Invoke($"Project converted to firmware {(to58 ? "5.8" : "5.7")}{(warn > 0 ? $", {warn} warning(s)" : "")}: see the module's migration report. Read it, then Apply to car and Store.");
+        }
+        if (family != Family && Family == FwFamily.Fork && data[4] != 0 && Fw57Migration.Configured(this))
+        {
+            Layout58 = to58;           // the 5.7 migration lands on this module's own layout
+            Migrate57Pending = true;   // a fork project on a 5.7+ module: DeviceManager converts it after this frame
+        }
+        else if (family != Family && family == FwFamily.Fork && Migration != null)
+            ErrorNotification?.Invoke($"{Name} runs {version}, but this project was converted for firmware 5.7: flash 5.7 first (Read and Apply are refused).");
+        else if (family != Family)
+        {
+            var fresh = _asBuilt?.SequenceEqual(Params.Select(p => p.GetValue())) == true;
+            Layout58 = to58;
+            UseFamily(family, false);
+            if (fresh && family == FwFamily.Upstream) FwFamily.TakeDefaults(this);
+        }
+        else if (VersionReceived && version != was) ParamSet.Stale();   // reflashed: read its param list again
+        VersionReceived = true;
+        _asBuilt = null;
+    }
+
+    [JsonIgnore] public bool Migrate57Pending { get; set; }
+    [JsonIgnore] public bool KeepValuesOnRead { get; set; }
+    [JsonPropertyName("migration")] public List<MigrationNote>? Migration { get; set; }
+
+    public void UseFamily(string family, bool assumeAll)
+    {
+        Family = family; ParamSet.Forget(); Rebuild();
+        if (!assumeAll || family != FwFamily.Upstream) return;
+        ParamSet.Assume(Params.Select(p => (p.Index, p.SubIndex)));
+        Rebuild();
+    }
+
+    public void UseLayout58(bool on) { Layout58 = on; Rebuild(); }
+
+    // The family changed: rebuild everything that has a per-family layout (values stay on the function objects).
+    private void Rebuild()
+    {
+        InitStatusSigs();
+        InitVarMap();
+        InitParams();
+        if (Logger is not null) _paramProtocol.SetLogger(Logger);
     }
     
     private bool CheckVersion(int major, int minor, int build)

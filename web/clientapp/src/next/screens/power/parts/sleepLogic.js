@@ -4,13 +4,22 @@
 // on the module at once and is stored with Apply to car.
 import { api, project, toast, defs, isPdm } from '../../../lib/live.svelte.js'
 import { spanAfter } from '../../../../lib/canids.js'
+import { upstreamWrite } from './sleepParams.js'
 
-export const SUB = { enabled: 2, timeout: 5, ignoreAlwaysOn: 9, forceSleep: 10, muteTx: 11, wakeMask: 12, wakeCan: 13 }
+export { SUB, upstreamWrite, upSub } from './sleepParams.js'
+/** Write one device param (index 0) given by its fork sub; upstream modules get theirs (none if they lack it). */
+export async function writeDeviceParam(d, sub, value) {
+  for (const [s, v] of upstreamWrite(d, sub, value)) await api.writeParam(d.guid, 0, s, v)
+}
 export const TIMEOUT_MIN_S = 1
 export const TIMEOUT_MAX_S = 60
 
 /** True when the module's firmware can sleep (false on a CANBoard built without CAN_SLEEP). */
 export const canSleep = (d) => d?.canSleep !== false
+/** Why a module can't sleep, in words (only meaningful when !canSleep(d)). */
+export const noSleepWhy = (d) => isUpstream(d) ? 'its sleep settings show once the module has been read (upstream dingoFW)' : 'its firmware is older than 5.5.111'
+/** What still wakes a module whose wake sources are all off: USB on a PDM, only a power cycle on a CANBoard (no USB). */
+export const lastWake = (d) => (isPdm(d) ? 'USB' : 'a power cycle')
 
 /** Digital inputs a module has (wake matrix columns). */
 export function digCount(d) {
@@ -26,7 +35,7 @@ export async function writeParams(d, writes) {
     return false
   }
   try {
-    for (const [sub, value] of writes) await api.writeParam(d.guid, 0, sub, value)
+    for (const [sub, value] of writes) await writeDeviceParam(d, sub, value)
     project.dirty = true
     return true
   } catch (e) {
@@ -84,10 +93,14 @@ export function wakeWords(d) {
   return w.count > 0 ? `${what} (${w.count} wake${w.count === 1 ? '' : 's'} since power-on)` : what
 }
 
+/** Why no wake reason is shown: firmware too old (fork before 5.6, upstream without SleepInfo) or not said yet. */
+export const noWakeWords = (d) => d?.family === 'upstream' ? 'Not reported by this firmware'
+  : d?.version && !/^v?0\.0\.0$/.test(d.version) ? 'Needs firmware 5.6' : 'Not reported'
+
 /** Which module a CAN id belongs to (base-1 .. base+span), or null. */
 export function moduleOfId(id, devices) {
   for (const d of devices) {
-    const span = spanAfter(d.type)
+    const span = spanAfter(d.type, d)
     if (id >= d.baseId - 1 && id <= d.baseId + span) return d
   }
   return null

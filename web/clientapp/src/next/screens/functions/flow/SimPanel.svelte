@@ -26,6 +26,8 @@
   function setFault(n, f) { faultSel[n.id] = f; sim.fault(n.id, f); onchange() }
   const canMax = (n) => Math.min(100000, Math.max(1, (2 ** Math.min(20, n.row?.bitLength ?? 8) - 1) * (n.row?.factor || 1)))
   const OUT_FAULTS = [{ value: 'none', label: '○ No fault' }, { value: 'oc', label: '■ Overcurrent' }, { value: 'open', label: '▲ Open load' }]
+  // only where an undercurrent limit is set (upstream output subs 27-29)
+  const faultsOf = (n) => (n.row?.underLimit > 0 ? [...OUT_FAULTS, { value: 'under', label: '▼ Too little current' }] : OUT_FAULTS)
 </script>
 
 <section class="sim" aria-label="Simulate inputs">
@@ -59,7 +61,7 @@
 
   <span class="sec">INJECT A FAULT</span>
   {#each outputs.filter((n) => n.kind !== 'canoutput') as n (n.id)}
-    <div class="fr"><span class="fn">{n.title}</span><Segmented label={'Fault on ' + n.title} items={OUT_FAULTS} value={faultSel[n.id] ?? 'none'} onchange={(v) => setFault(n, v)} size="sm" /></div>
+    <div class="fr"><span class="fn">{n.title}</span><Segmented label={'Fault on ' + n.title} items={faultsOf(n)} value={faultSel[n.id] ?? 'none'} onchange={(v) => setFault(n, v)} size="sm" /></div>
   {/each}
   {#each canIns as n (n.id)}
     <div class="fr"><span class="fn">{n.title}</span><Segmented label={'Fault on ' + n.title} items={[{ value: 'none', label: '○ Frames arrive' }, { value: 'timeout', label: '◇ CAN timeout' }]} value={faultSel[n.id] ?? 'none'} onchange={(v) => setFault(n, v)} size="sm" /></div>

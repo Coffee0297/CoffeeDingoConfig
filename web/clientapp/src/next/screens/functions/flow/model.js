@@ -5,7 +5,9 @@
 // `v<index>` and a wire is simply "target field = that index". The var map's own type (bool | int | float)
 // decides the port: round = on/off, square = number.
 
-import { olderThan } from '../../hardware/parts/util.js'
+import { olderThan, isUpstream, has } from '../../hardware/parts/util.js'
+import { curveProblem } from './curve.js'
+import { latchGateIns, latchGateProblem } from './latchgate.js'
 
 export const isCb = (dev) => /can.?board/i.test(dev?.type ?? '')
 
@@ -39,6 +41,12 @@ export const KINDS = {
   math: { label: 'Math', fam: 'logic', arr: 'maths', def: 'numMath', addable: true, fw: [5, 6, 0], ins: [['inputA', 'A', 'num'], ['inputB', 'B', 'num']] },
   canmsg: { label: 'CAN message', fam: 'out', arr: 'canMessages', def: 'numCanMessages', addable: true, fw: [5, 6, 0], ins: [['input', 'While', 'bool']] },
   comfortblink: { label: 'Comfort blink', fam: 'time', arr: 'comfortBlinks', addable: true, fw: [5, 6, 1], ins: [['leftInput', 'Lever left', 'bool'], ['rightInput', 'Lever right', 'bool'], ['clockInput', 'Indicator clock', 'bool']] },
+  // upstream dingoFW feat/curve-block (PDMs; /functions has `curves` only when the module has the 0x2400 block)
+  curve: { label: 'Curve', fam: 'logic', arr: 'curves', def: 'numCurves', addable: true, ins: [['input', 'Input', 'num']] },
+  // upstream dingoFW feat/latch-gate-block (PDMs; /functions has `latchGates` only when the module has the 0x2600 block)
+  latchgate: { label: 'Latch / Gate', fam: 'time', arr: 'latchGates', def: 'numLatchGates', addable: true, ins: latchGateIns() },
+  // upstream dingoFW feat/pid (PDMs; CANBoard 5.7: 2; /functions has `pids` only when the module has the 0x2300 block)
+  pid: { label: 'PID', fam: 'logic', arr: 'pids', def: 'numPids', addable: true, ins: [['setpointInput', 'Setpoint', 'num'], ['processInput', 'Measured', 'num'], ['activateInput', 'Active while', 'bool'], ['feedFwdInput', 'Feed-forward signal', 'num']] },
   ignition: { label: 'Ignition', fam: 'fn', ins: [['ignitionInput', 'Ignition switch', 'bool'], ['startInput', 'Start button', 'bool'], ['crankAllowInput', 'Crank allowed', 'bool'], ['runningInput', 'Engine running', 'bool']] },
 }
 export const arrOf = (kind, dev) => (kind === 'input' ? (isCb(dev) ? 'digitalIn' : 'inputs') : KINDS[kind]?.arr)
@@ -46,9 +54,28 @@ export const arrOf = (kind, dev) => (kind === 'input' ? (isCb(dev) ? 'digitalIn'
 export const OPS = ['=', '≠', '>', '<', '≥', '≤', '&', '!&']
 export const OP_WORDS = ['equals', 'is not', 'is above', 'is below', 'is at least', 'is at most', 'has bits', 'has not bits']
 export const JOIN = ['AND', 'OR', 'NOR']
-export const TIMER_MODES = ['On-delay', 'Off-delay', 'Pulse']
+// mode 3 (one pulse, edges ignored while it runs) and the reset input exist on upstream dingoFW only
+export const TIMER_MODES = ['On-delay', 'Keep on after', 'Pulse', 'One pulse']
+/** The inspector's names everywhere (canvas, sentence view); on upstream dingoFW mode 2 restarts on every new edge. */
+export const timerMode = (mode, up) => (up && +mode === 2 ? 'Pulse, restarts' : TIMER_MODES[mode ?? 0])
 export const EDGES = ['Rising', 'Falling', 'Both']
+/** The firmware (feat/can-output-trigger) gives one frame (same ID and ID type) one schedule: a trigger on any output
+ *  packed in it makes the whole frame sent on triggers only. This module's other enabled outputs in `row`'s frame,
+ *  split by whether they have a trigger. */
+export function framePeers(model, id, row) {
+  const peers = [...model.nodes.values()].filter((o) => o.kind === 'canoutput' && o.id !== id && o.enabled && (+o.row?.id || 0) === (+row?.id || 0) && !!o.row?.ide === !!row?.ide)
+  return { triggered: peers.filter((o) => o.row?.triggerInput).map((o) => o.title), untriggered: peers.filter((o) => !o.row?.triggerInput).map((o) => o.title) }
+}
 export const isRelational = (op) => [2, 3, 4, 5].includes(Number(op))
+/** Upstream dingoFW (feat/condition-hysteresis) stores a band ≥ 0, not the release point: on past `arg`, off again at
+ *  arg − band (>, ≥) or arg + band (<, ≤). A release point on the wrong side of `arg` is no band. Same as the backend's
+ *  Condition.HystBand. */
+export function hystBand(op, arg, argOff) {
+  const a = +arg || 0, o = argOff == null ? a : +argOff
+  return [2, 4].includes(Number(op)) ? Math.max(0, a - o) : [3, 5].includes(Number(op)) ? Math.max(0, o - a) : 0
+}
+/** The release point the firmware actually uses on upstream: arg moved back by the band. */
+export const upstreamArgOff = (op, arg, argOff) => (+arg || 0) + ([3, 5].includes(Number(op)) ? 1 : -1) * hystBand(op, arg, argOff)
 // Math block operations (firmware MathOp order); `fn` shows it with A and B
 export const MATH_OPS = [
   { label: 'A + B', fn: (a, b) => `${a} + ${b}` }, { label: 'A − B', fn: (a, b) => `${a} − ${b}` },
@@ -110,14 +137,17 @@ function subline(kind, n, row, dev) {
       return `Combine · ${a} then ${b}`
     }
     case 'condition': return `Compare ${OPS[row?.operator ?? 0]} ${row?.arg ?? 0}` + (isRelational(row?.operator) && row?.argOff !== row?.arg ? ` · off at ${row.argOff}` : '')
-    case 'timer': return `${TIMER_MODES[row?.mode ?? 0]} · ${secs(row?.preset)}`
+    case 'timer': return `${timerMode(row?.mode, isUpstream(dev))} · ${secs(row?.preset)}`
     case 'flasher': return `Flasher · ${row?.onTime ?? 0} / ${row?.offTime ?? 0} ms` + (row?.single ? ' · once' : '')
     case 'counter': return `Counter · ${row?.minCount ?? 0} to ${row?.maxCount ?? 0}` + (row?.wrapAround ? ' · wraps' : '')
     case 'table': return `Table · ${row?.xSize ?? 1}${(row?.ySize ?? 1) > 1 ? ' × ' + row.ySize : ''} points`
-    case 'canoutput': return `CAN ${hexId(row?.id)}${row?.ide ? ' ext' : ''} · every ${row?.interval ?? 0} ms`
+    case 'canoutput': return `CAN ${hexId(row?.id)}${row?.ide ? ' ext' : ''} · ` + (row?.triggerInput ? 'on a trigger' : `every ${row?.interval ?? 0} ms`)
     case 'math': return `Math · ${MATH_OPS[row?.op ?? 0]?.fn('A', row?.inputB ? 'B' : (row?.constB ?? 0))}` + ((row?.factor ?? 1) !== 1 || (row?.offset ?? 0) !== 0 ? ` · ×${row?.factor ?? 1} ${(row?.offset ?? 0) < 0 ? '−' : '+'} ${Math.abs(row?.offset ?? 0)}` : '')
     case 'canmsg': return `CAN ${hexId(row?.id)}${row?.ide ? ' ext' : ''} · ` + (row?.mode === 1 ? 'once' : `every ${row?.intervalMs ?? 0} ms`)
+    case 'curve': return `Curve · ${row?.points ?? 2} points`
+    case 'pid': return `PID · Kp ${row?.kp ?? 1} Ki ${row?.ki ?? 0} Kd ${row?.kd ?? 0}` + (row?.invert ? ' · cooling' : '') + ` · ${row?.outMin ?? 0} to ${row?.outMax ?? 100}`
     case 'comfortblink': return `Comfort blink · tap < ${secs(row?.tapMs ?? 1000)}: ${row?.blinks ?? 3} blinks`
+    case 'latchgate': return row?.type === 1 ? 'Gate · holds while off' : 'Latch' + (row?.timeMs > 0 ? ` · cancels after ${secs(row.timeMs)}` : '')
     case 'ignition': return `Ignition · ${row?.role === 1 ? 'follows the main module' : ['switch + button', 'button only', 'key'][row?.mode ?? 0]}`
     case 'output': return `Output ${n} · ${row?.currentLimit ?? '?'} A` + (row?.enabled === false ? ' · switched off' : row?.pwmEnabled ? ' · PWM' : '')
     case 'digitaloutput': return `Digital out ${n}` + (row?.pwmEnabled ? ' · PWM' : '')
@@ -150,6 +180,21 @@ function outPortsFor(kind, row, vars, consumed) {
   return vars.filter(keep).map((v) => ({ id: 'v' + v.index, idx: v.index, label: portLabel(v), type: portType(v), prop: v.prop }))
 }
 
+/** Why the firmware would refuse a PID config (its param ranges) or run it as "disabled" (crossed limits); '' = fine. */
+export function pidProblem(r) {
+  const n = (k, d = 0) => (r?.[k] == null || r[k] === '' ? d : Number(r[k]))
+  const bad = (v, lo = -1e6) => !Number.isFinite(v) || v < lo || v > 1e6
+  const per = n('periodMs', 20)
+  if (!Number.isInteger(per) || per < 2 || per > 1000) return 'the update period must be 2 to 1000 ms'
+  if (bad(n('kp', 1), 0) || bad(n('ki'), 0) || bad(n('kd'), 0)) return 'Kp, Ki and Kd must be 0 or more (the direction is set by "cooling")'
+  if (bad(n('spRate'), 0) || bad(n('deadband'), 0)) return 'the setpoint rate and deadband must be 0 or more'
+  if (['feedForward', 'iMin', 'iMax', 'outMin', 'outMax', 'pvMin', 'pvMax', 'fallback', 'setpoint'].some((k) => bad(n(k, { iMin: -100, iMax: 100, outMax: 100 }[k] ?? 0)))) return 'limits, setpoint, feed-forward and fallback must be within ±1000000'
+  if (n('outMin') > n('outMax', 100)) return 'output min is above output max'
+  if (n('iMin', -100) > n('iMax', 100)) return 'I min is above I max'
+  if (n('pvMin') > n('pvMax')) return "the sensor window's low end is above its high end"
+  return ''
+}
+
 /** Plain reasons a block can't run yet (empty = complete). */
 export function incompleteReasons(kind, row, enabled) {
   if (!row || !enabled) return []
@@ -167,9 +212,12 @@ export function incompleteReasons(kind, row, enabled) {
       if ((row.ySize ?? 1) > 1 && !row.yInput) r.push('needs a Y input (2-D table)')
       break
     }
-    case 'canoutput': if (!row.input) r.push('needs a value to send'); if (!row.id) r.push('needs a CAN ID'); break
+    case 'canoutput': if (!row.input && !(row.kind > 0)) r.push('needs a value to send'); if (!row.id) r.push('needs a CAN ID'); break
     case 'caninput': if (!row.id) r.push('needs a CAN ID'); if (!row.bitLength) r.push('needs a bit length'); break
     case 'math': if (!row.inputA) r.push('needs an A input'); break
+    case 'curve': { if (!row.input) r.push('needs an input'); const p = curveProblem(row); if (p) r.push(p); break }
+    case 'latchgate': { if (!row.input) r.push(row.type === 1 ? 'needs a value input' : 'needs a set input'); if (row.type === 1 && !row.controlInput) r.push('needs an enable input'); if (row.type !== 1 && !row.controlInput && !(row.timeMs > 0)) r.push('needs a reset input or an auto-cancel time'); const p = latchGateProblem(row); if (p) r.push(p); break }
+    case 'pid': if (!row.processInput) r.push('needs a measured value'); { const p = pidProblem(row); if (p) r.push(p) } break
     case 'comfortblink': if (!row.leftInput || !row.rightInput) r.push('needs both lever inputs'); if (!row.clockInput) r.push('needs the indicator clock'); break
     case 'canmsg': if (!row.input) r.push('needs a signal to send on'); if (!row.id) r.push('needs a CAN ID'); break
     case 'output': if (!row.inputVal) r.push('has no input, so it never switches'); break
@@ -197,7 +245,7 @@ export function buildModel(dev, funcs, vmap) {
   const physIn = isCb(dev) ? funcs?.digitalIn : funcs?.inputs
   for (const r of physIn ?? []) add('input', r.number, r, !!r.enabled)
   for (const r of funcs?.analogIn ?? []) add('analoginput', r.number, r, !!r.enabled)
-  for (const k of ['caninput', 'virtualinput', 'condition', 'counter', 'flasher', 'timer', 'table', 'canoutput', 'digitaloutput', 'math', 'canmsg', 'comfortblink']) {
+  for (const k of ['caninput', 'virtualinput', 'condition', 'counter', 'flasher', 'timer', 'table', 'canoutput', 'digitaloutput', 'math', 'canmsg', 'comfortblink', 'curve', 'latchgate', 'pid']) {
     for (const r of funcs?.[KINDS[k].arr] ?? []) add(k, r.number, r, !!r.enabled)
   }
   if (funcs?.ignition) add('ignition', 1, funcs.ignition, !!funcs.ignition.enabled)
@@ -208,10 +256,16 @@ export function buildModel(dev, funcs, vmap) {
 
   // target fields of every candidate (enabled blocks only — a disabled block's fields don't run)
   const targetsOf = (c) => {
-    if (c.kind === 'sys') return KINDS.sys.ins
+    // upstream fault clear: the module's retry-all signal (null on a module that has none)
+    // upstream load shedding: the module's shed input (null on a module that has none)
+    if (c.kind === 'sys') return [...KINDS.sys.ins, ...(c.row?.retryAllInput != null ? [['retryAllInput', 'Retry all faults', 'bool']] : []), ...(c.row?.shedInput != null ? [['shedInput', 'Shed loads', 'bool']] : [])]
     if (!c.enabled && c.kind !== 'output') return []   // a switched-off PDM output still shows (and keeps) its input
     let ins = KINDS[c.kind]?.ins ?? []
     if (c.kind === 'table' && (c.row?.ySize ?? 1) <= 1) ins = ins.filter(([f]) => f !== 'yInput')
+    if (c.kind === 'timer' && isUpstream(dev)) ins = [...ins, ['resetInput', 'Reset', 'bool']]
+    // upstream dingoFW feat/can-output-trigger (sub 12): send on each rise of this signal instead of the interval
+    if (c.kind === 'canoutput' && isUpstream(dev) && has(dev, 0x2000 + c.n - 1, 12)) ins = [...ins, ['triggerInput', 'Trigger', 'bool']]
+    if (c.kind === 'latchgate') ins = latchGateIns(c.row)
     if (c.kind === 'ignition' && c.row?.role === 1) ins = []   // a follower copies the main module's state
     if (c.kind === 'output' || c.kind === 'digitaloutput') ins = ins.filter(([f]) => f === 'input' || (f === 'dutyCycleInput' && c.row?.variableDutyCycle) || (f === 'freqInput' && c.row?.variableFreq))
     return ins
@@ -243,7 +297,7 @@ export function buildModel(dev, funcs, vmap) {
     const ins = targetsOf(c).map(([field, label, accepts], i) => ({
       id: field, label, accepts, src: Number(fieldOf(c.kind, c.row, field)) || 0,
       not: c.kind === 'virtualinput' ? !!c.row?.['not' + i] : false,
-      optional: (c.kind === 'virtualinput' && field === 'var2') || (c.kind === 'counter' && field !== 'incInput') || c.kind === 'sys' || (c.kind === 'math' && field === 'inputB') || c.kind === 'ignition',
+      optional: (c.kind === 'virtualinput' && field === 'var2') || (c.kind === 'timer' && field === 'resetInput') || (c.kind === 'canoutput' && field === 'triggerInput') || (c.kind === 'counter' && field !== 'incInput') || c.kind === 'sys' || (c.kind === 'math' && field === 'inputB') || (c.kind === 'latchgate' && field === 'controlInput' && c.row?.type !== 1) || (c.kind === 'pid' && field !== 'processInput') || c.kind === 'ignition',
     }))
     const outs = outPortsFor(c.kind, c.row, varsOf.get(c.id) ?? [], consumed)
     const physical = c.kind === 'input' || c.kind === 'analoginput' || c.kind === 'output' || c.kind === 'digitaloutput' || c.kind === 'sys' || c.kind === 'lua' || c.kind === 'keypad'
@@ -257,7 +311,7 @@ export function buildModel(dev, funcs, vmap) {
     })
   }
   for (const n of nodes.values()) if (n.disabledSource) n.incomplete = ['is switched off, so the blocks that use it read 0']
-  return { nodes, edges: edges.filter((e) => nodes.has(e.source) && nodes.has(e.target)), byIdx, consumers }
+  return { nodes, edges: edges.filter((e) => nodes.has(e.source) && nodes.has(e.target)), byIdx, consumers, upstream: isUpstream(dev) }
 }
 
 /** Source options for a target that accepts `accepts`, from the var map (configured functions only). */
@@ -342,9 +396,14 @@ export function slotUsage(dev, funcs, defs) {
     ['Flashers', 'flashers', 'numFlashers'], ['Counters', 'counters', 'numCounters'], ['Tables', 'tables', 'numTables'],
     ['CAN inputs', 'canInputs', 'numCanInputs'], ['CAN outputs', 'canOutputs', 'numCanOutputs'],
     ...(olderThan(dev?.version, [5, 6, 0]) ? [] : [['Math', 'maths', 'numMath'], ['CAN messages', 'canMessages', 'numCanMessages']]),
+    ['Curves', 'curves', 'numCurves'],   // only where /functions has them (upstream with the curve block)
+    ['Latch / Gate', 'latchGates', 'numLatchGates'],   // only where /functions has them (upstream with the latch/gate block)
+    ['PIDs', 'pids', 'numPids'],   // only where /functions has them (upstream with the PID block)
+    ...(olderThan(dev?.version, [5, 6, 1]) ? [] : [['Comfort blink', 'comfortBlinks', 'numComfortBlinks']]),
   ]
   return rows.filter(([, arr]) => Array.isArray(funcs?.[arr])).map(([label, arr, key]) => {
     const list = funcs[arr]
-    return { label, arr, used: list.filter((x) => x.enabled).length, max: def?.[key] ?? list.length }
+    // upstream: as many tables as the module has (2, or 4 with feat/more-tables), not the fork definition's 2
+    return { label, arr, used: list.filter((x) => x.enabled).length, max: isUpstream(dev) && arr === 'tables' ? list.length : def?.[key] ?? list.length }
   })
 }

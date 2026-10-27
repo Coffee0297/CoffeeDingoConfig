@@ -45,6 +45,8 @@ public class SlcanAdapter : ICommsAdapter
     // batch write (or two queued writes from concurrent Read/Write/Flash requests) could
     // interleave bytes on the wire and corrupt CAN frames.
     private readonly object _writeLock = new();
+    // Batch pacing (WriteBatchAsync): frames per millisecond the module's param thread keeps up with
+    private const int BatchFramesPerMs = 1;
 
     // The transport must actually be open to be "connected" — without this, a failed Init (port
     // closed, RxTimeDelta still at its default Zero) reported IsConnected=true with no link.
@@ -404,11 +406,17 @@ public class SlcanAdapter : ICommsAdapter
             // and can't be split by a concurrent single-frame WriteAsync.
             lock (_writeLock)
             {
+                var sent = 0;
+                var clock = System.Diagnostics.Stopwatch.StartNew();
                 foreach (var frame in frames)
                 {
                     if (frame.Payload.Length != 8) continue;
                     var len = EncodeFrame(frame, frameBuffer, 0);
                     WriteIo(frameBuffer, len);
+                    // A module's own USB link has no bus to pace it: a 3500-frame Write All overran the module's
+                    // 256-frame param queue even at ~2700 frames/s (the WriteAllComplete, sent last, was dropped and
+                    // nothing landed). Hold the batch to ~1000 frames/s by the clock, not by Sleep's 15 ms ticks.
+                    if (++sent > clock.ElapsedMilliseconds * BatchFramesPerMs) Thread.Sleep(1);
                 }
             }
         }

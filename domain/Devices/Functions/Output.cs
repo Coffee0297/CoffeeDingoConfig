@@ -51,10 +51,29 @@ public class Output : IDeviceFunction
     [JsonPropertyName("warnLimit")] public double WarnLimit { get => field; set => field = Math.Clamp(value, 0.0, 100.0); } = 0.0;        //A, 0 = disabled
     [JsonPropertyName("openLoadLimit")] public double OpenLoadLimit { get => field; set => field = Math.Clamp(value, 0.0, 100.0); } = 0.0; //A, 0 = disabled
     [JsonPropertyName("openLoadTime")] public int OpenLoadTime { get => field; set => field = Math.Clamp(value, 0, 60000); } = 1000;     //ms below floor before flagging
+    // upstream feat/undercurrent-trip (subs 27-29): below UnderLimit A (0 = off) for UnderTime ms while on, past inrush:
+    // report Undercurrent, or with UnderTrip latch Fault and switch the output off
+    [JsonPropertyName("underLimit")] public double UnderLimit { get => field; set => field = Math.Clamp(value, 0.0, 100.0); } = 0.0;
+    [JsonPropertyName("underTime")] public int UnderTime { get => field; set => field = Math.Clamp(value, 0, 60000); } = 1000;
+    [JsonPropertyName("underTrip")] public bool UnderTrip { get; set; }
+    // upstream feat/fault-clear: a latched Fault clears when the output's input goes off, so switching it on again retries
+    [JsonPropertyName("clearOnReassert")] public bool ClearOnReassert { get; set; }
+    // upstream feat/hard-short-trip: A, 0 = off; above it the output latches Fault at once, also inside the inrush time
+    [JsonPropertyName("hardShortLimit")] public double HardShortLimit { get => field; set => field = Math.Clamp(value, 0.0, 100.0); } = 0.0;
+    // upstream feat/soft-start-current-limit: ms, 0 = off; a PWM soft start holds while over the inrush limit and trips if not done in this time
+    [JsonPropertyName("softStartTimeout")] public int SoftStartTimeout { get => field; set => field = Math.Clamp(value, 0, 60000); } = 0;
+    // upstream feat/soft-stop: ms, 0 = off; a PWM output's duty ramps to 0 over this time when its input turns off
+    [JsonPropertyName("softStopTime")] public int SoftStopTime { get => field; set => field = Math.Clamp(value, 0, 10000); } = 0;
+    // upstream feat/load-shed: held off while the module's shed input is on
+    [JsonPropertyName("shed")] public bool Shed { get; set; }
+    // upstream feat/wire-load: wire time constant, s, 0 = off; the module estimates the wire's load % from I² (report only)
+    [JsonPropertyName("thermalTau")] public int ThermalTau { get => field; set => field = Math.Clamp(value, 0, 600); } = 0;
     
     [JsonIgnore][Plotable(displayName:"Current", unit:"A")] public double Current { get; set; }
     [JsonIgnore][Plotable(displayName:"State")] public OutState State { get; set; }
     [JsonIgnore][Plotable(displayName:"ResetCount")] public int ResetCount { get; set; }
+    // upstream feat/wire-load: the wire's estimated load % (100 = the temperature the current limit reaches for good)
+    [JsonIgnore][Plotable(displayName:"WireLoad", unit:"%")] public double WireLoad { get; set; }
     [JsonIgnore][Plotable(displayName:"DutyCycle", unit:"%")] public double CurrentDutyCycle
     {
         get;
@@ -66,7 +85,13 @@ public class Output : IDeviceFunction
     }
     [JsonIgnore][Plotable(displayName:"CalcCurrent", unit:"A")] public double CalculatedCurrent { get; private set; }
 
+    // Upstream dingoFW feat/stay-alive-outputs (sub 34): an output that is on when the module goes to sleep stays on
+    // (solid, 100 % even with PWM) with NO firmware current protection while asleep. The fork has none.
+    [JsonPropertyName("stayAlive")] public bool StayAlive { get; set; }
+
     [JsonIgnore] public List<DeviceParameter> Params { get; }
+    // Upstream-only subs (free in the fork, whose firmware lacks them): added on upstream modules only.
+    [JsonIgnore] public List<DeviceParameter> UpstreamParams { get; }
 
     [JsonConstructor]
     public Output(int number, string name)
@@ -75,6 +100,46 @@ public class Output : IDeviceFunction
         Name = name;
 
         Params = InitParams();
+        var idx = BaseIndex + (Number - 1);
+        UpstreamParams =
+        [
+            new DeviceParameter { ParentName = Name, Name = $"output[{Number}].clearOnReassert", Index = idx, SubIndex = 25,
+                GetValue = () => ClearOnReassert, SetValue = val => ClearOnReassert = (bool)val, ValueType = typeof(bool), DefaultValue = false },
+            new DeviceParameter { ParentName = Name, Name = $"output[{Number}].underLimit", Index = idx, SubIndex = 27,
+                GetValue = () => UnderLimit, SetValue = val => UnderLimit = (double)val, ValueType = typeof(double), DefaultValue = 0.0 },
+            new DeviceParameter { ParentName = Name, Name = $"output[{Number}].underTime", Index = idx, SubIndex = 28,
+                GetValue = () => UnderTime, SetValue = val => UnderTime = (int)val, ValueType = typeof(int), DefaultValue = 1000 },
+            new DeviceParameter { ParentName = Name, Name = $"output[{Number}].underTrip", Index = idx, SubIndex = 29,
+                GetValue = () => UnderTrip, SetValue = val => UnderTrip = (bool)val, ValueType = typeof(bool), DefaultValue = false },
+            new DeviceParameter { ParentName = Name, Name = $"output[{Number}].hardShortLimit", Index = idx, SubIndex = 32,
+                GetValue = () => HardShortLimit, SetValue = val => HardShortLimit = (double)val, ValueType = typeof(double), DefaultValue = 0.0 },
+            new DeviceParameter
+            {
+                ParentName = Name, Name = $"output[{Number}].softStartTimeout", Index = BaseIndex + (Number - 1), SubIndex = 30,
+                GetValue = () => SoftStartTimeout, SetValue = val => SoftStartTimeout = (int)val,
+                ValueType = typeof(int), DefaultValue = 0
+            },
+            new DeviceParameter
+            {
+                ParentName = Name, Name = $"output[{Number}].softStopTime", Index = BaseIndex + (Number - 1), SubIndex = 31,
+                GetValue = () => SoftStopTime, SetValue = val => SoftStopTime = (int)val,
+                ValueType = typeof(int), DefaultValue = 0
+            },
+            new DeviceParameter
+            {
+                ParentName = Name, Name = $"output[{Number}].shed", Index = BaseIndex + (Number - 1), SubIndex = 26,
+                GetValue = () => Shed, SetValue = val => Shed = (bool)val,
+                ValueType = typeof(bool), DefaultValue = false
+            },
+            new DeviceParameter
+            {
+                ParentName = Name, Name = $"output[{Number}].thermalTau", Index = BaseIndex + (Number - 1), SubIndex = 33,
+                GetValue = () => ThermalTau, SetValue = val => ThermalTau = (int)val,
+                ValueType = typeof(int), DefaultValue = 0
+            },
+            new() { ParentName = Name, Name = $"output[{Number}].stayAlive", Index = BaseIndex + (Number - 1), SubIndex = 34,
+                GetValue = () => StayAlive, SetValue = v => StayAlive = (bool)v, ValueType = typeof(bool), DefaultValue = false },
+        ];
     }
 
     private List<DeviceParameter> InitParams()

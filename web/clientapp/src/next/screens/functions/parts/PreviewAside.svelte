@@ -28,7 +28,7 @@
     {#if ins.length || outs.length}
       <strong>{name || tpl.name}</strong>:
       {#if ins.length}when {#each ins as x, i}{i ? (i === ins.length - 1 ? ' or ' : ', ') : ''}<strong>{label(x.label)}</strong> <span class="mono muted">({where(x.opt)})</span>{/each}{:else}always{/if}
-      → {#each outs as x, i}{i ? ', ' : ''}<strong>{label(x.label)}</strong> <span class="mono muted">({where(x.opt)})</span>{:else}pick an output{/each}.
+      → {#each outs as x, i}{i ? ', ' : ''}<strong>{label(x.label)}</strong> <span class="mono muted">({where(x.opt)})</span>{:else}{tpl.fields.some((f) => f.t === 'module') ? 'retry every tripped output' : 'pick an output'}{/each}.
       {#if settings.length || flags.length}<span class="muted"> {[...settings, ...flags].join(' · ')}.</span>{/if}
     {:else}
       <span class="muted">Pick outputs and inputs and the sentence appears here.</span>
@@ -44,8 +44,8 @@
   <span class="eyebrow">APPLY WILL</span>
   <ul class="will">
     {#each remoteIns as x}<li>add a CAN input on <b>{logic?.name}</b> that reads <b>{x.opt.module}</b> {x.opt.sig?.label ?? x.opt.sig?.name} (reuses one that already does)</li>{/each}
-    {#each preview?.ops ?? [] as o}<li>create {o.op === 'virtual' ? 'a combination' : o.op === 'wiper' ? 'the wiper block' : 'a ' + o.op} <b>{o.name}</b> <span class="muted">({o.detail})</span></li>{/each}
-    {#each preview?.wires ?? [] as w}{@const d = drawOuts.find((x) => x.num === w.out)}<li>wire <b>{d?.opt ? [d.opt.module, d.opt.pin?.label, d.opt.name].filter(Boolean).join(' · ') : 'output ' + w.out}</b>{w.pwm ? ' (PWM duty)' : ''}{relays[d?.k] ? ', through a relay' : ''}</li>{/each}
+    {#each (preview?.ops ?? []).filter((o) => o.op !== 'signal') as o}<li>{o.op === 'loadshed' ? 'set the module’s' : o.op === 'virtual' ? 'create a combination' : o.op === 'wiper' ? 'create the wiper block' : o.op === 'retryall' ? 'the module’s' : 'create a ' + o.op} <b>{o.name}</b> <span class="muted">({o.detail})</span></li>{/each}
+    {#each preview?.wires ?? [] as w}{@const d = drawOuts.find((x) => x.num === w.out)}<li>{w.shed ? 'switch off while shedding' : 'wire'} <b>{d?.opt ? [d.opt.module, d.opt.pin?.label, d.opt.name].filter(Boolean).join(' · ') : 'output ' + w.out}</b>{w.pwm ? ' (PWM duty)' : ''}{relays[d?.k] ? ', through a relay' : ''}</li>{/each}
     {#if !preview && !previewErr}<li class="muted">Nothing to write yet.</li>{/if}
     {#if previewErr}<li class="muted">Not buildable yet: {previewErr}</li>{/if}
   </ul>

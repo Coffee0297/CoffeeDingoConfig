@@ -10,6 +10,12 @@ test.beforeAll(async () => { cb = await deviceByName('CB-2'); cb1 = await device
 const row = (n) => funcRow(cb.guid, 'analogIn', n)
 const openAi = async (page, n, d = cb) => { await open(page, `hardware/module/${d.guid}/input/analoginput/${n}`); await expect(page.getByTestId('save')).toBeVisible() }
 const withAi = (n, fn) => withFunc(cb.guid, 'analoginput', 'analogIn', n, fn)
+// 5.7 (upstream layout): Multi-position switch opens on Evenly spaced; the resistor ladder is the Calibrated choice (fork: always the ladder)
+const ladderMode = async (page) => {
+  await page.getByRole('radio', { name: 'Multi-position switch' }).click()
+  const cal = page.getByRole('radio', { name: 'Calibrated (measured voltages)' })
+  if (await cal.count()) await cal.click()
+}
 const save = async (page) => { await page.getByTestId('save').dispatchEvent('click'); await expect(page.getByTestId('save-status')).toContainText(/^Kept in the project/, { timeout: 30_000 }) }
 
 /** Report a fixed millivolt value for one analog input (and its switch state) in GET .../signals. */
@@ -102,7 +108,7 @@ test('resistor ladder: presets, count, overlap check, order check, then save', a
   const errors = watchErrors(page)
   await withAi(4, async () => {
     await openAi(page, 4)
-    await page.getByRole('radio', { name: 'Multi-position switch' }).click()
+    await ladderMode(page)
     await page.getByRole('radio', { name: 'Headlight, 5 positions' }).click()
     await expect(page.getByTestId('ladder-table').locator('tbody tr')).toHaveCount(5)
     await expect(page.getByTestId('ladder-table')).toContainText('Clear')
@@ -148,7 +154,7 @@ test('teach the real switch: Use live per row and Capture steps through the posi
     await mockFunctions(page, cb.guid, (f) => { const r = f.analogIn[4]; r.name = 'MCPVAL b rotary'; r.enabled = true })
     const ctl = await mockMv(page, (await row(5)).name, 'MCPVAL b rotary', 1230)
     await openAi(page, 5)
-    await page.getByRole('radio', { name: 'Multi-position switch' }).click()
+    await ladderMode(page)
     await page.getByRole('radio', { name: 'Evenly spaced, 5' }).click()
     await expect(page.getByText('Turn the switch to "Off" and press Capture')).toBeVisible({ timeout: 10_000 })
     await expect(page.getByTestId('capture-step')).toBeEnabled({ timeout: 10_000 })   // steady for 1 s

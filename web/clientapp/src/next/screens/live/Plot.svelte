@@ -11,6 +11,7 @@
   import { buildCatalog, resolveSignalToken, describeKey } from './parts/catalog.js'
   import { renderPlotPng, downloadBlob } from './parts/plotExport.js'
   import LiveTabs from './parts/LiveTabs.svelte'
+  import RecordPlay from './parts/RecordPlay.svelte'
   import { LineChart } from '../../ui/index.js'
   import LearnSwitch from '../hardware/parts/LearnSwitch.svelte'
   import { findReader } from '../hardware/parts/learn.js'
@@ -212,6 +213,7 @@
   <PageHeader title="Live">
     {#snippet tag()}<LiveTabs current="plot" />{/snippet}
   </PageHeader>
+  <RecordPlay />
 
   {#if opened}
     <Banner tone="info" title="Opened from Graph it.">{opened} {asked.length === 1 ? 'is' : 'are'} on the graph. Add another signal to see what makes it change.</Banner>

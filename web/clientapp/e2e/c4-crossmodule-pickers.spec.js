@@ -4,7 +4,7 @@
 // where it can, and puts every module it touched back as it was.
 import { test, expect } from '@playwright/test'
 import { open, watchErrors } from './helpers.js'
-import { apiJson, deviceByName, devices, waitFor, API } from './api.js'
+import { apiJson, deviceByName, devices, waitFor, API, SIM_MCP } from './api.js'
 import { putOutput, saveAndWait } from './b-helpers.js'
 import fs from 'node:fs'
 
@@ -28,7 +28,7 @@ test.beforeAll(async () => {
 test.afterAll(async () => { if (addedEcu) await apiJson('POST', `/api/devices/${addedEcu}/remove`).catch(() => {}) })
 
 // ---------------------------------------------------------------- helpers
-const SIM = 'http://127.0.0.1:8787/mcp'
+const SIM = SIM_MCP
 async function sim(name, args) {
   const r = await fetch(SIM, { method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'application/json, text/event-stream' },
     body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name, arguments: args } }) })
@@ -494,7 +494,7 @@ test('base ID: re-addressing CB-2 re-points the CAN input PDM-01 reads it with, 
     await settings.getByTestId('base-input').fill(hex3(to))
     await settings.getByTestId('base-set').click()
     const dlg = page.getByRole('alertdialog')
-    await expect(dlg.getByTestId('base-relinks')).toContainText('1 CAN input on other modules reads this module')
+    await expect(dlg.getByTestId('base-relinks')).toContainText(/\d+ CAN inputs? on other modules reads? this module/)   // 2 on the Ranchero
     await dlg.getByTestId('confirm-yes').click()
     await expect(settings.getByTestId('readdr-msg')).toContainText(`answers on ${hex3(to)}`, { timeout: 30_000 })
   }

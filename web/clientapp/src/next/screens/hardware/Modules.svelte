@@ -4,10 +4,10 @@
   // POST /devices/{id}/rename|remove|modify. A module cannot report its own board revision (the definitions name the
   // documented board only, G21), so there is no Rev column; Identify (firmware 5.6) blinks the module's LEDs.
   import { DropdownMenu } from 'bits-ui'
-  import { Page, PageHeader, Card, Button, Chip, StateDot, Empty } from '../../ui/index.js'
+  import { Page, PageHeader, Card, Button, Chip, StateDot, Empty, Banner } from '../../ui/index.js'
   import Confirm from '../../shell/parts/Confirm.svelte'
-  import { live, api, mutate, moduleState, hex, blinkModule, modulesOf } from '../../lib/live.svelte.js'
-  import { olderThan } from './parts/util.js'
+  import { live, api, mutate, moduleState, hex, blinkModule, modulesOf, toast } from '../../lib/live.svelte.js'
+  import { lacks, isUpstream } from './parts/util.js'
   import { href } from '../../router.svelte.js'
   import { ui } from '../../shell/ui.svelte.js'
   import { addLike } from '../../shell/parts/addmodule.svelte.js'
@@ -18,12 +18,26 @@
 
   let { query } = $props()
 
+  // firmware 5.7 (the operator's new 5.x line) uses the upstream layout: convert the fork-5.x records of this project
+  const forkMods = $derived(mods.filter((d) => d.family === 'fork'))
+  let askMigrate = $state(false)
+  async function migrate() {
+    askMigrate = false
+    const r = await mutate(() => api.migrate57())
+    if (!r) return
+    const warn = r.reduce((n, m) => n + (m.migration ?? []).filter((x) => x.level === 'warn').length, 0)
+    toast(`${r.length} module${r.length === 1 ? '' : 's'} converted to firmware 5.7${warn ? `, ${warn} warning${warn === 1 ? '' : 's'}` : ''}. Open each module for its report.`, warn ? 'warn' : 'info', 8000)
+  }
+
   // an ECU described by a DBC file is not a module (no firmware, base ID or settings): it gets its own list
   const mods = $derived(modulesOf(live.devices).sort((a, b) => a.baseId - b.baseId))
   const ecus = $derived(live.devices.filter((d) => !mods.includes(d)))
   let sel = $state(null)
   $effect.pre(() => { sel = query?.sel ?? null })   // a link to another module while this page is open
   const selected = $derived(mods.find((m) => m.guid === sel) ?? mods[0] ?? null)
+  // the module on USB answers on an ID no module of this project has (re-addressed in the project, or a spare): its
+  // frames can land in a neighbour's ID range and make that one look connected with no version
+  const strayUsb = $derived(live.connected && live.usbBaseId != null && !mods.some((m) => m.baseId === live.usbBaseId) ? live.usbBaseId : null)
 
   // Last seen: the time this browser last saw the module answering (telemetry has no per-module timestamp).
   let seen = $state({})
@@ -63,7 +77,7 @@
   const range = $derived.by(() => {
     if (!mods.length) return { lo: 0x600, hi: 0x800 }
     const lo = Math.max(0, (Math.min(...mods.map((m) => m.baseId)) - ID_BEFORE) & ~0x3f)
-    const top = Math.max(...mods.map((m) => m.baseId + spanAfter(m.type) + 1))
+    const top = Math.max(...mods.map((m) => m.baseId + spanAfter(m.type, m) + 1))
     const hi = Math.min(0x800, Math.ceil(top / 0x40) * 0x40)
     return { lo, hi: Math.max(hi, lo + 0x40) }
   })
@@ -78,11 +92,17 @@
 <Page wide>
   <PageHeader crumbs={[{ label: 'Hardware' }, { label: 'Modules' }]} title="Modules" subtitle={`${mods.length} in this project${ecus.length ? ` · ${ecus.length} ECU${ecus.length === 1 ? '' : 's'} from a DBC` : ''}`}>
     {#snippet actions()}
+      {#if forkMods.length}<Button onclick={() => (askMigrate = true)} data-testid="migrate57">Migrate project to firmware 5.7…</Button>{/if}
       <Button onclick={() => (ui.addModule = true)} data-testid="find-modules">Find modules</Button>
       <Button variant="primary" onclick={() => { addLike.guid = null; ui.addModule = true }} data-testid="add-module">Add module</Button>
     {/snippet}
   </PageHeader>
   <HardwareNav current="modules" />
+  {#if strayUsb != null}
+    <Banner tone="warn" title={`The module on USB answers on ${hexId(strayUsb)}, which no module in this project uses`} data-testid="usb-stray">
+      Its frames can make a neighbouring module look connected. Click the module it should be, then use Deploy to the module on USB: it moves there with that module's settings.
+    </Banner>
+  {/if}
 
   {#if !mods.length}
     <Empty title="No modules in this project" text={live.connected ? 'Find the modules on the bus, or add one by hand.' : 'Connect to the car to find modules, or add one by hand.'}>
@@ -96,7 +116,7 @@
             <thead><tr><th>State</th><th>Type</th><th>Name</th><th>Base ID</th><th>Firmware</th><th>Last seen</th><th>Actions</th></tr></thead>
             <tbody>
               {#each mods as d (d.guid)}
-                {@const st = moduleState(d)} {@const oldFw = olderThan(d.version, [5, 6, 0])}
+                {@const st = moduleState(d)} {@const oldFw = !isUpstream(d) && lacks(d, [5, 6, 0])}
                 <tr class:sel={selected?.guid === d.guid} class:bad={clashes.has(d.guid)} data-testid={'row-' + d.name} tabindex="0" aria-current={selected?.guid === d.guid ? 'true' : undefined}
                   title="Click to show its settings" onclick={(e) => rowClick(e, d)} onkeydown={(e) => rowKey(e, d)}>
                   <td data-label="State"><StateDot tone={st.key} shape={st.shape} label={st.word} /></td>
@@ -118,7 +138,7 @@
                   <td class="mono" data-label="Firmware">{fwText(d)}</td>
                   <td class="muted" data-label="Last seen">{lastSeen(d)}</td>
                   <td class="acts">
-                    <Button size="sm" disabled={oldFw || !d.connected || !live.connected} title={oldFw ? `Needs firmware 5.6: ${d.name} runs ${fwText(d)}` : !d.connected || !live.connected ? 'The module is not answering' : 'Blink its LEDs for 10 s'} onclick={() => blinkModule(d)} aria-label={`Identify ${d.name}: blink its LED`}>Identify</Button>
+                    <Button size="sm" disabled={oldFw || !d.connected || !live.connected} title={oldFw ? `Needs firmware 5.6: ${d.name} runs ${fwText(d)}` : !d.connected || !live.connected ? 'The module is not answering' : isUpstream(d) ? 'Blink its LEDs for 10 s (upstream dingoFW: only if its build has identify)' : 'Blink its LEDs for 10 s'} onclick={() => blinkModule(d)} aria-label={`Identify ${d.name}: blink its LED`}>Identify</Button>
                     <DropdownMenu.Root>
                       <DropdownMenu.Trigger class="more" aria-label={`More actions for ${d.name}`} data-testid={'more-' + d.name}>⋯</DropdownMenu.Trigger>
                       <DropdownMenu.Portal>
@@ -156,7 +176,7 @@
           <div class="map" role="img" aria-label={mapLabel}>
             {#if obdIn}<span class="obd" style="left: {pct(0x7df)}; width: {w(0x11)}">OBD-II reserve</span>{/if}
             {#each mods as m, i (m.guid)}
-              <span class="box" class:bad={clashes.has(m.guid)} class:on={selected?.guid === m.guid} style="left: {pct(m.baseId)}; width: {w(spanAfter(m.type) + 1)}; top: {(i % 3) * 36 + 4}px">{clashes.has(m.guid) ? '■ ' : ''}{m.name}</span>
+              <span class="box" class:bad={clashes.has(m.guid)} class:on={selected?.guid === m.guid} style="left: {pct(m.baseId)}; width: {w(spanAfter(m.type, m) + 1)}; top: {(i % 3) * 36 + 4}px">{clashes.has(m.guid) ? '■ ' : ''}{m.name}</span>
             {/each}
           </div>
           <div class="ticks" aria-hidden="true">{#each ticks as t (t)}<span class="mono">{hexId(t)}</span>{/each}</div>
@@ -181,6 +201,15 @@
   {#snippet footer()}
     <Button onclick={() => (rm = null)} data-testid="rm-keep">Keep it</Button>
     <Button variant="danger" disabled={!rmArmed} onclick={doRemove} data-testid="rm-yes">Remove from project</Button>
+  {/snippet}
+</Confirm>
+
+<Confirm bind:open={askMigrate} title="Migrate project to firmware 5.7?" width={560}>
+  <p>Firmware 5.7 numbers its settings and signals like upstream dingoFW. This converts {forkMods.map((d) => d.name).join(', ')} to that layout: signal choices, Lua readVar numbers, timers, CAN timeouts, other modules' CAN inputs and ignition followers. Each module then shows a report of what changed and what could not be carried over.</p>
+  <p>Save the project under a new name afterwards (keep the 5.6 file). A module still on 5.6 refuses Read and Apply until it runs 5.7. After flashing, Read each module (it keeps this project), then Apply to car and Store.</p>
+  {#snippet footer()}
+    <Button onclick={() => (askMigrate = false)}>Cancel</Button>
+    <Button variant="primary" onclick={migrate} data-testid="migrate57-yes">Migrate {forkMods.length} module{forkMods.length === 1 ? '' : 's'}</Button>
   {/snippet}
 </Confirm>
 

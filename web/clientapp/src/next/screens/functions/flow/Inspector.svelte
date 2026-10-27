@@ -7,11 +7,15 @@
   import { untrack } from 'svelte'
   import { Button, Chip, Field, Select, Segmented, Checkbox, Banner } from '../../../ui/index.js'
   import { href } from '../../../router.svelte.js'
-  import { FAM_COLOR, FAM_NAME, OPS, OP_WORDS, JOIN, TIMER_MODES, EDGES, MATH_OPS, isRelational, sourceOptions, canWire, hexId, parseId } from './model.js'
+  import { FAM_COLOR, FAM_NAME, OPS, OP_WORDS, JOIN, timerMode, EDGES, MATH_OPS, isRelational, hystBand, sourceOptions, canWire, hexId, parseId, framePeers, pidProblem } from './model.js'
   import { sentenceFor } from './sentence.js'
+  import { MSG_CHECKSUMS, NO_COUNTER, hasMsgChecksum, msgChecksumWarnings } from './canmsgcheck.js'
+  import { curveProblem, curvePlot, curveAt, CURVE_MAX } from './curve.js'
   import { fmt } from './livevals.js'
-  import { olderThan } from '../../hardware/parts/util.js'
+  import { latchGateIns, latchGateProblem, LATCH_TYPES } from './latchgate.js'
+  import { lacks, has, isUpstream, upstreamHas } from '../../hardware/parts/util.js'
   import { remoteItems, isRemoteKey } from '../../../lib/remote.js'
+  import { COUT_KINDS, hasCoutKind, coutKindProblem, snapChecksum, otherChecksums } from './canoutkind.js'
 
   let { model, node, dev, lv, links = [], idMap = null, busy = false, onsave, onremove, onselect, onungroup, onopenlink, unsaved = $bindable(false) } = $props()
 
@@ -21,34 +25,43 @@
   let base = $state({})
   let idText = $state('')
   let seededFor = ''
+  let spSignal = $state(false)   // PID: "from a signal" picked, signal not chosen yet
   const EDIT = {
-    virtualinput: ['name', 'var0', 'var1', 'var2', 'not0', 'not1', 'not2', 'cond0', 'cond1', 'mode'],
-    condition: ['name', 'input', 'operator', 'arg', 'argOff'],
-    timer: ['name', 'input', 'mode', 'preset', 'edge'],
+    virtualinput: ['name', 'var0', 'var1', 'var2', 'not0', 'not1', 'not2', 'cond0', 'cond1', 'mode', 'retain'],
+    condition: ['name', 'input', 'operator', 'arg', 'argOff', 'delayOn', 'delayOff'],
+    timer: ['name', 'input', 'mode', 'preset', 'edge', 'resetInput'],
     flasher: ['name', 'input', 'onTime', 'offTime', 'single'],
-    counter: ['name', 'incInput', 'decInput', 'resetInput', 'incEdge', 'decEdge', 'resetEdge', 'minCount', 'maxCount', 'wrapAround', 'holdToReset', 'resetTime'],
+    counter: ['name', 'incInput', 'decInput', 'resetInput', 'incEdge', 'decEdge', 'resetEdge', 'minCount', 'maxCount', 'wrapAround', 'holdToReset', 'resetTime', 'retain'],
     table: ['name', 'xInput', 'yInput', 'xSize', 'ySize', 'xAxis', 'yAxis', 'cells'],
-    canoutput: ['name', 'input', 'id', 'ide', 'startBit', 'bitLength', 'byteOrder', 'factor', 'offset', 'signed', 'interval'],
-    caninput: ['name', 'id', 'ide', 'startBit', 'bitLength', 'factor', 'offset', 'operator', 'operand', 'mode', 'timeoutEnabled', 'timeout', 'timeoutValue'],
+    canoutput: ['name', 'input', 'id', 'ide', 'startBit', 'bitLength', 'byteOrder', 'factor', 'offset', 'signed', 'interval', 'kind', 'triggerInput'],
+    caninput: ['name', 'id', 'ide', 'startBit', 'bitLength', 'factor', 'offset', 'operator', 'operand', 'mode', 'timeoutEnabled', 'timeout', 'timeoutValue', 'timeoutUseValue'],
     math: ['name', 'inputA', 'inputB', 'op', 'constB', 'factor', 'offset'],
-    canmsg: ['name', 'input', 'id', 'ide', 'dlc', 'data', 'mode', 'intervalMs'],
+    canmsg: ['name', 'input', 'id', 'ide', 'dlc', 'data', 'mode', 'intervalMs', 'checksum', 'checksumByte', 'counterByte'],
     comfortblink: ['name', 'leftInput', 'rightInput', 'clockInput', 'tapMs', 'blinks'],
+    curve: ['name', 'input', 'points', 'x', 'y'],
+    latchgate: ['name', 'type', 'input', 'controlInput', 'timeMs'],
+    pid: ['name', 'setpointInput', 'processInput', 'activateInput', 'feedFwdInput', 'invert', 'kp', 'ki', 'kd', 'feedForward', 'outMin', 'outMax', 'iMin', 'iMax', 'spRate', 'deadband', 'pvMin', 'pvMax', 'fallback', 'periodMs', 'setpoint'],
     input: ['name', 'invert', 'mode', 'debounceTime'],
     digitaloutput: ['name', 'input'],
     output: ['name', 'input', 'dutyCycleInput'],
-    sys: ['forceSleepInput', 'muteTxInput'],
+    sys: ['forceSleepInput', 'muteTxInput', 'retryAllInput', 'shedInput'],
   }
   const fields = $derived(EDIT[node?.kind] ?? [])
   function seed() {
+    spSignal = false
     const r = node?.row ?? {}
     const b = {}
-    for (const f of EDIT[node?.kind] ?? []) b[f] = node.kind === 'output' && f === 'input' ? r.inputVal ?? 0 : r[f] ?? (f === 'argOff' ? r.arg : f.startsWith('not') || ['ide', 'single', 'wrapAround', 'holdToReset', 'signed', 'invert', 'timeoutEnabled'].includes(f) ? false : 0)
+    for (const f of EDIT[node?.kind] ?? []) b[f] = node.kind === 'output' && f === 'input' ? r.inputVal ?? 0 : r[f] ?? (f === 'argOff' ? r.arg : f.startsWith('not') || ['ide', 'single', 'wrapAround', 'holdToReset', 'signed', 'invert', 'timeoutEnabled', 'timeoutUseValue', 'retain'].includes(f) ? false : 0)
     if (node?.kind === 'canmsg') b.data = Array.from({ length: 8 }, (_, k) => +(r.data?.[k] ?? 0))
     if (node?.kind === 'table') {
       // fixed-size arrays (8 / 8 / 64); a fresh slot is all zero, which is not an ascending axis
       b.xAxis = Array.from({ length: 8 }, (_, k) => +(r.xAxis?.[k] ?? 0)); b.yAxis = Array.from({ length: 8 }, (_, k) => +(r.yAxis?.[k] ?? 0))
       b.cells = Array.from({ length: 64 }, (_, k) => +(r.cells?.[k] ?? 0))
       b.xSize = Math.min(8, Math.max(1, +r.xSize || 2)); b.ySize = Math.min(8, Math.max(1, +r.ySize || 1))
+    }
+    if (node?.kind === 'curve') {
+      b.x = Array.from({ length: CURVE_MAX }, (_, k) => +(r.x?.[k] ?? 0)); b.y = Array.from({ length: CURVE_MAX }, (_, k) => +(r.y?.[k] ?? 0))
+      b.points = Math.min(CURVE_MAX, Math.max(2, +r.points || 2))
     }
     base = JSON.parse(JSON.stringify(b))
     draft = JSON.parse(JSON.stringify(b))
@@ -96,17 +109,26 @@
     const k = node.kind
     if (idError) return idError
     if (k === 'flasher' && (draft.onTime < 0 || draft.onTime > 5000 || draft.offTime < 0 || draft.offTime > 5000)) return 'On and off times must be 0 to 5000 ms.'
+    if (k === 'timer' && isUpstream(dev) && (draft.preset < 0 || draft.preset > 600000)) return 'Time must be 0 to 10 minutes.'
     if (k === 'timer' && (draft.preset < 0 || draft.preset > 3600000)) return 'Time must be 0 to 1 hour.'
+    if (k === 'canoutput' && coutKindProblem(draft)) return coutKindProblem(draft)
     if ((k === 'canoutput' || k === 'caninput') && (draft.startBit < 0 || draft.startBit > 63 || draft.bitLength < 1 || draft.bitLength > 64 - draft.startBit)) return `Start bit 0–63 and length 1–${64 - (draft.startBit | 0)}.`
     if (k === 'sys' && (draft.forceSleepInput === 1 || draft.muteTxInput === 1)) return '"Always on" would keep the module asleep or muted for good. Pick a real signal.'
+    if (k === 'sys' && draft.shedInput > 0 && model?.byIdx?.get(draft.shedInput)?.kind === 'sys') return 'A module signal is never off: as the shed input it would keep the opted-in loads off for good. Pick a condition, e.g. battery below a voltage.'
     if (k === 'table') {
       for (let i = 1; i < draft.xSize; i++) if (!(draft.xAxis[i] > draft.xAxis[i - 1])) return `X point ${i + 1} must be above X point ${i}.`
       if (draft.ySize > 1) for (let i = 1; i < draft.ySize; i++) if (!(draft.yAxis[i] > draft.yAxis[i - 1])) return `Y point ${i + 1} must be above Y point ${i}.`
     }
+    if (k === 'condition' && hyst && isUpstream(dev) && isRelational(draft.operator) && !(hystBand(draft.operator, draft.arg, draft.argOff) > 0))
+      return [2, 4].includes(draft.operator) ? 'Off again at must be below the value.' : 'Off again at must be above the value.'
+    if (k === 'condition' && [draft.delayOn, draft.delayOff].some((x) => !(x >= 0 && x <= 60000))) return 'Delays must be 0 to 60 s.'
     if (k === 'counter' && draft.maxCount <= draft.minCount) return 'Max must be above min.'
+    if (k === 'curve') { const p = curveProblem(draft); if (p) return p[0].toUpperCase() + p.slice(1) + '.' }
     if (k === 'canmsg' && (draft.dlc < 0 || draft.dlc > 8)) return 'Length must be 0 to 8 bytes.'
+    if (k === 'latchgate') { const p = latchGateProblem(draft); if (p) return p[0].toUpperCase() + p.slice(1) + '.' }
     if (k === 'comfortblink' && (draft.tapMs < 100 || draft.tapMs > 5000)) return 'The tap time must be 0.1 to 5 s.'
     if (k === 'comfortblink' && (!Number.isInteger(draft.blinks) || draft.blinks < 1 || draft.blinks > 10)) return 'Blinks must be 1 to 10.'
+    if (k === 'pid') { const p = pidProblem(draft); if (p) return p[0].toUpperCase() + p.slice(1) + '.' }
     if (k === 'canmsg' && draft.mode === 0 && (draft.intervalMs < 10 || draft.intervalMs > 60000)) return 'Repeat every 10 to 60000 ms.'
     if (k === 'canmsg' && draft.data.some((x) => !Number.isInteger(x) || x < 0 || x > 255)) return 'Each byte must be 00 to FF.'
     return ''
@@ -116,7 +138,7 @@
     err = validate()
     if (err) return
     const body = { ...dirtyBody }
-    for (const k of Object.keys(body)) if (!isRemoteKey(body[k]) && (typeof base[k] === 'number' || ['input', 'var0', 'var1', 'var2', 'xInput', 'yInput', 'incInput', 'decInput', 'resetInput', 'inputA', 'inputB', 'leftInput', 'rightInput', 'clockInput'].includes(k))) body[k] = Number(body[k])
+    for (const k of Object.keys(body)) if (!isRemoteKey(body[k]) && (typeof base[k] === 'number' || ['input', 'var0', 'var1', 'var2', 'xInput', 'yInput', 'incInput', 'decInput', 'resetInput', 'inputA', 'inputB', 'leftInput', 'rightInput', 'clockInput', 'triggerInput', 'setpointInput', 'processInput', 'activateInput', 'feedFwdInput'].includes(k))) body[k] = Number(body[k])
     await onsave?.(node.id, body, `${node.title}: ${Object.keys(body).join(', ')}`)
   }
 
@@ -134,7 +156,12 @@
   })
   const remoteFor = (accepts) => (accepts === 'bool' ? remote.bool : [...remote.num, ...remote.bool.filter((i) => !i.value.startsWith('d:'))])
   const optsFor = (accepts) => [...sourceOptions(model, accepts, node?.id), ...remoteFor(accepts)]
-  const inputRows = $derived((node?.ins ?? []).filter((p) => fields.includes(p.id)))
+  // a counter / checksum output sends no input value
+  // a latch / gate's port names follow the type being edited (Set / Reset or Value / Enable)
+  const inputRows = $derived((node?.ins ?? []).filter((p) => fields.includes(p.id) && !(node.kind === 'canoutput' && draft.kind > 0 && p.id === 'input')).map((p) => { const t = node.kind === 'latchgate' && latchGateIns(draft).find(([f]) => f === p.id); return t ? { ...p, label: t[1], accepts: t[2] } : p }))
+  const kindOk = $derived(node?.kind === 'canoutput' && hasCoutKind(dev))
+  const sharedSums = $derived(node?.kind === 'canoutput' && draft.kind >= 2
+    ? otherChecksums([...model.nodes.values()].filter((x) => x.kind === 'canoutput' && x.id !== node.id).map((x) => x.row ?? {}), { ...draft, id: parseInt(String(idText).replace(/^0x/i, ''), 16), enabled: true }) : [])
   const typeOfIdx = (idx) => (model.byIdx.get(Number(idx))?.type === 'bool' ? 'bool' : 'num')
   const fromLabel = (idx) => optsFor('num').find((o) => o.value === String(idx))?.label ?? (idx ? '#' + idx : 'not connected')
 
@@ -147,8 +174,12 @@
   const remoteOut = $derived(links.filter((l) => l.from.node === node?.id))
   const sentence = $derived(node ? sentenceFor(model, node) : null)
   const sentenceText = $derived(sentence ? sentence.map((s) => s.t ?? s.label).join(' ').replace(/ ([.,)])/g, '$1').replace(/\( /g, '(') : '')
-  const reads = $derived(sentenceText || ({ sys: "This module's own signals: always on, state, board temperature and battery voltage. Its force-sleep and mute-CAN inputs are set here.", input: 'A switch wired to this module. Settings for the pin are below.', analoginput: 'An analog input (sensor, switch ladder or rotary). Calibrate it on its Hardware screen.', lua: 'Values set by the Lua program on this module (Expert › Lua).', keypad: 'Buttons of a CAN keypad.' }[node?.kind] ?? 'A block on this module.'))
-  const graphHref = $derived(node && dev ? href('live', 'plot', { signal: node.kind === 'output' ? `out:${dev.guid}:${node.n}` : `${dev.guid}|${node.title}` }) : '#')
+  const reads = $derived(sentenceText || ({ sys: "This module's own signals: always on, state, board temperature and battery voltage. Its force-sleep and mute-CAN inputs (and, where the firmware has it, the retry-all-faults signal) are set here.", input: 'A switch wired to this module. Settings for the pin are below.', analoginput: 'An analog input (sensor, switch ladder or rotary). Calibrate it on its Hardware screen.', lua: 'Values set by the Lua program on this module (Expert › Lua).', keypad: 'Buttons of a CAN keypad.' }[node?.kind] ?? 'A block on this module.'))
+  // a PID graphs with its setpoint and measured value (when they are signals of this module)
+  const srcTitle = (idx) => { const v = model.byIdx.get(Number(idx)); return v && v.kind !== 'sys' ? model.nodes.get(`${v.kind}:${v.number}`)?.title : null }
+  const graphSignal = (n) => n.kind === 'output' ? `out:${dev.guid}:${n.n}`
+    : [n.title, ...(n.kind === 'pid' ? [srcTitle(n.row?.setpointInput), srcTitle(n.row?.processInput)] : [])].filter(Boolean).map((t) => `${dev.guid}|${t}`).join(',')
+  const graphHref = $derived(node && dev ? href('live', 'plot', { signal: graphSignal(node) }) : '#')
   const hwHref = $derived.by(() => {
     if (!node || !dev) return null
     const { kind, n } = parseId(node.id)
@@ -215,6 +246,10 @@
         {@render seg('Second join', segItems(JOIN), String(draft.cond1 ?? 0), (v) => (draft.cond1 = Number(v)), !Number(draft.var2))}
       </div>
       {@render seg('Mode', [{ value: '0', label: 'Follows' }, { value: '1', label: 'Push on / push off' }], String(draft.mode ?? 0), (v) => (draft.mode = Number(v)), false)}
+      <!-- upstream dingoFW feat/retain-values (sub 10): a latched state kept across power-off -->
+      {#if draft.mode === 1 && upstreamHas(dev, 0x1400 + node.n - 1, 10)}
+        <Checkbox label="Keep across power-off" hint="Comes back as it was after the ignition was off or the module slept" bind:checked={() => !!draft.retain, (v) => (draft.retain = v)} />
+      {/if}
       <p class="hint">NOR: on only when none are on. Firmware older than 5.6.6 treats it as NAND (on unless both are on).</p>
     {/if}
 
@@ -242,16 +277,25 @@
         <Select label="Is" items={OPS.map((o, i) => ({ value: String(i), label: o + '  ' + OP_WORDS[i] }))} bind:value={() => String(draft.operator ?? 0), (v) => (draft.operator = Number(v))} />
         <Field label="Value" type="number" step="any" bind:value={() => draft.arg ?? 0, (v) => (draft.arg = toNum(v))} />
       </div>
-      {#if isRelational(draft.operator)}
+      {#if isRelational(draft.operator) && has(dev, 0x1500 + node.n - 1, 4)}
         <Checkbox label="Separate off point (hysteresis)" hint="Stops it chattering right at the value" bind:checked={hyst} />
         {#if hyst}<Field label="Off again at" type="number" step="any" bind:value={() => draft.argOff ?? 0, (v) => (draft.argOff = toNum(v))} hint={'On past ' + draft.arg + ', off again past ' + draft.argOff + '.'} />{/if}
       {/if}
+      <!-- upstream dingoFW feat/condition-delay (subs 5/6): only on a module whose firmware has them -->
+      {#if isUpstream(dev) && has(dev, 0x1500 + node.n - 1, 5)}
+        <div class="two">
+          <Field label="Delay on" type="number" step="0.1" min="0" max="60" unit="s" hint="True this long first" bind:value={() => (draft.delayOn ?? 0) / 1000, (v) => (draft.delayOn = Math.round(toNum(v) * 1000))} />
+          <Field label="Delay off" type="number" step="0.1" min="0" max="60" unit="s" hint="False this long first" bind:value={() => (draft.delayOff ?? 0) / 1000, (v) => (draft.delayOff = Math.round(toNum(v) * 1000))} />
+        </div>
+      {/if}
     {:else if node.kind === 'timer'}
       <span class="sec">Settings</span>
-      {@render seg('Kind', [{ value: '0', label: 'On-delay' }, { value: '1', label: 'Keep on after' }, { value: '2', label: 'Pulse' }], String(draft.mode ?? 0), (v) => (draft.mode = Number(v)), false)}
+      {@const up = isUpstream(dev)}
+      {@render seg('Kind', [0, 1, 2, ...(up ? [3] : [])].map((m) => ({ value: String(m), label: timerMode(m, up) })), String(draft.mode ?? 0), (v) => (draft.mode = Number(v)), false)}
       <div class="two">
-        <Field label="Time" type="number" step="0.1" min="0" unit="s" bind:value={() => (draft.preset ?? 0) / 1000, (v) => (draft.preset = Math.round(toNum(v) * 1000))} />
-        {@render seg('Active when input is', [{ value: '0', label: 'On' }, { value: '1', label: 'Off' }], String(draft.edge ?? 0), (v) => (draft.edge = Number(v)), false)}
+        <Field label="Time" type="number" step="0.1" min="0" max={up ? 600 : 3600} unit="s" bind:value={() => (draft.preset ?? 0) / 1000, (v) => (draft.preset = Math.round(toNum(v) * 1000))} />
+        <!-- upstream dingoFW: no input level choice; a Reset input instead (a port above) -->
+        {#if !up}{@render seg('Active when input is', [{ value: '0', label: 'On' }, { value: '1', label: 'Off' }], String(draft.edge ?? 0), (v) => (draft.edge = Number(v)), false)}{/if}
       </div>
       {#if lv.sim}<p class="hint" role="status">Simulated time left: {Math.round((lv.left?.[node.id] ?? 0) / 100) / 10} s</p>{/if}
     {:else if node.kind === 'math'}
@@ -279,6 +323,25 @@
       {@render seg('Send', [{ value: '0', label: 'Repeat while on' }, { value: '1', label: 'Once each time' }], String(draft.mode ?? 0), (v) => (draft.mode = Number(v)), false)}
       {#if (draft.mode ?? 0) === 0}<Field label="Every" type="number" min="10" max="60000" unit="ms" bind:value={() => draft.intervalMs ?? 100, (v) => (draft.intervalMs = toNum(v))} />{/if}
       <p class="hint">Bytes in hex. The frame goes out on the module's bus exactly as typed, for example a command another ECU listens for.</p>
+      {#if hasMsgChecksum(dev, node.n)}
+        <span class="sec">Counter and checksum</span>
+        <div class="two">
+          <Select label="Rolling counter in byte" items={[{ value: String(NO_COUNTER), label: 'None' }, ...Array.from({ length: 8 }, (_, i) => ({ value: String(i), label: 'Byte ' + i }))]} bind:value={() => String(draft.counterByte ?? NO_COUNTER), (v) => (draft.counterByte = Number(v))} />
+          <Select label="Checksum" items={MSG_CHECKSUMS.map(([v, l]) => ({ value: String(v), label: l }))} bind:value={() => String(draft.checksum === 1 ? 0 : draft.checksum ?? 0), (v) => (draft.checksum = Number(v))} />
+        </div>
+        {#if (draft.checksum ?? 0) >= 2}<Select label="Checksum in byte" items={Array.from({ length: 8 }, (_, i) => ({ value: String(i), label: 'Byte ' + i }))} bind:value={() => String(draft.checksumByte ?? 7), (v) => (draft.checksumByte = Number(v))} />{/if}
+        {#each msgChecksumWarnings(draft) as w (w)}<p class="hint bad" role="status">▲ {w}</p>{/each}
+        <p class="hint">The counter counts 0–15 in the low half of its byte, one step per frame sent (the high half keeps the byte you typed). The checksum covers every other byte of the frame, the counter included.</p>
+      {/if}
+    {:else if node.kind === 'latchgate'}
+      <span class="sec">Settings</span>
+      {@render seg('Type', segItems(LATCH_TYPES), String(draft.type ?? 0), (v) => (draft.type = Number(v)), false)}
+      {#if (draft.type ?? 0) === 0}
+        <Field label="Turn off by itself after (0 = never)" type="number" min="0" max="600" step="0.1" unit="s" bind:value={() => (draft.timeMs ?? 0) / 1000, (v) => (draft.timeMs = Math.round(toNum(v) * 1000))} />
+        <p class="hint">On at the moment Set turns on, off at the moment Reset turns on (Reset wins when both happen together), or after the time above. An input already on when the module starts is not counted.</p>
+      {:else}
+        <p class="hint">While Enable is on the value follows its input (any number); while Enable is off it holds the last value, for example the last good reading of a sensor whose valid flag dropped.</p>
+      {/if}
     {:else if node.kind === 'comfortblink'}
       <span class="sec">Settings</span>
       <div class="two">
@@ -286,6 +349,46 @@
         <Field label="Blinks for a tap" type="number" min="1" max="10" step="1" bind:value={() => draft.blinks ?? 3, (v) => (draft.blinks = Math.round(toNum(v)))} />
       </div>
       <p class="hint">A tap of the lever blinks that many times, then stops. Held longer than the tap time it blinks until released. A tap the other way during a comfort blink cancels it. Use Left / Right as "indicator on" in place of the lever; blinks are counted on the indicator clock, so every module stops on the same blink.</p>
+    {:else if node.kind === 'pid'}
+      {#if has(dev, 0x2300 + (node.row?.number ?? 1) - 1, 20)}<!-- a fixed setpoint needs param 0x2300+n:20 -->
+      <span class="sec">Setpoint</span>
+      {@render seg('Setpoint: signal or fixed value', [{ value: 'fixed', label: 'Fixed value' }, { value: 'signal', label: 'From a signal' }], spSignal || draft.setpointInput ? 'signal' : 'fixed', (v) => { spSignal = v === 'signal'; if (!spSignal) draft.setpointInput = 0 }, false)}
+      {#if !(spSignal || draft.setpointInput)}
+        <Field label="Fixed setpoint" type="number" step="any" bind:value={() => draft.setpoint ?? 0, (v) => (draft.setpoint = toNum(v))} hint="The target, e.g. 90 for 90 °C" />
+      {:else if !draft.setpointInput}
+        <p class="hint" role="status">Pick the setpoint signal under Inputs.</p>
+      {/if}
+      {/if}
+      <span class="sec">Direction</span>
+      {@render seg('The output rises while the measured value is', [{ value: 'false', label: 'below the setpoint (heater)' }, { value: 'true', label: 'above it (fan, pump)' }], String(!!draft.invert), (v) => (draft.invert = v === 'true'), false)}
+      <span class="sec">Gains</span>
+      <div class="three">
+        <Field label="Kp" type="number" min="0" step="any" bind:value={() => draft.kp ?? 1, (v) => (draft.kp = toNum(v))} />
+        <Field label="Ki" type="number" min="0" step="any" unit="/s" bind:value={() => draft.ki ?? 0, (v) => (draft.ki = toNum(v))} />
+        <Field label="Kd" type="number" min="0" step="any" unit="s" bind:value={() => draft.kd ?? 0, (v) => (draft.kd = toNum(v))} />
+      </div>
+      <div class="two">
+        <Field label="Output min" type="number" step="any" bind:value={() => draft.outMin ?? 0, (v) => (draft.outMin = toNum(v))} />
+        <Field label="Output max" type="number" step="any" bind:value={() => draft.outMax ?? 100, (v) => (draft.outMax = toNum(v))} />
+        <Field label="I min" type="number" step="any" bind:value={() => draft.iMin ?? -100, (v) => (draft.iMin = toNum(v))} />
+        <Field label="I max" type="number" step="any" bind:value={() => draft.iMax ?? 100, (v) => (draft.iMax = toNum(v))} />
+        <Field label="Feed-forward (constant)" type="number" step="any" bind:value={() => draft.feedForward ?? 0, (v) => (draft.feedForward = toNum(v))} hint="Added to the output always" />
+        <Field label="Update every" type="number" min="2" max="1000" unit="ms" bind:value={() => draft.periodMs ?? 20, (v) => (draft.periodMs = Math.round(toNum(v)))} />
+        <Field label="Setpoint rate" type="number" min="0" step="any" unit="/s" bind:value={() => draft.spRate ?? 0, (v) => (draft.spRate = toNum(v))} hint="0 = jumps at once" />
+        <Field label="Deadband" type="number" min="0" step="any" bind:value={() => draft.deadband ?? 0, (v) => (draft.deadband = toNum(v))} hint="Errors smaller than this count as 0" />
+      </div>
+      <span class="sec">Sensor check</span>
+      <div class="three">
+        <Field label="Measured valid from" type="number" step="any" bind:value={() => draft.pvMin ?? 0, (v) => (draft.pvMin = toNum(v))} />
+        <Field label="to" type="number" step="any" bind:value={() => draft.pvMax ?? 0, (v) => (draft.pvMax = toNum(v))} />
+        <Field label="Else output" type="number" step="any" bind:value={() => draft.fallback ?? 0, (v) => (draft.fallback = toNum(v))} />
+      </div>
+      {#if draft.pvMin || draft.pvMax}
+        <p class="hint" class:bad={!draft.fallback && draft.invert} role="status">{!draft.fallback && draft.invert ? '▲ A cooling fan or pump should run when its sensor is lost: set "Else output" to 100.' : 'Outside the window (sensor lost, or a CAN input that timed out to 0) the output holds "Else output": 100 for a fan or pump, 0 for a heater.'}</p>
+      {:else}
+        <p class="hint">Both 0 = no check. Set a window that excludes 0 (e.g. 1 to 200 °C), so a lost CAN sensor gives the fallback instead of a dead fan.</p>
+      {/if}
+      <p class="hint">To drive a fan or pump: wire Output to an output's "Duty from" (the output's denominator is set to 1, so 100 = 100 %). Live: the output comes from the module; P, I and D are not sent over CAN.</p>
     {:else if node.kind === 'ignition'}
       <p class="hint">The ignition and start button are set up on their own page: mode, inputs, crank limits and which module is the main one.</p>
       <Button size="sm" href={href('power', 'ignition')}>Open ignition setup</Button>
@@ -310,6 +413,10 @@
       <Checkbox label="Wrap round past max" bind:checked={() => !!draft.wrapAround, (v) => (draft.wrapAround = v)} />
       <Checkbox label="Hold to reset" bind:checked={() => !!draft.holdToReset, (v) => (draft.holdToReset = v)} />
       {#if draft.holdToReset}<Field label="Hold for" type="number" unit="ms" bind:value={() => draft.resetTime ?? 0, (v) => (draft.resetTime = toNum(v))} />{/if}
+      <!-- upstream dingoFW feat/retain-values (sub 12) -->
+      {#if upstreamHas(dev, 0x1600 + node.n - 1, 12)}
+        <Checkbox label="Keep the count across power-off" hint="Comes back as it was after the ignition was off or the module slept" bind:checked={() => !!draft.retain, (v) => (draft.retain = v)} />
+      {/if}
     {:else if node.kind === 'table'}
       <span class="sec">Points</span>
       <div class="two">
@@ -329,7 +436,31 @@
         {/each}
       </div>
       <p class="hint">X points (and Y points) must increase. Between points the module interpolates; outside it holds the edge value.</p>
+    {:else if node.kind === 'curve'}
+      {@const plot = curvePlot(draft, 200, 80)}
+      {@const inV = lv.v[draft.input]}
+      <span class="sec">Points</span>
+      <Field label="Points (2–12)" type="number" min="2" max="12" bind:value={() => draft.points ?? 2, (v) => (draft.points = Math.min(CURVE_MAX, Math.max(2, Math.round(toNum(v)) || 2)))} />
+      <div class="tgrid" style="grid-template-columns: 54px 1fr 1fr">
+        <span class="th muted">#</span><span class="th muted">X (input)</span><span class="th muted">Y (value)</span>
+        {#each Array.from({ length: draft.points ?? 2 }) as _, i (i)}
+          <span class="th muted">{i + 1}</span>
+          <input class="nx-input mono cell" type="number" step="any" aria-label={'X of point ' + (i + 1)} bind:value={() => draft.x?.[i] ?? 0, (v) => (draft.x[i] = toNum(v))} />
+          <input class="nx-input mono cell" type="number" step="any" aria-label={'Y of point ' + (i + 1)} bind:value={() => draft.y?.[i] ?? 0, (v) => (draft.y[i] = toNum(v))} />
+        {/each}
+      </div>
+      <svg class="cplot" viewBox="-6 -6 212 92" role="img" aria-label={`Curve from X ${plot.x0} to ${plot.x1}, Y ${plot.y0} to ${plot.y1}`}>
+        <rect x="0" y="0" width="200" height="80" fill="none" stroke="var(--color-line)" />
+        <polyline points={plot.pts} fill="none" stroke="var(--color-block-logic)" stroke-width="2" />
+        {#each plot.pts.split(' ') as p, i (i)}<circle cx={p.split(',')[0]} cy={p.split(',')[1]} r="3" fill="var(--color-block-logic)" />{/each}
+      </svg>
+      <p class="hint">X must rise from point to point. Between points the module draws a straight line; below the first and above the last it holds the end value.{typeof inV === 'number' ? ` Now: input ${fmt(inV)} → ${fmt(curveAt(draft.points, draft.x, draft.y, inV))}.` : ''} To drive a fan or pump: on the output's screen pick "PWM, duty from a signal" and "Use a duty curve".</p>
     {:else if node.kind === 'canoutput' || node.kind === 'caninput'}
+      {#if kindOk}
+        <Select label="Sends" items={COUT_KINDS.map((l, i) => ({ value: String(i), label: l }))} bind:value={() => String(draft.kind ?? 0), (v) => (draft = snapChecksum({ ...draft, kind: Number(v) }))} data-testid="cout-kind" />
+        {#if draft.kind === 1}<p class="hint">Counts up by one each frame and wraps at the field's length (4 bits: 0–15).</p>
+        {:else if draft.kind >= 2}<p class="hint">One byte, worked out over the frame's other bytes. Put it in a byte no other output on this ID uses.{sharedSums.length ? ' ▲ This frame already has a checksum; the later one also covers the earlier one’s byte. One per frame is usual.' : ''}</p>{/if}
+      {/if}
       <span class="sec">Frame</span>
       <div class="two">
         <Field label="CAN ID (hex)" mono bind:value={idText} error={idError} />
@@ -337,17 +468,30 @@
       </div>
       <div class="two">
         <Field label="Start bit" type="number" min="0" max="63" bind:value={() => draft.startBit ?? 0, (v) => (draft.startBit = toNum(v))} />
-        <Field label="Length (bits)" type="number" min="1" max="64" bind:value={() => draft.bitLength ?? 0, (v) => (draft.bitLength = toNum(v))} />
+        <Field label="Length (bits)" type="number" min="1" max="64" disabled={node.kind === 'canoutput' && draft.kind >= 2} bind:value={() => draft.bitLength ?? 0, (v) => (draft.bitLength = toNum(v))} />
       </div>
+      {#if !(node.kind === 'canoutput' && draft.kind > 0)}
+      <!-- a DBC scale both ways: a CAN input reads raw × factor + offset, a CAN output sends (value − offset) ÷ factor -->
+      {@const out = node.kind === 'canoutput'}
       <div class="two">
-        <Field label="× Factor" type="number" step="any" bind:value={() => draft.factor ?? 0, (v) => (draft.factor = toNum(v))} />
-        <Field label="+ Offset" type="number" step="any" bind:value={() => draft.offset ?? 0, (v) => (draft.offset = toNum(v))} />
+        <Field label={out ? '÷ Factor' : '× Factor'} type="number" step="any" bind:value={() => draft.factor ?? 0, (v) => (draft.factor = toNum(v))} />
+        <Field label={out ? '− Offset' : '+ Offset'} type="number" step="any" bind:value={() => draft.offset ?? 0, (v) => (draft.offset = toNum(v))} />
       </div>
+      {#if node.kind === 'canoutput'}<p class="hint">The frame holds (value − offset) ÷ factor, as a DBC scale: factor 0.1 sends 12.5 V as 125.</p>{/if}
+      {/if}
       {#if node.kind === 'canoutput'}
+        {@const peers = framePeers(model, node.id, { id: parseInt(String(idText).replace(/^0x/i, ''), 16), ide: draft.ide })}
+        {@const onTrigger = !!draft.triggerInput || peers.triggered.length > 0}
         <div class="two">
-          {@render seg('Byte order', [{ value: '0', label: 'Little' }, { value: '1', label: 'Big' }], String(draft.byteOrder ?? 0), (v) => (draft.byteOrder = Number(v)), false)}
-          <Field label="Every" type="number" min="0" unit="ms" bind:value={() => draft.interval ?? 0, (v) => (draft.interval = toNum(v))} />
+          {@render seg('Byte order', [{ value: '0', label: 'Little' }, { value: '1', label: 'Big' }], String(draft.byteOrder ?? 0), (v) => (draft = snapChecksum({ ...draft, byteOrder: Number(v) })), false)}
+          <Field label="Every" type="number" min="0" unit="ms" disabled={onTrigger} hint={onTrigger ? 'Ignored: sent on trigger' : ''} bind:value={() => draft.interval ?? 0, (v) => (draft.interval = toNum(v))} />
         </div>
+        {#if draft.triggerInput}
+          <p class="hint">Sent once each time the trigger turns on, with the value at that moment; nothing while it stays on or off. A lost frame is not repeated: if it must arrive, send a cyclic copy too.</p>
+          {#if peers.untriggered.length}<p class="hint bad" role="status">▲ {peers.untriggered.join(', ')} share{peers.untriggered.length > 1 ? '' : 's'} this frame and {peers.untriggered.length > 1 ? 'have' : 'has'} no trigger: this frame is sent only on triggers, so {peers.untriggered.length > 1 ? 'they go' : 'it goes'} out only then.</p>{/if}
+        {:else if peers.triggered.length}
+          <p class="hint bad" role="status">▲ {peers.triggered.join(', ')} in the same frame {peers.triggered.length > 1 ? 'have' : 'has'} a trigger: this frame is sent only on triggers, so this one goes out only then.</p>
+        {/if}
         {#if idOwners}
           <p class="hint" class:bad={idOwners.length} role="status">{idOwners.length ? '▲ ' + idText + ' is already sent by ' + idOwners.join(', ') + '. Two senders on one ID collide.' : '● ' + idText + ' is free (checked against every module and the CAN ID map).'}</p>
         {/if}
@@ -358,12 +502,14 @@
         </div>
         <Checkbox label="Off when no frame arrives (timeout)" bind:checked={() => !!draft.timeoutEnabled, (v) => (draft.timeoutEnabled = v)} />
         {#if draft.timeoutEnabled}
-          {@const oldFw = olderThan(dev?.version, [5, 6, 0])}
+          {@const oldFw = lacks(dev, [5, 6, 0], 0x1300, 14)}
+          {@const flag = isUpstream(dev) && !oldFw && has(dev, 0x1300 + node.n - 1, 15)}
           <div class="two">
             <Field label="Timeout" type="number" unit="ms" bind:value={() => draft.timeout ?? 0, (v) => (draft.timeout = toNum(v))} />
-            <Field label="Then the value is" type="number" step="any" disabled={oldFw} bind:value={() => draft.timeoutValue ?? 0, (v) => (draft.timeoutValue = toNum(v))}
-              hint={oldFw ? `Reads 0: ${dev?.name} needs firmware 5.6 for another value.` : 'Used while the frame is missing.'} />
+            <Field label="Then the value is" type="number" step="any" disabled={oldFw || (flag && !draft.timeoutUseValue)} bind:value={() => draft.timeoutValue ?? 0, (v) => (draft.timeoutValue = toNum(v))}
+              hint={oldFw ? `Reads 0: ${dev?.name}'s firmware has no other value.` : flag && !draft.timeoutUseValue ? 'Reads 0 and off.' : 'Used while the frame is missing.'} />
           </div>
+          {#if flag}<Checkbox label="Use this value instead of 0" hint="Pick the value that makes the result safe, e.g. 120 for a coolant > 95 fan." bind:checked={() => !!draft.timeoutUseValue, (v) => (draft.timeoutUseValue = v)} />{/if}
         {/if}
       {/if}
     {:else if node.kind === 'input'}
@@ -419,6 +565,7 @@
   .sec { font-size: 12px; font-weight: 600; color: var(--color-text-muted); margin-top: 4px; }
   .sg { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
   .tgrid { display: grid; gap: 4px; align-items: center; }
+  .cplot { width: 100%; max-width: 320px; height: auto; }
   .cell { min-height: 36px; padding: 0 6px; font-size: 12px; }
   .th { font-size: 11px; font-weight: 700; text-align: center; }
   .two { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-2); align-items: end; }

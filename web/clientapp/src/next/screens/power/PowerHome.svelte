@@ -4,6 +4,8 @@
   import { live } from '../../lib/live.svelte.js'
   import PowerDown from './parts/PowerDown.svelte'
   import ModuleSleepTable from './parts/ModuleSleepTable.svelte'
+  import RetryAll from './parts/RetryAll.svelte'
+  import LoadShed from './parts/LoadShed.svelte'
   import { canSleep } from './parts/sleepLogic.js'
   import { has56, ignitionMain } from './parts/ignition.js'
   import { onDestroy } from 'svelte'
@@ -13,6 +15,8 @@
   onDestroy(() => seq.stop())
 
   const modules = $derived(live.devices.filter((d) => /pdm|canboard/i.test(d.type ?? '')))
+  const retryMods = $derived(modules.filter((d) => d.retryAllInput != null))   // upstream fault clear
+  const shedMods = $derived(modules.filter((d) => d.shedInput != null))   // upstream load shedding
   const sleepers = $derived(modules.filter((d) => canSleep(d) && d.sleepEnabled))
   // firmware 5.6: the main module's ignition state (from its own state frame)
   const ignMain = $derived(ignitionMain(modules))
@@ -60,6 +64,8 @@
     <PowerDown {seq} />
     <ModuleSleepTable {seq} />
   </div>
+  {#if retryMods.length}<RetryAll mods={retryMods} />{/if}
+  {#if shedMods.length}<LoadShed mods={shedMods} />{/if}
 </Page>
 
 <style>

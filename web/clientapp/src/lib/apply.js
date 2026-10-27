@@ -2,7 +2,7 @@
 // backend's template runner (MCP list/preview/apply/remove_template, run in Jint from template-runtime.js)
 // do exactly the same thing. `api` is store.js's api, or the backend's loopback twin with the same methods
 // (functions, inputs, setFunction, outputConfig, broadcastSignals).
-import { previewTemplate, liveCtx, outputOptions, logicModule, shortfalls, freedBy, validate, isInput, blank } from './templates.js'
+import { previewTemplate, liveCtx, outputOptions, logicModule, shortfalls, freedBy, validate, isInput, blank, shedCaps } from './templates.js'
 import { pinFor, ioTag } from './pinmap.js'
 import { busInputOptions, isDefaultName } from './businputs.js'
 
@@ -36,8 +36,14 @@ export const binBody = (o, input, enabled = true) => {
     // Variable-PWM (duty/freq follow a signal) — carry through so a deploy/binburn doesn't reset them.
     VariableDutyCycle: o.variableDutyCycle ?? false, DutyCycleInput: o.dutyCycleInput ?? 0, DutyCycleDenom: o.dutyCycleDenom ?? 100,
     VariableFreq: o.variableFreq ?? false, FreqInput: o.freqInput ?? 0, FreqInputDenom: o.freqInputDenom ?? 1,
-    RampDutyChanges: o.rampDutyChanges ?? false, PrimaryOutput: o.primaryOutput ?? -1,
+    RampDutyChanges: o.rampDutyChanges ?? false, PrimaryOutput: o.primaryOutput ?? -1, StayAlive: o.stayAlive ?? false,
     WarnLimit: o.warnLimit ?? 0, OpenLoadLimit: o.openLoadLimit ?? 0, OpenLoadTime: o.openLoadTime ?? 1000,
+    UnderLimit: o.underLimit ?? 0, UnderTime: o.underTime ?? 1000, UnderTrip: !!o.underTrip,   // upstream subs 27-29: kept on a re-wire
+    HardShortLimit: o.hardShortLimit ?? 0,   // upstream output sub 32: carried so a re-wire keeps it
+    SoftStartTimeout: o.softStartTimeout ?? 0,   // upstream output sub 30: carried so a re-wire keeps it
+    SoftStopTime: o.softStopTime ?? 0,   // upstream output sub 31: carried so a re-wire keeps it
+    Shed: o.shed ?? false,   // upstream load shedding: carried so a re-wire never drops the opt-in
+    ThermalTau: o.thermalTau ?? 0,   // upstream output sub 33: carried so a re-wire keeps it
   }
 }
 
@@ -157,7 +163,8 @@ export function trackWrites(api, devices) {
   const note = (g, r) => { if (!seen.has(g)) seen.set(g, new Set()); seen.get(g).add(r?.written === false ? 'project' : 'live'); return r }
   const t = { ...api,
     setFunction: async (g, ...a) => note(g, await api.setFunction(g, ...a)),
-    outputConfig: async (g, b) => note(g, await api.outputConfig(g, b)) }
+    outputConfig: async (g, b) => note(g, await api.outputConfig(g, b)),
+    deviceInputs: async (g, b) => note(g, await api.deviceInputs(g, b)) }
   const anyLive = () => [...seen.values()].some((s) => s.has('live'))
   return [t, () => (anyLive() ? [...seen].filter(([, s]) => s.has('project')).map(([g]) => devices.find((d) => d.guid === g)?.name ?? g) : [])]
 }
@@ -187,6 +194,7 @@ export async function undoTemplate(api0, devices, inst, keep = []) {
     const k = key(w), [g, n] = k.split(':'), d = devOf(g)
     if (!snaps[k] && d) await step(`${name(g)} output ${n}`, () => wireOut(api, d, +n, inst.prev?.[k] ?? inst.prev?.[w] ?? 0))
   }
+  if (inst.device) await step(`${name(inst.guid)} module settings`, () => api.deviceInputs(inst.guid, inst.device))   // module settings it set (retry-all / shed input)
   for (const [k, s] of Object.entries(snaps)) { const g = k.split(':')[0], d = devOf(g); if (s && d) await step(`${name(g)} output ${s.number}`, () => restoreOutput(api, d, s)) }
   for (const c of [...(inst.created ?? [])].reverse()) {
     const g = c.guid ?? inst.guid, k = `${g}|${c.number}`
@@ -289,18 +297,25 @@ export async function applyTemplate(api0, { devices, tpl, sel, relays, name, id,
       if (s[f.k] == null) throw new Error(`${f.label}: created the CAN input but couldn't resolve its signal`)
     }
     const was = (v) => oldOf(old?.prev, v) ?? outOpts.find((o) => o.value === v)?.input ?? 0
-    ctx = await liveCtx({ api, guid: dev.guid, isCanboard: isCb(dev), outName, wireOutput: (v, idx) => {
+    ctx = await liveCtx({ api, guid: dev.guid, isCanboard: isCb(dev), outName, inputOf: was, ...shedCaps(devices), wireOutput: (v, idx) => {
       prev[v] ??= was(v)
       const [g, n] = String(v).split(':')
       return g === dev.guid ? wireOut(api, dev, +n, idx) : wireRemote(devOf(g), +n, idx)
+    }, outputDuty: (v, duty, on) => {
+      // PWM with the duty from a 0–100 % signal (duty % = signal ÷ denominator, so 1)
+      prev[v] ??= was(v)
+      // CANBoard DO (5.7): variable duty (sub 4) from the signal (sub 5), denominator (sub 9) 1
+      if (isCb(dev)) return api.setFunction(dev.guid, 'digitaloutput', numOut(v), { enabled: true, input: on, pwmEnabled: true, variableDutyCycle: true, dutyCycleInput: duty, dutyCycleDenominator: 1 })
+      const o = (dev.outputs ?? []).find((x) => x.number === numOut(v)) ?? { number: numOut(v) }
+      return api.outputConfig(dev.guid, { ...binBody(o, on), PwmEnabled: true, VariableDutyCycle: true, DutyCycleInput: duty, DutyCycleDenom: 1 })
     } })
     await tpl.build(ctx, s)
     const p = partial()
     return { ...(p.length ? { partial: partialMsg(p, 'Apply') + ` — Write All ${p.length > 1 ? 'them' : 'it'} (device_action writeall), then Burn` } : {}), id, key: tpl.key, name: (name ?? '').trim() || tpl.name, guid: dev.guid, sel: { ...sel }, relays: { ...relays },
-      created: [...created, ...ctx.created], wired: ctx.wired, prev, outs, enabled, cans, pins, at: new Date().toISOString() }
+      created: [...created, ...ctx.created], wired: ctx.wired, prev, outs, enabled, cans, pins, ...(ctx.device ? { device: ctx.device } : {}), at: new Date().toISOString() }
   } catch (e) {
     // Roll back what this run made so a failed apply leaves no half-built circuit.
-    await undoTemplate(api, devices, { guid: dev.guid, created: [...created, ...(ctx?.created ?? [])], wired: ctx?.wired ?? [], prev, outs, enabled, cans }, others)
+    await undoTemplate(api, devices, { guid: dev.guid, created: [...created, ...(ctx?.created ?? [])], wired: ctx?.wired ?? [], prev, outs, enabled, cans, device: ctx?.device }, others)
       .catch((u) => { e.message += ` (and the roll-back ${u.message})` })
     throw e
   }
@@ -341,6 +356,10 @@ export async function planTemplate(api, { devices, defs, templates, req, old = n
     const o = matchOption(outOpts, picks[f.k])
     if (o.error) errors.push(`${f.label}: ${o.error}`); else { sel[f.k] = o.value; resolved[f.k] = o.label }
   }
+  for (const f of tpl.fields.filter((f) => f.t === 'module' && !blank(picks[f.k]))) {
+    const d = mods.find((x) => x.guid === picks[f.k] || x.name.toLowerCase() === String(picks[f.k]).trim().toLowerCase())   // a name, or the guid an edit keeps
+    if (!d) errors.push(`${f.label}: no module called “${picks[f.k]}”`); else { sel[f.k] = d.guid; resolved[f.k] = d.name }
+  }
   const lm = logicModule(tpl, sel)
   if (lm.error) errors.push(lm.error)
   const dev = devices.find((d) => d.guid === lm.guid)
@@ -353,12 +372,12 @@ export async function planTemplate(api, { devices, defs, templates, req, old = n
   const v = validate(tpl, sel); if (v) errors.push(v)
   let preview = null
   try {
-    preview = await previewTemplate(tpl, { ...sel }, (o) => outOpts.find((x) => x.value === o)?.name || 'output ' + numOut(o))
+    preview = await previewTemplate(tpl, { ...sel }, (o) => outOpts.find((x) => x.value === o)?.name || 'output ' + numOut(o), shedCaps(devices))
     const freed = freedBy(old)
     const short = shortfalls(preview.need, funcs[lm.guid], freed[lm.guid]); if (short.length) errors.push(`Not enough free slots on ${dev?.name}: ${short.join(', ')}`)
     const rs = remoteShortfalls(tpl, sel, lm.guid, funcs, devices, freed); if (rs.length) errors.push(`Outputs on other modules follow the logic over CAN — not enough free CAN inputs on ${rs.join(', ')}`)
   } catch (e) { errors.push(e.message) }
-  const taken = tpl.fields.filter((f) => f.t === 'out' && outOpts.find((o) => o.value === sel[f.k])?.used).map((f) => resolved[f.k])
+  const taken = tpl.fields.filter((f) => f.t === 'out' && !tpl.keepsRule && outOpts.find((o) => o.value === sel[f.k])?.used).map((f) => resolved[f.k])
   return { tpl, sel, relays, resolved, logic: dev ? { guid: dev.guid, name: dev.name } : null, preview, errors, taken,
     inOpt: (k) => (inOpts[k] ?? []).find((o) => o.value === sel[k] && o.value !== ''), outOpts }
 }

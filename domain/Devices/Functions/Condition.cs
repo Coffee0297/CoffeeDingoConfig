@@ -21,9 +21,31 @@ public class Condition : IDeviceFunction
     [JsonPropertyName("argOff")] public double ArgOff { get => _argOff ?? Arg; set => _argOff = value; }
     private double? _argOff;
 
+    // Upstream dingoFW feat/condition-delay (subs 5/6, ms 0-60000): the result turns on only after the compare has been
+    // true that long, and off only after it has been false that long. 0 = at once. The fork has neither.
+    [JsonPropertyName("delayOn")] public int DelayOn { get; set; }
+    [JsonPropertyName("delayOff")] public int DelayOff { get; set; }
+
     [JsonIgnore][Plotable(displayName:"State")] public int Value {get; set;}
 
     [JsonIgnore] public List<DeviceParameter> Params { get; }
+    // Upstream dingoFW (feat/condition-hysteresis): sub 4 is fHyst, a band >= 0 (on past Arg, off again once the input
+    // is the band back: Arg - band for > / >=, Arg + band for < / <=). The app keeps the user's "off again at" (ArgOff)
+    // and sends the band; a release point on the wrong side of Arg is no band (0).
+    [JsonIgnore] public List<DeviceParameter> UpstreamParams { get; }
+    [JsonIgnore] public double HystBand => Operator switch
+    {
+        Operator.GreaterThan or Operator.GreaterThanOrEqual => Math.Max(0, Arg - ArgOff),
+        Operator.LessThan or Operator.LessThanOrEqual => Math.Max(0, ArgOff - Arg),
+        _ => 0,
+    };
+    /// <summary>Takes a band read from the module (after Operator and Arg, which come first in sub order).</summary>
+    public void SetHystBand(double band) => ArgOff = Operator switch
+    {
+        Operator.GreaterThan or Operator.GreaterThanOrEqual => Arg - band,
+        Operator.LessThan or Operator.LessThanOrEqual => Arg + band,
+        _ => Arg,
+    };
 
     [JsonConstructor]
     public Condition(int number, string name)
@@ -31,6 +53,17 @@ public class Condition : IDeviceFunction
         Number = number;
         Name = name;
         Params = InitParams();
+        UpstreamParams =
+        [
+            .. Params.Take(4),
+            new DeviceParameter
+            {
+                ParentName = Name, Name = $"condition[{Number}].hyst", Index = BaseIndex + (Number - 1), SubIndex = 4,
+                GetValue = () => HystBand, SetValue = val => SetHystBand((double)val), ValueType = typeof(double), DefaultValue = 0.0
+            },
+            new() { ParentName = Name, Name = $"condition[{Number}].delayOn", Index = BaseIndex + (Number - 1), SubIndex = 5, GetValue = () => DelayOn, SetValue = v => DelayOn = (int)v, ValueType = typeof(int), DefaultValue = 0 },
+            new() { ParentName = Name, Name = $"condition[{Number}].delayOff", Index = BaseIndex + (Number - 1), SubIndex = 6, GetValue = () => DelayOff, SetValue = v => DelayOff = (int)v, ValueType = typeof(int), DefaultValue = 0 },
+        ];
     }
 
     private List<DeviceParameter> InitParams()

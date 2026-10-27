@@ -30,7 +30,7 @@ public class AnalogScale(int number, string name) : IDeviceFunction
 
     [JsonIgnore] public List<DeviceParameter> Params { get; } = null!;
 
-    public List<DeviceParameter> InitParams(ref int subIndex)
+    public List<DeviceParameter> InitParams(ref int subIndex, double defaultGain = 0.0)
     {
         return
         [
@@ -44,7 +44,7 @@ public class AnalogScale(int number, string name) : IDeviceFunction
             {
                 ParentName = Name, Name = $"analogScale[{Number}].gain", Index = BaseIndex + (Number - 1), SubIndex = subIndex++,
                 GetValue = () => Gain, SetValue = val => Gain = (double)val,
-                ValueType = Gain.GetType(), DefaultValue = 0.0
+                ValueType = Gain.GetType(), DefaultValue = defaultGain
             },
             new DeviceParameter
             {

@@ -1,5 +1,5 @@
 // Functions screens (C1): function list, add function (template picker) and the setup wizard, against the Sim.
-// Writes only touch the spare outputs PDM-02 o8 and PDM-03 o8 (and spare inputs CB-2 DI6..DI7), and every test
+// Writes only touch the spare outputs SP o8 and PDM-03 o8 (and spare inputs CB-2 DI6..DI7), and every test
 // removes what it applied again (also in `finally`, through the backend's template remove).
 import { test, expect } from '@playwright/test'
 import { open, watchErrors } from './helpers.js'
@@ -7,6 +7,13 @@ import { apiJson, deviceByName, waitFor } from './api.js'
 import { putOutput } from './b-helpers.js'
 
 const PFX = 'c1-'
+// The spare output o8 these tests drive: PDM-02's when it is spare (switched off, no input); the 5.7 Ranchero project has
+// the Starter Relay there, so PDM-04's o8 stands in, and the hand-built function duplicated onto it is one of PDM-04's.
+let SP = 'PDM-02', DUP = { fn: 'Low Beam', out: /low beam/i }
+test.beforeAll(async () => {
+  const o8 = (await deviceByName('PDM-02')).outputs.find((o) => o.number === 8)
+  if (o8.enabled || o8.inputVal > 0) { SP = 'PDM-04'; DUP = { fn: 'Fuel Pump', out: /fuel pump/i } }
+})
 
 /** Remove every function this file applied, whatever state a failed test left. */
 async function cleanup() {
@@ -84,6 +91,7 @@ test.describe('function list', () => {
   test('chips, search and selection', async ({ page }) => {
     const errors = watchErrors(page)
     await open(page, 'functions')
+    await expect(page.getByTestId('fn-row').first()).toBeVisible()   // the list loads after the page
     const total = await page.getByTestId('fn-row').count()
     // system chip
     await page.getByRole('button', { name: /^Lights/ }).click()
@@ -163,30 +171,30 @@ test.describe('function list', () => {
 test('a hand-built function: disable and enable it, duplicate it onto a spare output, remove the copy @exclusive', async ({ page }) => {
   test.setTimeout(300_000)
   const errors = watchErrors(page)
-  const p2 = await deviceByName('PDM-02')
+  const p2 = await deviceByName(SP)
   const ARRS = { virtualInputs: 'virtualinput', conditions: 'condition', counters: 'counter', flashers: 'flasher', timers: 'timer', tables: 'table', maths: 'math' }
   const before = await apiJson('GET', `/api/devices/${p2.guid}/functions`)
   const outsBefore = JSON.parse(JSON.stringify(p2.outputs))
-  const out = async (n) => (await deviceByName('PDM-02')).outputs.find((o) => o.number === n)
+  const out = async (n) => (await deviceByName(SP)).outputs.find((o) => o.number === n)
   const panel = page.getByTestId('fn-panel')
   try {
     await open(page, 'functions')
-    const low = row(page, 'Low Beam')
-    await low.getByRole('button', { name: /Low Beam/ }).click()
+    const low = row(page, DUP.fn)
+    await low.getByRole('button', { name: new RegExp(DUP.fn) }).click()
     // disable: the outputs switch off; the row stays and says so; enable asks first
     await panel.getByRole('button', { name: 'Disable function' }).click()
     await expect(low.locator('.st')).toHaveText(/disabled/, { timeout: 30_000 })
     await panel.getByRole('button', { name: 'Enable function' }).click()
     await page.getByTestId('confirm-on').click()
     await expect(low.locator('.st')).not.toHaveText(/disabled/, { timeout: 30_000 })
-    // duplicate onto the spare PDM-02 o8: copied blocks drive it, the original is untouched
+    // duplicate onto the spare o8: copied blocks drive it, the original is untouched
     await panel.getByTestId('fn-duplicate').click()
     await page.getByTestId('dup-output').click()
-    await page.getByRole('option', { name: /PDM-02 · OUT8/ }).click()
+    await page.getByRole('option', { name: new RegExp('^' + SP + ' · OUT8') }).click()
     await page.getByTestId('dup-name').fill('c1-low copy')
     await page.getByTestId('dup-go').click()
     await waitFor(async () => { const o = await out(8); return o.enabled && o.inputVal > 0 }, 30_000, 'o8 driven by the copy')
-    const lowOut = outsBefore.find((o) => /low beam/i.test(o.name))
+    const lowOut = outsBefore.find((o) => DUP.out.test(o.name))
     expect((await out(lowOut.number)).inputVal).toBe(lowOut.inputVal)
     const vars = await apiJson('GET', `/api/devices/${p2.guid}/inputs`)
     const o8in = (await out(8)).inputVal
@@ -211,7 +219,7 @@ test('a hand-built function: disable and enable it, duplicate it onto a spare ou
         const c = (now[arr] ?? []).find((x) => x.number === r.number)
         if (c && JSON.stringify(c) !== JSON.stringify(r)) await apiJson('POST', `/api/devices/${p2.guid}/function/${kind}/${r.number}`, r).catch(() => {})
       }
-    const live = await deviceByName('PDM-02')
+    const live = await deviceByName(SP)
     for (const o of outsBefore) {
       const c = live.outputs.find((x) => x.number === o.number)
       if (['enabled', 'inputVal', 'name'].some((k) => c?.[k] !== o[k])) await putOutput(p2.guid, o).catch(() => {})
@@ -227,7 +235,7 @@ test.describe('add function', () => {
     await open(page, 'functions/add')
     const cards = page.getByTestId('tpl-cards').locator('article[data-tpl]')
     const total = await cards.count()
-    expect(total).toBe(18)   // every template in templates.js
+    expect(total).toBe(22)   // every template in templates.js (the integration branch adds retryall, loadshed, reminder, pidfan)
     await expect(cards.first().getByText(/You need:/)).toBeVisible()
     await expect(page.locator('article[data-tpl=washwipe]').getByText('NEW')).toBeVisible()
     await expect(page.locator('article[data-tpl=headlights]').getByText('NEW')).toHaveCount(0)
@@ -269,20 +277,20 @@ test.describe('add function', () => {
 test.describe('setup wizard', () => {
   test('steps are gated, Back and Cancel work, nothing is written before Apply', async ({ page }) => {
     const errors = watchErrors(page)
-    const before = JSON.stringify((await deviceByName('PDM-02')).outputs[7])
+    const before = JSON.stringify((await deviceByName(SP)).outputs[7])
     await open(page, 'functions/setup/simple')
     await expect(page.getByText('STEP 1 OF 3')).toBeVisible()
     await expect(page.getByTestId('wz-next')).toBeDisabled()
     await expect(page.getByTestId('step-issue')).toContainText('Pick: Output')
-    await pick(page, 'pick-output', 'PDM-02 o8', /PDM-02 · J3-3 OUT8/)
+    await pick(page, 'pick-output', SP + ' o8', new RegExp(SP + ' · J3-3 OUT8'))
     await expect(page.getByTestId('wz-next')).toBeEnabled()
-    await expect(page.getByTestId('wizard-sentence')).toContainText('PDM-02')
+    await expect(page.getByTestId('wizard-sentence')).toContainText(SP)
     await page.getByTestId('wz-next').click()
     await expect(page.getByText('STEP 2 OF 3')).toBeVisible()
     await expect(page.getByTestId('wz-next')).toBeDisabled()
     await pick(page, 'pick-input', 'CB-2 DI6', /CB-2 · J3-6 DI6/)
-    await expect(page.getByTestId('wizard-fits')).toContainText('Fits on PDM-02')
-    await expect(page.getByTestId('wizard-preview')).toContainText('add a CAN input on PDM-02')
+    await expect(page.getByTestId('wizard-fits')).toContainText('Fits on ' + SP)
+    await expect(page.getByTestId('wizard-preview')).toContainText('add a CAN input on ' + SP)
     await page.getByTestId('wz-back').click()
     await expect(page.getByText('STEP 1 OF 3')).toBeVisible()
     await page.getByRole('navigation', { name: 'Steps' }).getByRole('button', { name: /What drives it/ }).click()   // jump to a visited step
@@ -293,7 +301,7 @@ test.describe('setup wizard', () => {
     await expect(page.getByTestId('wz-apply')).toBeEnabled()
     await page.getByTestId('wz-cancel').click()
     await expect(page).toHaveURL(/#\/next\/functions$/)
-    expect(JSON.stringify((await deviceByName('PDM-02')).outputs[7])).toBe(before)
+    expect(JSON.stringify((await deviceByName(SP)).outputs[7])).toBe(before)
     expect((await instances()).filter((i) => i.name.startsWith(PFX))).toEqual([])
     expect(errors).toEqual([])
   })
@@ -347,15 +355,15 @@ test.describe('setup wizard', () => {
     test.setTimeout(600_000)
     const errors = watchErrors(page)
     const NAME = PFX + 'simple'
-    const p2o8 = await outCfg('PDM-02', 8)
+    const p2o8 = await outCfg(SP, 8)
     const p3o8 = await outCfg('PDM-03', 8)
     expect(p2o8.inputVal).toBe(0); expect(p3o8.inputVal).toBe(0)   // the spare outputs really are spare
     const di6 = await cbIn(6)
     try {
-      // ---- apply on PDM-02 o8, driven by CB-2 DI6
+      // ---- apply on the spare o8, driven by CB-2 DI6
       await open(page, 'functions/setup/simple')
       await page.getByTestId('fn-name').fill(NAME)
-      await pick(page, 'pick-output', 'PDM-02 o8', /PDM-02 · J3-3 OUT8/)
+      await pick(page, 'pick-output', SP + ' o8', new RegExp(SP + ' · J3-3 OUT8'))
       await page.getByTestId('wz-next').click()
       await pick(page, 'pick-input', 'CB-2 DI6', /CB-2 · J3-6 DI6/)
       await expect(page.getByTestId('now-input')).toContainText('switched on when you apply')
@@ -363,11 +371,11 @@ test.describe('setup wizard', () => {
       await applyWizard(page)
       await expect(page.getByTestId('wizard-result')).toContainText(`“${NAME}” is built`)
       // the module really changed: output 8 follows a CAN input that decodes CB-2 DI6
-      const o8 = await waitFor(async () => { const o = await outCfg('PDM-02', 8); return o.inputVal > 0 && o }, 20_000, 'PDM-02 output 8 wired')
+      const o8 = await waitFor(async () => { const o = await outCfg(SP, 8); return o.inputVal > 0 && o }, 20_000, SP + ' output 8 wired')
       expect(o8.enabled).toBe(true)
       expect((await cbIn(6)).enabled).toBe(true)   // the pin it reads was switched on
       const inst = (await instances()).find((i) => i.name === NAME)
-      expect(inst?.wired).toEqual([`${(await deviceByName('PDM-02')).guid}:8`])
+      expect(inst?.wired).toEqual([`${(await deviceByName(SP)).guid}:8`])
 
       // ---- the list shows it as a function block
       await page.getByTestId('result-done').click()
@@ -380,7 +388,7 @@ test.describe('setup wizard', () => {
       const panel = page.getByTestId('fn-panel')
       await expect(panel.getByRole('heading', { name: NAME })).toBeVisible()
       await expect(panel).toContainText('From template “Simple switched circuit”')
-      await expect(panel.getByText('PDM-02 o8')).toBeVisible()
+      await expect(panel.getByText(SP + ' o8')).toBeVisible()
       await expect(panel.getByRole('link', { name: 'Open in builder' })).toBeVisible()
       // the add picker now says it is in use
       await page.goto('/#/next/functions/add')
@@ -391,20 +399,20 @@ test.describe('setup wizard', () => {
       await row(page, NAME).getByRole('button', { name: new RegExp(NAME) }).click()
       await panel.getByRole('button', { name: 'Disable function' }).click()
       await expect(row(page, NAME).locator('.st')).toHaveText('disabled', { timeout: 15_000 })
-      expect((await outCfg('PDM-02', 8)).enabled).toBe(false)
+      expect((await outCfg(SP, 8)).enabled).toBe(false)
       await panel.getByRole('button', { name: 'Enable function' }).click()
       const on = page.getByRole('dialog', { name: /Enable/ })
       await on.getByRole('button', { name: 'Cancel' }).click()
-      expect((await outCfg('PDM-02', 8)).enabled).toBe(false)   // Cancel wrote nothing
+      expect((await outCfg(SP, 8)).enabled).toBe(false)   // Cancel wrote nothing
       await row(page, NAME).getByRole('switch').click()           // the row switch asks as well
       await page.getByTestId('confirm-on').click()
       await expect(row(page, NAME).locator('.st')).toHaveText(/^\s*(off|ON [\d.]+ A)$/, { timeout: 15_000 })
-      expect((await outCfg('PDM-02', 8)).enabled).toBe(true)
+      expect((await outCfg(SP, 8)).enabled).toBe(true)
       await row(page, NAME).getByRole('switch').click()           // and off again from the row
       await expect(row(page, NAME).locator('.st')).toHaveText('disabled', { timeout: 15_000 })
       await panel.getByRole('button', { name: 'Enable function' }).click()
       await page.getByTestId('confirm-on').click()
-      await expect.poll(async () => (await outCfg('PDM-02', 8)).enabled).toBe(true)
+      await expect.poll(async () => (await outCfg(SP, 8)).enabled).toBe(true)
 
       // ---- duplicate: the wizard opens with the picks, a "copy" name and empty outputs; put the copy on PDM-03 o8
       await panel.getByRole('link', { name: 'Duplicate' }).click()
@@ -427,7 +435,7 @@ test.describe('setup wizard', () => {
       await panel.getByRole('link', { name: 'Change settings' }).click()
       await expect(page).toHaveURL(/setup\/simple\?edit=/)
       await expect(page.getByTestId('fn-name')).toHaveValue(NAME)
-      await expect(page.getByTestId('pick-output')).toHaveValue(/PDM-02/)
+      await expect(page.getByTestId('pick-output')).toHaveValue(new RegExp(SP))
       await page.getByTestId('fn-name').fill(NAME + ' v2')
       await page.getByTestId('wz-next').click(); await page.getByTestId('wz-next').click()
       await applyWizard(page)
@@ -435,7 +443,7 @@ test.describe('setup wizard', () => {
       await expect(row(page, NAME + ' v2')).toBeVisible()
       await expect(row(page, NAME)).toHaveCount(0)
       expect((await instances()).filter((i) => i.name.startsWith(PFX)).length).toBe(2)
-      expect((await outCfg('PDM-02', 8)).inputVal).toBeGreaterThan(0)
+      expect((await outCfg(SP, 8)).inputVal).toBeGreaterThan(0)
 
       // ---- remove both: Cancel first, then confirm
       for (const nm of [NAME + ' v2', NAME + ' copy']) {
@@ -447,7 +455,7 @@ test.describe('setup wizard', () => {
         await removeFn(page, nm)
       }
       // the outputs and the pin are back as they were
-      await waitFor(async () => (await outCfg('PDM-02', 8)).inputVal === 0 && (await outCfg('PDM-03', 8)).inputVal === 0, 20_000, 'outputs restored')
+      await waitFor(async () => (await outCfg(SP, 8)).inputVal === 0 && (await outCfg('PDM-03', 8)).inputVal === 0, 20_000, 'outputs restored')
       expect((await cbIn(6)).enabled).toBe(di6.enabled)
       expect((await instances()).filter((i) => i.name.startsWith(PFX))).toEqual([])
     } finally {
@@ -491,10 +499,10 @@ test.describe('setup wizard', () => {
 
   test('a combination the template cannot build says why and keeps Apply off', async ({ page }) => {
     const errors = watchErrors(page)
-    const before = JSON.stringify([(await outCfg('PDM-02', 8)), (await outCfg('PDM-03', 8))])
+    const before = JSON.stringify([(await outCfg(SP, 8)), (await outCfg('PDM-03', 8))])
     await open(page, 'functions/setup/headlights')
     await pick(page, 'pick-lowL', 'PDM-03 o8', /PDM-03 · J3-3 OUT8/)
-    await pick(page, 'pick-highL', 'PDM-02 o8', /PDM-02 · J3-3 OUT8/)   // a high-beam output, but no high-beam switch below
+    await pick(page, 'pick-highL', SP + ' o8', new RegExp(SP + ' · J3-3 OUT8'))   // a high-beam output, but no high-beam switch below
     await page.getByTestId('wz-next').click()
     await pick(page, 'pick-low', 'CB-2 DI6', /CB-2 · J3-6 DI6/)
     await page.getByTestId('wz-next').click()
@@ -510,7 +518,7 @@ test.describe('setup wizard', () => {
     await expect(page.getByText('Cannot build this yet')).toHaveCount(0)
     await expect(page.getByTestId('wz-apply')).toBeEnabled()
     await page.getByTestId('wz-cancel').click()   // nothing is applied
-    expect(JSON.stringify([(await outCfg('PDM-02', 8)), (await outCfg('PDM-03', 8))])).toBe(before)
+    expect(JSON.stringify([(await outCfg(SP, 8)), (await outCfg('PDM-03', 8))])).toBe(before)
     expect(errors).toEqual([])
   })
 })

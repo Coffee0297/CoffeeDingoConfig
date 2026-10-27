@@ -1,7 +1,9 @@
 // Plain-language rendering of the same blocks the canvas shows. Each sentence is a list of segments:
 // { t: 'text' } or a token { tok: 'src' | 'val' | 'self' | 'missing', label, node?, field? }.
 // Tokens are buttons in the view; a click opens that block in the inspector.
-import { OP_WORDS, isRelational, secs, hexId, TIMER_MODES } from './model.js'
+import { msgChecksumWords } from './canmsgcheck.js'
+import { OP_WORDS, isRelational, secs, hexId, timerMode } from './model.js'
+import { COUT_KINDS } from './canoutkind.js'
 
 const T = (t) => ({ t })
 const val = (label, field) => ({ tok: 'val', label: String(label), field })
@@ -29,19 +31,24 @@ export function sentenceFor(model, n) {
       const segs = [self(n), T('is on when'), ...part(0), j(r.cond0), ...part(1)]
       if (r.var2) segs.push(j(r.cond1), ...part(2))
       segs.push(T(r.mode === 1 ? '(each time this becomes true, it flips on or off).' : 'is true.'))
+      if (r.mode === 1 && r.retain) segs.push(T('It stays as it was after power-off.'))
       return segs
     }
     case 'condition': {
       const segs = [self(n), T('is on when'), srcTok(model, r.input, 'input'), T(OP_WORDS[r.operator ?? 0] ?? '?'), val(r.arg ?? 0, 'arg')]
       if (isRelational(r.operator) && r.argOff != null && r.argOff !== r.arg) segs.push(T('(off again at'), val(r.argOff, 'argOff'), T(')'))
+      if (r.delayOn > 0) segs.push(T('for at least'), val(secs(r.delayOn), 'delayOn'))
       segs.push(T('.'))
+      if (r.delayOff > 0) segs.push(T('It stays on'), val(secs(r.delayOff), 'delayOff'), T('after that stops being true.'))
       return segs
     }
     case 'timer': {
       const s = srcTok(model, r.input, 'input')
       const on = r.edge === 1 ? 'turns off' : 'turns on', off = r.edge === 1 ? 'turns on' : 'turns off'
       if (r.mode === 1) return [self(n), T(`follows`), s, T(`and stays on for`), val(secs(r.preset), 'preset'), T(`after it ${off}.`)]
-      if (r.mode === 2) return [self(n), T('gives one'), val(secs(r.preset), 'preset'), T('pulse each time'), s, T(on + '.')]
+      const reset = r.resetInput ? [T(', and stops when'), srcTok(model, r.resetInput, 'resetInput'), T('turns on.')] : [T('.')]
+      if (r.mode === 3) return [self(n), T('gives one'), val(secs(r.preset), 'preset'), T('pulse when'), s, T(on + ', ignoring it until the pulse ends'), ...reset]
+      if (r.mode === 2) return [self(n), T('gives one'), val(secs(r.preset), 'preset'), T('pulse each time'), s, T(on), ...reset]
       return [self(n), T('turns on'), val(secs(r.preset), 'preset'), T(`after`), s, T(on + ', and off with it.')]
     }
     case 'flasher':
@@ -51,6 +58,7 @@ export function sentenceFor(model, n) {
       if (r.decInput) segs.push(T(', down on'), srcTok(model, r.decInput, 'decInput'))
       if (r.resetInput) segs.push(T(', back to 0 on'), srcTok(model, r.resetInput, 'resetInput'))
       segs.push(T(', from'), val(r.minCount ?? 0, 'minCount'), T('to'), val(r.maxCount ?? 0, 'maxCount'), T(r.wrapAround ? 'and wraps round.' : '.'))
+      if (r.retain) segs.push(T('The count stays after power-off.'))
       return segs
     }
     case 'table': {
@@ -59,13 +67,38 @@ export function sentenceFor(model, n) {
       segs.push(T('in a'), val(`${r.xSize}${(r.ySize ?? 1) > 1 ? ' × ' + r.ySize : ''} point`, 'xSize'), T('table, in between it interpolates.'))
       return segs
     }
+    case 'curve': {
+      const k = Math.min(12, Math.max(2, r.points | 0)), pts = Array.from({ length: k }, (_, i) => `${+r.x?.[i] || 0} → ${+r.y?.[i] || 0}`).join(', ')
+      return [self(n), T('follows'), srcTok(model, r.input, 'input'), T('along the curve'), val(pts, 'points'), T(', in a straight line between points and held beyond the ends.')]
+    }
+    case 'latchgate': {
+      if (r.type === 1) return [self(n), T('follows'), srcTok(model, r.input, 'input'), T('while'), srcTok(model, r.controlInput, 'controlInput'), T('is on, and holds its last value while it is off.')]
+      const segs = [self(n), T('turns on when'), srcTok(model, r.input, 'input'), T('turns on')]
+      if (r.controlInput) segs.push(T(', off when'), srcTok(model, r.controlInput, 'controlInput'), T('turns on (reset wins)'))
+      if (r.timeMs > 0) segs.push(T(r.controlInput ? ', or' : ', and off'), val(secs(r.timeMs), 'timeMs'), T('after it was set'))
+      segs.push(T('.'))
+      return segs
+    }
     case 'canoutput':
-      return [T('Send'), srcTok(model, r.input, 'input'), T('on CAN ID'), val(hexId(r.id) + (r.ide ? ' ext' : ''), 'id'), T('at bit'), val(r.startBit ?? 0, 'startBit'), T(', ×'), val(r.factor ?? 1, 'factor'), T(', every'), val((r.interval ?? 0) + ' ms', 'interval'), T('.')]
+      if (r.kind === 1) return [T('Send a rolling counter on CAN ID'), val(hexId(r.id) + (r.ide ? ' ext' : ''), 'id'), T('at bit'), val(`${r.startBit ?? 0}+${r.bitLength ?? 0}`, 'startBit'), T(', one up each frame, every'), val((r.interval ?? 0) + ' ms', 'interval'), T('.')]
+      if (r.kind >= 2) return [T('Send a'), val(COUT_KINDS[r.kind] ?? '?', 'kind'), T('of the frame on CAN ID'), val(hexId(r.id) + (r.ide ? ' ext' : ''), 'id'), T('in byte'), val(Math.floor((r.startBit ?? 0) / 8), 'startBit'), T(', every'), val((r.interval ?? 0) + ' ms', 'interval'), T('.')]
+      return [T('Send'), srcTok(model, r.input, 'input'), T('on CAN ID'), val(hexId(r.id) + (r.ide ? ' ext' : ''), 'id'), T('at bit'), val(r.startBit ?? 0, 'startBit'), T(+r.offset ? 'as (value −' : 'as value ÷'), ...(+r.offset ? [val(r.offset, 'offset'), T(') ÷')] : []), val(r.factor ?? 1, 'factor'), ...(r.triggerInput ? [T(', once each time'), srcTok(model, r.triggerInput, 'triggerInput'), T('turns on.')] : [T(', every'), val((r.interval ?? 0) + ' ms', 'interval'), T('.')])]
     case 'caninput':
-      return [self(n), T('reads CAN ID'), val(hexId(r.id) + (r.ide ? ' ext' : ''), 'id'), T(', bits'), val(`${r.startBit}+${r.bitLength}`, 'startBit'), T(', and is on when the value'), T(OP_WORDS[r.operator ?? 0] ?? '?'), val(r.operand ?? 0, 'operand'), T(r.timeoutEnabled ? `(no frame for ${r.timeout} ms → reads ${r.timeoutValue ?? 0}).` : '.')]
+      return [self(n), T('reads CAN ID'), val(hexId(r.id) + (r.ide ? ' ext' : ''), 'id'), T(', bits'), val(`${r.startBit}+${r.bitLength}`, 'startBit'), T(', and is on when the value'), T(OP_WORDS[r.operator ?? 0] ?? '?'), val(r.operand ?? 0, 'operand'), T(r.timeoutEnabled ? `(no frame for ${r.timeout} ms → reads ${model.upstream && !r.timeoutUseValue ? '0, off' : r.timeoutValue ?? 0}).` : '.')]
     case 'comfortblink':
       return [T('A tap of'), srcTok(model, r.leftInput, 'leftInput'), T('or'), srcTok(model, r.rightInput, 'rightInput'), T('shorter than'), val(secs(r.tapMs ?? 1000), 'tapMs'),
         T('blinks'), val(r.blinks ?? 3, 'blinks'), T('times on'), srcTok(model, r.clockInput, 'clockInput'), T('; held longer it blinks until released, and a tap the other way cancels it.')]
+    case 'pid': {
+      const segs = [self(n), T('drives its output'), val(`${r.outMin ?? 0} to ${r.outMax ?? 100}`, 'outMin'), T('up while'), srcTok(model, r.processInput, 'processInput'),
+        T(r.invert ? 'is above' : 'is below'), r.setpointInput ? srcTok(model, r.setpointInput, 'setpointInput') : val(r.setpoint ?? 0, 'setpoint'),
+        T(': Kp'), val(r.kp ?? 1, 'kp'), T(', Ki'), val((r.ki ?? 0) + ' /s', 'ki'), T(', Kd'), val((r.kd ?? 0) + ' s', 'kd')]
+      if (r.feedForward) segs.push(T(', plus'), val(r.feedForward, 'feedForward'))
+      if (r.feedFwdInput) segs.push(T(', plus'), srcTok(model, r.feedFwdInput, 'feedFwdInput'))
+      if (r.pvMin || r.pvMax) segs.push(T('. Outside'), val(`${r.pvMin} to ${r.pvMax}`, 'pvMin'), T('it holds'), val(r.fallback ?? 0, 'fallback'))
+      if ((r.activateInput ?? 1) !== 1) segs.push(T(r.activateInput ? '. Only while' : '. It has no "active while" input, so it sends only the feed-forward'), ...(r.activateInput ? [srcTok(model, r.activateInput, 'activateInput'), T('is on')] : []))
+      segs.push(T('.'))
+      return segs
+    }
     case 'math': {
       const a = srcTok(model, r.inputA, 'inputA'), b = r.inputB ? srcTok(model, r.inputB, 'inputB') : val(r.constB ?? 0, 'constB')
       const op = r.op ?? 0
@@ -80,24 +113,50 @@ export function sentenceFor(model, n) {
     case 'canmsg': {
       const bytes = (r.data ?? []).slice(0, r.dlc ?? 8).map((x) => Number(x).toString(16).toUpperCase().padStart(2, '0')).join(' ')
       const id = val(hexId(r.id) + (r.ide ? ' ext' : ''), 'id')
+      const cs = msgChecksumWords(r), tail = cs ? [T(','), val(cs, 'checksum')] : []
       return r.mode === 1
-        ? [T('Each time'), srcTok(model, r.input, 'input'), T('turns on, send'), val(bytes || '(no data)', 'data'), T('on CAN ID'), id, T('once.')]
-        : [T('While'), srcTok(model, r.input, 'input'), T('is on, send'), val(bytes || '(no data)', 'data'), T('on CAN ID'), id, T('every'), val((r.intervalMs ?? 0) + ' ms', 'intervalMs'), T('.')]
+        ? [T('Each time'), srcTok(model, r.input, 'input'), T('turns on, send'), val(bytes || '(no data)', 'data'), T('on CAN ID'), id, T('once'), ...tail, T('.')]
+        : [T('While'), srcTok(model, r.input, 'input'), T('is on, send'), val(bytes || '(no data)', 'data'), T('on CAN ID'), id, T('every'), val((r.intervalMs ?? 0) + ' ms', 'intervalMs'), ...tail, T('.')]
     }
     case 'output': case 'digitaloutput': {
       const src = n.kind === 'output' ? r.inputVal : r.input
       const segs = [T('When'), srcTok(model, src, 'input'), T('is on → turn on'), self(n)]
       if (r.variableDutyCycle) segs.push(T('at a duty from'), srcTok(model, r.dutyCycleInput, 'dutyCycleInput'))
       else if (r.pwmEnabled) segs.push(T('at'), val((r.fixedDuty ?? r.fixedDutyCycle ?? 100) + ' %', 'pwm'))
+      // Hz = signal ÷ denominator (the firmware clamps it to its PWM range)
+      if (r.pwmEnabled && r.variableFreq) segs.push(T('with a frequency of'), srcTok(model, r.freqInput, 'freqInput'), T('÷'), val(r.freqInputDenom ?? 1, 'freqInputDenom'), T('Hz'))
       segs.push(T('.'))
+      // report only: the state reads Warning / Open load, protection is unchanged
+      if (r.warnLimit > 0) segs.push(T('It reports a warning above'), val(r.warnLimit + ' A', 'warnLimit'), T('.'))
+      if (r.openLoadLimit > 0) segs.push(T('It reports a missing load below'), val(r.openLoadLimit + ' A', 'openLoadLimit'), T('for'), val((r.openLoadTime ?? 1000) + ' ms', 'openLoadTime'), T('.'))
+      if (r.underLimit > 0) segs.push(T(r.underTrip ? 'It switches off and latches a fault below' : 'It reports too little current below'), val(r.underLimit + ' A', 'underLimit'), T('for'), val((r.underTime ?? 1000) + ' ms', 'underTime'), T('.'))
+      // the firmware ramps only with soft start + a duty from a signal, at 100 % per soft-start ramp time
+      if (r.pwmEnabled && r.variableDutyCycle && r.rampDutyChanges && (r.softStart ?? r.softStartEnabled))
+        segs.push(T('Duty changes ramp at up to 100 % per'), val((r.softStartRamp ?? r.softStartRampTime ?? 0) + ' ms', 'softStartRamp'), T('.'))
+      if (r.clearOnReassert) segs.push(T('A trip that stays off clears when the input switches off, so switching it on again retries.'))
+      // upstream hard short limit (output sub 32)
+      if (r.hardShortLimit > 0) segs.push(T('Above'), val(r.hardShortLimit + ' A', 'hardShortLimit'), T('(a dead short) it latches off at once, without retrying.'))
+      // upstream current-limited soft start (output sub 30): the inrush limit holds the ramp, the timeout trips
+      if (r.pwmEnabled && r.softStart && r.softStartTimeout > 0) segs.push(T('Its soft start waits while the current is above'), val((r.inrushLimit ?? 0) + ' A', 'inrushLimit'), T('and it trips if not at full duty after'), val(r.softStartTimeout + ' ms', 'softStartTimeout'), T('.'))
+      // upstream soft stop (output sub 31)
+      if (r.pwmEnabled && r.softStopTime > 0) segs.push(T('When it turns off, its duty ramps down over'), val(r.softStopTime + ' ms', 'softStopTime'), T('first.'))
+      if (r.shed) segs.push(T('It switches off while the module sheds loads.'))
+      if (r.stayAlive) segs.push(T('It stays on while the module sleeps, without current protection.'))
       return segs
+    }
+    case 'sys': {
+      // upstream fault clear / load shedding: only the retry-all and shed inputs make a sentence (sleep / mute have their own screen)
+      const segs = []
+      if (r.retryAllInput) segs.push(...[T('Each time'), srcTok(model, r.retryAllInput, 'retryAllInput'), T('turns on, every tripped output on'), self(n), T('tries again (at most once every 2 s).')])
+      if (r.shedInput) segs.push(...[T('While'), srcTok(model, r.shedInput, 'shedInput'), T('is on,'), self(n), T('holds every output set to shed off (load shedding).')])
+      return segs.length ? segs : null
     }
     default: return null
   }
 }
 
 /** Card heading for the sentence view: family · kind. */
-export function cardKind(n) {
-  const k = { virtualinput: 'COMBINE', condition: 'COMPARE', timer: 'TIMER · ' + (TIMER_MODES[n.row?.mode ?? 0] ?? '').toUpperCase(), flasher: 'FLASHER', counter: 'COUNTER', table: 'TABLE', canoutput: 'CAN OUTPUT', caninput: 'CAN INPUT', math: 'MATH', canmsg: 'CAN MESSAGE', comfortblink: 'COMFORT BLINK', output: 'OUTPUT', digitaloutput: 'OUTPUT' }[n.kind] ?? n.kindLabel.toUpperCase()
+export function cardKind(n, up = false) {
+  const k = { virtualinput: 'COMBINE', condition: 'COMPARE', timer: 'TIMER · ' + (timerMode(n.row?.mode, up) ?? '').toUpperCase(), flasher: 'FLASHER', counter: 'COUNTER', table: 'TABLE', canoutput: 'CAN OUTPUT', caninput: 'CAN INPUT', math: 'MATH', curve: 'CURVE', canmsg: 'CAN MESSAGE', pid: 'PID', comfortblink: 'COMFORT BLINK', latchgate: n.row?.type === 1 ? 'GATE' : 'LATCH', output: 'OUTPUT', digitaloutput: 'OUTPUT' }[n.kind] ?? n.kindLabel.toUpperCase()
   return k
 }

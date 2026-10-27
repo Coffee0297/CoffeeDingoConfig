@@ -100,7 +100,13 @@ export const api = {
   rename: (guid, Name) => j('POST', `/api/devices/${guid}/rename`, { Name }),
   remove: (guid) => j('POST', `/api/devices/${guid}/remove`),
   // firmware 5.6: blink the module's status LEDs for `seconds` -> { ok, hasLed } (the CANBoard has none)
+  // upstream config lock (0x0200): the project's password / contact (sent by the next write), unlock, factory reset ('WIPE')
+  setLock: (guid, body) => j('POST', `/api/devices/${guid}/lock`, body),
+  unlock: (guid, Password) => j('POST', `/api/devices/${guid}/unlock`, { Password }),
+  factoryReset: (guid) => j('POST', `/api/devices/${guid}/factoryreset`, { Confirm: 'WIPE' }, 10000),
   blink: (guid, seconds = 10) => j('POST', `/api/devices/${guid}/identify?seconds=${seconds}`),
+  // upstream feat/reset-cause: { flags, cause, names } why the module last reset (409 when its firmware does not say)
+  resetCause: (guid) => j('GET', `/api/devices/${guid}/resetcause`),
   action: (guid, act) => j('POST', `/api/devices/${guid}/${act}`, undefined, 45000),   // write/writeall/burn wait for the module's confirm (server caps 30 s)
   outputConfig: (guid, body) => j('POST', `/api/devices/${guid}/outputconfig`, body),
   // Bench test: { mode: 'on'|'pwm'|'off', duty, freq, hold } — live module only, releases by itself after `hold` s.
@@ -121,6 +127,9 @@ export const api = {
   luaError: (guid) => j('GET', `/api/devices/${guid}/luaerror`),
   overloads: (guid) => j('GET', `/api/devices/${guid}/overloads`),
   overloadsClear: (guid) => j('POST', `/api/devices/${guid}/overloads/clear`),
+  // upstream feat/fault-history: { bootCount, entries: [{ n, output, kind, boot, amps, volts, uptimeMs }] }, newest first
+  faultLog: (guid) => j('GET', `/api/devices/${guid}/faultlog`, undefined, 60000),
+  faultLogClear: (guid) => j('POST', `/api/devices/${guid}/faultlog/clear`),
   async flash(guid, bytes) {
     const r = await fetch(`/api/devices/${guid}/flash`, { method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: bytes })
     if (!r.ok) throw await apiError(r)
@@ -134,6 +143,15 @@ export const api = {
   },
   flashStatus: () => j('GET', '/api/flash/status'),
   flashScan: () => j('GET', '/api/flash/dfu'),   // list DFU devices dfu-util can see
+  // SWD through a debug probe (pyOCD): board = canboard | dingopdm | dingopdmmax
+  swdScan: () => j('GET', '/api/flash/swd', undefined, 20000),
+  // baseId: the ID the board starts on while it has no stored settings (null = the firmware's default)
+  async flashSwd(board, name, bytes, baseId = null) {
+    const id = baseId == null ? '' : `&baseId=${baseId}`
+    const r = await fetch(`/api/flash/swd?board=${encodeURIComponent(board)}&name=${encodeURIComponent(name)}${id}`, { method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: bytes })
+    if (!r.ok) throw await apiError(r)
+    return r.json()
+  },
   // Flash a module's app over CAN via the OpenBLT XCP bootloader (.srec). No USB/DFU.
   async flashCan(guid, bytes) {
     const r = await fetch(`/api/devices/${guid}/flash-can`, { method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: bytes })
@@ -165,7 +183,7 @@ export const api = {
   simRate: (fps) => j('POST', `/api/sim/rate?fps=${fps}`),
   async simLoad(body) {
     // body is a File/Blob — the browser streams it, so even a huge log isn't held as a JS string.
-    const r = await fetch('/api/sim/load', { method: 'POST', headers: { 'Content-Type': 'text/csv' }, body })
+    const r = await fetch('/api/sim/load' + (body?.name ? '?name=' + encodeURIComponent(body.name) : ''), { method: 'POST', headers: { 'Content-Type': 'text/csv' }, body })
     if (!r.ok) throw await apiError(r)
     return r.json()
   },
@@ -183,11 +201,17 @@ export const api = {
     return r.json()
   },
   canlog: () => j('GET', '/api/canlog'),
+  // Force a CAN input: the app sends { Id, Ide, Data (hex), PeriodMs, HoldSec } until the hold runs out (max 30 s) or stop.
+  canForce: (body) => j('POST', '/api/can/force', body),
+  canForceStop: () => j('POST', '/api/can/force/stop'),
+  canForceStatus: () => j('GET', '/api/can/force/status'),
   syslog: () => j('GET', '/api/syslog'),
   project: () => j('GET', '/api/project'),
   projSave: (FileName, Client) => j('POST', '/api/project/save', { FileName, Client }),
   projOpen: (FileName) => j('POST', '/api/project/open', { FileName }),
   projNew: () => j('POST', '/api/project/new'),
+  projFolder: (Dir) => j('POST', '/api/project/folder', { Dir }),   // the project folder (user preferences)
+  migrate57: () => j('POST', '/api/project/migrate57'),   // fork 5.x records -> the firmware 5.7 layout (report on each device)
   projDownload: () => j('GET', '/api/project/download'),
   // function / helper block groups per module (G16): { groups: [...], dismissed: [...] }
   groups: (guid) => j('GET', `/api/groups/${guid}`),
@@ -210,30 +234,8 @@ export const api = {
   definitions: () => j('GET', '/api/definitions'),
 }
 
-// Minimum recommended copper wire gauge to carry an output's current LIMIT (the trip
-// point) on a short automotive run, with insulation/bundling headroom so the wire is
-// never the weak link before the dingoPDM trips. Conservative — for long runs or
-// voltage-drop-sensitive loads (lighting), step up a size. Based on the current limit,
-// not the expected load, on purpose.
-// ponytail: lookup table, not a thermal model — the physical world needs a margin a
-// formula won't give. Edit the thresholds if your insulation/run length differ.
-export function awgFor(limitA) {
-  const a = Number(limitA) || 0
-  if (a <= 0) return null
-  // [maxAmps, AWG, EU/IEC cross-section mm²]. Automotive thin-wall, short run — sized to
-  // the trip point. mm² are real EU stock sizes; AWG is the nearest equivalent.
-  const tbl = [[7, '20', 0.5], [10, '18', 0.75], [15, '16', 1.5], [24, '14', 2.5], [32, '12', 4], [45, '10', 6], [60, '8', 10]]
-  for (const [max, awg, mm2] of tbl) if (a <= max) return { awg, mm2 }
-  return { awg: '6', mm2: 16 }
-}
-
-// Standard EU/IEC wire cross-sections with nearest AWG, for the manual gauge override.
-export const WIRE_GAUGES = [
-  { mm2: 0.5, awg: '20' }, { mm2: 0.75, awg: '18' }, { mm2: 1.0, awg: '17' }, { mm2: 1.5, awg: '16' },
-  { mm2: 2.5, awg: '14' }, { mm2: 4, awg: '12' }, { mm2: 6, awg: '10' }, { mm2: 10, awg: '8' },
-  { mm2: 16, awg: '6' }, { mm2: 25, awg: '4' }, { mm2: 35, awg: '2' },
-]
-export const awgForMm2 = (mm2) => WIRE_GAUGES.find((g) => g.mm2 === Number(mm2))?.awg ?? '?'
+// Wire gauge and voltage drop live in wire.js (pure, so node tests can import them).
+export { awgFor, WIRE_GAUGES, awgForMm2, vDrop } from './wire.js'
 
 // Device hardware specs (per-model counts + per-output current ratings, icons, min firmware, …)
 // are NOT hardcoded here — they come from the backend, whose single source of truth is
@@ -246,15 +248,6 @@ api.definitions().then((d) => { if (d) deviceDefs.set(d) }).catch((e) => console
 // Setting a trip above the rating is allowed — advisory only; callers just flag it.
 export { outputRatingA }
 
-// Voltage drop over a copper wire run at a given current. lengthM is one-way; the feed +
-// return path is 2·L. ρ ≈ 0.0175 Ω·mm²/m (copper, slightly warm). Returns volts + % of
-// system voltage (13.8 V running) or null if inputs are incomplete.
-export function vDrop(lengthM, amps, mm2, sysV = 13.8) {
-  const L = Number(lengthM) || 0, I = Number(amps) || 0, A = Number(mm2) || 0
-  if (L <= 0 || I <= 0 || A <= 0) return null
-  const volts = (2 * L * I * 0.0175) / A
-  return { volts, pct: (volts / sysV) * 100 }
-}
 
 // ===========================================================================
 // Node-graph wiring — every function's input is a varmap index pointing at another
@@ -266,7 +259,7 @@ export function vDrop(lengthM, amps, mm2, sysV = 13.8) {
 export const NODE_INPUTS = {
   output: ['input', 'dutyCycleInput', 'freqInput'], virtualinput: ['var0', 'var1', 'var2'], condition: ['input'],
   flasher: ['input'], counter: ['incInput', 'decInput', 'resetInput'], timer: ['input'], table: ['xInput', 'yInput'], canoutput: ['input'],
-  sys: ['forceSleepInput', 'muteTxInput'],   // the module block itself: force-sleep / mute-TX signals (device params)
+  sys: ['forceSleepInput', 'muteTxInput', 'retryAllInput', 'shedInput'],   // the module block itself: force-sleep / mute-TX signals (device params)
 }
 
 // Apply a graph edge: write the target function's input field = the source's varmap index.
@@ -325,7 +318,7 @@ function bridgeCanId(srcGuid, srcVar, devices = []) {
   const used = new Set(Object.values(b))
   let liveIds = new Set(); try { liveIds = new Set(get(telemetry).ids ?? []) } catch {}
   // …and nothing inside a configured module's frame span (base .. base+29 PDM / +13 CANBoard), live or not
-  const inSpan = (id) => (devices ?? []).some((d) => isModule(d.type) && id >= (d.baseId ?? 0) - 1 && id <= (d.baseId ?? 0) + spanAfter(d.type))
+  const inSpan = (id) => (devices ?? []).some((d) => isModule(d.type) && id >= (d.baseId ?? 0) - 1 && id <= (d.baseId ?? 0) + spanAfter(d.type, d))
   let id = GFX_ID_BASE
   while ((used.has(id) || liveIds.has(id) || inSpan(id)) && id <= GFX_ID_MAX) id++
   if (id > GFX_ID_MAX) throw new Error('No free bridge CAN ID available in 0x101–0x13F — free one up or wire it manually.')
@@ -617,7 +610,8 @@ export const cmfIsLua = (f) => f?.mode === 'lua' || !!f?.clockBackup
 // CANBoard firmware is built HAS_LUA=FALSE (no room on its STM32F303K8: 62 KB flash / 16 KB RAM
 // vs the PDM's 384 KB / 128 KB + 48 KB Lua heap). Keypads/DBC devices aren't programmable either.
 // Used to hide Lua UI and to refuse pushing Lua to a non-Lua module.
-export const deviceHasLua = (type) => !/keypad|dbc|canboard|can.?board/i.test(type || '')
+import { deviceHasLua } from './pinmap.js'
+export { deviceHasLua }
 
 // Compile all cross-module functions into per-module Lua + output bindings.
 // Returns { [guid]: { lua, bindings: [{ output, input }] } } for every module with a role.
@@ -859,11 +853,11 @@ async function deployCrossModuleNow(devices) {
     const lua = userLua ?? c?.lua ?? ''
     // A CANBoard (or any non-PDM) has no Lua engine — never push Lua to it. If a Lua-mode
     // cross-module function landed on one, report it instead of silently uploading dead code.
-    if ((lua || c) && !deviceHasLua(d.type)) {
-      results.push({ name: d.name, ok: false, error: `${d.name} has no Lua engine (a CANBoard doesn't run Lua) — switch this function to a native rule, or run the Lua on a PDM and bridge the signal over CAN.` })
+    if ((lua || c) && !deviceHasLua(d)) {
+      results.push({ name: d.name, ok: false, error: `${d.name} has no Lua engine (a CANBoard, or upstream firmware without Lua) — switch this function to a native rule, or run the Lua on a PDM and bridge the signal over CAN.` })
       continue
     }
-    if (deviceHasLua(d.type)) await luaHydrate(d.guid)   // keep the module's own Lua around the cmf block
+    if (deviceHasLua(d)) await luaHydrate(d.guid)   // keep the module's own Lua around the cmf block
     const had = !!luaGet(d.guid, 'cmf').trim()   // a cmf block sent before: uploading without it stops it
     luaSnippets.update((v) => { v[d.guid] = { ...(v[d.guid] || {}) }; v[d.guid].cmf = lua; return { ...v } })
     if (!lua && !c && !had) continue

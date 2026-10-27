@@ -6,7 +6,7 @@
   import { Card, Button, Select, Switch, Dialog, Field, Checkbox, Chip, FwBadge, Empty } from '../../../ui/index.js'
   import { api, mutate, toast } from '../../../lib/live.svelte.js'
   import { href } from '../../../router.svelte.js'
-  import { BLOCK, walkChain, funcArray, olderThan } from './util.js'
+  import { BLOCK, walkChain, funcArray, lacks, isUpstream } from './util.js'
   import { remoteItems, resolveRemote, isRemoteKey } from '../../../lib/remote.js'
 
   let { guid, dev, f = $bindable(), feed, connected = false, raw = null } = $props()
@@ -167,7 +167,7 @@
       <span class="muted">Add to a chain:</span>
       <Button size="sm" onclick={() => open('compare')}>+ Compare</Button>
       <Button size="sm" onclick={() => open('combine')}>+ Combine</Button>
-      {#if olderThan(dev?.version, [5, 6, 0])}<Button size="sm" disabled title="Needs firmware 5.6">+ Math</Button><FwBadge />
+      {#if lacks(dev, [5, 6, 0], 0x1C00)}<Button size="sm" disabled title="Needs firmware 5.6">+ Math</Button><FwBadge upstream={isUpstream(dev)} />
       {:else}<Button size="sm" href={flowHref} title="Build this in the flow builder">+ Math</Button>{/if}
       {#each ['On-delay', 'Keep on after', 'Flasher', 'Table', 'Signal', 'Lua'] as c (c)}
         <Button size="sm" href={flowHref} title="Build this in the flow builder">+ {c}</Button>
@@ -177,7 +177,7 @@
 
   <div class="acts">
     <Button href={flowHref}>Open in flow builder</Button>
-    {#if olderThan(dev?.version, [5, 6, 0])}<Button disabled title="Output roles need firmware 5.6">Use a role instead…</Button><FwBadge />
+    {#if lacks(dev, [5, 6, 0], 0x1E00)}<Button disabled title="Output roles need firmware 5.6">Use a role instead…</Button><FwBadge upstream={isUpstream(dev)} />
     {:else}<Button href={href('power', 'roles')}>Use a role instead…</Button>{/if}
     <Button variant="ghost" aria-pressed={showRaw} onclick={() => (showRaw = !showRaw)} data-testid="show-raw">{showRaw ? 'Hide raw' : 'Show raw'}</Button>
   </div>

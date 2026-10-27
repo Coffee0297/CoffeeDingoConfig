@@ -29,7 +29,7 @@
     {@const inc = c.n.incomplete?.length}
     <article class="card" class:inc class:sel={selected === c.n.id} style="--fam: {FAM_COLOR[c.n.fam]}" aria-label={c.n.title}>
       <div class="top">
-        <span class="k">{cardKind(c.n)}</span>
+        <span class="k">{cardKind(c.n, model.upstream)}</span>
         {#if inc}<Chip tone="fault" symbol="▲" dashed>NEEDS ATTENTION</Chip>{/if}
         {#if c.n.remote}<Chip tone="on" symbol="◆">OVER CAN</Chip>{/if}
         <span class="grow"></span>

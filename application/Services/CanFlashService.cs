@@ -17,15 +17,17 @@ public sealed class CanFlashService(
     ICommsAdapterManager adapters,
     ILogger<CanFlashService> logger)
 {
-    public record FlashResult(bool Ok, string Log, string? Version = null);
+    // Started: the module was sent to its bootloader (false: refused before anything reached it, it runs as before)
+    public record FlashResult(bool Ok, string Log, string? Version = null, bool Started = false);
     public record FlashStatus(bool Busy, int Percent, string Phase);
 
-    // Every OpenBLT board relocates its application above the 16 KB bootloader to sector 1.
-    private const uint AppBase = 0x08004000;
+    // OpenBLT PDMs relocate the app above the 16 KB bootloader to sector 1 (CANBoards from 5.7: DfuImage.CanboardAppBase).
+    private const uint AppBase = DfuImage.AppBase;
 
     private volatile int _percent;
     private volatile string _phase = "idle";
     private volatile bool _busy;
+    private int _running;
     public FlashStatus Status() => new(_busy, _percent, _phase);
     private void Set(string phase, int percent) { _phase = phase; _percent = percent; }
 
@@ -33,23 +35,31 @@ public sealed class CanFlashService(
     {
         var log = new StringBuilder();
 
-        // 1. Parse the S-record.
+        // 1. Parse the S-record (or the Intel HEX that upstream dingoFW releases ship).
         SRecordImage image;
         try { image = SRecordImage.ParseText(Encoding.ASCII.GetString(srec)); }
-        catch (Exception ex) { return new(false, $"Not a valid S-record (.srec) file: {ex.Message}"); }
+        catch (Exception ex) { return new(false, $"Not a valid .srec / .hex file: {ex.Message}"); }
         log.AppendLine($"Parsed {image.TotalBytes} bytes in {image.Segments.Count} segment(s), base 0x{image.MinAddress:X8}.");
 
         // 2. Wrong-board / sanity guard. Any board carrying the OpenBLT CAN bootloader can be
         // flashed over CAN (CANBoard, dingoPDM, dingoPDM-Max); they all relocate the app to 0x08004000.
         var dev = dm.GetDevice(deviceId);
         if (dev is null) return new(false, "Device is not on the bus — connect and discover it first.");
+        bool upstream = dev is IDeviceConfigurable { Family: domain.Common.FwFamily.Upstream };
         if (dev is not IDeviceConfigurable cfg || !cfg.CanBootloader)
-            return new(false, $"'{dev.Type}' does not have the OpenBLT CAN bootloader — it can't be flashed over CAN.");
-        if (image.MinAddress != AppBase)
-            return new(false, $"Firmware base 0x{image.MinAddress:X8} does not match the relocated application base 0x{AppBase:X8} — wrong firmware (or not a bootloader-relocated build) for this module?");
-        // CANBoard app region is 46 KB; the F446 PDMs are 368 KB (sectors 1–6).
+            return new(false, upstream
+                ? $"Refused: {dev.Name} runs upstream dingoFW and is not known to have the OpenBLT CAN bootloader. Plain upstream firmware answers a CAN update by going to USB-DFU. Program the bootloader once (SWD or USB), then mark it on the Firmware page."
+                : $"'{dev.Type}' does not have the OpenBLT CAN bootloader — it can't be flashed over CAN.");
+        // The app starts where the .srec says: PDMs 0x08004000; a CANBoard 0x08002000 (5.7, 8 KB bootloader) or 0x08004000 (5.x).
         bool isCanboard = string.Equals(dev.Type, "CANBoard", StringComparison.OrdinalIgnoreCase);
-        int maxBytes = (isCanboard ? 46 : 368) * 1024;
+        if (!DfuImage.IsAppBase(image.MinAddress, isCanboard))
+            return new(false, $"Firmware base 0x{image.MinAddress:X8} does not match the relocated application base 0x{AppBase:X8}{(isCanboard ? $" or 0x{DfuImage.CanboardAppBase:X8}" : "")} — wrong firmware (or not a bootloader-relocated build) for this module?");
+        bool newCbLoader = isCanboard && image.MinAddress == DfuImage.CanboardAppBase;
+        if (newCbLoader)
+            log.AppendLine("CANBoard image at 0x08002000: needs the 8 KB CANBoard bootloader (programmed once over SWD). With the old 16 KB one the erase fails and the module stays in its bootloader.");
+        // CANBoard app region: 54 KB behind the 8 KB bootloader, 46 KB behind the old 16 KB one; the F446 PDMs are 368 KB
+        // (sectors 1–6), upstream 496 KB (sectors 1–7).
+        int maxBytes = (isCanboard ? (newCbLoader ? 54 : 46) : upstream ? 496 : 368) * 1024;
         if (image.TotalBytes < 1024 || image.TotalBytes > maxBytes)
             return new(false, $"Refused: image size {image.TotalBytes} bytes is outside the {dev.Type} app range (1 KB–{maxBytes / 1024} KB).");
         // A v7 and a -Max share the MCU and app base, so only the marker tells their images apart.
@@ -64,8 +74,11 @@ public sealed class CanFlashService(
             _ => null,
         } is { Length: > 0 } v && v != "v0.0.0" ? v : null;
         var before = Ver();
+        // one update at a time: a second one (another window, a reload) moved the receive filter off the first module
+        if (Interlocked.CompareExchange(ref _running, 1, 0) != 0) return new(false, "Refused: another module is being updated over CAN. Wait until it is done.");
         _busy = true; Set("Entering bootloader", 2);
-        using var lifetime = ct.CanBeCanceled ? null : new CancellationTokenSource(TimeSpan.FromMinutes(4));
+        // A 450 KB PDM image takes ~4.5 min at 7 bytes a frame (write + read-back): 4 min cut a good update off in its verify.
+        using var lifetime = ct.CanBeCanceled ? null : new CancellationTokenSource(TimeSpan.FromMinutes(10));
         var token = lifetime?.Token ?? ct;
 
         try
@@ -91,19 +104,30 @@ public sealed class CanFlashService(
             // 4. Connect (retry while the bootloader comes up). IDs derived from the base ID.
             Set("Connecting", 5);
             if (!await xcp.ConnectAsync(retries: 25, token))
-                return Fail(log, $"No XCP response on 0x{xcp.RespId:X3}. The bootloader did not come up (is it SWD-flashed? is the bus quiet?).");
+            {
+                // upstream: it answered no bootloader, so it isn't offered a CAN update again until someone says it has one
+                if (dm.GetDevice(deviceId) is domain.Devices.dingoPdm.PdmDevice { Family: domain.Common.FwFamily.Upstream } up) up.OpenBlt = false;
+                return Fail(log, $"No XCP response on 0x{xcp.RespId:X3}. The bootloader did not come up (is it SWD-flashed? is the bus quiet?)."
+                    + (upstream ? " Plain upstream firmware goes to USB-DFU instead: power-cycle the module to get it back." : ""));
+            }
+            if (dm.GetDevice(deviceId) is domain.Devices.dingoPdm.PdmDevice { Family: domain.Common.FwFamily.Upstream } seen) seen.OpenBlt = true;
             log.AppendLine($"XCP connected (cmd 0x{xcp.CmdId:X3} / resp 0x{xcp.RespId:X3}, maxCto {xcp.MaxCto}).");
             await xcp.GetStatusAsync(token);
             if (!await xcp.ProgramStartAsync(token))
                 return Fail(log, "PROGRAM_START refused by the bootloader.");
 
-            // 5. Erase + write each segment.
+            // 5. Erase the whole image range ONCE, then write each segment. OpenBLT erases whole sectors, so erasing
+            //    per segment wiped what an earlier segment had already written into a sector the two share (the 5.7.4
+            //    PDM image has a 4-byte gap at 0x0805B80C inside sector 6: its read-back then mismatched on every module).
             int total = image.TotalBytes, written = 0;
+            Set("Erasing", 8);
+            if (!await xcp.ClearMemoryAsync(image.MinAddress, image.EndAddress - image.MinAddress, token))
+                return Fail(log, $"Erase failed at 0x{image.MinAddress:X8}." + (newCbLoader ? " This CANBoard probably still has the old 16 KB bootloader: program the 8 KB one over SWD once."
+                    // the June-2026 PDM bootloader stops at sector 6 (app up to 0x0805FFFF); a 5.7.4 PDM image reaches into sector 7
+                    : !isCanboard && image.EndAddress > 0x08060000 ? " This image reaches past 0x08060000: the module's older bootloader ends at sector 6. Program the current bootloader once (FULL image over USB-DFU with BOOT0, or over SWD)." : ""));
+            log.AppendLine($"Erased 0x{image.MinAddress:X8}-0x{image.EndAddress - 1:X8} ({image.Segments.Count} segment(s)).");
             foreach (var seg in image.Segments)
             {
-                Set("Erasing", 8);
-                if (!await xcp.ClearMemoryAsync(seg.Address, (uint)seg.Data.Length, token))
-                    return Fail(log, $"Erase failed at 0x{seg.Address:X8}.");
                 if (!await xcp.WriteDataAsync(seg.Address, seg.Data, n =>
                         Set("Writing", 10 + (int)(55L * (written + n) / Math.Max(total, 1))), token))
                     return Fail(log, $"Programming failed in segment at 0x{seg.Address:X8}.");
@@ -160,7 +184,7 @@ public sealed class CanFlashService(
             Set("Done", 100);
             log.AppendLine(version is not null ? $"✓ Done — module reports {version}." : "✓ Done — module rebooting (version not yet reported).");
             logger.LogInformation("CAN flash ok ({Bytes} bytes) for {Name}", written, dev.Name);
-            return new(true, log.ToString(), version);
+            return new(true, log.ToString(), version, true);
         }
         catch (OperationCanceledException) { return Fail(log, "Timed out / cancelled."); }
         catch (Exception ex)
@@ -168,13 +192,14 @@ public sealed class CanFlashService(
             logger.LogError(ex, "CAN flash error");
             return Fail(log, "Error: " + ex.Message);
         }
-        finally { adapters.ActiveAdapter?.SetReceiveFilter(null); dm.ResumeConfigFilter(); _busy = false; }
+        finally { adapters.ActiveAdapter?.SetReceiveFilter(null); dm.ResumeConfigFilter(); _busy = false; _running = 0; }
     }
 
     private FlashResult Fail(StringBuilder log, string msg)
     {
+        logger.LogWarning("CAN flash failed at {Percent} %: {Msg}", _percent, msg);   // the UI log is the only other place this goes
         Set("Failed", _percent);
         log.AppendLine("✗ " + msg);
-        return new(false, log.ToString());
+        return new(false, log.ToString(), null, true);
     }
 }

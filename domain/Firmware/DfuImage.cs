@@ -10,6 +10,12 @@ public static class DfuImage
 {
     public const uint FlashBase = 0x08000000;
     public const uint AppBase = 0x08004000;
+    /// <summary>The CANBoard app from firmware 5.7 on: behind the 8 KB CANBoard OpenBLT bootloader (sectors 0-1).</summary>
+    public const uint CanboardAppBase = 0x08002000;
+
+    /// <summary>Where an app for <paramref name="isCanboard"/>'s OpenBLT bootloader may start: PDMs 0x08004000;
+    /// CANBoards 0x08002000 (5.7, 8 KB bootloader) or 0x08004000 (5.x, the old 16 KB one).</summary>
+    public static bool IsAppBase(uint address, bool isCanboard) => address == AppBase || (isCanboard && address == CanboardAppBase);
     private const uint FlashEnd = FlashBase + 0x100000;   // 1 MB: covers every STM32 dingo board
 
     /// <summary>The flash address to write <paramref name="bin"/> at, or null when it isn't an STM32 flash image.</summary>

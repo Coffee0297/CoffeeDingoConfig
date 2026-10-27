@@ -78,6 +78,19 @@ const capi = { functions: async () => ({ conditions: [{ number: 1, enabled: fals
 assert.equal(await (await liveCtx({ api: capi, guid: 'p' })).condition(9, 2, 2500, 'x'), 20)
 assert.equal(cc[0].argOff, 2500)
 
+// dash reset button: no output, runs on the picked PDM and sets its retry-all signal (upstream fault clear)
+const ra = T('retryall')
+assert.match(validate(ra, defaults(ra)), /PDM whose tripped outputs/)
+assert.deepEqual(logicModule(ra, { pdm: 'p', button: 5 }), { guid: 'p' })
+p = await previewTemplate(ra, { pdm: 'p', button: 5 })
+assert.deepEqual(p.ops.map((o) => [o.op, o.ins]), [['retryall', ['in:button']]]); assert.deepEqual(p.need, {})
+const dw = []
+const rapi = { functions: async () => ({ device: { retryAllInput: 7 } }), inputs: async () => [], deviceInputs: async (g, b) => dw.push([g, b]) }
+const rctx = await liveCtx({ api: rapi, guid: 'p' })
+await ra.build(rctx, { pdm: 'p', button: 5 })
+assert.deepEqual(dw, [['p', { retryAllInput: 5 }]]); assert.deepEqual(rctx.device, { retryAllInput: 7 })
+await assert.rejects(ra.build(await liveCtx({ api: { ...rapi, functions: async () => ({ device: {} }) }, guid: 'p' }), { button: 5 }), /no retry-all input/)
+
 // bus-wide outputs: pin, side, rating, free first
 const pdm = { guid: 'p', name: 'PDM-01', type: 'dingoPDM' }, cb = { guid: 'c', name: 'CB-1', type: 'CANBoard' }
 const oo = outputOptions([{ device: pdm, outs: [{ number: 1, name: 'Fuel Pump', input: 9, ratingA: 15 }] }, { device: cb, outs: [{ number: 2, name: '', input: 0 }] }], pinFor, ioTag)
@@ -131,6 +144,24 @@ await T('drl').build(Object.assign(vctx, { wireOutput: async () => {} }), { ign:
 assert.deepEqual([vc[0].var0, vc[0].var1, vc[0].not1, vc[0].var2], [5, 6, true, 0])
 assert.equal(await vctx.allOf([7], 'x'), 7)
 await vctx.allOf([{ v: 8, not: true }], 'y'); assert.deepEqual([vc[1].var0, vc[1].not0, vc[1].var1], [8, true, 1])     // NOT x AND Always On
+
+// PID fan: PI on a fixed setpoint (the target), fallback 100 % outside 1..200, output duty denominator 1
+assert.deepEqual((await pv('pidfan', { temp: 5, output: 'p:1' })).need, { pids: 1 })
+await assert.rejects(pv('pidfan', { temp: 5, target: 100, full: 90, output: 'p:1' }), /must be above/)
+const pc = [], dutyCalls = []
+const pctx = await liveCtx({ api: { functions: async () => ({ pids: [1, 2].map((number) => ({ number, enabled: number === 1 })) }), inputs: async () => [{ index: 230, kind: 'pid', number: 2, prop: 'Output' }, { index: 1, name: 'Always On' }],
+  setFunction: async (g, k, n, b) => pc.push([k, n, b]) }, guid: 'p', outputDuty: async (o, d, on) => dutyCalls.push([o, d, on]) })
+await T('pidfan').build(pctx, { temp: 5, target: 85, full: 105, ign: '', output: 'p:3' })
+assert.deepEqual([pc[0][0], pc[0][1], pc[0][2].kp, pc[0][2].setpointInput, pc[0][2].setpoint, pc[0][2].feedForward, pc[0][2].invert, pc[0][2].ki, pc[0][2].iMin, pc[0][2].pvMin, pc[0][2].fallback],
+  ['pid', 2, 5, 0, 85, 0, true, 0.25, 0, 1, 100])
+assert.deepEqual(dutyCalls, [['p:3', 230, 1]])
+await assert.rejects(T('pidfan').build(await liveCtx({ api: { functions: async () => ({ pids: null }), inputs: async () => [] }, guid: 'p' }), { temp: 5, target: 85, full: 105, output: 'p:3' }), /no PID block/)
+// CANBoard 5.7: PID 1 output (var 113) drives a DO's variable duty
+const cdut = []
+const cctx = await liveCtx({ api: { functions: async () => ({ pids: [1, 2].map((number) => ({ number, enabled: false })) }), inputs: async () => [{ index: 113, kind: 'pid', number: 1, prop: 'Output' }, { index: 1, name: 'Always On' }],
+  setFunction: async () => {} }, guid: 'c', isCanboard: true, outputDuty: async (o, d, on) => cdut.push([o, d, on]) })
+await T('pidfan').build(cctx, { temp: 96, target: 85, full: 105, ign: '', output: 'c:2' })
+assert.deepEqual(cdut, [['c:2', 113, 1]])
 
 // relay wiring adapts to the switching side
 assert.deepEqual(outputCircuit('high', true).coil, ['OUT', 'GND'])

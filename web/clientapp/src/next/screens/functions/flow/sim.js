@@ -1,9 +1,14 @@
 // Client-side simulator of one module's blocks. Nothing is sent to the car.
 // Mirrors the firmware (functions/*.cpp): Condition hysteresis, VirtualInput AND/OR/NOR (a real NOR from
 // firmware 5.6.6; before it was NAND) with NOT per input and momentary/latching, Timer on-delay/off-delay/pulse, Flasher,
-// Counter edges, Table interpolation, CAN input operator + timeout, outputs with injected faults.
+// Condition on / off delay (upstream feat/condition-delay), Counter edges, Table interpolation, Curve (upstream feat/curve-block), Latch / Gate (upstream feat/latch-gate-block), PID (upstream feat/pid), CAN input operator + timeout, outputs with injected faults (a trip that runs out
+// of retries latches; upstream fault clear: cleared by the input going off, or by the module's retry-all edge).
 import { interpolate } from '../../../../lib/table.js'
+import { latchClears } from '../../../../lib/trip.js'
+import { curveAt } from './curve.js'
 import { fmt } from './livevals.js'
+import { upstreamArgOff } from './model.js'
+import { latchGateStep } from './latchgate.js'
 
 const truthy = (v) => v === true || (typeof v === 'number' && v !== 0)
 const asNum = (v) => (v === true ? 1 : v === false || v == null ? 0 : +v || 0)
@@ -29,6 +34,40 @@ function check(m, mode, v) {
 }
 const edgeOf = (e, prev, cur) => (Number(e) === 0 ? !prev && cur : Number(e) === 1 ? prev && !cur : prev !== cur)
 
+// firmware Pid::Update (functions/pid.cpp), one call per main-loop pass. s = the block's memory, r = its config,
+// now in ms, sp / pv / act / ffv = the input values. Fills s.val, s.p, s.i, s.d.
+const clampF = (f, lo, hi) => { if (!(f > lo)) f = lo; if (f > hi) f = hi; return Number.isFinite(f) ? f : 0 }
+export function pidStep(s, r, now, sp, pv, act, ffv) {
+  const n = (k, d = 0) => (r[k] == null ? d : +r[k])
+  const outMin = n('outMin'), outMax = n('outMax', 100), iMin = n('iMin', -100), iMax = n('iMax', 100), pvMin = n('pvMin'), pvMax = n('pvMax')
+  s.i ??= 0
+  if (!r.enabled || outMin > outMax || iMin > iMax || pvMin > pvMax) { s.init = false; s.prevValid = false; s.val = s.p = s.i = s.d = 0; return s }
+  if (s.init && now - s.tLast < n('periodMs', 20)) return s
+  const dt = s.init ? (now - s.tLast) * 0.001 : 0
+  s.tLast = now; s.init = true
+  const ff = n('feedForward') + ffv
+  if (!(act > 0.5)) { s.prevValid = false; s.p = s.i = s.d = 0; s.val = clampF(ff, outMin, outMax); return s }
+  const windowOn = pvMin !== 0 || pvMax !== 0
+  if (!Number.isFinite(sp) || !Number.isFinite(pv) || !Number.isFinite(ff) || (windowOn && (pv < pvMin || pv > pvMax))) {
+    s.prevValid = false; s.p = s.d = 0; s.val = clampF(n('fallback'), outMin, outMax); s.fault = true; return s
+  }
+  s.fault = false
+  if (!s.prevValid) { s.prevValid = true; s.ramp = pv; s.prevPv = pv }
+  const rate = n('spRate')
+  s.ramp = rate > 0 ? clampF(sp, s.ramp - rate * dt, s.ramp + rate * dt) : sp
+  let err = r.invert ? pv - s.ramp : s.ramp - pv
+  if (Math.abs(err) < n('deadband')) err = 0
+  s.p = n('kp', 1) * err
+  const dPv = pv - s.prevPv
+  s.prevPv = pv
+  s.d = dt > 0 ? (n('kd') * (r.invert ? dPv : -dPv)) / dt : 0
+  const iNew = clampF(s.i + n('ki') * err * dt, iMin, iMax)
+  const out = ff + s.p + iNew + s.d
+  if (!((out > outMax && iNew > s.i) || (out < outMin && iNew < s.i))) s.i = iNew
+  s.val = clampF(ff + s.p + s.i + s.d, outMin, outMax)
+  return s
+}
+
 export const SOURCE_KINDS = new Set(['input', 'analoginput', 'caninput', 'sys', 'lua', 'keypad'])
 
 export function createSim(model, snapshot) {
@@ -50,7 +89,10 @@ export function createSim(model, snapshot) {
       if (n.kind === 'caninput') {
         const sIdx = port(n, 'State'), vIdx = port(n, 'Value')
         if (faults[n.id] === 'timeout') {
-          if (n.row?.timeoutEnabled) { if (vIdx) vals[vIdx] = 0; if (sIdx) vals[sIdx] = false; status[n.id] = { text: 'TIMEOUT', tone: 'warn', why: `No frame for ${n.row.timeout} ms: value 0, state off.` } }
+          // upstream dingoFW with timeoutUseValue: the timeout value, and its result by the input's own test
+          const tv = model.upstream && n.row?.timeoutUseValue ? +n.row.timeoutValue || 0 : null
+          if (n.row?.timeoutEnabled && tv != null) { const on = cmp(n.row.operator, tv, +n.row.operand || 0); if (vIdx) vals[vIdx] = tv; if (sIdx) vals[sIdx] = on; status[n.id] = { text: 'TIMEOUT', tone: 'warn', why: `No frame for ${n.row.timeout} ms: value ${tv}, state ${on ? 'on' : 'off'}.` } }
+          else if (n.row?.timeoutEnabled) { if (vIdx) vals[vIdx] = 0; if (sIdx) vals[sIdx] = false; status[n.id] = { text: 'TIMEOUT', tone: 'warn', why: `No frame for ${n.row.timeout} ms: value 0, state off.` } }
           else status[n.id] = { text: 'NO DATA', tone: 'warn', why: 'Timeout is off on this input, so it keeps its last value.' }
           continue
         }
@@ -78,7 +120,8 @@ export function createSim(model, snapshot) {
         vals[out] = check(m(n.id), r.mode ?? 0, res)
       } else if (n.kind === 'condition') {
         const out = port(n, 'Value'); if (!out) continue
-        const x = asNum(val(r.input)), set = +r.arg || 0, rel = r.argOff == null ? set : +r.argOff
+        // upstream dingoFW keeps a band, not the release point (model.js hystBand): a wrong-side release point is none
+        const x = asNum(val(r.input)), set = +r.arg || 0, rel = model.upstream ? upstreamArgOff(r.operator, set, r.argOff) : r.argOff == null ? set : +r.argOff
         const hyst = rel !== set, was = truthy(vals[out]), lo = Math.min(set, rel), hi = Math.max(set, rel)
         let v
         switch (Number(r.operator)) {
@@ -88,10 +131,22 @@ export function createSim(model, snapshot) {
           case 5: v = hyst ? (was ? x <= hi : x <= lo) : x <= set; break
           default: v = cmp(r.operator, x, set)
         }
+        // upstream feat/condition-delay (firmware Condition::Update): the result follows the compare only once it
+        // has differed for Delay on (turning on) / Delay off (turning off); a flip back in between restarts it
+        const dOn = +r.delayOn || 0, dOff = +r.delayOff || 0
+        if (dOn || dOff) {
+          const s = m(n.id), c = !!v
+          s.same ??= t
+          if (c === s.out || t - s.same >= (c ? dOn : dOff)) { s.out = c; s.same = t }
+          v = s.out
+        }
         vals[out] = v
       } else if (n.kind === 'table') {
         const out = port(n, 'Value'); if (!out) continue
         vals[out] = interpolate(r.xSize, r.ySize, r.xAxis ?? [], r.yAxis ?? [], r.cells ?? [], asNum(val(r.xInput)), (r.ySize ?? 1) > 1 ? asNum(val(r.yInput)) : 0)
+      } else if (n.kind === 'curve') {
+        const out = port(n, 'Value'); if (!out) continue
+        vals[out] = curveAt(r.points, r.x, r.y, asNum(val(r.input)))
       } else if (n.kind === 'math') {
         // same as the firmware's MathEval: B a signal or the constant, ÷0 gives 0, then × factor + offset
         const out = port(n, 'Value'); if (!out) continue
@@ -112,6 +167,9 @@ export function createSim(model, snapshot) {
         const rise = active && !s.la, fall = !active && s.la
         s.la = active
         const pre = +r.preset || 0
+        // upstream dingoFW: a reset input stops the timer; mode 3 = one pulse, further edges ignored while it runs
+        if (truthy(val(r.resetInput))) { s.timing = false; vals[out] = false; s.left = 0; continue }
+        if (Number(r.mode) === 3) { if (rise && !s.timing) { s.timing = true; s.t0 = t } if (s.timing && t - s.t0 >= pre) s.timing = false; vals[out] = !!s.timing; s.left = s.timing ? Math.max(0, pre - (t - s.t0)) : 0; continue }
         if (Number(r.mode) === 0) { if (rise) { s.timing = true; s.t0 = t } if (!active) s.timing = false; vals[out] = !!s.timing && t - s.t0 >= pre }
         else if (Number(r.mode) === 1) { if (fall) { s.timing = true; s.t0 = t } if (active) s.timing = false; if (s.timing && t - s.t0 >= pre) s.timing = false; vals[out] = active || !!s.timing }
         else { if (rise) { s.timing = true; s.t0 = t } if (s.timing && t - s.t0 >= pre) s.timing = false; vals[out] = !!s.timing }
@@ -135,6 +193,15 @@ export function createSim(model, snapshot) {
           x.just = false
         }
         vals[outL] = on(s.L); vals[outR] = on(s.R)
+      } else if (n.kind === 'latchgate') {
+        const out = port(n, 'Value'); if (!out) continue
+        vals[out] = latchGateStep(s, r, asNum(val(r.input)), asNum(val(r.controlInput)), t)
+      } else if (n.kind === 'pid') {
+        // the firmware runs it every main-loop pass and gates on its own period; here once per sim step
+        pidStep(s, { ...r, enabled: true }, t, r.setpointInput ? asNum(val(r.setpointInput)) : +(r.setpoint ?? 0), asNum(val(r.processInput)), asNum(val(r.activateInput)), asNum(val(r.feedFwdInput)))
+        for (const [prop, k] of [['Output', 'val'], ['P', 'p'], ['I', 'i'], ['D', 'd']]) { const o = port(n, prop); if (o) vals[o] = s[k] }
+        if (s.fault) status[n.id] = { text: 'FALLBACK', tone: 'warn', why: `The measured value is outside ${r.pvMin} to ${r.pvMax}: the output holds the fallback ${r.fallback}.` }
+        else delete status[n.id]
       } else if (n.kind === 'flasher') {
         const out = port(n, 'State'); if (!out) continue
         if (!truthy(val(r.input))) { vals[out] = false; s.on = false; continue }
@@ -159,31 +226,94 @@ export function createSim(model, snapshot) {
     }
   }
 
+  // firmware CyclicUpdate: a rising edge of the retry-all signal, at most every 2 s (its clock starts at 0)
+  function retryEdge() {
+    const idx = model.nodes.get('sys')?.row?.retryAllInput, s = m('sys|retry')
+    const on = !!idx && truthy(val(idx)), edge = on && !s.last && t - (s.at ?? 0) >= 2000
+    s.last = on
+    if (edge) s.at = t
+    return edge
+  }
+
   function evalOutputs() {
+    const retry = retryEdge(), retryWired = !!model.nodes.get('sys')?.row?.retryAllInput
+    // upstream load shedding: while the module's shed input is on, outputs with Shed are held off (like starter disable)
+    const shedIdx = model.nodes.get('sys')?.row?.shedInput, shedding = !!shedIdx && truthy(val(shedIdx))
     for (const n of model.nodes.values()) {
       const r = n.row ?? {}
       if (n.kind === 'output' || n.kind === 'digitaloutput') {
         const onIdx = port(n, n.kind === 'output' ? 'On' : 'State'), curIdx = port(n, 'Current'), ocIdx = port(n, 'Overcurrent'), fIdx = port(n, 'Fault')
+        const wIdx = port(n, 'Warning'), olIdx = port(n, 'Open Load'), ucIdx = port(n, 'Undercurrent')   // upstream state signals, 1 only while reported
         const src = n.kind === 'output' ? r.inputVal : r.input
-        const want = !!r.enabled && truthy(val(src))
+        const shedNow = n.kind === 'output' && shedding && !!r.shed
+        const want = !!r.enabled && truthy(val(src)) && !shedNow
         const f = faults[n.id]
         const nominal = mem[n.id]?.amps
+        const s = m(n.id), until = latchClears(r, retryWired)
+        // Profet::ClearFault: a retry-all edge, or (clear on re-assert) the input going off
+        if (retry || (s.latched && r.clearOnReassert && !want)) { s.latched = false; s.trip = undefined }
         if (f === 'oc' && want) {
           if (onIdx) vals[onIdx] = false; if (ocIdx) vals[ocIdx] = true; if (fIdx) vals[fIdx] = true; if (curIdx) vals[curIdx] = 0
+          m(n.id).on = false   // a trip cuts a soft stop at once
           const lim = r.currentLimit ?? '?'
-          status[n.id] = { text: 'TRIPPED', tone: 'fault', why: n.kind === 'output'
-            ? `Over ${lim} A: the output trips. ${r.resetMode ? `It tries again after ${(r.resetTime ?? 0) / 1000} s, up to ${r.resetCountLimit} times, then stays off.` : 'It stays off until it is reset.'}`
+          s.trip ??= t
+          // reset mode None latches at once, Count once its retries have run out, Endless never
+          if (n.kind === 'output' && (!r.resetMode || (r.resetMode === 1 && t - s.trip >= (r.resetCountLimit ?? 0) * (r.resetTime ?? 0)))) s.latched = true
+          status[n.id] = { text: s.latched ? 'FAULT' : 'TRIPPED', tone: 'fault', why: n.kind === 'output'
+            ? r.hardShortLimit > 0 ? `Over ${lim} A: the output trips. If it is a dead short (above ${r.hardShortLimit} A) it latches off at once instead, without retrying; a smaller overload ${r.resetMode ? 'retries as set' : 'stays off until it is reset'}.`
+            : `Over ${lim} A: the output trips. ${s.latched ? `It stays off until ${until}.` : r.resetMode ? `It tries again after ${(r.resetTime ?? 0) / 1000} s${r.resetMode === 1 ? `, up to ${r.resetCountLimit} times, then stays off` : ''}.` : ''}`
             : 'Low-side output tripped (simulated).' }
+        } else if (n.kind === 'output' && (m(n.id).uTrip || (f === 'under' && want && r.underLimit > 0))) {
+          // too little current (upstream subs 27-29): after the time, report Undercurrent, or switch off and latch Fault
+          const s = m(n.id); s.underAt ??= t
+          const tripped = s.uTrip || (r.underTrip && t - s.underAt >= (r.underTime ?? 1000))
+          if (tripped) {
+            s.uTrip = true
+            if (onIdx) vals[onIdx] = false; if (ocIdx) vals[ocIdx] = false; if (fIdx) vals[fIdx] = true; if (curIdx) vals[curIdx] = 0
+            status[n.id] = { text: 'TRIPPED', tone: 'fault', why: `Below ${r.underLimit} A for ${r.underTime ?? 1000} ms: the output switched off and latched Fault. It stays off until the module is power-cycled.` }
+          } else {
+            if (onIdx) vals[onIdx] = true; if (ocIdx) vals[ocIdx] = false; if (fIdx) vals[fIdx] = false; if (curIdx) vals[curIdx] = r.underLimit / 2
+            status[n.id] = t - s.underAt < (r.underTime ?? 1000)
+              ? { text: 'ON', tone: 'on', why: `Less than ${r.underLimit} A: reported after ${r.underTime ?? 1000} ms.` }
+              : { text: 'UNDERCURRENT', tone: 'warn', why: `It draws less than its ${r.underLimit} A limit: a bulb out, a pump running dry? It keeps running; the module only reports it.` }
+          }
+        } else if (s.latched) {
+          if (onIdx) vals[onIdx] = false; if (ocIdx) vals[ocIdx] = false; if (fIdx) vals[fIdx] = true; if (curIdx) vals[curIdx] = 0
+          status[n.id] = { text: 'FAULT', tone: 'fault', why: `Latched off after a trip. It stays off until ${until}.` }
         } else if (f === 'open' && want) {
           if (onIdx) vals[onIdx] = true; if (ocIdx) vals[ocIdx] = false; if (fIdx) vals[fIdx] = false; if (curIdx) vals[curIdx] = 0
-          status[n.id] = { text: 'OPEN LOAD', tone: 'warn', why: 'The module drives the output but reads almost no current. Check the plug and the fuse.' }
+          // a PDM output reports Open load only with a "load missing below" limit, once the load has been missing that long
+          const s = m(n.id); s.openAt ??= t
+          if (n.kind === 'output' && !(r.openLoadLimit > 0)) status[n.id] = { text: 'ON', tone: 'on', why: 'It reads almost no current, but no "load missing below" limit is set, so the module reports it as on.' }
+          else if (n.kind === 'output' && t - s.openAt < (r.openLoadTime ?? 1000)) status[n.id] = { text: 'ON', tone: 'on', why: `Almost no current: reported as Open load after ${r.openLoadTime ?? 1000} ms.` }
+          else status[n.id] = { text: 'OPEN LOAD', tone: 'warn', why: 'The module drives the output but reads almost no current. Check the plug and the fuse.' }
         } else {
+          s.trip = undefined
+          // upstream soft stop (output sub 31): a PWM output that was on ramps down for its soft-stop time after its
+          // input turns off, and reports On meanwhile; disabling it (or a trip) cuts at once
+          if (want || !r.enabled || !r.pwmEnabled || !(r.softStopTime > 0)) { s.stopAt = undefined; s.on = want }
+          else if (s.on) { s.stopAt ??= t; if (t - s.stopAt >= r.softStopTime) { s.on = false; s.stopAt = undefined } }
+          if (!want && s.on) {
+            if (onIdx) vals[onIdx] = true; if (ocIdx) vals[ocIdx] = false; if (fIdx) vals[fIdx] = false
+            if (curIdx) vals[curIdx] = nominal ?? null
+            status[n.id] = { text: 'STOPPING', tone: 'on', why: `Its input is off: the duty ramps down over ${r.softStopTime} ms, then it switches off.` }
+            if (wIdx) vals[wIdx] = false; if (olIdx) vals[olIdx] = false; if (ucIdx) vals[ucIdx] = false
+            continue
+          }
           if (onIdx) vals[onIdx] = want; if (ocIdx) vals[ocIdx] = false; if (fIdx) vals[fIdx] = false
           if (curIdx) vals[curIdx] = want ? (nominal ?? null) : 0
-          status[n.id] = { text: want ? 'ON' : 'OFF', tone: want ? 'on' : 'off', why: !r.enabled ? 'The output is disabled.' : !src ? 'It has no input, so it never switches.' : want ? 'Its input is on.' : f ? 'It is off, so the fault has nothing to act on yet.' : 'Its input is off.' }
+          m(n.id).openAt = undefined; m(n.id).underAt = undefined
+          status[n.id] = want && r.warnLimit > 0 && nominal > r.warnLimit
+            ? { text: 'WARNING', tone: 'warn', why: `It draws ${nominal.toFixed(1)} A, above its ${r.warnLimit} A warning limit. It keeps running; the module only reports it.` }
+            : shedNow && r.enabled && truthy(val(src)) ? { text: 'SHED', tone: 'warn', why: 'Its input is on, but the module is shedding loads: it comes back when the shed input goes off.' }
+            : { text: want ? 'ON' : 'OFF', tone: want ? 'on' : 'off', why: !r.enabled ? 'The output is disabled.' : !src ? 'It has no input, so it never switches.' : want ? 'Its input is on.' : f ? 'It is off, so the fault has nothing to act on yet.' : 'Its input is off.' }
         }
+        if (wIdx) vals[wIdx] = status[n.id]?.text === 'WARNING'
+        if (olIdx) vals[olIdx] = status[n.id]?.text === 'OPEN LOAD'
+        if (ucIdx) vals[ucIdx] = status[n.id]?.text === 'UNDERCURRENT'
       } else if (n.kind === 'canoutput' && n.enabled) {
-        status[n.id] = r.input ? { text: 'SENDS ' + fmt(val(r.input)), tone: 'on', why: `Sends ${fmt(val(r.input))} on ${'0x' + Number(r.id ?? 0).toString(16).toUpperCase()} every ${r.interval} ms (simulated, nothing is sent).` }
+        status[n.id] = r.kind > 0 ? { text: r.kind === 1 ? 'COUNTER' : 'CHECKSUM', tone: 'on', why: `Sends ${r.kind === 1 ? 'a rolling counter' : 'a checksum of the frame'} on ${'0x' + Number(r.id ?? 0).toString(16).toUpperCase()} every ${r.interval} ms (simulated, nothing is sent).` }
+          : r.input ? { text: 'SENDS ' + fmt(val(r.input)), tone: 'on', why: `Sends ${fmt(val(r.input))} on ${'0x' + Number(r.id ?? 0).toString(16).toUpperCase()} ${r.triggerInput ? 'each time its trigger turns on' : `every ${r.interval} ms`} (simulated, nothing is sent).` }
           : { text: 'NOTHING', tone: 'warn', why: 'No value to send.' }
       }
     }

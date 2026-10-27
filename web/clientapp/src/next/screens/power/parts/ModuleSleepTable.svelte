@@ -2,14 +2,14 @@
   // Every module: its role in sleeping, live sleep status, last wake (firmware 5.6).
   import { Card, StateDot } from '../../../ui/index.js'
   import { live, hex } from '../../../lib/live.svelte.js'
-  import { sleepStatus, canSleep, wakeWords } from './sleepLogic.js'
+  import { sleepStatus, canSleep, wakeWords, noWakeWords, noSleepWhy } from './sleepLogic.js'
   let { seq } = $props()
   const mods = $derived(live.devices.filter((d) => /pdm|canboard/i.test(d.type ?? '')))
   function role(d) {
     const s = seq.state.perModule[d.guid]
     if (s?.master) return 'Sleep master: keeps the car awake, then says "sleep now"'
     if (s?.follows) return `Sleeps on the master's "sleep now"`
-    if (!canSleep(d)) return d.muteTxInput ? 'Goes quiet on request' : 'Stays awake (firmware older than 5.5.111: no sleep)'
+    if (!canSleep(d)) return d.muteTxInput ? 'Goes quiet on request' : `Stays awake (no sleep: ${noSleepWhy(d)})`
     if (d.sleepEnabled) return `Own auto-sleep, ${Math.round(d.sleepTimeoutMs / 1000)} s`
     return d.forceSleepInput ? 'Sleeps on its sleep input' : 'Stays awake'
   }
@@ -26,7 +26,7 @@
             <td><strong>{d.name}</strong> <span class="muted mono">{hex(d.baseId)}</span></td>
             <td class="muted">{role(d)}</td>
             <td><StateDot tone={st.key} shape={st.key === 'on' ? 'dot' : st.key === 'off' ? 'ring' : 'diamond'} label={st.word} /> <span class="muted">{st.detail}</span></td>
-            <td class="muted">{wakeWords(d) || (d.version && !/^v?0\.0\.0$/.test(d.version) ? 'Needs firmware 5.6' : 'Not reported')}</td>
+            <td class="muted">{wakeWords(d) || noWakeWords(d)}</td>
           </tr>
         {/each}
       </tbody>

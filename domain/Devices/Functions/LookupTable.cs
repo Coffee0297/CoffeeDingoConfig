@@ -12,6 +12,10 @@ namespace domain.Devices.Functions;
 public class LookupTable : IDeviceFunction
 {
     [JsonIgnore] public const int BaseIndex = 0x1A00;
+    // Upstream dingoFW (feat/lookup-tables): same subs at 0x1B00 (its 0x1A00 is the timer).
+    [JsonIgnore] public const int UpstreamBaseIndex = 0x1B00;
+    [JsonIgnore] public const int UpstreamMax = 4;   // feat/more-tables (PDMs); stock feat/lookup-tables has 2
+    public static int BaseFor(string family) => family == FwFamily.Upstream ? UpstreamBaseIndex : BaseIndex;
     [JsonIgnore] public const int AxisMax = 8;
     [JsonPropertyName("name")] public string Name {get; set; }
     [JsonPropertyName("number")] public int Number {get;}
@@ -29,13 +33,15 @@ public class LookupTable : IDeviceFunction
     [JsonIgnore][Plotable(displayName:"Value")] public double Value {get; set;}
 
     [JsonIgnore] public List<DeviceParameter> Params { get; }
+    [JsonIgnore] public List<DeviceParameter> UpstreamParams { get; }
 
     [JsonConstructor]
     public LookupTable(int number, string name)
     {
         Number = number;
         Name = name;
-        Params = InitParams();
+        Params = InitParams(BaseIndex);
+        UpstreamParams = InitParams(UpstreamBaseIndex);
     }
 
     // Same math as the firmware (functions/table.cpp) — used for the live preview in the editor
@@ -64,9 +70,9 @@ public class LookupTable : IDeviceFunction
         return (i, span > 0 ? (v - axis[i]) / span : 0);
     }
 
-    private List<DeviceParameter> InitParams()
+    private List<DeviceParameter> InitParams(int baseIndex)
     {
-        var idx = BaseIndex + (Number - 1);
+        var idx = baseIndex + (Number - 1);
         var list = new List<DeviceParameter>
         {
             new()

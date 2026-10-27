@@ -1,3 +1,4 @@
+import { has } from '../next/screens/hardware/parts/util.js'
 // Templates: ready-made circuits (headlights, washer + wipers, blinkers…) whose inputs can be any signal on
 // the bus and whose outputs any module's output, optionally through a relay. The logic runs on the module
 // that owns most of the outputs (or the one a template pins with `logicOn`); an input from another module
@@ -8,12 +9,13 @@
 // uses the same list.
 //
 // Field types: bool / num = an input signal, out = an output (load: lamp | motor | pump | horn | fan | load),
-// number = a value, op = a comparison, check = a yes/no option. opt = may be left empty.
+// number = a value, op = a comparison, check = a yes/no option, module = a module's guid (where the logic runs;
+// the template's outputs, if any, must be on it). opt = may be left empty.
 // In build(ctx, s) an output is its '<guid>:<n>' value: pass it to ctx.wireOutput / ctx.outName as is.
 
 const And = 0, Or = 1   // BoolOperator
 const OnDelay = 0, OffDelay = 1   // TimerMode (2 = pulse)
-const Eq = 0, Gt = 2    // Operator
+const Eq = 0, Gt = 2, Lt = 3    // Operator
 // Firmware ranges (core/param_defs.h): flasher on/off 0..5000 ms, timer preset 0..3600000 ms. The device
 // NAKs anything out of range, so round + clamp here and "built" means the device really got it.
 const ms = (v, max) => Math.min(max, Math.max(0, Math.round(+v || 0)))
@@ -66,6 +68,15 @@ export const TEMPLATES = [
   { key: 'simple', group: 'accessories', name: 'Simple switched circuit', icon: '🔌', desc: 'One input drives one output directly.',
     fields: [{ k: 'input', t: 'bool', label: 'Driven by' }, { k: 'output', t: 'out', load: 'load', label: 'Output' }],
     build: async (ctx, s) => { await ctx.wireOutput(s.output, +s.input) } },
+  { key: 'backuppump', group: 'accessories', name: 'Backup pump', icon: '⛽', logicOn: 'main',
+    desc: 'The main pump runs from its switch. When it loses its load (open load: dry, unplugged, blown fuse) or faults, the backup pump runs instead while the switch is on. Set a "load missing below" limit on the main pump (Output page, Protection) so the module can see a missing load. The main pump must be a dingoPDM output.',
+    fields: [{ k: 'run', t: 'bool', label: 'Pump switch / demand' }, { k: 'main', t: 'out', load: 'pump', label: 'Main pump' }, { k: 'backup', t: 'out', load: 'pump', label: 'Backup pump' }],
+    build: async (ctx, s) => {
+      const lost = [await ctx.outSignal(s.main, 'Open Load'), await ctx.outSignal(s.main, 'Fault')]
+      if (!lost.some((x) => x > 0)) throw new Error('The main pump needs a dingoPDM output (it reports Open load / Fault)')
+      await ctx.wireOutput(s.main, +s.run)
+      await ctx.wireOutput(s.backup, await ctx.allOf([+s.run, await ctx.anyOf(lost, 'TP MainPumpLost')], 'TP BackupPump'))
+    } },
   { key: 'analog', group: 'accessories', name: 'Analog triggered switch', icon: '📈', desc: 'Output turns on when an analog signal crosses a threshold (creates a Condition).',
     fields: [{ k: 'analog', t: 'num', label: 'Analog signal' }, { k: 'op', t: 'op', label: 'Turn on when it is', def: 2 }, { k: 'thr', t: 'number', label: 'Threshold', def: 0 }, { k: 'output', t: 'out', load: 'load', label: 'Output' }],
     build: async (ctx, s) => { const c = await ctx.condition(+s.analog, +s.op, +s.thr, 'TP ' + ctx.outName(s.output)); await ctx.wireOutput(s.output, c) } },
@@ -246,6 +257,39 @@ TEMPLATES.push(
       await ctx.wireOutput(s.output, on)
       if (s.output2) await ctx.wireOutput(s.output2, on)
     } },
+  { key: 'retryall', group: 'power', name: 'Dash reset button (retry tripped outputs)', icon: '↻',
+    desc: 'A dash or keypad button retries every tripped output on a PDM, without a power cycle. The module allows one retry every 2 s, so a held button does not hammer a short. Needs dingoFW with fault clear.',
+    fields: [{ k: 'pdm', t: 'module', label: 'PDM whose tripped outputs it retries' }, { k: 'button', t: 'bool', label: 'Reset button (keypad button or dash switch)' }],
+    build: async (ctx, s) => { await ctx.retryAll(+s.button) } },
+  { key: 'loadshed', group: 'power', name: 'Load shed (low battery)', icon: '🔋',
+    keepsRule: true,   // its loads keep what drives them now (AND NOT, or the module's opt-in): no take-over
+    desc: 'Switches chosen loads off while the battery stays low (a failing alternator, accessories left on while parked) and back on once it recovers. Priority 1 loads go first; priority 2 and 3 only if the voltage drops further. With dingoFW load shedding the priority-1 loads use the module’s own shed input; otherwise (and for priorities 2-3) each output’s rule gets an AND NOT. The battery condition gets hysteresis where the firmware has it; the delay keeps a short dip from switching loads.',
+    fields: [{ k: 'pdm', t: 'module', label: 'PDM that measures the battery and switches the loads' },
+      { k: 'volts', t: 'number', label: 'Shed priority 1 below (V)', def: 12.0, min: 6, max: 16 },
+      { k: 'back', t: 'number', label: 'Back on above (V)', def: 12.6, min: 6, max: 16 },
+      { k: 'step', t: 'number', label: 'Each further priority sheds this much lower (V)', def: 0.4, min: 0, max: 4 },
+      { k: 'delay', t: 'number', label: 'Only once it has been low for (ms, max 10 min)', def: 10000, min: 0, max: 600000 },
+      ...[1, 2, 3, 4].flatMap((i) => [{ k: 'out' + i, t: 'out', load: 'load', label: i === 1 ? 'Load to shed' : `Load to shed ${i}`, opt: i > 1 },
+        { k: 'pr' + i, t: 'number', label: `Priority of load ${i} (1 = shed first)`, def: 1, min: 1, max: 3 }])],
+    build: async (ctx, s) => {
+      if (+s.back <= +s.volts) throw new Error('“Back on above” must be higher than “Shed priority 1 below”')
+      const loads = [1, 2, 3, 4].filter((i) => !blank(s['out' + i])).map((i) => ({ o: s['out' + i], p: Math.min(3, Math.max(1, Math.round(+s['pr' + i] || 1))) }))
+      for (const x of loads) if (String(x.o).includes(':') && String(x.o).split(':')[0] !== String(s.pdm)) throw new Error(`${ctx.outName(x.o)} is not on the PDM picked: it can only shed its own outputs`)
+      const native = loads.filter((x) => x.p === 1 && ctx.canShed(x.o))
+      const rules = new Map(loads.filter((y) => !native.includes(y)).map((x) => [x, ctx.inputOf(x.o)]))
+      for (const [x, rule] of rules) if (!rule) throw new Error(`${ctx.outName(x.o)} has nothing driving it yet: give it its input first, then add load shedding`)
+      // one battery condition (+ on-delay) per priority used: priority p sheds (p-1) steps lower, released (back - volts) higher
+      const shed = {}
+      for (const p of [...new Set(loads.map((x) => x.p))].sort()) {
+        const v = Math.round((+s.volts - (p - 1) * (+s.step || 0)) * 100) / 100, off = Math.round((v + +s.back - +s.volts) * 100) / 100
+        const low = await ctx.condition(ctx.battery(), Lt, v, `TP Batt low ${p}`, off)
+        shed[p] = +s.delay > 0 ? await ctx.timer(low, OnDelay, +s.delay, `TP Shed ${p}`) : low
+      }
+      for (const [x, rule] of rules) {
+        await ctx.wireOutput(x.o, await ctx.allOf([rule, { v: shed[x.p], not: true }], `TP Keep ${ctx.outName(x.o)}`.slice(0, 31)))
+      }
+      if (native.length) await ctx.shed(shed[1], native.map((x) => x.o))
+    } },
   { key: 'reminder', group: 'lights', name: 'Lights-on reminder', icon: '🔔',
     desc: 'Beeps a buzzer while the lights are on with the ignition off (and the door open, if you pick a door switch).',
     fields: [{ k: 'lights', t: 'bool', label: 'Lights on' }, { k: 'ign', t: 'bool', label: 'Ignition' }, { k: 'door', t: 'bool', label: 'Door switch (only while open)', opt: true },
@@ -253,6 +297,22 @@ TEMPLATES.push(
     build: async (ctx, s) => {
       const warn = await ctx.allOf([+s.lights, { v: +s.ign, not: true }, +s.door || 0], 'TP LightsOn')
       await ctx.wireOutput(s.output, await ctx.flasher(warn, 300, 300, 'TP Chime'))
+    } },
+  // A PI loop on a fixed setpoint (the target): Kp = 100 / (full − target), so P alone gives 100 % at "full";
+  // Ki = Kp / 20 (a slow 20 s integral time, coolant lags) removes the steady error. I is 0..100, no windup at 0 / 100 %.
+  { key: 'pidfan', group: 'cooling', name: 'Fan by coolant temperature (PID)', icon: '🌀', logicOn: 'output',
+    desc: 'The fan speed (PWM duty) holds the coolant at the target temperature: it speeds up as the coolant goes above the target and is at 100 % by the full-speed temperature. If the temperature signal is lost (a CAN frame that stops reads 0) or out of range, the fan runs at 100 %. Needs a module whose firmware has the PID block (a dingoPDM, or a CANBoard from 5.7) and a PWM fan output on that module.',
+    fields: [{ k: 'temp', t: 'num', label: 'Coolant temperature signal' },
+      { k: 'target', t: 'number', label: 'Hold the coolant at', def: 90 }, { k: 'full', t: 'number', label: 'Full speed at', def: 100 },
+      { k: 'ign', t: 'bool', label: 'Ignition (fan only with it on)', opt: true },
+      { k: 'output', t: 'out', load: 'fan', label: 'Fan output (PWM)' }],
+    build: async (ctx, s) => {
+      if (+s.full <= +s.target) throw new Error('“Full speed at” must be above “Hold the coolant at”')
+      const kp = 100 / (+s.full - +s.target)
+      const pid = await ctx.pid({ setpointInput: 0, setpoint: +s.target, processInput: +s.temp, activateInput: ctx.alwaysOn(), feedForward: 0, feedFwdInput: 0,
+        kp, ki: kp / 20, kd: 0, iMin: 0, iMax: 100, outMin: 0, outMax: 100, invert: true, spRate: 0, deadband: 0,
+        pvMin: 1, pvMax: 200, fallback: 100, periodMs: 100 }, 'TP Fan PID', `hold ${s.target}, 100 % by ${s.full}`)
+      await ctx.outputDuty(s.output, pid, +s.ign || ctx.alwaysOn())
     } },
 )
 
@@ -299,9 +359,12 @@ const withAnyOf = (ctx) => Object.assign(ctx, {
 // ---- Preview: run build without touching a module. Every signal is a token (a fake index > 0); every
 // block it would create becomes an op {id, op, name, ins: [node ids], detail}; every output wire a {out, src}.
 // Node ids: 'in:<field>' for a template input, 'on' for Always On, 'op<n>' for a created block.
-const TOK_OP = 100000, TOK_IN = 200000
-export async function previewTemplate(tpl, sel, outName = (o) => 'output ' + o) {
+const TOK_OP = 100000, TOK_IN = 200000, TOK_SIG = 300000
+// caps.canShed(o): output o ('guid:n') can use its module's own load-shed input (see canShedOut)
+export async function previewTemplate(tpl, sel, outName = (o) => 'output ' + o, caps = {}) {
+  let batt
   const ops = [], wires = [], node = new Map([[1, 'on']])
+  let sigs = 0
   const s = { ...sel }
   tpl.fields.forEach((f, i) => { if (isInput(f) && !blank(sel[f.k])) { s[f.k] = TOK_IN + i; node.set(TOK_IN + i, 'in:' + f.k) } })
   const ids = (...xs) => xs.filter((x) => x > 0).map((x) => node.get(x) ?? '?')
@@ -311,13 +374,22 @@ export async function previewTemplate(tpl, sel, outName = (o) => 'output ' + o) 
   }
   const ctx = withAnyOf({
     alwaysOn: () => 1, outName,
+    // module signals and an output's current rule: shown, not created
+    battery: () => (batt ??= op('signal', 'Battery voltage', [], 'module signal')),
+    inputOf: (o) => op('signal', `${outName(o)} rule now`, [], 'kept'),
+    canShed: (o) => !!caps.canShed?.(o),
+    shed: async (src, outs) => { op('loadshed', 'Load shed input', ids(src), 'module setting'); for (const o of outs) wires.push({ out: o, src: ids(src)[0] ?? null, shed: true }) },
     condition: async (input, o, arg, name, argOff = arg) => op('condition', name, ids(input), `${OPS.find((x) => x.v === o)?.t ?? 'op ' + o} ${arg}` + (argOff !== arg ? `, off at ${argOff}` : '')),
     counter: async (c, name) => op('counter', name, ids(c.inc, c.reset), c.wrap && c.max === 1 ? 'toggle' : `count ${c.min}–${c.max}`),
     flasher: async (input, on, off, name) => op('flasher', name, ids(input), `${ms(on, 5000)} / ${ms(off, 5000)} ms`),
     timer: async (input, mode, preset, name) => op('timer', name, ids(input), `${['on-delay', 'off-delay', 'pulse'][mode]} ${ms(preset, 3600000)} ms`),
     virtual: async (c, name) => op('virtual', name, ids(c.v0, c.v1, c.v2), virtualText(c)),
     wireOutput: async (o, src) => { wires.push({ out: o, src: ids(src)[0] ?? null }) },
+    outSignal: async (o) => { const t = TOK_SIG + ++sigs; node.set(t, 'out:' + o); return t },
     setOutputPwm: async (o, { source }) => { wires.push({ out: o, src: ids(source)[0] ?? null, pwm: true }) },
+    retryAll: async (src) => { op('retryall', 'Retry all tripped outputs', ids(src), 'module setting') },
+    pid: async (c, name, detail) => op('pid', name, ids(c.processInput, c.setpointInput), detail ?? 'PID'),
+    outputDuty: async (o, duty) => { wires.push({ out: o, src: ids(duty)[0] ?? null, pwm: true }) },
     wiper: async (cfg) => {
       const id = op('wiper', 'Wiper block', ids(cfg.slowInput, cfg.fastInput, cfg.interInput, cfg.parkInput, cfg.washInput), `${cfg.washWipeCycles} wipes after wash`)
       return { slow: id, fast: id, park: id, inter: id, wash: id, swipe: id }
@@ -331,7 +403,7 @@ const virtualText = (c) => {
   const parts = [t(c.v0, c.not0), t(c.v1, c.not1), t(c.v2, c.not2)].filter(Boolean)
   return parts.length > 1 ? (c.op0 === Or ? 'any of ' : 'all of ') + parts.length : 'pass'
 }
-const ARR = { condition: 'conditions', flasher: 'flashers', timer: 'timers', virtual: 'virtualInputs', counter: 'counters' }
+const ARR = { condition: 'conditions', flasher: 'flashers', timer: 'timers', virtual: 'virtualInputs', counter: 'counters', pid: 'pids' }
 const countNeeds = (ops) => ops.reduce((m, o) => { const a = ARR[o.op]; if (a) m[a] = (m[a] ?? 0) + 1; return m }, {})
 
 // Free-slot shortfalls on the logic module for a preview, e.g. ['2 timers (1 free)']. freed = {arr: n} slots an
@@ -347,7 +419,7 @@ export function shortfalls(need, funcs, freed = {}) {
 
 // Slots an applied instance holds, per module: {guid: {virtualInputs: 2, canInputs: 1, …}} — an edit frees them
 // before it rebuilds, so its preview counts them as free.
-const SLOT_ARR = { virtualinput: 'virtualInputs', condition: 'conditions', flasher: 'flashers', timer: 'timers', counter: 'counters', caninput: 'canInputs' }
+const SLOT_ARR = { virtualinput: 'virtualInputs', condition: 'conditions', flasher: 'flashers', timer: 'timers', counter: 'counters', caninput: 'canInputs', pid: 'pids' }
 export function freedBy(inst) {
   const m = {}
   for (const c of inst?.created ?? []) { const a = SLOT_ARR[c.kind], g = c.guid ?? inst.guid; if (a) { m[g] ??= {}; m[g][a] = (m[g][a] ?? 0) + 1 } }
@@ -375,7 +447,7 @@ export async function liveCtx(env) {
     return i
   }
   const ctx = withAnyOf({
-    created, wired, outName: env.outName ?? ((n) => 'output' + n),
+    created, wired, device: null, outName: env.outName ?? ((n) => 'output' + n),
     alwaysOn: () => vmap.find((v) => v.name === 'Always On')?.index ?? 1,
     // Every field is set: a free slot keeps whatever it held before (a leftover argOff is a hysteresis release
     // point — e.g. argOff 2 on a '> 2500' never lets the output turn off).
@@ -389,11 +461,49 @@ export async function liveCtx(env) {
     timer: (input, mode, preset, name) => make('timer', 'timers', 'State', { input, mode, edge: 0, preset: ms(preset, 3600000), name }),
     virtual: (c, name) => make('virtualinput', 'virtualInputs', 'State', { not0: !!c.not0, var0: c.v0 ?? 0, cond0: c.op0 ?? And, not1: !!c.not1, var1: c.v1 ?? 0, cond1: c.op1 ?? And, not2: !!c.not2, var2: c.v2 ?? 0, mode: 0, name }),
     wireOutput: async (o, src) => { await env.wireOutput(o, src); wired.push(o) },
+    // An output's own signal ('Open Load', 'Fault', ...) on this module; 0 when the module has none.
+    outSignal: async (o, prop) => {
+      const [g, n] = String(o).includes(':') ? String(o).split(':') : [guid, o]
+      return g === guid ? idxOf('output', +n, prop) ?? 0 : 0
+    },
+    battery: () => {
+      const i = vmap.find((v) => v.kind === 'sys' && v.name === 'Battery Voltage')?.index
+      if (i == null) throw new Error('This module has no battery voltage signal: load shedding by battery needs a PDM')
+      return i
+    },
+    inputOf: (o) => env.inputOf?.(o) ?? 0,
+    canShed: (o) => funcs?.device?.shedInput != null && !!env.canShed?.(o),
+    // upstream feat/load-shed: the module's shed input + each output's opt-in; ctx.device keeps the old input for a remove
+    // (the outputs come back from their snapshots)
+    shed: async (src, outs) => {
+      if (funcs?.device?.shedInput == null) throw new Error("This module's firmware has no load-shed input (dingoFW with load shedding, PDMs only)")
+      ctx.device = { shedInput: funcs.device.shedInput }
+      await api.deviceInputs(guid, { shedInput: src })
+      for (const o of outs) await api.outputConfig(guid, { Number: +String(o).split(':')[1], Shed: true })
+    },
     // Configure a CANBoard digital output for variable-duty PWM from an analog source + soft start.
     setOutputPwm: async (o, { source, full, min, freq, on }) => {
       const [g, n] = String(o).includes(':') ? String(o).split(':') : [guid, o]   // the Circuit Builder passes a bare n
       if (!env.isCanboard || g !== guid) throw new Error('PWM-from-analog is wired on CANBoard outputs; for a PDM output set it in the output editor')
       await api.setFunction(guid, 'digitaloutput', +n, { enabled: true, input: on ?? ctx.alwaysOn(), pwmEnabled: true, variableDutyCycle: true, dutyCycleInput: source, dutyCycleDenominator: Math.max(1, Math.round(full / 100)), minDutyCycle: min, frequency: freq, variableFreq: false, freqInput: 0, rampDutyChanges: false, softStartEnabled: true, softStartRampTime: 500 })
+      wired.push(o)
+    },
+    // The module's retry-all signal (upstream fault clear); ctx.device keeps the old value for a remove.
+    retryAll: async (src) => {
+      if (funcs?.device?.retryAllInput == null) throw new Error("This module's firmware has no retry-all input (dingoFW with fault clear, PDMs only)")
+      ctx.device = { retryAllInput: funcs.device.retryAllInput }
+      await api.deviceInputs(guid, { retryAllInput: src })
+    },
+    // A PID block (upstream dingoFW with the PID feature, PDMs only); returns its Output signal.
+    pid: (c, name) => {
+      if (!funcs?.pids) throw new Error('This module has no PID block: it needs a dingoPDM or a CANBoard 5.7 whose firmware has the PID feature')
+      return make('pid', 'pids', 'Output', { ...c, name })
+    },
+    // An output on this module (PDM output, or CANBoard DO on 5.7): on from `on`, PWM with its duty from `duty` (a 0–100 % signal, denominator 1).
+    outputDuty: async (o, duty, on) => {
+      const [g] = String(o).split(':')
+      if (g !== guid || !env.outputDuty) throw new Error('The fan output must be an output on the module that runs the PID')
+      await env.outputDuty(o, duty, on)
       wired.push(o)
     },
     // The native wiper block (a singleton, PDM only).
@@ -438,6 +548,8 @@ export function outputOptions(mods, pinFor, ioTag) {
 // picked). Outputs on other modules follow the logic over CAN.
 export function logicModule(tpl, sel) {
   const g = (k) => String(sel[k]).split(':')[0]
+  const mod = tpl.fields.find((f) => f.t === 'module' && !blank(sel[f.k]))
+  if (mod) return { guid: String(sel[mod.k]) }
   if (tpl.logicOn && !blank(sel[tpl.logicOn])) return { guid: g(tpl.logicOn) }
   const n = new Map()
   for (const f of tpl.fields) if (f.t === 'out' && !blank(sel[f.k])) n.set(g(f.k), (n.get(g(f.k)) ?? 0) + 1)
@@ -455,3 +567,9 @@ export function outputCircuit(side, relay) {
     : { coil: ['OUT', 'GND'], load: ['87', 'GND'], feed30: '+12V fused' }
   return side === 'low' ? { load: ['+12V fused', 'OUT'] } : { load: ['OUT', 'GND'] }
 }
+
+/** Output n of PDM `dev` can be shed by the module's own load-shed input (upstream feat/load-shed: device 0x0000:13
+ *  and output sub 26). Otherwise the load-shed template ANDs NOT into the output's rule. */
+export const canShedOut = (dev, n) => dev?.shedInput != null && has(dev, 0x1000 + n - 1, 26)
+/** previewTemplate / liveCtx caps over the project's modules. */
+export const shedCaps = (devs) => ({ canShed: (o) => { const [g, n] = String(o).split(':'); return canShedOut(devs.find((d) => d.guid === g), +n) } })

@@ -5,7 +5,57 @@ All notable changes to **dingoConfig** are recorded here. Versions follow [SemVe
 
 ## [Unreleased]
 
+## [0.12.0] — 2026-10-27
+
+Supports modules on upstream dingoFW (0.x) and the 5.7 line next to the fork firmware. Needs firmware 5.7.4 for the
+flash-tool base ID marker and the CANBoard ignition frame.
+
+### Added
+- **Upstream dingoFW and the 5.7 line**: per-family params, var map and status frames, the WriteAll / CRC handshake
+  by the module's own settings list, and the 5.7 layout with currents at 0.1 A; a fork project is converted with a
+  report, and a project is renumbered to firmware 5.8 when a module answers it.
+- **Every upstream feature block in the app and the flow builder**: lookup tables, curve, PID (fixed setpoint, fan
+  by coolant as a PI loop), math, latch / gate, CAN message blocks with counter or checksum, CAN outputs on a
+  trigger with counter or checksum, comfort blink, Compare delays and hysteresis, CAN input timeout value, config
+  lock, Lua scripting, wake frame, stay-alive outputs, retain across power-off, digital-input PWM, linear sensor
+  scaling and calibrated switches on analog inputs, CANBoard timers, DO PWM, PID and sleep.
+- **Output protection on upstream modules**: warning and open-load limits, undercurrent trip, hard short limit,
+  soft start with a current limit, soft stop, ramped duty changes, PWM frequency from a signal, wire load, load
+  shedding, latched fault clear, the trip log and fault history, and the trip thresholds drawn against a load.
+- **Ignition**: the ignition block with roles, the 5.7 sync id and status id, Standalone, stop and door inputs,
+  dash power down and sleep delay, a CANBoard as ignition main, and the followers' sync copied from the main.
+- **Firmware page**: update over CAN through the OpenBLT bootloader, upstream .hex images with the start address
+  checked first, a release's FULL image for a blank board over USB-DFU, Flash over SWD with pyOCD (patching the
+  board's base ID into the image, firmware 5.7.4), a bootloader scan that probes every silent module, and a
+  module that comes back on the default ID is put back on its own.
+- **Live and tools**: record the bus and play a log back, force a CAN input from the dashboard, an ECU library
+  (Haltech, Speeduino, rusEFI, EMU Black, MaxxECU), a setup sheet per module, a resource bar per block kind,
+  the CAN input editor decoding test bytes, Apply checks the project first, identify and reset cause from
+  upstream modules, sleep info and the sleep log, and the project folder set from Project > Open.
+- **Tool-present heartbeat**: while the app is on a real adapter it broadcasts 0x5AB every 2 s, so a sleep master
+  that reads it as "in use" keeps every module awake and reachable for as long as the app is connected.
+
 ### Fixed
+- **Update over CAN erased per segment**: OpenBLT erases whole sectors, so an image with a gap inside a sector
+  (the 5.7.4 PDM image) had its second erase wipe what the first segment had written and the read-back failed
+  at 88 %. The whole image span is erased once. A 450 KB image gets 10 minutes, a failed update is logged, and
+  an erase the older sector-6 PDM bootloader refuses says to program the current bootloader.
+- **A Write All over the module's own USB link** is paced to about 1000 frames/s: at full speed the module's
+  param queue overran and the final WriteAllComplete was dropped.
+- **Modules looked connected from a neighbour's frames**: a module only counts as connected from its own frames,
+  a 5.7 PDM claims its appended frames only while that feature is on, and a DBC device only its own ids.
+- **Deploy to the module on USB** works when the project module is not on the bus, never overwrites another
+  module on that ID, and the hardware tab warns when the module on USB answers on an ID no module has.
+- **A re-opened 5.7 project keeps its values**: the Read before a write learns the module's settings list and
+  keeps the file; a module added fresh on 5.7 starts from the firmware's defaults.
+- CAN id checks: a module's own CAN outputs on one id are one frame, 5.7 PDMs 0x20 apart no longer clash, and
+  the car's ECU frames in the OBD-II range are not called a clash.
+- Apply waits up to 130 s for a module's write and Lua read-back; a Lua script over the module's space is refused
+  before it lands in the project; a Lua upload waits until the module has stored it.
+- Floats read from a module keep their own digits; a CAN output's factor and offset read as the firmware applies
+  them; output PWM frequency on upstream is 16 to 400 Hz; the CAN log recorder writes culture-invariant times.
+- Phone layouts for the module page and Find on CAN; the played-back log shows its own file name; the Unlock
+  dialog shows a wrong password.
 - **NOR in the flow builder**: its simulator and hint now treat NOR as a real NOR (on only when none are on), as
   firmware 5.6.6 does. Older firmware treats it as NAND; the hint says so.
 - **A module wired to the master's "Sleep · awake" over CAN never slept**: the master goes quiet the moment "awake"

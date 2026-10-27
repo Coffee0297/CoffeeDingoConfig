@@ -1,14 +1,17 @@
 <script>
+  import { untrack } from 'svelte'
   // Output roles: what each output does when the ignition changes. A role is the output's input set to one of
   // its module's ignition signals (firmware 5.6 var map: Ignition, Accessory, Cranking, Dash, Ready) or to
   // Always On; anything else is Custom (the output's own rule). Accessory is already off while cranking in the
   // firmware, so no extra starter-disable is needed. Backed by GET /devices/{id}/inputs and POST /outputconfig.
+  // Firmware 5.7 PDMs have their own output roles (0x1E00 sub 0x30 + output: Ignition / Accessory / Dash / Starter,
+  // overriding the output's input while the Ignition block is on): those four are set there (POST /function/ignition/1).
   import { Page, PageHeader, Banner, Card, FwBadge, Button, Chip } from '../../ui/index.js'
   import { href } from '../../router.svelte.js'
   import { live, hex, api, mutate, toast, project } from '../../lib/live.svelte.js'
   import Confirm from './parts/Confirm.svelte'
   import { pinFor } from '../../../lib/pinmap.js'
-  import { olderThan } from '../hardware/parts/util.js'
+  import { lacks, isUpstream, has } from '../hardware/parts/util.js'
 
   // role -> the var-map property it follows ('always' = sys Always On, index 1)
   const ROLES = [
@@ -20,7 +23,7 @@
     { r: 'Always on', prop: 'always', what: 'Never switched by the ignition.' },
   ]
   const pdms = $derived(live.devices.filter((d) => /pdm/i.test(d.type ?? '')))
-  const newFw = $derived(pdms.filter((d) => !olderThan(d.version, [5, 6, 0])))
+  const newFw = $derived(pdms.filter((d) => !lacks(d, [5, 6, 0], 0x1E00)))
   const total = $derived(pdms.reduce((n, d) => n + (d.outputs?.length ?? 0), 0))
   const versions = $derived([...new Set(pdms.map((d) => d.version).filter(Boolean))].join(', ') || 'unknown')
   const spec = (d, o) => {
@@ -28,8 +31,9 @@
     return [p?.label, o.currentLimit ? `${o.currentLimit} A` : ''].filter(Boolean).join(' · ')
   }
 
-  // ignition var indexes per module: { prop -> index }
-  let idx = $state({}), loadedFor = ''
+  const FW_ROLE = { Ignition: 1, Accessory: 2, Dash: 3, Starter: 4 }
+  // ignition var indexes per module: { prop -> index }; 5.7 output roles per module (null: the module has none)
+  let idx = $state({}), fwRoles = $state({}), loadedFor = ''
   $effect(() => {
     const key = newFw.map((d) => d.guid).join(',')
     if (key === loadedFor) return
@@ -39,8 +43,11 @@
       for (const v of vars ?? []) if (v.kind === 'ignition') m[v.prop] = v.index
       idx[d.guid] = m
     }).catch(() => {})
+    untrack(() => { for (const d of newFw.filter((d) => isUpstream(d) && has(d, 0x1E00, 0x30))) api.functions(d.guid).then((fn) => { fwRoles[d.guid] = fn?.ignition?.outputRoles ?? null }).catch(() => {}) })   // keyed on the guids only
   })
   const roleOf = (d, o) => {
+    const fr = fwRoles[d.guid]?.[o.number - 1]
+    if (fr) return Object.keys(FW_ROLE).find((k) => FW_ROLE[k] === fr) ?? ''
     const m = idx[d.guid]
     if (!m || !o.inputVal) return ''
     return ROLES.find((x) => m[x.prop] === o.inputVal)?.r ?? ''
@@ -51,6 +58,16 @@
 
   async function setRole(d, o, value) {
     if (value === '') return
+    const roles = fwRoles[d.guid]
+    if (roles) {
+      // 5.7: the module's own role for the four ignition roles; anything else clears it and goes through the input
+      const next = [...roles]
+      next[o.number - 1] = FW_ROLE[value] ?? 0
+      if (next[o.number - 1] !== roles[o.number - 1])
+        await mutate(async () => { await api.setFunction(d.guid, 'ignition', 1, { outputRoles: next }); fwRoles[d.guid] = next; if (FW_ROLE[value]) await api.outputConfig(d.guid, { Number: o.number, Enabled: true }) },
+          FW_ROLE[value] ? `${o.name || 'Output ' + o.number} is now ${value}` : `${o.name || 'Output ' + o.number}: ignition role cleared`)
+      if (FW_ROLE[value]) return
+    }
     const target = value === 'none' ? 0 : idx[d.guid]?.[ROLES.find((x) => x.r === value)?.prop]
     if (target == null) return
     const what = value === 'none' ? `${o.name || 'Output ' + o.number}: no input` : `${o.name || 'Output ' + o.number} is now ${value}`
@@ -93,9 +110,9 @@
   <div class="cols">
     <div class="mods">
       {#each pdms as d (d.guid)}
-        {@const old = olderThan(d.version, [5, 6, 0])}
+        {@const old = lacks(d, [5, 6, 0], 0x1E00)}
         <Card title={d.name} subtitle={hex(d.baseId)} aria-label={`${d.name} outputs`}>
-          {#snippet actions()}{#if old}<FwBadge version="5.6" />{/if}{/snippet}
+          {#snippet actions()}{#if old}<FwBadge version="5.6" upstream={isUpstream(d)} />{/if}{/snippet}
           {#if !d.outputs?.length}<p class="muted">No outputs read from this module yet.</p>{/if}
           <ul class="rows" data-testid={`roles-${d.name}`}>
             {#each d.outputs ?? [] as o (o.number)}
@@ -128,7 +145,7 @@
             <div><dt><strong>{x.r}</strong> <Chip tone="muted">used by {counts[x.r] ?? 0}</Chip></dt><dd class="muted">{x.what}</dd></div>
           {/each}
         </dl>
-        <p class="muted">A role sets the output's input; changing it on the output's own page later makes it Custom again.</p>
+        <p class="muted">A role sets the output's input; changing it on the output's own page later makes it Custom again.{#if Object.values(fwRoles).some(Boolean)} On firmware 5.7 Ignition, Accessory, Dash and Starter are the module's own output roles instead: they override the output's input while the Ignition block is on.{/if}</p>
       </Card>
       <Button href={href('power', 'ignition')}>Back to ignition setup</Button>
     </div>

@@ -9,9 +9,13 @@ namespace web.Api;
 /// to it at startup when asked to, and reconnects when the link drops on its own. A Disconnect from the user
 /// stops the reconnecting until the next Connect.
 /// </summary>
-public sealed class ConnectionKeeper(ICommsAdapterManager adapters, UserPreferencesManager prefs, ILogger<ConnectionKeeper> log) : BackgroundService
+public sealed class ConnectionKeeper(ICommsAdapterManager adapters, UserPreferencesManager prefs, ConfigFileManager cfg, ILogger<ConnectionKeeper> log) : BackgroundService
 {
     private volatile bool _wanted;          // the user asked for a connection and has not disconnected since
+    // "Tool present" heartbeat: while the app is on a real adapter it broadcasts this frame every loop tick, so a
+    // sleep master can count the tool as "in use" (a CAN input on 0x5AB, timeout a few seconds) and the whole car
+    // stays awake and reachable while the app is connected, whichever module carries the USB cable.
+    public const int ToolPresentId = 0x5AB;
     private readonly SemaphoreSlim _gate = new(1, 1);
 
     // Lost = the adapter manager dropped the adapter (it does on a closed port / socket). Not IsConnected: an
@@ -34,6 +38,8 @@ public sealed class ConnectionKeeper(ICommsAdapterManager adapters, UserPreferen
             if (r.Ok)
             {
                 _wanted = true;
+                // a log replay is not the car: keep the car's connection as the one to come back to
+                if (adapter == "Sim") return r;
                 var p = prefs.Preferences;
                 // "USB" keeps no port: it is looked up again on every connect (the COM number can change)
                 p.SelectedAdapter = adapter; p.SelectedPort = adapter == "USB" ? "" : port; p.SelectedBitrate = bitrate;
@@ -76,6 +82,7 @@ public sealed class ConnectionKeeper(ICommsAdapterManager adapters, UserPreferen
     protected override async Task ExecuteAsync(CancellationToken ct)
     {
         prefs.Initialize();
+        cfg.WorkingDirectory = prefs.Preferences.WorkingDirectory;   // the project folder the preferences name (default Documents\dingoConfig)
         var p = prefs.Preferences;
         if (p.AutoConnect && p.SelectedAdapter is { } a)
         {
@@ -86,6 +93,18 @@ public sealed class ConnectionKeeper(ICommsAdapterManager adapters, UserPreferen
         while (!ct.IsCancellationRequested)
         {
             try { await Task.Delay(2000, ct); } catch (OperationCanceledException) { return; }
+            if (adapters.ActiveAdapter is { IsConnected: true } live && adapters.GetStatus().activeAdapter != "Sim")
+            {
+                try { await live.WriteAsync(new domain.Models.CanFrame(ToolPresentId, 8, [1, 0, 0, 0, 0, 0, 0, 0]), ct); }
+                catch (Exception e) { log.LogDebug("Tool-present frame not sent: {Msg}", e.Message); }
+            }
+            // The module on USB is asked for its id once, at connect. Still booting then (the reconnect after a DFU
+            // update) it gave none, every PDM looked CAN-only and its update went over CAN: ask until it answers.
+            if (!Lost && adapters.GatewayBaseId is null && prefs.Preferences.SelectedAdapter == "USB")
+            {
+                try { if (await adapters.ReidentifyAsync(ct) is int gw) log.LogInformation("Module on USB answers at 0x{Id:X3}", gw); }
+                catch (Exception e) { log.LogDebug("USB identify failed: {Msg}", e.Message); }
+            }
             if (!Reconnecting || prefs.Preferences.SelectedAdapter is not { } adapter) continue;
             try
             {

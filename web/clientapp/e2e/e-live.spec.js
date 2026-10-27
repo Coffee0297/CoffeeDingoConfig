@@ -32,7 +32,8 @@ test('dashboard shows car, output and signal tiles from live data', async ({ pag
   // the same enabled signals the API reports (non-output kinds) are on the dashboard
   const d = await devs()
   let enabled = 0
-  for (const m of d) enabled += (await apiJson('GET', `/api/devices/${m.guid}/signals`)).filter((s) => s.enabled !== false && s.kind !== 'Output').length
+  // an ECU (DBC) keeps its signals under Show hidden (it can hold thousands)
+  for (const m of d.filter((x) => !/dbc/i.test(x.type))) enabled += (await apiJson('GET', `/api/devices/${m.guid}/signals`)).filter((s) => s.enabled !== false && s.kind !== 'Output').length
   await expect(page.getByRole('region', { name: 'Switches and signals' }).getByTestId('tile')).toHaveCount(enabled, { timeout: 10_000 })
   // outputs that are on
   const on = d.filter((m) => m.connected).flatMap((m) => m.outputs).filter((o) => o.enabled !== false && (o.state === 'On' || o.current > 0.05)).length

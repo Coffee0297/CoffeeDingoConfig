@@ -132,9 +132,12 @@ test('press test sees a change on the pin and the live state follows it', async 
 })
 
 test('used-by lists the functions that read an input', async ({ page }) => {
-  // PDM-05 CAN input 6 ("Sleep now") feeds the module's mute-TX signal, so the list must name it.
+  // The PDM-05 CAN input that feeds the module's mute-TX signal (CAN input 7 "Sleep · master quiet" in the Ranchero
+  // project; looked up, not hard-coded, since the var number differs between the fork and the 5.7 layout), so the list must name it.
   const p5 = await deviceByName('PDM-05')
-  await open(page, `hardware/module/${p5.guid}/input/caninput/6`)
+  const mute = (await apiJson('GET', `/api/devices/${p5.guid}/inputs`)).find((v) => v.index === p5.muteTxInput && v.kind === 'caninput')
+  expect(mute, 'PDM-05 mutes on one of its CAN inputs').toBeTruthy()
+  await open(page, `hardware/module/${p5.guid}/input/caninput/${mute.number}`)
   await expect(page.getByTestId('used-by')).toContainText('Car sleep')
   await page.getByTestId('used-by').getByRole('link').first().click()
   await expect(page).toHaveURL(new RegExp(`functions/flow/${p5.guid}`))

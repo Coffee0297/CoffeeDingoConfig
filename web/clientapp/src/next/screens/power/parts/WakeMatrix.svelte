@@ -2,7 +2,7 @@
   // Wake sources per module: one tick per digital input (a bit of wakeDigInputMask) + CAN activity.
   import { Card, StateDot } from '../../../ui/index.js'
   import { live, hex, toast } from '../../../lib/live.svelte.js'
-  import { SUB, canSleep, digCount, writeParams } from './sleepLogic.js'
+  import { SUB, canSleep, digCount, writeParams, noSleepWhy, lastWake } from './sleepLogic.js'
 
   const mods = $derived(live.devices.filter((d) => /pdm|canboard/i.test(d.type ?? '')))
   const maxDi = 8
@@ -13,7 +13,7 @@
     const newMask = kind === 'di' ? (on ? mask | (1 << bit) : mask & ~(1 << bit)) : mask
     const newCan = kind === 'can' ? on : d.wakeOnCan !== false
     if ((d.sleepEnabled || d.forceSleepInput) && newMask === 0 && !newCan) {
-      toast(`${d.name} would have no way to wake up except USB. Keep at least one input or CAN activity ticked.`, 'error', 9000)
+      toast(`${d.name} would have no way to wake up except ${lastWake(d)}. Keep at least one input or CAN activity ticked.`, 'error', 9000)
       el.checked = !on
       return
     }
@@ -23,7 +23,7 @@
     if (!ok) el.checked = !on
     if (ok) status = `${d.name}: ${kind === 'di' ? `DI${bit + 1}` : 'CAN activity'} ${on ? 'now wakes' : 'no longer wakes'} the module.`
   }
-  const why = (d) => !canSleep(d) ? 'No sleep in this firmware (a CANBoard sleeps from 5.5.111): no wake sources.' : !d.connected ? 'Not on the bus. Connect it to change this.' : ''
+  const why = (d) => !canSleep(d) ? `Cannot sleep: ${noSleepWhy(d)}. No wake sources.` : !d.connected ? 'Not on the bus. Connect it to change this.' : ''
 </script>
 
 <Card title="Wake sources, per module" subtitle="A sleeping module wakes when any ticked source happens. USB always wakes it." aria-label="Wake sources">

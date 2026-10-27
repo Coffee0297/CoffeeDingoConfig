@@ -2,9 +2,10 @@
 // Tests that really flash are tagged @exclusive (the lead runs them alone, with release files in E2E_SREC_DIR).
 import { test, expect } from '@playwright/test'
 import { open, watchErrors } from './helpers.js'
-import { apiJson, deviceByName, waitFor } from './api.js'
+import { apiJson, deviceByName, waitFor, API, SIM_MCP } from './api.js'
 
-const srec = (name) => ({ name, mimeType: 'application/octet-stream', buffer: Buffer.from('S00F000068656C6C6F202020202000003C\nS9030000FC\n') })
+// one data record at the bootloader app start 0x08004000: an image the CAN path takes (one without data has no start address)
+const srec = (name) => ({ name, mimeType: 'application/octet-stream', buffer: Buffer.from('S00F000068656C6C6F202020202000003C\nS3090800400000000000AE\nS70508004000B2\n') })
 const idle = async () => {
   const [a, b] = [await apiJson('GET', '/api/flash-can/status'), await apiJson('GET', '/api/flash/status')]
   return !a.busy && !b.busy
@@ -36,7 +37,7 @@ test('firmware: files are matched to boards by name; update buttons stay off unt
   await expect(page.getByTestId('fw-file-list')).toContainText('canboard-v5-9-0.srec')
   await expect(page.getByTestId('fw-status-CB-2')).toHaveText('Ready: canboard-v5-9-0.srec')
   await expect(page.getByTestId('fw-update-CB-2')).toBeEnabled()
-  await expect(page.getByTestId('fw-status-PDM-02')).toContainText('No .srec file for a dingoPDM')
+  await expect(page.getByTestId('fw-status-PDM-02')).toContainText(/No \.srec (or \.hex )?file for a dingoPDM/)   // over CAN a .hex fits too
   await expect(page.getByTestId('fw-update-PDM-02')).toBeDisabled()
   // a PDM file at the version the PDMs already run: skipped
   const v = (await deviceByName('PDM-02')).version.replace(/^v/, '').replaceAll('.', '-')
@@ -106,7 +107,8 @@ test('firmware: a refused image shows the failure and that the module is safe @e
   await page.getByTestId('fw-update-CB-2').click()
   await page.getByTestId('confirm-go').click()
   await expect(page.getByTestId('fw-status-CB-2')).toContainText(/Failed|Link lost/, { timeout: 180_000 })
-  await expect(page.getByTestId('fw-status-CB-2')).toContainText('stays in its bootloader and is safe')
+  // refused before the module was touched (5.7: too small) says nothing was sent; a failure during the update, that the module is safe
+  await expect(page.getByTestId('fw-status-CB-2')).toContainText(/stays in its bootloader and is safe|Nothing was sent: the module runs its firmware as before/)
   // the module must come back
   await waitFor(async () => (await deviceByName('CB-2')).connected, 120_000, 'CB-2 back on the bus')
 })
@@ -151,7 +153,7 @@ test('firmware: update all over CAN with real release files @exclusive', async (
 test('firmware: the release list loads a release\'s files through the backend and checks each image (G7)', async ({ page }) => {
   test.setTimeout(180_000)
   const errors = watchErrors(page)
-  const r = await fetch('http://127.0.0.1:5000/api/firmware/releases').then((x) => x.json()).catch(() => null)
+  const r = await fetch(API + '/api/firmware/releases').then((x) => x.json()).catch(() => null)
   test.skip(!r?.releases?.length, 'no release list: GitHub not reachable and none saved')
   // the page picks the newest proper release by version number
   const num = (v) => v.split('.').map(Number)
@@ -181,7 +183,9 @@ test('firmware: the release list loads a release\'s files through the backend an
   // each image was checked: the PDM .srec fits the dingoPDMs of the project
   const pdmSrec = want.find((i) => i.board === 'dingoPDM' && i.kind === 'srec')
   if (pdmSrec) await expect(list.locator('li').filter({ hasText: pdmSrec.name })).toContainText(devs.find((d) => d.type === 'dingoPDM').name)
-  await expect(page.getByTestId('fw-check-problem')).toHaveCount(0)
+  // modules on the 5.7 line and a fork 5.6.x release: the only problem named is the layout switch (settings do not carry over)
+  const probs = await page.getByTestId('fw-check-problem').allInnerTexts()
+  expect(probs.filter((p) => !/settings do not carry over/.test(p))).toEqual([])
   // the images are kept on this PC now
   const again = await apiJson('GET', '/api/firmware/releases')
   expect(again.releases.find((x) => x.tag === rel.tag).images.filter((i) => want.some((w) => w.name === i.name)).every((i) => i.cached)).toBe(true)
@@ -190,7 +194,7 @@ test('firmware: the release list loads a release\'s files through the backend an
 
 test('firmware: the image check names an image without a board marker (G7)', async () => {
   const body = 'S00F000068656C6C6F202020202000003C\nS1130000000102030405060708090A0B0C0D0E0F74\nS9030000FC\n'
-  const c = await fetch('http://127.0.0.1:5000/api/firmware/check?name=dingopdm_v7_FW_v5-5-112.srec', { method: 'POST', body }).then((x) => x.json())
+  const c = await fetch(API + '/api/firmware/check?name=dingopdm_v7_FW_v5-5-112.srec', { method: 'POST', body }).then((x) => x.json())
   expect(c.board).toBe('dingoPDM'); expect(c.version).toBe('5.5.112'); expect(c.kind).toBe('srec')
   expect(c.problems.join(' ')).toMatch(/no board marker/)
   expect(c.modules.length).toBeGreaterThan(0)
@@ -198,7 +202,7 @@ test('firmware: the image check names an image without a board marker (G7)', asy
 
 // Sim module reset through the Sim's MCP endpoint (cleanup only)
 async function simReset(module) {
-  await fetch('http://127.0.0.1:8787/mcp', { method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'application/json, text/event-stream' },
+  await fetch(SIM_MCP, { method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'application/json, text/event-stream' },
     body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'sim_renode', arguments: { cmd: 'reset', module } } }) }).catch(() => {})
 }
 

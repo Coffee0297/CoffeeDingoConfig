@@ -4,6 +4,7 @@
   import { Card, Banner, Checkbox, Field, Segmented, Select } from '../../../../ui/index.js'
   import { remoteItems, resolveRemote, isRemoteKey } from '../../../../lib/remote.js'
   import { COLORS, pad4, write } from './keypadLogic.js'
+  import { upstreamHas } from '../util.js'
   let { pad, btn, signals = [], onchanged } = $props()
 
   const colorItems = COLORS.map((c, i) => ({ value: String(i), label: c }))
@@ -48,6 +49,10 @@
   <Field label="Name on the keypad face" bind:value={name} disabled={busy} onfocus={() => (editing = true)} onblur={() => (editing = false)} onchange={(v) => v !== btn.name && save({ name: v }, `Named “${v}”.`)} data-testid="btn-name" />
   <div class="f"><span class="nx-label" id="act-l">What it does</span>
     <Segmented label="Button action" items={[{ value: '0', label: 'Momentary', sub: 'on while held' }, { value: '1', label: 'Toggle', sub: 'press on, press off' }]} value={String(btn.mode)} disabled={busy} onchange={(v) => Number(v) !== btn.mode && save({ mode: Number(v) }, `Action set to ${v === '1' ? 'toggle' : 'momentary'}.`)} data-testid="btn-action" /></div>
+  <!-- upstream dingoFW feat/retain-values (sub 22): a toggled state kept across power-off -->
+  {#if btn.mode === 1 && upstreamHas(pad.pdm, 0x3100 + (pad.slot - 1) * 32 + btn.number - 1, 22)}
+    <Checkbox label="Keep across power-off" hint="comes back as it was after the ignition was off or the module slept" checked={!!btn.retain} disabled={busy} onchange={(v) => save({ retain: v }, v ? 'Kept across power-off.' : 'Starts off after power-off.')} data-testid="btn-retain" />
+  {/if}
 
   <h3>LED: colour and signal for each state</h3>
   <p class="muted note">The first state whose signal is true wins. State 0 shows when nothing else does.</p>

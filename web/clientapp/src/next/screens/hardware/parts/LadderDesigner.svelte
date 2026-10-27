@@ -4,7 +4,7 @@
   import { Card, Button, Segmented, Stepper, Field, Checkbox, Banner } from '../../../ui/index.js'
   import { nodeVoltageMv, resistorForMv, nearestStandard, recommendResistors, recommendPullup, supplyCurrentMa, decodePoints, autoTolerance, NO_POS, R_IN } from '../../../../lib/ladder.js'
 
-  let { rot = $bindable(), liveMv = null, online = false, steady = false, capture = true } = $props()
+  let { rot = $bindable(), liveMv = null, online = false, steady = false, capture = true, maxPos = 10 } = $props()
 
   const VSUP = 5000
   const RPU = recommendPullup({ vsupMv: VSUP })     // fixed on the board: 470 ohm
@@ -26,7 +26,7 @@
     cal = 0
   }
   function setCount(n) {
-    n = Math.max(2, Math.min(10, Math.round(Number(n) || 2)))
+    n = Math.max(2, Math.min(maxPos, Math.round(Number(n) || 2)))
     const rows = rot.rows.slice(0, n)
     while (rows.length < n) rows.push(mkRow('Position ' + rows.length, Infinity))
     rot.rows = rows; rot.n = n
@@ -71,7 +71,7 @@
 
 <Card title="Positions" subtitle={`pull-up ${RPU} Ω to 5 V · each position switches one resistor to ground · the last one is open`} aria-label="Resistor ladder designer">
   <div class="top">
-    <Stepper label="Number of positions" bind:value={rot.n} min={2} max={10} step={1} onchange={setCount} data-testid="numpos" />
+    <Stepper label="Number of positions" bind:value={rot.n} min={2} max={maxPos} step={1} onchange={setCount} data-testid="numpos" />
     <div class="pre"><span class="nx-label">Start from</span>
       <Segmented label="Start from" items={PRESETS} bind:value={preset} onchange={applyPreset} data-testid="ladder-preset" />
     </div>

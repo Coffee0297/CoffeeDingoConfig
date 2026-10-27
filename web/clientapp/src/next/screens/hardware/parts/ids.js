@@ -14,12 +14,13 @@ export const hexId = (n) => '0x' + Number(n).toString(16).toUpperCase().padStart
 
 /** The first other module whose frame span overlaps `type` at `base` (null when free). */
 export function clashOf(devices, selfGuid, type, base) {
-  const after = spanAfter(type)
-  return (devices ?? []).find((x) => x.guid !== selfGuid && isModule(x.type) && x.baseId - ID_BEFORE <= base + after && base - ID_BEFORE <= x.baseId + spanAfter(x.type)) ?? null
+  const after = spanAfter(type, (devices ?? []).find((x) => x.guid === selfGuid))
+  // a clash shares an id; the guard below base only steers the suggested bases (a 5.7 PDM fills its whole 0x20 slot)
+  return (devices ?? []).find((x) => x.guid !== selfGuid && isModule(x.type) && x.baseId <= base + after && base <= x.baseId + spanAfter(x.type, x)) ?? null
 }
 
-/** The span a module takes: "0x680 to 0x69D". */
-export const spanText = (type, base) => `${hexId(base)} to ${hexId(base + spanAfter(type))}`
+/** The span a module takes: "0x680 to 0x69D". `dev`: the module, for what it really sends (a 5.7 PDM up to +36). */
+export const spanText = (type, base, dev = null) => `${hexId(base)} to ${hexId(base + spanAfter(type, dev))}`
 
 /** Up to `count` free base IDs for a module of `type`, on 0x10 boundaries. `reserve` keeps 0x7DF-0x7EF free (OBD-II). */
 export function freeBases(devices, selfGuid, type, { reserve = true, count = 3, busy = null } = {}) {
@@ -61,9 +62,11 @@ export const typeName = (d) => d?.type ?? 'Module'
 
 /** Firmware text: the Sim and unconnected modules report v0.0.0, which is not a real version. */
 export function fwText(d) {
-  const v = d?.version
-  if (!v || /^v?0\.0\.0$/.test(v)) return d?.connected ? 'not reported' : 'unknown'
-  return v.replace(/^v/, '')
+  // not answering: what it reported last time, saved in the project (the live version is whoever answered on its ID
+  // earlier in this session, which may be another module that was re-addressed since)
+  if (!d?.connected) return d?.lastFirmware ? `${d.lastFirmware.replace(/^v/, '')} (last seen)` : 'unknown'
+  const v = d.version
+  return !v || /^v?0\.0\.0$/.test(v) ? 'not reported' : v.replace(/^v/, '')
 }
 
 /** Next free default name: "PDM-06", "CB-3". */

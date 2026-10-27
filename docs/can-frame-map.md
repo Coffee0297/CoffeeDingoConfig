@@ -55,6 +55,33 @@ fork kept its numbering and added per-input wake masks; upstream `development` r
 | 12  | wakeDigInputMask (one bit per digital input)                  | —                                        |
 | 13  | wakeOnCan                                                     | —                                        |
 
+dingoConfig speaks both: a module whose Version reply has major 0 is *upstream*. Its status frames differ from
+this fork's: PDM currents (Msg 0 total, Msg 1–2 per output) are **1 A/bit**, not 0.1 A; Msg 0 bits 2–7 and
+Msg 3 byte 7 are 0; Msg 27–29 (+29..+31) are the timers (byte 0 outputs, byte 1 running; then elapsed per
+timer, u16 in 10 ms) instead of the table outputs; CAN-input value frames use the input's own byte order.
+With upstream feat/wire-load (output param sub 33) a PDM also sends Msg 30 at `base+32` while any output has a wire
+time constant: bytes 0-7 = wire load % of outputs 1-8 (u8, saturates at 255). That is the next module's `base+0` at
+0x20 spacing, so the app counts it in such a module's ID span.
+Upstream with lookup tables (params 0x1B00, feat/lookup-tables) adds Msg 30 (`base+32`): table 1-2 as float32 LE,
+sent while a table is enabled, so such a PDM spans `base+32` and no longer fits a 0x20 spacing. With 4 tables
+(feat/more-tables) Msg 31 (`base+33`) carries tables 3-4 the same way, sent while table 3 or 4 is enabled.
+The upstream CANBoard has no DO duty frame and no timers; its other frames match the fork's.
+With `feat/ignition-block`, an enabled *main* module sends the ignition state as Msg 30 = base + 32 (PT-DPDM Msg 31 =
+base + 33), `['I', state, flags]` as on the fork; at 0x20 spacing that is the next module's base id, so space an
+upstream main at least 0x30 below its neighbour (the Modules page flags the clash).
+
+Each of those branches puts its frame at Msg 30 (`base+32`) on its own. When a firmware has several of them, each
+takes the next index in this order: wire load, tables 1-2, tables 3-4, PID, ignition state; a feature the module
+lacks (its param list) takes none. integration/all-features (dingopdm_v7 / -Max): wire load +32, tables 1-2 +33,
+tables 3-4 +34, PID +35, ignition +36 (pt-dpdm4 one higher), so a follower's main state id there is the main's
+base + 36. The app derives the offsets the same way (PdmDevice.UpstreamFrames, canids.js spanAfter).
+
+Firmware 5.7 (the fork line rebuilt on integration/all-features) uses this upstream layout (the app treats a Version
+reply >= 5.7 like 0.x), with currents at 0.1 A/bit as on the fork. Its CANBoard has the ignition block: a main sends
+its state as Msg 10 = `base+12` (followers copy that id), PID 1 / 2 outputs go out as Msg 11 = `base+13` (int16 x10 LE, bytes
+0-1 / 2-3, only while a PID is enabled), and its app starts at 0x08002000 behind the 8 KB bootloader. Its var map has 121
+entries: DI PWM duty / Hz 79-94 after the timers, analog scaled 95-99, math 100-103, ignition 104-110, comfort 111-112, PID 113-120.
+
 ---
 
 ## dingoPDM (and -Max / PT-DPDM)

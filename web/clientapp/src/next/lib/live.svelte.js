@@ -6,7 +6,7 @@ import { toast } from '../../lib/toast.js'
 export { api, toast }
 
 /** Live telemetry, ~10 Hz: { connected, reconnecting, adapter, programmingAllowed, canTotal, canRate, ids, devices[], agentPending } */
-export const live = $state({ connected: false, reconnecting: false, agentPending: 0, agentPendingId: null, adapter: null, programmingAllowed: true, canTotal: 0, canRate: 0, ids: [], devices: [], stale: false })
+export const live = $state({ connected: false, reconnecting: false, agentPending: 0, agentPendingId: null, adapter: null, programmingAllowed: true, canTotal: 0, canRate: 0, ids: [], devices: [], stale: false, usbBaseId: null })
 /** SignalR feed state: 'live' | 'reconnecting' | 'down' */
 export const hub = $state({ state: 'live' })
 
@@ -19,6 +19,7 @@ telemetry.subscribe((t) => {
   live.canRate = t.canRate ?? 0
   live.ids = t.ids ?? []
   live.devices = t.devices ?? []
+  live.usbBaseId = t.usbBaseId ?? null   // the base ID the module on USB answers on
   live.stale = !!t.stale
   live.reconnecting = !!t.reconnecting   // G10: the backend is trying the adapter again
   live.agentPending = t.agentPending ?? 0   // G22: AI agent requests waiting for an answer
@@ -77,15 +78,18 @@ export function device(key) {
 /** Module live state for display: { key, word, shape } — never colour alone. */
 export function moduleState(d) {
   if (!live.connected) return { key: 'stale', word: 'No connection', shape: 'ring' }
+  // the module on USB answers there even while it sends no telemetry (its mute input is on)
+  if (!d?.connected && d?.isGateway) return { key: 'off', word: 'On USB · quiet', shape: 'ring' }
   if (!d?.connected) return { key: 'fault', word: 'Not found', shape: 'square' }
   if (/sleep/i.test(d.state ?? '')) return { key: 'off', word: 'Asleep', shape: 'ring' }
   if (/error|overtemp/i.test(d.state ?? '')) return { key: 'fault', word: d.state, shape: 'square' }
   return { key: 'on', word: 'Connected', shape: 'dot' }
 }
 
-/** Changes not sent to the car = modules whose config differs from the project (configMismatch). */
+/** Changes not sent to the car = modules whose config differs from the project (configMismatch), or a firmware 5.7
+ *  module not read since the project was opened (the app cannot compare it before that Read). */
 export function pendingModules() {
-  return live.devices.filter((d) => d.configMismatch && d.connected)
+  return live.devices.filter((d) => d.connected && (d.configMismatch || (d.family === 'upstream' && !d.paramsRead)))
 }
 
 /** Modules holding written values they lose at power-off (G3: storedOnModule false). */

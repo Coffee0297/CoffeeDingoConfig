@@ -8,10 +8,11 @@
   // undo (POST /devices/{id}/pending/{n}/revert) and where it came from.
   import { untrack } from 'svelte'
   import { Dialog, Button, Banner, StateDot, Chip } from '../ui/index.js'
-  import { live, api, toast, hex, pendingModules, project } from '../lib/live.svelte.js'
+  import { live, api, toast, hex, pendingModules, project, defOf, modulesOf } from '../lib/live.svelte.js'
   import { href } from '../router.svelte.js'
   import { ui } from './ui.svelte.js'
   import { postAction, waitRead } from './parts/act.js'
+  import { checkModule, checkCanMap } from './parts/validate.js'
 
   const open = $derived(ui.panel === 'apply')
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
@@ -52,14 +53,14 @@
   $effect(() => {
     const o = open
     untrack(() => {
-      if (o && !wasOpen) { session = {}; asking = null; note = ''; refreshDiffs() }
+      if (o && !wasOpen) { session = {}; asking = null; note = ''; refreshDiffs(); runChecks() }
       wasOpen = o
     })
   })
   // Reload a module's short diff / edit list when its counts change (not on every poll: `listed` is a new
   // array each time); a newer refresh wins over a slower older one.
   const diffKey = $derived(open ? listed.map((d) => d.guid + ':' + d.configDiffCount + ':' + (d.pendingEdits ?? 0)).join('|') : '')
-  $effect(() => { if (diffKey) untrack(refreshDiffs) })
+  $effect(() => { if (diffKey) untrack(() => { refreshDiffs(); runChecks() }) })
   let diffSeq = 0
   async function refreshDiffs() {
     const seq = ++diffSeq
@@ -71,6 +72,30 @@
       try { diffs[d.guid] = (await api.configDiff(d.guid)) ?? [] } catch { diffs[d.guid] = [] }
     }
   }
+
+  // Checks before Apply: errors stop Apply for that module, warnings ask first (validate.js)
+  let issues = $state([])
+  let checking = $state(false), checkSeq = 0
+  async function runChecks() {
+    const seq = ++checkSeq
+    checking = true
+    const mods = untrack(() => modulesOf(live.devices))
+    const map = await api.canIdMap().catch(() => null)
+    const all = checkCanMap(map, mods)
+    for (const d of mods.filter((x) => x.connected)) {
+      try {
+        const [funcs, vmap] = await Promise.all([api.functions(d.guid), api.inputs(d.guid)])
+        all.push(...checkModule({ dev: d, funcs, vmap, def: defOf(d), claimed: map?.claimed ?? null }))
+      } catch { /* module record not readable: nothing to check */ }
+    }
+    if (seq === checkSeq) { issues = all; checking = false }
+  }
+  const errors = $derived(issues.filter((i) => i.level === 'error'))
+  const warnings = $derived(issues.filter((i) => i.level === 'warn'))
+  // Apply waits for the checks of this opening, so stale results never let an error through
+  const blocked = (g) => checking || errors.some((i) => i.guid === g)
+  const blockedWhy = $derived(checking ? 'Checking the project…' : 'Fix the errors listed above first')
+  const goTo = (i) => { const [kind, number] = i.node.split(':'); return linkOf(i.guid, { kind: kind === 'sys' ? 'device' : kind, number }) }
 
   const dev = (g) => live.devices.find((d) => d.guid === g)
 
@@ -115,6 +140,7 @@
 
   function ask(act, guids) {
     if (cantProgram || busyAct || !guids.length) return
+    if (act === 'write' && guids.some(blocked)) return
     asking = { act, guids }
   }
   // G2: saved edits wait in the project until Apply; a Read replaces them with what the modules have, so ask first
@@ -138,7 +164,8 @@
       if (stop) break
       progress = { ...progress, name: d.name }
       session[d.guid] = { ...(stOf(d) ?? {}), name: d.name, state: 'working', step: act, error: '', rejected: [] }
-      const r = await postAction(d.guid, act)
+      // a write also sends the project's Lua and waits for its read-back (server: 30 s write + 90 s Lua): not 45 s
+      const r = await postAction(d.guid, act, act === 'write' ? 130_000 : undefined)
       const prev = session[d.guid]
       if (r.ok) {
         if (act === 'write') session[d.guid] = { ...prev, state: 'written', written: true }
@@ -167,7 +194,7 @@
     if (!d.connected) return { tone: 'fault', shape: 'square', word: 'Not found: cannot apply' }
     if (!s) return { tone: 'warn', shape: 'diamond', word: d.pendingEdits > 0 ? `${d.pendingEdits} change${d.pendingEdits === 1 ? '' : 's'} waiting` : 'Not sent' }
     return {
-      working: { tone: 'accent', shape: 'ring', word: s.step === 'write' ? 'Writing…' : 'Storing…' },
+      working: { tone: 'accent', shape: 'ring', word: s.step === 'write' ? (d.family === 'upstream' && !d.paramsRead ? 'Reading, then writing…' : 'Writing…') : 'Storing…' },
       written: { tone: 'warn', shape: 'diamond', word: 'Written, not stored' },
       refused: { tone: 'fault', shape: 'square', word: `Refused ${s.rejected.length} value${s.rejected.length === 1 ? '' : 's'}` },
       stored: { tone: 'ok', shape: 'dot', word: 'Stored' },
@@ -191,10 +218,11 @@
     return { tone: 'ok', title: 'Nothing to apply.', body: 'Every connected module matches the project as far as the app knows.' }
   })
 
+  const askWarn = $derived(asking?.act === 'write' ? warnings.filter((i) => asking.guids.includes(i.guid)) : [])
   const confirmText = $derived(asking ? (asking.act === 'read'
     ? `Read ${asking.guids.length} module${asking.guids.length === 1 ? '' : 's'} into the project? Changes you saved but did not apply yet are replaced by what the modules have.`
     : asking.act === 'write'
-    ? `Write the project's settings to ${asking.guids.length} module${asking.guids.length === 1 ? '' : 's'} now? Outputs follow the new limits and rules at once. The values are lost at power-off, and when a module sleeps, until you store them.`
+    ? (askWarn.length ? `${askWarn.length} warning${askWarn.length === 1 ? '' : 's'} (listed above) for ${askWarn.length === 1 ? 'this module' : 'these modules'}. ` : '') + `Write the project's settings to ${asking.guids.length} module${asking.guids.length === 1 ? '' : 's'} now? Outputs follow the new limits and rules at once. The values are lost at power-off, and when a module sleeps, until you store them.`
     : `Store the current settings permanently in the flash of ${asking.guids.length} module${asking.guids.length === 1 ? '' : 's'}? This replaces what they start up with.`) : '')
 
   const short = (e) => `${e.name}`
@@ -216,6 +244,26 @@
   {/if}
   {#if note}<p class="muted" role="status">{note}</p>{/if}
 
+
+  {#if issues.length}
+    <section class="checks" class:err={errors.length} aria-label="Checks before applying" data-testid="apply-checks">
+      <strong>{errors.length ? `■ ${errors.length} error${errors.length === 1 ? '' : 's'}: fix ${errors.length === 1 ? 'it' : 'them'} before applying ${[...new Set(errors.map((i) => i.module))].join(', ')}` : `▲ ${warnings.length} warning${warnings.length === 1 ? '' : 's'}: you can still apply`}</strong>
+      {#snippet row(i)}
+        <li class:e={i.level === 'error'} data-testid={'check-' + i.level}>
+          <span aria-hidden="true">{i.level === 'error' ? '■' : '▲'}</span>
+          <span>{i.module} · <strong>{i.title}</strong> {i.why}</span>
+          <a href={goTo(i)} onclick={() => (ui.panel = null)}>Go to</a>
+        </li>
+      {/snippet}
+      {#if errors.length}<ul>{#each errors as i, k (k)}{@render row(i)}{/each}</ul>{/if}
+      {#if warnings.length}
+        <details open={!errors.length && warnings.length <= 5}>
+          <summary>{warnings.length} warning{warnings.length === 1 ? '' : 's'}</summary>
+          <ul>{#each warnings as i, k (k)}{@render row(i)}{/each}</ul>
+        </details>
+      {/if}
+    </section>
+  {/if}
 
   <div class="mods">
     {#each listed as d (d.guid)}
@@ -251,6 +299,9 @@
         {:else if !s && !(edits[d.guid] ?? []).length}
           <p class="muted sm">{d.configDiffCount === 0 ? 'Not compared with the module yet. Read it to see exactly what differs, or apply to send what changed.' : ''}</p>
         {/if}
+        {#if s?.state !== 'working' && d.family === 'upstream' && !d.paramsRead && d.connected}
+          <p class="muted sm" data-testid="apply-reads-first">Apply reads {d.name} first: the app learns a firmware 5.7 module's list of settings from one Read after the project is opened. The project's values are kept, then written.</p>
+        {/if}
         {#if s?.state === 'refused'}
           <div class="refuse" role="alert">
             <strong>■ {d.name} refused {s.rejected.length === 1 ? 'this value' : 'these values'}</strong>
@@ -268,7 +319,7 @@
           </span>
           <span class="grow"></span>
           <Button size="sm" onclick={() => askRead([d.guid])} disabled={!!busyAct || !d.connected} aria-label={`Read ${d.name}`}>Read</Button>
-          <Button size="sm" onclick={() => ask('write', [d.guid])} disabled={!!busyAct || !d.connected || !!cantProgram} aria-label={`Apply ${d.name}`}>Apply</Button>
+          <Button size="sm" onclick={() => ask('write', [d.guid])} disabled={!!busyAct || !d.connected || !!cantProgram || blocked(d.guid)} title={blocked(d.guid) ? blockedWhy : ''} aria-label={`Apply ${d.name}`}>Apply</Button>
           <Button size="sm" onclick={() => ask('burn', [d.guid])} disabled={!!busyAct || !d.connected || !!cantProgram} aria-label={`Store ${d.name}`}>Store</Button>
         </div>
       </section>
@@ -283,7 +334,7 @@
           <div class="qrow" data-testid={'apply-quiet-' + d.name}>
             <strong>{d.name}</strong><span class="muted mono">{hex(d.baseId)}</span><span class="grow"></span>
             <Button size="sm" onclick={() => askRead([d.guid])} disabled={!!busyAct} aria-label={`Read ${d.name}`}>Read</Button>
-            <Button size="sm" onclick={() => ask('write', [d.guid])} disabled={!!busyAct || !!cantProgram} aria-label={`Apply ${d.name}`}>Apply</Button>
+            <Button size="sm" onclick={() => ask('write', [d.guid])} disabled={!!busyAct || !!cantProgram || blocked(d.guid)} title={blocked(d.guid) ? blockedWhy : ''} aria-label={`Apply ${d.name}`}>Apply</Button>
             <Button size="sm" onclick={() => ask('burn', [d.guid])} disabled={!!busyAct || !!cantProgram} aria-label={`Store ${d.name}`}>Store</Button>
           </div>
         {/each}
@@ -296,7 +347,7 @@
     <p>{confirmText}</p>
     {#snippet footer()}
       <Button onclick={() => (asking = null)}>Cancel</Button>
-      <Button variant={asking?.act === 'burn' ? 'danger' : 'primary'} onclick={confirmAsk} data-testid="apply-confirm-yes">{asking?.act === 'write' ? 'Yes, write now' : asking?.act === 'read' ? 'Yes, read and replace' : 'Yes, store permanently'}</Button>
+      <Button variant={asking?.act === 'burn' ? 'danger' : 'primary'} onclick={confirmAsk} data-testid="apply-confirm-yes">{asking?.act === 'write' ? (askWarn.length ? 'Apply anyway' : 'Yes, write now') : asking?.act === 'read' ? 'Yes, read and replace' : 'Yes, store permanently'}</Button>
     {/snippet}
   </Dialog>
   {#snippet footer()}
@@ -311,7 +362,7 @@
         <Button variant={needWrite.length ? 'secondary' : 'primary'} onclick={() => ask('burn', needStore.map((d) => d.guid))} disabled={!!cantProgram} title={cantProgram} data-testid="apply-store">Store on modules ({needStore.length})</Button>
       {/if}
       {#if needWrite.length || cantProgram}
-        <Button variant="primary" onclick={() => ask('write', needWrite.map((d) => d.guid))} disabled={!!cantProgram || !needWrite.length} title={cantProgram} data-testid="apply-go">Apply to car{needWrite.length ? ` (${needWrite.length} module${needWrite.length === 1 ? "" : "s"})` : ""}</Button>
+        <Button variant="primary" onclick={() => ask('write', needWrite.map((d) => d.guid))} disabled={!!cantProgram || !needWrite.length || needWrite.some((d) => blocked(d.guid))} title={cantProgram || (needWrite.some((d) => blocked(d.guid)) ? blockedWhy : '')} data-testid="apply-go">Apply to car{needWrite.length ? ` (${needWrite.length} module${needWrite.length === 1 ? "" : "s"})` : ""}</Button>
       {:else if !needStore.length}
         <Button variant="primary" onclick={() => (ui.panel = null)}>Done</Button>
       {/if}
@@ -341,5 +392,12 @@
   .pad { padding: var(--space-3); }
   .quiet summary { cursor: pointer; min-height: 36px; display: flex; align-items: center; font-weight: 600; }
   .qrow { display: flex; align-items: center; gap: var(--space-3); padding: 6px 0; border-bottom: 1px solid var(--color-line); }
+  .checks { display: flex; flex-direction: column; gap: var(--space-2); padding: var(--space-3); border-radius: var(--radius-md); border: 1px dashed var(--color-warn); }
+  .checks.err { border: 1px solid var(--color-fault); background: var(--color-fault-soft); }
+  .checks ul { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 4px; }
+  .checks li { display: grid; grid-template-columns: 16px minmax(0, 1fr) auto; gap: var(--space-2); align-items: baseline; }
+  .checks li > span:first-child { color: var(--color-warn); }
+  .checks li.e > span:first-child { color: var(--color-fault); }
+  .checks summary { cursor: pointer; min-height: 32px; display: flex; align-items: center; font-weight: 600; }
   .hint { margin-right: auto; align-self: center; font-size: var(--text-xs); }
 </style>

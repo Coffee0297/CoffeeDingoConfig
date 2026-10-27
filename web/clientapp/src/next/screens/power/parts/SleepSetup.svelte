@@ -7,7 +7,7 @@
   import { api, live, toast } from '../../../lib/live.svelte.js'
   import { shortfall, clearSleep, compileMaster, compileFollower, sleepSignals, repointSleep } from '../../../../lib/sleepPlan.js'
   import { remoteItems, resolveRemote } from '../../../lib/remote.js'
-  import { SUB } from './sleepLogic.js'
+  import { SUB, writeDeviceParam } from './sleepLogic.js'
   let { open = $bindable(false), seq } = $props()
 
   const mods = $derived(live.devices.filter((d) => /pdm|canboard/i.test(d.type ?? '')))
@@ -80,7 +80,7 @@
       // a keep-awake signal that is one of the master's digital inputs also wakes it
       const dis = plan.inputs.map((i) => mv.find((v) => v.index === i)).filter((v) => v?.kind === 'input' && v.prop === 'State')
       const mask = dis.reduce((a, v) => a | (1 << (v.number - 1)), m.wakeDigInputMask ?? 0)
-      if (mask !== (m.wakeDigInputMask ?? 0)) await api.writeParam(m.guid, 0, SUB.wakeMask, mask)
+      if (mask !== (m.wakeDigInputMask ?? 0)) await writeDeviceParam(m, SUB.wakeMask, mask)
       toast(`Sleep staged: ${m.name} is the master. Apply to car, then Store on modules: a module wakes from what it has stored.`, 'info', 9000)
       open = false
     } catch (e) { err = `${e.message}. Some modules may be half changed: open this again and stage once more.` }

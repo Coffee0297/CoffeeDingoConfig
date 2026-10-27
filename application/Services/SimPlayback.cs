@@ -49,7 +49,11 @@ public class SimPlayback(ILogger<SimPlayback> logger)
 
     public event Action<CanFrame, DataDirection>? MessageReady;
 
-    public async Task<(bool success, string? error)> LoadFile(string filePath)
+    // The app's own timestamp; logs recorded before it was culture-invariant may use '.' between the time parts.
+    private static readonly string[] TsFormats = ["yyyy-MM-dd HH:mm:ss.fff", "yyyy-MM-dd HH.mm.ss.fff"];
+
+    /// <param name="name">the name to show (an upload is read from a temp file)</param>
+    public async Task<(bool success, string? error)> LoadFile(string filePath, string? name = null)
     {
         try
         {
@@ -93,7 +97,7 @@ public class SimPlayback(ILogger<SimPlayback> logger)
                     {
                         // Legacy/app format: timestamp(datetime), Dir, ID(hex), Len, Data(space-separated hex)
                         if (p.Length < 5) continue;
-                        dt = DateTime.ParseExact(p[0].Trim(), "yyyy-MM-dd HH:mm:ss.fff", CultureInfo.InvariantCulture); isDateTime = true;
+                        dt = DateTime.ParseExact(p[0].Trim(), TsFormats, CultureInfo.InvariantCulture, DateTimeStyles.None); isDateTime = true;
                         direction = p[1].Trim().Equals("Tx", StringComparison.OrdinalIgnoreCase) ? DataDirection.Tx : DataDirection.Rx;
                         canId = Convert.ToInt32(p[2].Trim(), 16);
                         length = byte.Parse(p[3].Trim());
@@ -123,7 +127,7 @@ public class SimPlayback(ILogger<SimPlayback> logger)
                         if (ciTs >= 0 && ciTs < p.Length)
                         {
                             var ts = p[ciTs].Trim();
-                            if (DateTime.TryParseExact(ts, "yyyy-MM-dd HH:mm:ss.fff", CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.None, out dt))
+                            if (DateTime.TryParseExact(ts, TsFormats, CultureInfo.InvariantCulture, DateTimeStyles.None, out dt))
                                 isDateTime = true;
                             else if (double.TryParse(ts, System.Globalization.NumberStyles.Float, CultureInfo.InvariantCulture, out num))
                                 tsIsSeconds ??= ts.Contains('.');
@@ -174,7 +178,7 @@ public class SimPlayback(ILogger<SimPlayback> logger)
                 CurrentMessageIndex = 0;
                 State = PlaybackState.Idle;
                 CurrentTime = TimeSpan.Zero;
-                CurrentFileName = Path.GetFileName(filePath);
+                CurrentFileName = string.IsNullOrWhiteSpace(name) ? Path.GetFileName(filePath) : Path.GetFileName(name);
             }
 
             logger.LogInformation("Loaded {Count} CAN messages from {FileName}", messages.Count, CurrentFileName);
