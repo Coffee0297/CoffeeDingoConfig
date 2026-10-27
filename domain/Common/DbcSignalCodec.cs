@@ -69,7 +69,8 @@ public class DbcSignalCodec
             int currentByte = startByte;
             int currentBitInByte = startBitInByte;
 
-            while (bitsRemaining > 0)
+            // a frame shorter than the DBC's (GM 0x1DF arrives with 3 bytes): bits past its end read as 0
+            while (bitsRemaining > 0 && currentByte < data.Length)
             {
                 // How many bits can we read from current position to LSB of current byte?
                 int bitsAvailableInByte = currentBitInByte + 1;
@@ -90,9 +91,6 @@ public class DbcSignalCodec
                 // Move to next byte (going forward in array)
                 currentByte++;
                 currentBitInByte = 7; // Start at MSB of next byte
-
-                if (currentByte >= data.Length && bitsRemaining > 0)
-                    break; // Safety check
             }
         }
 
