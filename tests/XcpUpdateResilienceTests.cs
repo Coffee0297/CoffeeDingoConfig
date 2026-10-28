@@ -17,12 +17,15 @@ public class XcpUpdateResilienceTests
     {
         public readonly Dictionary<uint, byte> Mem = [];
         public readonly HashSet<int> DropReply = [];   // 0-based count of commands whose reply is lost (after acting)
+        public readonly HashSet<int> DoubleReply = []; // commands whose reply arrives twice
         public bool Silent;                            // bus-off: no replies at all
-        private uint _mta; private int _n;
+        private uint _mta; private int _n; private CanFrame? _double;
 
         public Task<bool> WriteAsync(CanFrame f, CancellationToken ct)
         {
             if (f.Id != Base + 12) return Task.FromResult(true);
+            // a doubled reply lands once the next command is out, ahead of that command's own reply
+            if (_double is { } d) { _double = null; DataReceived?.Invoke(this, new CanFrameEventArgs(d)); }
             var c = f.Payload; byte[] resp = [0xFF];
             switch (c[0])
             {
@@ -32,8 +35,10 @@ public class XcpUpdateResilienceTests
                 case 0xD0: for (int i = 0; i < c[1]; i++) Mem[_mta++] = c[2 + i]; break;        // PROGRAM
                 case 0xF5: resp = [0xFF, .. Enumerable.Range(0, c[1]).Select(_ => Mem[_mta++])]; break; // UPLOAD
             }
-            var drop = Silent || DropReply.Contains(_n++);
-            if (!drop) Task.Run(() => DataReceived?.Invoke(this, new CanFrameEventArgs(new CanFrame(Base + 13, resp.Length, [.. resp, .. new byte[8 - resp.Length]]))));
+            var n = _n++;
+            var frame = new CanFrame(Base + 13, resp.Length, [.. resp, .. new byte[8 - resp.Length]]);
+            if (!Silent && !DropReply.Contains(n)) Task.Run(() => DataReceived?.Invoke(this, new CanFrameEventArgs(frame)));
+            if (DoubleReply.Contains(n)) _double = frame;   // CAN sends it again after an error in its last bit
             return Task.FromResult(true);
         }
 
@@ -84,6 +89,46 @@ public class XcpUpdateResilienceTests
         for (int i = 0; i < data.Length; i++) boot.Mem[0x08004000u + (uint)i] = data[i];
         boot.DropReply.Add(1); boot.DropReply.Add(6);            // the initial SET_MTA's reply and a later UPLOAD's
         Assert.Equal(data, await xcp.ReadDataAsync(0x08004000, data.Length, null, default));
+    }
+
+    private static (FakeBoot, byte[]) Flashed()
+    {
+        var boot = new FakeBoot();
+        var data = Enumerable.Range(0, 140).Select(i => (byte)(i * 13 + 5)).ToArray();
+        for (int i = 0; i < data.Length; i++) boot.Mem[0x08004200u + (uint)i] = data[i];
+        return (boot, data);
+    }
+
+    [Fact]
+    public async Task AReplyReceivedTwice_ShiftsAPlainReadBack()
+    {
+        var (boot, data) = Flashed();
+        using var xcp = new XcpCanMaster(boot, Base);
+        Assert.True(await xcp.ConnectAsync(1, default));
+        boot.DoubleReply.Add(4);                                 // the 3rd UPLOAD's reply comes twice
+        Assert.NotEqual(data, await xcp.ReadDataAsync(0x08004200, data.Length, null, default));
+    }
+
+    [Fact]
+    public async Task AReplyReceivedTwice_IsReadAgainWhenVerifying()
+    {
+        var (boot, data) = Flashed();
+        using var xcp = new XcpCanMaster(boot, Base);
+        Assert.True(await xcp.ConnectAsync(1, default));
+        boot.DoubleReply.Add(4);
+        Assert.Equal(data, await xcp.ReadDataAsync(0x08004200, data.Length, null, default, data));
+    }
+
+    [Fact]
+    public async Task AFlashThatReallyDiffers_StillFailsTheVerify()
+    {
+        var (boot, data) = Flashed();
+        using var xcp = new XcpCanMaster(boot, Base);
+        Assert.True(await xcp.ConnectAsync(1, default));
+        boot.Mem[0x08004200u + 30] ^= 0xFF;
+        var read = await xcp.ReadDataAsync(0x08004200, data.Length, null, default, data);
+        Assert.NotNull(read);
+        Assert.NotEqual(data, read);
     }
 
     [Fact]

@@ -178,7 +178,7 @@ public sealed class CanFlashService(
             {
                 Set("Verifying", 70);
                 var read = await xcp.ReadDataAsync(seg.Address, seg.Data.Length, n =>
-                        Set("Verifying", 70 + (int)(24L * (verified + n) / Math.Max(total, 1))), token);
+                        Set("Verifying", 70 + (int)(24L * (verified + n) / Math.Max(total, 1))), token, seg.Data);
                 if (read is null)
                     return Fail(log, $"Read-back failed at 0x{seg.Address:X8} (left in bootloader — safe to retry).");
                 if (!read.AsSpan().SequenceEqual(seg.Data))

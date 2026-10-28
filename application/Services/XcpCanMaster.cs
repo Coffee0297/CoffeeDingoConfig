@@ -187,7 +187,7 @@ public sealed class XcpCanMaster(ICommsAdapterManager adapters, int baseId) : ID
             // the chunk already: point MTA back at it and send it again (same bytes at the same address, into the
             // block OpenBLT buffers in RAM), up to 3 times.
             for (int retry = 0; !ok && retry < 3 && !ct.IsCancellationRequested; retry++)
-                ok = await SetMtaAsync(address + (uint)offset, ct).ConfigureAwait(false)
+                ok = await ResyncAsync(address + (uint)offset, ct).ConfigureAwait(false)
                      && Ok(await SendAsync(p, len, 2000, ct).ConfigureAwait(false));
             if (!ok) return false;
             offset += n;
@@ -196,8 +196,17 @@ public sealed class XcpCanMaster(ICommsAdapterManager adapters, int baseId) : ID
         return true;
     }
 
-    /// <summary>Read back a range via XCP UPLOAD (SET_MTA then chunked UPLOAD), for verify-after-program.</summary>
-    public async Task<byte[]?> ReadDataAsync(uint address, int length, Action<int>? onBytes, CancellationToken ct)
+    /// <summary>Wait out late or doubled replies (nothing pending: they are dropped), then point MTA at the address.</summary>
+    private async Task<bool> ResyncAsync(uint address, CancellationToken ct)
+    {
+        await Task.Delay(LateReplyDrainMs, ct).ConfigureAwait(false);
+        return await SetMtaAsync(address, ct).ConfigureAwait(false);
+    }
+
+    /// <summary>Read back a range via XCP UPLOAD (SET_MTA then chunked UPLOAD), for verify-after-program. With
+    /// <paramref name="expected"/>, a chunk that differs is read again after a resync before it counts.</summary>
+    public async Task<byte[]?> ReadDataAsync(uint address, int length, Action<int>? onBytes, CancellationToken ct,
+        byte[]? expected = null)
     {
         var result = new byte[length];
         int chunk = MaxDto - 1;
@@ -207,11 +216,14 @@ public sealed class XcpCanMaster(ICommsAdapterManager adapters, int baseId) : ID
         while (offset < length)
         {
             int n = Math.Min(chunk, length - offset);
+            bool Good(byte[]? x) => Ok(x) && x!.Length >= n + 1 &&
+                (expected is null || x.AsSpan(1, n).SequenceEqual(expected.AsSpan(offset, n)));
             var r = mtaOk ? await SendAsync([CmdUpload, (byte)n], 2, 2000, ct).ConfigureAwait(false) : null;
-            // One lost reply ended a verify after a good write (PDM-04, 2026-10-28). UPLOAD may have moved the MTA
-            // on already: point it back at this chunk and ask again, up to 3 times, as the write does.
-            for (int retry = 0; (!Ok(r) || r!.Length < n + 1) && retry < 3 && !ct.IsCancellationRequested; retry++)
-                r = await SetMtaAsync(address + (uint)offset, ct).ConfigureAwait(false)
+            // A lost reply, or one received twice (an error in a frame's last bit makes CAN send it again after some
+            // nodes took it), left every later reply one behind: PDM-04 and PDM-01 failed verify after good writes
+            // (2026-10-28). Drain, point MTA back at this chunk and read it again, up to 3 times.
+            for (int retry = 0; !Good(r) && retry < 3 && !ct.IsCancellationRequested; retry++)
+                r = await ResyncAsync(address + (uint)offset, ct).ConfigureAwait(false)
                     ? await SendAsync([CmdUpload, (byte)n], 2, 2000, ct).ConfigureAwait(false) : null;
             if (!Ok(r) || r!.Length < n + 1) return null;
             mtaOk = true;
