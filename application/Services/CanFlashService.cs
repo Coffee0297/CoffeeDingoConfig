@@ -120,6 +120,14 @@ public sealed class CanFlashService(
             //    per segment wiped what an earlier segment had already written into a sector the two share (the 5.7.4
             //    PDM image has a 4-byte gap at 0x0805B80C inside sector 6: its read-back then mismatched on every module).
             int total = image.TotalBytes, written = 0;
+            // Nothing is erased until the link has proved itself: on a bus with error frames the bootloader lost
+            // replies or went bus-off mid-write, and PDM-02 and PDM-05 were left without firmware.
+            Set("Checking the link", 7);
+            var lost = await xcp.LinkCheckAsync(100, token);
+            if (lost > 0)
+                return Fail(log, $"The link to the bootloader lost {lost} of 100 replies, so nothing was erased: the module keeps its firmware. "
+                    + "Fix the bus errors first, or update through a direct CAN adapter.");
+            log.AppendLine("Link check: 100 of 100 replies.");
             Set("Erasing", 8);
             if (!await xcp.ClearMemoryAsync(image.MinAddress, image.EndAddress - image.MinAddress, token))
                 return Fail(log, $"Erase failed at 0x{image.MinAddress:X8}." + (newCbLoader ? " This CANBoard probably still has the old 16 KB bootloader: program the 8 KB one over SWD once."
@@ -130,7 +138,9 @@ public sealed class CanFlashService(
             {
                 if (!await xcp.WriteDataAsync(seg.Address, seg.Data, n =>
                         Set("Writing", 10 + (int)(55L * (written + n) / Math.Max(total, 1))), token))
-                    return Fail(log, $"Programming failed in segment at 0x{seg.Address:X8}.");
+                    return Fail(log, $"Programming failed in segment at 0x{seg.Address:X8}: the bootloader stopped answering even after retries "
+                        + "(on a bus with error frames an older bootloader goes bus-off and stays off). Power-cycle the module: it comes back in its "
+                        + "bootloader, and the update can be started again over CAN. No need to open it.");
                 written += seg.Data.Length;
             }
             log.AppendLine($"Programmed {written} bytes.");
