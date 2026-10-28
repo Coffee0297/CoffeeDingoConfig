@@ -95,6 +95,7 @@ public class DeviceManager(ILogger<DeviceManager> logger, ILoggerFactory loggerF
     {
         lock (_filterLock)
         {
+            if (_filterOwned) return;   // a CAN flash aimed the adapter at its bootloader: only it lifts the filter
             if (_filterBase is { } b && b >= 0 && ExchangeRunning(b)) { _filterIdleTimer?.Change(FilterIdleMs, Timeout.Infinite); return; }
             if (_filterBase != null) logger.LogInformation("RX filter: lifted (quiet)");
             _filterBase = null; _setReceiveFilter?.Invoke(null, null); domain.Devices.RxFilterWindow.Lift();
@@ -951,7 +952,8 @@ public class DeviceManager(ILogger<DeviceManager> logger, ILoggerFactory loggerF
     /// </summary>
     public void OnFrameTransmitted(DeviceCanFrame frame)
     {
-        if (_filterBase is { } fb && fb >= 0 && frame.DeviceBaseId == fb) _filterIdleTimer?.Change(FilterIdleMs, Timeout.Infinite);
+        // not while a CAN flash owns the filter: restarted, the idle timer lifted the flash's filter mid-programming
+        if (!_filterOwned && _filterBase is { } fb && fb >= 0 && frame.DeviceBaseId == fb) _filterIdleTimer?.Change(FilterIdleMs, Timeout.Infinite);
         if (frame.SendOnly) return;
 
         int index = frame.Frame.Payload[2] << 8 | frame.Frame.Payload[1];
