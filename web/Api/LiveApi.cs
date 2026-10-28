@@ -318,6 +318,14 @@ public class LiveHub : Hub { }
 // ---------- helpers shared by hub broadcaster + REST ----------
 public static class DingoMap
 {
+    /// <summary>The ids a module's CAN Message blocks transmit, one sender per id (several blocks on one id are one
+    /// module sending). PDM-04's backup indicator clock sent 0x730 on top of PDM-01's and the duplicate-id check,
+    /// which knew only broadcasts, CAN outputs and Lua, did not flag it.</summary>
+    public static IEnumerable<(int Id, bool Ide, string Who)> CanMessageSenders(IDevice d) =>
+        (d switch { PdmDevice p => p.CanMessages, CanboardDevice c => c.CanMessages, _ => [] })
+            .Where(m => m.Enabled && m.Id > 0).GroupBy(m => (m.Id, m.Ide))
+            .Select(g => (g.Key.Id, g.Key.Ide, $"{d.Name}: CAN message {string.Join(", ", g.Select(m => $"'{m.Name}'"))}"));
+
     // Reject an unknown bitrate string instead of silently defaulting to 500K — a wrong default
     // would put the adapter on the wrong bus speed and the operator would never know why nothing
     // answers. The connect endpoint surfaces this message to the UI.
@@ -1591,6 +1599,7 @@ public static class LiveApi
                     // a module packs its CAN outputs on one id into one frame (signals, counter, checksum): one sender
                     foreach (var co in couts.Where(x => x.Enabled).GroupBy(x => (x.Id, x.Ide)))
                         Claim(co.Key.Id, co.Key.Ide, $"{d.Name}: CAN out {string.Join(", ", co.Select(x => $"'{x.Name}'"))}");
+                foreach (var (id, ide, who) in DingoMap.CanMessageSenders(d)) Claim(id, ide, who);
                 // A Lua program's txCan(bus, id, ext, …) frames are transmissions as well — without them a future module
                 // placed on those ids would overlap silently.
                 if (d is PdmDevice lp && !string.IsNullOrWhiteSpace(lp.LuaProgram))
