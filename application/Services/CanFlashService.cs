@@ -99,7 +99,26 @@ public sealed class CanFlashService(
             dm.SuspendConfigFilter();
             adapters.ActiveAdapter?.SetReceiveFilter(baseId + 13);
 
-            using var xcp = new XcpCanMaster(adapters, baseId);
+            // A bootloader started by a power-up without firmware (an update that failed, then a power cycle) can't know
+            // the module's address: it listens on the firmware's default (PDM 0x0DE: XCP 0x0EA/0x0EB, CANBoard 0x640).
+            // PDM-02 sat there and the update said "no XCP response" on its own id.
+            int xcpBase = baseId;
+            using (var own = new XcpCanMaster(adapters, baseId))
+                if (!await own.ConnectAsync(retries: 25, token))
+                {
+                    var def = FlashBaseIdRestore.DefaultBaseIdFor(dev);
+                    adapters.ActiveAdapter?.SetReceiveFilter(def + 13);
+                    using var atDefault = new XcpCanMaster(adapters, def);
+                    if (def != baseId && await atDefault.ConnectAsync(retries: 5, token))
+                    {
+                        xcpBase = def;
+                        log.AppendLine($"No answer on 0x{baseId + 13:X3}; a bootloader answered on its default address 0x{def + 13:X3} (it was powered up "
+                            + "without firmware). Only one module may wait there during the update: power any other one in its bootloader off.");
+                    }
+                    else adapters.ActiveAdapter?.SetReceiveFilter(baseId + 13);
+                }
+
+            using var xcp = new XcpCanMaster(adapters, xcpBase);
 
             // 4. Connect (retry while the bootloader comes up). IDs derived from the base ID.
             Set("Connecting", 5);
