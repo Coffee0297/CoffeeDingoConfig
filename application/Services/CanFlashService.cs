@@ -182,7 +182,10 @@ public sealed class CanFlashService(
                 if (read is null)
                     return Fail(log, $"Read-back failed at 0x{seg.Address:X8} (left in bootloader — safe to retry).");
                 if (!read.AsSpan().SequenceEqual(seg.Data))
-                    return Fail(log, $"Verify mismatch at 0x{seg.Address:X8} — NOT starting the app (left in bootloader — retry).");
+                {
+                    int at = read.AsSpan().CommonPrefixLength(seg.Data);
+                    return Fail(log, $"Verify mismatch at 0x{seg.Address + (uint)at:X8} (segment 0x{seg.Address:X8}, read {read[at]:X2}, image {seg.Data[at]:X2}) — NOT starting the app (left in bootloader — retry).");
+                }
                 verified += seg.Data.Length;
             }
             log.AppendLine("Read-back verify OK.");

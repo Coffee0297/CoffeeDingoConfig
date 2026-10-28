@@ -20,6 +20,7 @@ public sealed class XcpCanMaster(ICommsAdapterManager adapters, int baseId) : ID
     private const byte CmdProgramStart = 0xD2, CmdProgramClear = 0xD1, CmdProgram = 0xD0;
     private const byte CmdProgramReset = 0xCF, CmdProgramMax = 0xC9;
     private const byte PidRes = 0xFF;                 // positive response
+    private const int LateReplyDrainMs = 200;         // after a timeout: a late reply lands with nothing pending
 
     private readonly int _cmdId = baseId + 12;        // tool → bootloader
     private readonly int _respId = baseId + 13;       // bootloader → tool
@@ -83,6 +84,10 @@ public sealed class XcpCanMaster(ICommsAdapterManager adapters, int baseId) : ID
         if (done != tcs.Task)
         {
             lock (_gate) { if (_pending == tcs) _pending = null; }
+            // A reply can still come (a bootloader back from bus-off sends what it had queued). XCP has no sequence
+            // number, so it would answer the next command and every reply after it would be one behind: PDM-04's
+            // verify compared the wrong chunks (2026-10-28). With nothing pending it is dropped.
+            await Task.Delay(LateReplyDrainMs, ct).ConfigureAwait(false);
             return null;                              // timeout
         }
         return await tcs.Task.ConfigureAwait(false);
