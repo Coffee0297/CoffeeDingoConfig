@@ -194,16 +194,22 @@ public sealed class XcpCanMaster(ICommsAdapterManager adapters, int baseId) : ID
     /// <summary>Read back a range via XCP UPLOAD (SET_MTA then chunked UPLOAD), for verify-after-program.</summary>
     public async Task<byte[]?> ReadDataAsync(uint address, int length, Action<int>? onBytes, CancellationToken ct)
     {
-        if (!await SetMtaAsync(address, ct).ConfigureAwait(false)) return null;
         var result = new byte[length];
         int chunk = MaxDto - 1;
         if (chunk < 1) chunk = 1;
         int offset = 0;
+        bool mtaOk = await SetMtaAsync(address, ct).ConfigureAwait(false);
         while (offset < length)
         {
             int n = Math.Min(chunk, length - offset);
-            var r = await SendAsync([CmdUpload, (byte)n], 2, 2000, ct).ConfigureAwait(false);
+            var r = mtaOk ? await SendAsync([CmdUpload, (byte)n], 2, 2000, ct).ConfigureAwait(false) : null;
+            // One lost reply ended a verify after a good write (PDM-04, 2026-10-28). UPLOAD may have moved the MTA
+            // on already: point it back at this chunk and ask again, up to 3 times, as the write does.
+            for (int retry = 0; (!Ok(r) || r!.Length < n + 1) && retry < 3 && !ct.IsCancellationRequested; retry++)
+                r = await SetMtaAsync(address + (uint)offset, ct).ConfigureAwait(false)
+                    ? await SendAsync([CmdUpload, (byte)n], 2, 2000, ct).ConfigureAwait(false) : null;
             if (!Ok(r) || r!.Length < n + 1) return null;
+            mtaOk = true;
             Array.Copy(r, 1, result, offset, n);
             offset += n;
             onBytes?.Invoke(offset);

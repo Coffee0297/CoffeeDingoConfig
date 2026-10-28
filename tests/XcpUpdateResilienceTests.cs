@@ -30,6 +30,7 @@ public class XcpUpdateResilienceTests
                 case 0xF6: _mta = BitConverter.ToUInt32(c, 4); break;                          // SET_MTA (Intel)
                 case 0xC9: for (int i = 1; i < 8; i++) Mem[_mta++] = c[i]; break;               // PROGRAM_MAX
                 case 0xD0: for (int i = 0; i < c[1]; i++) Mem[_mta++] = c[2 + i]; break;        // PROGRAM
+                case 0xF5: resp = [0xFF, .. Enumerable.Range(0, c[1]).Select(_ => Mem[_mta++])]; break; // UPLOAD
             }
             var drop = Silent || DropReply.Contains(_n++);
             if (!drop) Task.Run(() => DataReceived?.Invoke(this, new CanFrameEventArgs(new CanFrame(Base + 13, resp.Length, [.. resp, .. new byte[8 - resp.Length]]))));
@@ -71,6 +72,18 @@ public class XcpUpdateResilienceTests
         var data = Enumerable.Range(0, 100).Select(i => (byte)i).ToArray();
         Assert.True(await xcp.WriteDataAsync(0x08004000, data, null, default));
         Assert.Equal(data, Enumerable.Range(0, 100).Select(i => boot.Mem[0x08004000u + (uint)i]).ToArray());
+    }
+
+    [Fact]
+    public async Task ALostUploadReply_IsRetried_AndTheReadBackIsWhole()
+    {
+        var boot = new FakeBoot();
+        using var xcp = new XcpCanMaster(boot, Base);
+        Assert.True(await xcp.ConnectAsync(1, default));
+        var data = Enumerable.Range(0, 100).Select(i => (byte)(i * 7)).ToArray();
+        for (int i = 0; i < data.Length; i++) boot.Mem[0x08004000u + (uint)i] = data[i];
+        boot.DropReply.Add(1); boot.DropReply.Add(6);            // the initial SET_MTA's reply and a later UPLOAD's
+        Assert.Equal(data, await xcp.ReadDataAsync(0x08004000, data.Length, null, default));
     }
 
     [Fact]
