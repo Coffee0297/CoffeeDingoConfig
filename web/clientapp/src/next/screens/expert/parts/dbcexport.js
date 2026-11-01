@@ -16,7 +16,8 @@ const unique = (base, taken) => {
   taken.add(n)
   return n
 }
-const quote = (s) => String(s ?? '').replace(/\\/g, '/').replace(/"/g, "'")
+// plain ASCII inside quotes: many tools read a .dbc as Latin-1 ("·" in a label becomes "-", "°" becomes "deg")
+const quote = (s) => String(s ?? '').replace(/°/g, 'deg').replace(/\\/g, '/').replace(/"/g, "'").replace(/[^\x20-\x7E]/g, '-')
 const num = (v) => (Number.isFinite(+v) ? String(+(+v).toPrecision(12)) : '0')
 
 // The firmware's CanOutputs::CalcDlc: the byte holding the signal's last bit, plus one.
