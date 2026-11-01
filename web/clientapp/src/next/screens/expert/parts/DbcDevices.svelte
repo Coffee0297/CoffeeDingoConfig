@@ -210,7 +210,7 @@
       }
       let capped = false
       if (inc.ecu) for (const d of devs) {
-        const r = await api.dbcSignals(d.guid, 2000)
+        const r = await api.dbcSignals(d.guid, 20000)
         if ((r?.count ?? 0) > (r?.items?.length ?? 0)) capped = true
         for (const s of r?.items ?? []) frames.push({ node: d.name, id: s.id, ide: !!s.ide, msg: s.messageName || `${d.name}_${hex(s.id).slice(2)}`, sig: { name: s.name, startBit: s.startBit, length: s.length, byteOrder: s.byteOrder, isSigned: s.isSigned, isFloat: false, factor: s.factor, offset: s.offset, unit: s.unit, min: s.min, max: s.max } })
       }
@@ -219,7 +219,7 @@
       const a = document.createElement('a')
       a.href = URL.createObjectURL(blob); a.download = 'dingo-combined.dbc'; document.body.appendChild(a); a.click(); a.remove()
       setTimeout(() => URL.revokeObjectURL(a.href), 2000)
-      exNote = `Saved dingo-combined.dbc with ${frames.length} signals.` + (capped ? ' ECU devices with more than 2 000 signals were cut at 2 000 (the backend caps the list).' : '')
+      exNote = `Saved dingo-combined.dbc with ${frames.length} signals.` + (capped ? ' ECU devices with more than 20 000 signals were cut at 20 000 (the backend caps the list).' : '')
     } catch (e) { exNote = 'Export failed: ' + e.message } finally { exBusy = false }
   }
   const fmtV = (v) => (v == null ? '—' : Number.isInteger(v) ? String(v) : Number(v).toFixed(3))

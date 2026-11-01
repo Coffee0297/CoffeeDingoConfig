@@ -1468,7 +1468,7 @@ public static class LiveApi
         api.MapGet("/devices/{guid}/dbc/signals", (string guid, int? limit, DeviceManager dm) =>
         {
             if (!Guid.TryParse(guid, out var g) || dm.GetDevice(g) is not DbcDevice d) return Results.Ok(new { count = 0, items = Array.Empty<object>() });
-            var lim = Math.Clamp(limit ?? 500, 1, 2000);
+            var lim = Math.Clamp(limit ?? 500, 1, 20000);   // a whole OEM DBC (GM Global A ~2500) fits the export
             return Results.Ok(new { count = d.DbcSignals.Count, items = d.DbcSignals.Take(lim).Select(DingoMap.DbcSigDto).ToArray() });
         });
 

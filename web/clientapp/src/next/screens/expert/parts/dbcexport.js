@@ -1,6 +1,22 @@
 // Builds one combined .dbc text from frames: [{ node, id, ide, msg, dlc?, sig: { name, startBit, length, byteOrder, isSigned, isFloat, factor, offset, unit, min?, max? } | null }]
 // A frame with sig null only declares its message (a CAN message block of fixed bytes); dlc defaults to 8.
 const clean = (s) => String(s ?? '').replace(/[^A-Za-z0-9_]/g, '_').replace(/^(\d)/, '_$1') || 'X'
+// DBC names are at most 32 characters (Vector tools and some dashboards refuse longer): squeeze the underscores a label
+// turns into, then keep the start and the end ("..._Millivolts" vs "..._Pos" stay apart). The full text goes in a comment.
+const MAX_NAME = 32
+const fit = (n) => {
+  if (n.length <= MAX_NAME) return n
+  const s = n.replace(/_+/g, '_').replace(/^_(?!\d)|_$/g, '')
+  return s.length <= MAX_NAME ? s : s.slice(0, 20).replace(/_$/, '') + '_' + s.slice(-(MAX_NAME - 21)).replace(/^_/, '')
+}
+// a unique name within `taken`, suffix inside the 32
+const unique = (base, taken) => {
+  let n = fit(base), i = 2
+  while (taken.has(n)) { const suf = '_' + i++; n = fit(base).slice(0, MAX_NAME - suf.length) + suf }
+  taken.add(n)
+  return n
+}
+const quote = (s) => String(s ?? '').replace(/\\/g, '/').replace(/"/g, "'")
 const num = (v) => (Number.isFinite(+v) ? String(+(+v).toPrecision(12)) : '0')
 
 // The firmware's CanOutputs::CalcDlc: the byte holding the signal's last bit, plus one.
@@ -34,28 +50,27 @@ export function buildDbc(frames) {
   const msgs = new Map()
   for (const f of frames) {
     const k = `${f.ide ? 'x' : 's'}:${f.id}:${clean(f.msg)}`
-    if (!msgs.has(k)) msgs.set(k, { id: f.id, ide: f.ide, name: clean(f.msg), node: clean(f.node), dlc: 0, sigs: [] })
+    if (!msgs.has(k)) msgs.set(k, { id: f.id, ide: f.ide, name: clean(f.msg), full: f.msg, node: clean(f.node), dlc: 0, sigs: [], taken: new Set() })
     const m = msgs.get(k)
     m.dlc = Math.max(m.dlc, f.dlc ?? 8)
     if (!f.sig) continue
-    let n = clean(f.sig.name), i = 2
-    while (m.sigs.some((s) => s.n === n)) n = clean(f.sig.name) + '_' + i++
-    m.sigs.push({ n, s: f.sig })
+    m.sigs.push({ n: unique(clean(f.sig.name), m.taken), s: f.sig })
   }
   const seenNames = new Set()
   let out = 'VERSION ""\n\nNS_ :\n\nBS_:\n\nBU_: ' + nodes.join(' ') + '\n\n'
-  const floats = []
+  const floats = [], notes = []
   for (const m of [...msgs.values()].sort((a, b) => a.id - b.id)) {
-    let name = m.name, i = 2
-    while (seenNames.has(name)) name = m.name + '_' + i++
-    seenNames.add(name)
+    const name = unique(m.name, seenNames)
     const dbcId = m.ide ? (m.id | 0x80000000) >>> 0 : m.id
     out += `BO_ ${dbcId} ${name}: ${m.dlc} ${m.node}\n`
+    if (name !== m.name) notes.push(`CM_ BO_ ${dbcId} "${quote(m.full)}";\n`)
     for (const { n, s } of m.sigs) {
-      out += ` SG_ ${n} : ${s.startBit}|${s.length}@${s.byteOrder == 1 ? 0 : 1}${s.isSigned ? '-' : '+'} (${num(s.factor ?? 1)},${num(s.offset ?? 0)}) [${num(s.min ?? 0)}|${num(s.max ?? 0)}] "${String(s.unit ?? '').replace(/"/g, "'")}" Vector__XXX\n`
+      out += ` SG_ ${n} : ${s.startBit}|${s.length}@${s.byteOrder == 1 ? 0 : 1}${s.isSigned ? '-' : '+'} (${num(s.factor ?? 1)},${num(s.offset ?? 0)}) [${num(s.min ?? 0)}|${num(s.max ?? 0)}] "${quote(s.unit)}" Vector__XXX\n`
       if (s.isFloat) floats.push(`SIG_VALTYPE_ ${dbcId} ${n} : 1;\n`)
+      if (n !== clean(s.name)) notes.push(`CM_ SG_ ${dbcId} ${n} "${quote(s.name)}";\n`)
     }
     out += '\n'
   }
-  return out + floats.join('')
+  // comments (the full names) come before SIG_VALTYPE_ in the DBC section order
+  return out + (notes.length ? notes.join('') + '\n' : '') + floats.join('')
 }

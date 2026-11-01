@@ -31,4 +31,18 @@ assert.match(dbc, /BO_ 1451 Dash_shutdown: 3 CB_1\n SG_ Dash_shutdown_counter : 
 // fixed bytes with nothing to decode: the message is still declared
 assert.match(dbc, /BO_ 1452 Plain: 8 CB_1\n\n/)
 
+// names over 32 characters are shortened (start + end kept, still unique) and the full text goes in a CM_ comment
+{
+  const long = (sig) => ({ node: 'PDM-03', id: 0x6d5, ide: false, msg: 'PDM-03_6D5', sig: { name: sig, startBit: 0, length: 8, byteOrder: 0, factor: 1, offset: 0 } })
+  const d = buildDbc([long('Spare (cooldown moved to CB-2 DI1) Millivolts'), long('Spare (cooldown moved to CB-2 DI1) Pos'), long('Spare (cooldown moved to CB-2 DI1) Pos')])
+  const names = [...d.matchAll(/^ SG_ (\S+) /gm)].map((x) => x[1])
+  assert.equal(names.length, 3)
+  assert.equal(new Set(names).size, 3, 'still unique')
+  assert.ok(names.every((n) => n.length <= 32), names.join(' '))
+  assert.ok(names[0].endsWith('Millivolts') && names[1].endsWith('Pos'), names.join(' '))
+  assert.match(d, /CM_ SG_ 1749 \S+ "Spare \(cooldown moved to CB-2 DI1\) Millivolts";/)
+  assert.equal((d.match(/^CM_ /gm) ?? []).length, 3)
+  assert.ok(!/^CM_ /m.test(dbc), 'names that fit get no comment')
+}
+
 console.log('dbcexport.test.js: all assertions passed')
