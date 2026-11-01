@@ -99,6 +99,52 @@ export function supplyCurrentMa(rk, { vsupMv, rpu, rin = R_IN }) {
   return vsupMv / (rpu + p)
 }
 
+// ---- Inline (series) circuit ------------------------------------------------------------------
+// Supply → one series resistor Rs (e.g. 1k at the plug) → the switch's common → at each position its
+// own resistor Rk → all legs joined on one wire to the input. The board's R_IN to ground is the only
+// pull-down: V = Vsup·Rin/(Rs+Rk+Rin). Between detents nothing connects, so the input reads 0 V
+// ("no position"), and a broken wire reads the same.
+export const seriesMaxMv = ({ vsupMv, rs, rin = R_IN }) => vsupMv * rin / (rs + rin)
+
+export function seriesVoltageMv(rk, { vsupMv, rs, rin = R_IN }) {
+  return isFinite(rk) ? vsupMv * rin / (rs + Math.max(0, rk) + rin) : 0
+}
+
+// Leg resistor for a target voltage: 0 (a plain wire) at/above the top the circuit can reach,
+// Infinity (open) at/below 0 V.
+export function seriesResistorForMv(mv, { vsupMv, rs, rin = R_IN }) {
+  if (mv <= 0) return Infinity
+  const r = vsupMv * rin / mv - rs - rin
+  return r <= 0 ? 0 : r
+}
+
+// N positions evenly spaced below the top, leaving half a step of headroom so the top leg still has
+// a resistor: V_k = top·(k+1)/(n+0.5). Rs 1k, 4 positions → 56k/20k/8.2k/2k ≈ 1.0/2.1/3.1/4.2 V.
+export function recommendSeries(n, { vsupMv, rs, rin = R_IN, series = 'E24' }) {
+  const top = Math.min(seriesMaxMv({ vsupMv, rs, rin }), V_ADC_MAX_MV)
+  return Array.from({ length: n }, (_, k) => {
+    const target = top * (k + 1) / (n + 0.5)
+    const r = nearestStandard(seriesResistorForMv(target, { vsupMv, rs, rin }), series)
+    return { r, mv: seriesVoltageMv(r, { vsupMv, rs, rin }), target }
+  })
+}
+
+export const seriesCurrentMa = (rk, { vsupMv, rs, rin = R_IN }) =>
+  isFinite(rk) ? vsupMv / (rs + Math.max(0, rk) + rin) : 0
+
+// One interface over both circuits for the designer: 'ground' = pull-up + a resistor to ground per
+// position (the original), 'inline' = series resistor + a resistor per leg.
+export function circuitFor(kind, { vsupMv, rpu, rs, rin = R_IN }) {
+  if (kind === 'inline') {
+    const o = { vsupMv, rs, rin }
+    return { voltage: (r) => seriesVoltageMv(r, o), resistorFor: (mv) => seriesResistorForMv(mv, o),
+             recommend: (n) => recommendSeries(n, o), current: (r) => seriesCurrentMa(r, o) }
+  }
+  const o = { vsupMv, rpu, rin }
+  return { voltage: (r) => nodeVoltageMv(r, o), resistorFor: (mv) => resistorForMv(mv, o),
+           recommend: (n) => recommendResistors(n, o), current: (r) => supplyCurrentMa(r, o) }
+}
+
 export const NO_POS = 15   // firmware ROTARY_NO_POS — reading is in a dead zone / fault
 
 // Auto sensing tolerance (half-window, mV) for the calibrated-points decode: a fraction of the

@@ -1,7 +1,7 @@
 // Self-check: `node ladder.test.js`. No framework — the logic that decides switch
 // positions must round-trip, so this proves recommended resistors actually decode back.
 import assert from 'node:assert/strict'
-import { nearestStandard, recommendResistors, deriveBands, decodePos, nodeVoltageMv, resistorForMv, recommendPullup, supplyCurrentMa, ocVoltageMv, autoTolerance, decodePoints, NO_POS, R_IN, V_ADC_MAX_MV } from './ladder.js'
+import { nearestStandard, recommendResistors, deriveBands, decodePos, nodeVoltageMv, resistorForMv, recommendPullup, supplyCurrentMa, ocVoltageMv, autoTolerance, decodePoints, NO_POS, R_IN, V_ADC_MAX_MV, seriesMaxMv, seriesVoltageMv, seriesResistorForMv, recommendSeries, circuitFor } from './ladder.js'
 
 // nearest standard value snaps in log space
 assert.equal(nearestStandard(4700, 'E24'), 4700)
@@ -77,6 +77,35 @@ assert.ok(supplyCurrentMa(680, ci) > 0 && supplyCurrentMa(680, ci) < 50, 'curren
   // tolerance is bounded: a far-apart 2-position switch is capped, not half-rail
   assert.ok(autoTolerance([500, 4500]) <= 300, '2-pos tolerance capped')
   assert.equal(decodePoints(2500, [500, 4500], autoTolerance([500, 4500])), NO_POS, '2-pos middle is dead zone, not a position')
+}
+
+// inline (series) circuit: 5 V → Rs → switch → a resistor per leg → input (board R_IN to ground)
+{
+  const so = { vsupMv: 5000, rs: 1000 }
+  assert.ok(Math.abs(seriesMaxMv(so) - 5000 * R_IN / (1000 + R_IN)) < 0.01, 'top = Rs and Rin divider')
+  assert.equal(seriesVoltageMv(Infinity, so), 0, 'between detents (open) reads 0 V')
+  for (const mv of [800, 2000, 3500]) {
+    const r = seriesResistorForMv(mv, so)
+    assert.ok(Math.abs(seriesVoltageMv(r, so) - mv) < 1, `series roundtrip ${mv}mV`)
+  }
+  assert.equal(seriesResistorForMv(4900, so), 0, 'above the top: a plain wire')
+  // the user's own 4-leg example, 56k/22k/9.1k/2.7k ≈ 1.03/1.95/2.96/3.99 V
+  const own = [56000, 22000, 9100, 2700].map((r) => seriesVoltageMv(r, so) / 1000)
+  ;[1.03, 1.95, 2.96, 3.99].forEach((v, i) => assert.ok(Math.abs(own[i] - v) < 0.02, `own leg ${i}: ${own[i].toFixed(2)} V`))
+  for (let n = 2; n <= 8; n++) {
+    const rows = recommendSeries(n, so)
+    const mvs = rows.map((x) => x.mv)
+    for (let k = 0; k < n; k++) assert.ok(isFinite(rows[k].r) && rows[k].r > 0, `series n=${n} leg ${k} has a resistor`)
+    for (let k = 1; k < n; k++) assert.ok(mvs[k] > mvs[k - 1], `series n=${n} monotonic`)
+    assert.ok(mvs[0] > 400, `series n=${n} lowest leg clear of the 0 V "no position"`)
+    const t = autoTolerance(mvs)
+    for (let k = 0; k < n; k++) assert.equal(decodePoints(mvs[k], mvs, t), k, `series n=${n} pos ${k} decodes`)
+    assert.equal(decodePoints(0, mvs, t), NO_POS, `series n=${n}: 0 V (between detents / broken wire) is no position`)
+  }
+  // the factory picks the right maths
+  const g = circuitFor('ground', { vsupMv: 5000, rpu: 470 }), s = circuitFor('inline', { vsupMv: 5000, rs: 1000 })
+  assert.equal(g.voltage(Infinity) > 4000, true, 'ground: open position is the top')
+  assert.equal(s.voltage(Infinity), 0, 'inline: open is 0 V')
 }
 
 console.log('ladder.test.js: all assertions passed')
