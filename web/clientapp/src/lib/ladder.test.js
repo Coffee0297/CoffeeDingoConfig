@@ -1,7 +1,7 @@
 // Self-check: `node ladder.test.js`. No framework — the logic that decides switch
 // positions must round-trip, so this proves recommended resistors actually decode back.
 import assert from 'node:assert/strict'
-import { nearestStandard, recommendResistors, deriveBands, decodePos, nodeVoltageMv, resistorForMv, recommendPullup, supplyCurrentMa, ocVoltageMv, autoTolerance, decodePoints, NO_POS, R_IN, V_ADC_MAX_MV, seriesMaxMv, seriesVoltageMv, seriesResistorForMv, recommendSeries, circuitFor } from './ladder.js'
+import { nearestStandard, recommendResistors, deriveBands, decodePos, nodeVoltageMv, resistorForMv, recommendPullup, supplyCurrentMa, ocVoltageMv, autoTolerance, decodePoints, NO_POS, R_IN, V_ADC_MAX_MV, seriesMaxMv, seriesVoltageMv, seriesResistorForMv, recommendSeries, circuitFor, neighbours, distinct } from './ladder.js'
 
 // nearest standard value snaps in log space
 assert.equal(nearestStandard(4700, 'E24'), 4700)
@@ -106,6 +106,17 @@ assert.ok(supplyCurrentMa(680, ci) > 0 && supplyCurrentMa(680, ci) < 50, 'curren
   const g = circuitFor('ground', { vsupMv: 5000, rpu: 470 }), s = circuitFor('inline', { vsupMv: 5000, rs: 1000 })
   assert.equal(g.voltage(Infinity) > 4000, true, 'ground: open position is the top')
   assert.equal(s.voltage(Infinity), 0, 'inline: open is 0 V')
+}
+
+// positions in any voltage order (firmware 5.7.10): same cases as the firmware host test
+{
+  const pts = [0, 4530, 2890]
+  assert.ok(distinct(pts) && !distinct([1000, 2000, 1000]))
+  ;[[0, 0], [4530, 1], [2890, 2], [4230, 1], [4229, NO_POS], [3190, 2], [3191, NO_POS]].forEach(([mv, k]) => assert.equal(decodePoints(mv, pts, 300), k, `any order ${mv}`))
+  const mid = [1000, 1400, 1100]
+  ;[[1050, 0], [1051, 2], [1249, 2], [1251, 1]].forEach(([mv, k]) => assert.equal(decodePoints(mv, mid, 300), k, `between ${mv}`))
+  assert.deepEqual(neighbours(mid), [{ lo: null, hi: 2 }, { lo: 2, hi: null }, { lo: 0, hi: 1 }])
+  assert.equal(autoTolerance([0, 4530, 2890]), 300)
 }
 
 console.log('ladder.test.js: all assertions passed')

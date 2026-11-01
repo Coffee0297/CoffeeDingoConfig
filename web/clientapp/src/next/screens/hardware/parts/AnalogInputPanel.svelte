@@ -5,10 +5,10 @@
   import { live, isCanboard } from '../../../lib/live.svelte.js'
   import { href } from '../../../router.svelte.js'
   import { pinFor, ioTag } from '../../../../lib/pinmap.js'
-  import { autoTolerance, decodePoints, NO_POS, nodeVoltageMv, recommendPullup, resistorForMv, nearestStandard } from '../../../../lib/ladder.js'
+  import { autoTolerance, decodePoints, distinct, NO_POS, nodeVoltageMv, recommendPullup, resistorForMv, nearestStandard } from '../../../../lib/ladder.js'
   import { inputModel } from './input.svelte.js'
   import { signalFeed, ring } from './feeds.svelte.js'
-  import { resample, isUpstream, lacks, has } from './util.js'
+  import { resample, isUpstream, lacks, has, ownLine, olderThan } from './util.js'
   import SaveBar from './SaveBar.svelte'
   import UsedBy from './UsedBy.svelte'
   import LadderDesigner from './LadderDesigner.svelte'
@@ -26,6 +26,8 @@
   // holds 8 positions (no sub 20 = positions 9-10)
   const calOk = $derived(up && !lacks(dev, [0, 0, 0], 0x2200, 13))
   const maxCal = $derived(up && !has(dev, 0x2200, 20) ? 8 : 10)
+  // 5.7.10 decodes the position voltages in any order; older firmware needs them ascending
+  const anyOrder = $derived(ownLine(dev) && !olderThan(dev?.version, [5, 7, 10]))
 
   // ---- form ----
   const VSUP = 5000, OPTS = { vsupMv: VSUP, rpu: recommendPullup({ vsupMv: VSUP }) }
@@ -59,12 +61,13 @@
   const offs = $derived(f ? Number(f.lowX) - gain * Number(f.lowV) * 1000 : 0)
   const mvs = $derived(f ? f.rot.rows.map((r) => r.mv) : [])
   const tol = $derived(f ? (f.rot.tolAuto ? autoTolerance(mvs) : Number(f.rot.tol) || 200) : 200)
-  const ascending = $derived(mvs.every((v, i) => i === 0 || v > mvs[i - 1]))
+  const ordered = $derived(anyOrder ? distinct(mvs) : mvs.every((v, i) => i === 0 || v > mvs[i - 1]))
   const problem = $derived.by(() => {
     if (!f || !dirty) return ''
     if (!String(f.name).trim()) return 'Give the input a name.'
     if (f.mode === 'linear' && Number(f.highV) === Number(f.lowV)) return 'The two voltages must be different.'
-    if (f.mode === 'ladder' && !ascending) return 'The position voltages must go up with the position number.'
+    if (f.mode === 'ladder' && !distinct(mvs)) return 'Two positions have the same voltage.'
+    if (f.mode === 'ladder' && !ordered) return 'The position voltages must go up with the position number (firmware 5.7.10 takes any order).'
     if (f.mode === 'uniform' && !(Number(f.uni.stepMv) > 0)) return 'The step must be above 0 mV.'
     if (f.mode === 'linear' && !(Math.abs(gain) <= 1e9 && Math.abs(offs) <= 1e9)) return 'The two points give a scale the module cannot hold (above 1e9).'
     if (up && f.mode === 'ladder' && f.rot.rows.length > maxCal) return `This module holds at most ${maxCal} positions.`
@@ -129,7 +132,7 @@
         : { kind: 'on', text: `Position ${mp}${f.mode === 'ladder' ? ' · ' + (f.rot.rows[f.rot.invert ? f.rot.rows.length - 1 - mp : mp]?.name ?? '') : ''} · ${V.toFixed(2)} V`, v: V }
     }
     const pts = f.rot.rows.map((r) => r.mv)
-    const p = ascending ? decodePoints(mv, pts, tol) : NO_POS
+    const p = ordered ? decodePoints(mv, pts, tol) : NO_POS
     const pos = p === NO_POS ? null : (f.rot.invert ? pts.length - 1 - p : p)
     return pos == null ? { kind: 'off', text: 'No position · ' + V.toFixed(2) + ' V', v: V } : { kind: 'on', text: `Position ${pos} · ${f.rot.rows[p]?.name} · ${V.toFixed(2)} V`, v: V }
   })
@@ -197,7 +200,7 @@
     {:else if f.mode === 'ladder'}
       <div class="cols one">
         <div class="col">
-          <LadderDesigner bind:rot={f.rot} liveMv={mv} {online} {steady} maxPos={up ? maxCal : 10} />
+          <LadderDesigner bind:rot={f.rot} liveMv={mv} {online} {steady} maxPos={up ? maxCal : 10} {anyOrder} />
           <UsedBy {guid} items={M.usedBy} hint={'Each position is also its own on / off signal, for example "' + (f.name || 'Switch') + ' is ' + (f.rot.rows[2]?.name ?? 'Low') + '".'} />
         </div>
       </div>

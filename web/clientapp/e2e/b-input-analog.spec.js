@@ -116,10 +116,10 @@ test('resistor ladder: presets, count, overlap check, order check, then save', a
     await page.getByLabel('Resistor for position 1 in ohms').fill('230'); await page.getByLabel('Resistor for position 1 in ohms').blur()
     await expect(page.getByText('Two positions overlap')).toBeVisible()
     await expect(page.getByTestId('ladder-table')).toContainText(/Overlaps/)
-    // out of order blocks Save
-    await page.getByLabel('Resistor for position 1 in ohms').fill('100'); await page.getByLabel('Resistor for position 1 in ohms').blur()
-    await expect(page.getByText('The voltages must go up with the position number')).toBeVisible()
-    await expect(page.getByTestId('save-status')).toContainText('must go up')
+    // the same voltage as another position blocks Save (any order is fine on 5.7.10; older firmware is not on the Sim)
+    await page.getByLabel('Resistor for position 1 in ohms').fill('1000'); await page.getByLabel('Resistor for position 1 in ohms').blur()
+    await expect(page.getByText('Two positions have the same voltage')).toBeVisible()
+    await expect(page.getByTestId('save-status')).toContainText('same voltage')
     await expect(page.getByTestId('save')).toBeDisabled()
     // evenly spaced + 3 positions, then count stepper
     await page.getByRole('radio', { name: 'Evenly spaced, 5' }).click()

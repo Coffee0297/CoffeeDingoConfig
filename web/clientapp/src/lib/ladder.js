@@ -152,22 +152,36 @@ export const NO_POS = 15   // firmware ROTARY_NO_POS — reading is in a dead zo
 // band. This is the cap; the firmware further clamps each side at the midpoint to its neighbour.
 export function autoTolerance(mvs, { min = 75, max = 300 } = {}) {
   if (mvs.length < 2) return max
+  const s = [...mvs].sort((a, b) => a - b)
   let gap = Infinity
-  for (let i = 1; i < mvs.length; i++) gap = Math.min(gap, Math.abs(mvs[i] - mvs[i - 1]))
+  for (let i = 1; i < s.length; i++) gap = Math.min(gap, s[i] - s[i - 1])
   return Math.round(Math.max(min, Math.min(max, 0.4 * gap)))
 }
 
+// For each point, the index of the nearest point below and above it by voltage (null at the ends), in any
+// position order. Equal voltages count as neither: check `distinct` separately.
+export function neighbours(points) {
+  return points.map((c) => {
+    let lo = null, hi = null
+    points.forEach((p, j) => {
+      if (p < c && (lo === null || p > points[lo])) lo = j
+      if (p > c && (hi === null || p < points[hi])) hi = j
+    })
+    return { lo, hi }
+  })
+}
+export const distinct = (points) => new Set(points).size === points.length
+
 // Calibrated-points decode, mirrored EXACTLY from firmware analog_input.cpp RotaryUpdate (points
 // mode): the position whose window contains mv, else NO_POS. Half-width each side = min(tol,
-// gap-to-neighbour/2); the ends are capped at tol. `points` must be ascending. invert handled by caller.
+// gap to the nearest voltage that side / 2); the ends are capped at tol. Firmware 5.7.10+ takes the points in any
+// order (older firmware compared index neighbours, so it needs them ascending). invert handled by caller.
 export function decodePoints(mv, points, tol) {
-  const n = points.length
-  for (let k = 0; k < n; k++) {
-    const c = points[k]
-    const gapLo = (k === 0) ? tol * 2 : c - points[k - 1]
-    const gapHi = (k === n - 1) ? tol * 2 : points[k + 1] - c
-    const halfLo = Math.min(tol, Math.floor(gapLo / 2))
-    const halfHi = Math.min(tol, Math.floor(gapHi / 2))
+  const nb = neighbours(points)
+  for (let k = 0; k < points.length; k++) {
+    const c = points[k], { lo, hi } = nb[k]
+    const halfLo = lo === null ? tol : Math.min(tol, Math.trunc((c - points[lo]) / 2))
+    const halfHi = hi === null ? tol : Math.min(tol, Math.trunc((points[hi] - c) / 2))
     if (mv >= c - halfLo && mv <= c + halfHi) return k
   }
   return NO_POS
