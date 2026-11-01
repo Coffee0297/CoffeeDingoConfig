@@ -4,7 +4,7 @@
   import { onMount } from 'svelte'
   import { Card, Button, Chip, Banner, Dialog, Empty, Field, Segmented, Select, Checkbox } from '../../../ui/index.js'
   import { live, api, toast, project, isPdm, isCanboard, hex } from '../../../lib/live.svelte.js'
-  import { buildDbc } from './dbcexport.js'
+  import { buildDbc, moduleTxFrames } from './dbcexport.js'
   import { ECU_TEMPLATES, ROLES } from '../../../../lib/ecutemplates.js'
   import { addCanInputFromFrame } from '../../../../lib/apply.js'
   const ECU_DBC = import.meta.glob('../../../../lib/ecu-dbc/*.dbc', { query: '?raw', import: 'default', eager: true })
@@ -206,6 +206,7 @@
       for (const m of mods) {
         const sigs = (await api.broadcastSignals(m.guid)) ?? []
         for (const s of sigs) frames.push({ node: m.name, id: m.baseId + s.offset, ide: false, msg: `${m.name}_${hex(m.baseId + s.offset).slice(2)}`, sig: { name: s.label || s.name, startBit: s.startBit, length: s.bitLength, byteOrder: s.byteOrder, isSigned: s.signed, isFloat: s.isFloat, factor: s.factor, offset: s.valueOffset, unit: s.unit } })
+        frames.push(...moduleTxFrames(m.name, await api.functions(m.guid)))   // its own CAN outputs and CAN messages
       }
       let capped = false
       if (inc.ecu) for (const d of devs) {
@@ -247,7 +248,7 @@
 
     <div class="exp">
       <h3>Export one combined DBC</h3>
-      <Checkbox bind:checked={inc.mod} label="dingo modules" hint="Their broadcast frames, built from the live project" />
+      <Checkbox bind:checked={inc.mod} label="dingo modules" hint="Their status frames and their own CAN outputs and messages, from the live project" />
       <Checkbox bind:checked={inc.ecu} label="ECU devices" hint="{devs.length} imported {devs.length === 1 ? 'device' : 'devices'}" />
       <Button onclick={doExport} busy={exBusy} data-testid="dbc-export">Export .dbc</Button>
       {#if exNote}<p class="muted" role="status" data-testid="dbc-export-note">{exNote}</p>{/if}
