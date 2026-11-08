@@ -53,8 +53,33 @@ internal class ParamProtocol(IDeviceConfigurable device, List<DeviceParameter> @
     // Upstream: the order the module sent its params in (= its CRC order) and the raw values of unknown ones.
     private readonly List<(int Index, int SubIndex)> _readOrder = new();
     private readonly Dictionary<(int Index, int SubIndex), uint> _readRaw = new();
+    // Upstream: the wire value of every param the last full Read received (for filling a gap, below).
+    private readonly Dictionary<(int Index, int SubIndex), uint> _readVal = new();
+    // A full Read through a USB bridge on a busy bus loses a few replies. With the module's list known (saved in the
+    // project), the missing params are asked one by one and the read counts as complete only if the CRC over the
+    // list then equals the module's. Missing = keys still awaited; Order/Crc/Count = the module's list and checks.
+    private (List<(int Index, int SubIndex)> Order, HashSet<(int Index, int SubIndex)> Missing, uint Crc, int Count)? _fill;
+    private const int MaxFill = 64;
     // Upstream: the params a failed full WriteAll did not get (WriteAllMissing), reported with the failure.
     private readonly List<(int Index, int SubIndex)> _writeMissing = new();
+    // Upstream full WriteAll short by a few params: the module keeps what arrived and lists what did not, so only
+    // those are sent again (into the same staged write) and the WriteAllComplete repeated. A full re-send on a busy
+    // bus loses a few others each time, and the old one-by-one fallback flooded the bridge for minutes.
+    private const int MaxTopUps = 6;
+    private int _topUps;
+    private int _missedCount;
+    private uint _missedCrc;
+    private bool _awaitMissing;
+    private Dictionary<(int Index, int SubIndex), CanFrame> _lastWriteVals = new();
+    private List<CanFrame> _lastWriteOrder = [];
+    private CanFrame? _lastComplete;
+    /// <summary>A WriteAllComplete said "short" and the missed params are being sent again: not the final verdict.</summary>
+    public bool WriteAllPending => _awaitMissing;
+    /// <summary>A Read All is being completed by asking for its missing params one by one.</summary>
+    public bool ReadFillPending => _fill != null;
+    // The module sends no status while it takes a WriteAll (4-5 s through the USB bridge): not "gone" until this passes.
+    private DateTime _writeBusyUntil;
+    public bool WriteAllBusy => DateTime.Now < _writeBusyUntil;
 
     public void SetLogger(ILogger logger) => _logger = logger;
 
@@ -99,6 +124,14 @@ internal class ParamProtocol(IDeviceConfigurable device, List<DeviceParameter> @
                 index = data[2] << 8 | data[1];
                 subIndex = data[3];
 
+                if (_fill is { } refused && refused.Missing.Contains((index, subIndex)))
+                {
+                    _fill = null;
+                    _tempParamValues.Clear();
+                    _writeBusyUntil = default;
+                    _logger.LogError("{Name} ID: {BaseId}, Read All Incomplete: the module does not have 0x{index:X}:{sub} from the saved list", name, baseId, index, subIndex);
+                }
+
                 matchingParam = _params.FirstOrDefault(p => p.Index == index && p.SubIndex == subIndex);
 
                 var paramName = "";
@@ -141,6 +174,13 @@ internal class ParamProtocol(IDeviceConfigurable device, List<DeviceParameter> @
                 index = data[2] << 8 | data[1];
                 subIndex = data[3];
 
+                if ((MessageCommand)data[0] == MessageCommand.Read && _fill is { } gap && gap.Missing.Remove((index, subIndex)))
+                {
+                    if (queue.TryRemove((baseId, index, subIndex), out var gapFrame)) gapFrame.TimeSentTimer?.Dispose();
+                    FillReply(name, baseId, txId, index, subIndex, data, outgoing);
+                    break;
+                }
+
                 matchingParam = _params.FirstOrDefault(p => p.Index == index && p.SubIndex == subIndex)
                     // a locked upstream module still answers the contact text, before any Read could teach the list
                     ?? (index == ConfigLock.BaseIndex ? @params.FirstOrDefault(p => p.Index == index && p.SubIndex == subIndex) : null);
@@ -170,6 +210,9 @@ internal class ParamProtocol(IDeviceConfigurable device, List<DeviceParameter> @
                 _deviceOnly.Clear();
                 _readOrder.Clear();
                 _readRaw.Clear();
+                _readVal.Clear();
+                _fill = null;
+                _writeBusyUntil = DateTime.Now.AddSeconds(10);   // quiet while it streams the list, too
 
                 _readAllCount = 0;
                 device.Lock.Locked = false;   // it started sending its config
@@ -202,6 +245,7 @@ internal class ParamProtocol(IDeviceConfigurable device, List<DeviceParameter> @
                 _readOrder.Add((index, subIndex));
                 _readCrc32.Update(data.Skip(4).Take(4).ToArray());
                 _readAllCount++;
+                _readVal[(index, subIndex)] = (uint)(data[4] | data[5] << 8 | data[6] << 16 | data[7] << 24);
 
                 matchingParam = ReadCandidates.FirstOrDefault(p => p.Index == index && p.SubIndex == subIndex);
                 if (matchingParam is null)
@@ -243,80 +287,13 @@ internal class ParamProtocol(IDeviceConfigurable device, List<DeviceParameter> @
                 uint readAllCrc = (uint)(data[7] << 24 | data[6] << 16 | data[5] << 8 | data[4]);
 
                 if (readAllCrc == _readCrc32.Final)
-                {
-                    // Upstream: a full Read is the module's param list, in its CRC order. Learn it before the diff, so
-                    // the diff and every later read/write/CRC use exactly the params this module has.
-                    if (Upstream && !_readModifiedOnly)
-                    {
-                        device.ParamSet.Learn([.. _readOrder], new(_readRaw));
-                        ParamSetLearned?.Invoke();
-                    }
-// Diff the device's values against the app's CURRENT config BEFORE we overwrite them,
-                    // so we can explain exactly what didn't match (value diffs + params each side is missing).
-                    var diff = new List<ConfigDiffEntry>();
-                    foreach (var param in _params)
-                    {
-                        var paramKey = (param.Index, param.SubIndex);
-                        if (param.WriteOnly) continue;   // reads 0 whatever it holds
-                        if (!_readReceived.Contains(paramKey) && _readModifiedOnly)
-                        {
-                            // Not sent in a modified-only read = the device holds the default.
-                            if (!ValuesEqual(param.GetValue(), param.DefaultValue))
-                                diff.Add(new ConfigDiffEntry(param.Name, param.Index, param.SubIndex, "value", FormatVal(param.GetValue()), FormatVal(param.DefaultValue)));
-                        }
-                        else if (!_readReceived.Contains(paramKey))
-                        {
-                            // App has this param but the device never sent it — device firmware older than the app.
-                            diff.Add(new ConfigDiffEntry(param.Name, param.Index, param.SubIndex, "appOnly", FormatVal(param.GetValue()), null));
-                        }
-                        else if (_tempParamValues.TryGetValue(paramKey, out var dv) && !ValuesEqual(param.GetValue(), dv))
-                        {
-                            diff.Add(new ConfigDiffEntry(param.Name, param.Index, param.SubIndex, "value", FormatVal(param.GetValue()), FormatVal(dv)));
-                        }
-                    }
-                    diff.AddRange(_deviceOnly);
-                    device.LastConfigDiff = diff;
-
-                    // After a 5.7 migration the project is what counts: learn the list (above), keep the values, Apply them next.
-                    if (device.KeepValuesOnRead && Upstream && !_readModifiedOnly)
-                    {
-                        device.KeepValuesOnRead = false;
-                        _tempParamValues.Clear();
-                        device.ConfigMismatch = diff.Any(d => d.Kind == "value");
-                        _logger.LogInformation("{Name} ID: {BaseId}, Read learned the param list and kept the migrated project ({n} difference(s) to Apply)", name, baseId, diff.Count);
-                        NotifySuccess?.Invoke($"{name}: Read the module's settings list and kept the migrated project. Apply to car, then Store.");
-                    }
-                    else
-                    {
-                        // End of params, apply all temporary values to actual properties
-                        foreach (var param in _params)
-                        {
-                            var paramKey = (param.Index, param.SubIndex);
-                            if (_tempParamValues.TryGetValue(paramKey, out var value))
-                            {
-                                param.SetValue(value);
-                            }
-                        }
-
-                        _tempParamValues.Clear();
-                        // The app now holds the device's config — they're in sync. Remaining entries are
-                        // param-set/version differences, kept for display but no longer a content mismatch.
-                        device.ConfigMismatch = false;
-                        if (diff.Count == 0)
-                            _logger.LogInformation("{Name} ID: {BaseId}, Read complete — config matches ({readAllCount} params)", name, baseId, readAllCount);
-                        else
-                        {
-                            var v = diff.Count(d => d.Kind == "value"); var a = diff.Count(d => d.Kind == "appOnly"); var dz = diff.Count(d => d.Kind == "deviceOnly");
-                            _logger.LogWarning("{Name} ID: {BaseId}, Read complete — {n} config difference(s): {v} value, {a} app-only, {d} device-only", name, baseId, diff.Count, v, a, dz);
-                            foreach (var d in diff.Take(40))
-                                _logger.LogWarning("{Name}: config diff [{kind}] {param} (0x{idx:X4}:{sub}) app='{app}' device='{dev}'", name, d.Kind, d.Name, d.Index, d.SubIndex, d.AppValue ?? "—", d.DeviceValue ?? "—");
-                        }
-                        NotifySuccess?.Invoke(diff.Count == 0 ? $"{name}: Read Successful — config matches" : $"{name}: Read Successful — {diff.Count} difference(s), see Logs");
-                    }
-                }
+                    FinishRead(name, baseId, readAllCount);
+                else if (StartFill(name, baseId, txId, readAllCount, readAllCrc, outgoing))
+                    break;   // CheckCrc follows the fill
                 else
                 {
                     _tempParamValues.Clear();
+                    _writeBusyUntil = default;
                     _logger.LogError("{Name} ID: {BaseId}, Read All Incomplete {pdmCrc} != {thisCrc}, {fromPdm} vs {received}",
                                         name, baseId, readAllCrc, _readCrc32.Final, readAllCount, _readAllCount);
                 }
@@ -418,6 +395,7 @@ internal class ParamProtocol(IDeviceConfigurable device, List<DeviceParameter> @
                 if (Upstream ? data[3] == 1 : writeAllCrc == _writeCrc32.Final)
                 {
                     _writeMissing.Clear();
+                    _writeBusyUntil = default;
                     // The device acknowledged every param the app sent — they're in sync now.
                     _writeAllRetries = 0;
                     device.ConfigMismatch = false;
@@ -426,34 +404,19 @@ internal class ParamProtocol(IDeviceConfigurable device, List<DeviceParameter> @
                         name, baseId, writeAllCrc, _writeCrc32.Final, writeAllCount);
                     NotifySuccess?.Invoke($"{name}: Write Successful");
                 }
-                else if (_writeAllRetries < MaxWriteAllRetries)
+                else if (Upstream && _writeAllCmd == MessageCommand.WriteAll && data[3] == 0 && writeAllCount < _writeAllCount && _topUps < MaxTopUps)
                 {
-                    _writeAllRetries++;
-                    _logger.LogWarning("{Name} ID: {BaseId}, Write All incomplete ({fromPdm} of {sent} params arrived), retry {Try}/{Max}",
-                        name, baseId, writeAllCount, _writeAllCount, _writeAllRetries, MaxWriteAllRetries);
-                    outgoing.Add(new DeviceCanFrame
-                    {
-                        DeviceBaseId = baseId,
-                        Frame = new CanFrame(Id: txId, Len: 8, Payload: [Convert.ToByte(_writeAllCmd), 0, 0, 0, 0, 0, 0, 0]),
-                        Name = "WriteAll (retry)"
-                    });
+                    // the list of what it missed follows (WriteAllMissing ... WriteAllMissingDone): resend those there
+                    _awaitMissing = true;
+                    _writeMissing.Clear();
+                    _missedCount = writeAllCount; _missedCrc = writeAllCrc;
+                    _logger.LogInformation("{Name} ID: {BaseId}, Write All short ({fromPdm} of {sent} params arrived): waiting for the module's list of what it missed",
+                        name, baseId, writeAllCount, _writeAllCount);
                     break;
                 }
-                else
-                {
-                    _writeAllRetries = 0;
-                    _logger.LogError("{Name} ID: {BaseId}, Write All Failed {pdmCrc} != {thisCrc}, {fromPdm} vs {received}",
-                        name, baseId, writeAllCrc, _writeCrc32.Final, writeAllCount, _writeAllCount);
-                    if (_writeMissing.Count > 0)
-                        _logger.LogError("{Name}: the module did not get {Params}", name,
-                            string.Join(", ", _writeMissing.Select(k => @params.FirstOrDefault(p => (p.Index, p.SubIndex) == k)?.Name ?? $"0x{k.Index:X4}:{k.SubIndex}")));
-                    // The device keeps its old config when the count/CRC don't match: say so, don't let a
-                    // following burn look like it stored the new one.
-                    device.ConfigMismatch = true;
-                    if (WriteAllFailed?.Invoke() != true)
-                        NotifyError?.Invoke($"{name}: Write failed — device received {writeAllCount} of {_writeAllCount} params, config NOT applied");
-                }
-                
+                else if (NotApplied(name, baseId, txId, writeAllCount, writeAllCrc, outgoing))
+                    break;   // re-sent in full
+
                 outgoing.Add(new DeviceCanFrame
                 {
                     DeviceBaseId = baseId,
@@ -475,6 +438,29 @@ internal class ParamProtocol(IDeviceConfigurable device, List<DeviceParameter> @
                 _logger.LogWarning("{Name} ID: {BaseId}, module missed {Count} param(s) of the Write All: {Params}", name, baseId,
                     missingCount == 0xFFFF ? "many" : missingCount.ToString(),
                     string.Join(", ", _writeMissing.Select(k => $"0x{k.Index:X4}:{k.SubIndex}")));
+                if (!_awaitMissing) break;
+                _awaitMissing = false;
+                // more than 16 missed: the module lists none ("many") but still keeps what arrived, so send every value
+                // again without a new WriteAll (that would clear it); each pass only adds, and the next list is short
+                var every = missingCount == 0xFFFF && _writeMissing.Count == 0;
+                if ((every || (_writeMissing.Count > 0 && _writeMissing.All(_lastWriteVals.ContainsKey))) && _lastComplete is { } done)
+                {
+                    _topUps++;
+                    _writeBusyUntil = DateTime.Now.AddSeconds(10);
+                    foreach (var f in every ? _lastWriteOrder : _writeMissing.Select(k => _lastWriteVals[k]))
+                        outgoing.Add(new DeviceCanFrame { DeviceBaseId = baseId, SendOnly = true, Frame = f, Name = "WriteAll top-up" });
+                    outgoing.Add(new DeviceCanFrame { DeviceBaseId = baseId, Frame = done, Name = "WriteAllComplete" });
+                    _logger.LogInformation("{Name} ID: {BaseId}, sending {What} again (round {r}/{max})", name, baseId,
+                        every ? "every param (it missed too many to list)" : $"the {_writeMissing.Count} missed param(s)", _topUps, MaxTopUps);
+                }
+                else if (!NotApplied(name, baseId, txId, _missedCount, _missedCrc, outgoing))
+                    outgoing.Add(new DeviceCanFrame
+                    {
+                        DeviceBaseId = baseId,
+                        SendOnly = true,
+                        Frame = new CanFrame(Id: txId, Len: 8, Payload: [Convert.ToByte(MessageCommand.CheckCrc), 0, 0, 0, 0, 0, 0, 0]),
+                        Name = "CheckCRC"
+                    });
                 break;
 
             // Config lock (upstream feat/config-lock): a request refused while locked. [58, idxLo, idxHi, sub, refused cmd].
@@ -554,6 +540,178 @@ internal class ParamProtocol(IDeviceConfigurable device, List<DeviceParameter> @
         }
     }
 
+    private void FinishRead(string name, int baseId, int readAllCount)
+    {
+        _writeBusyUntil = default;
+        // Upstream: a full Read is the module's param list, in its CRC order. Learn it before the diff, so
+        // the diff and every later read/write/CRC use exactly the params this module has.
+        if (Upstream && !_readModifiedOnly)
+        {
+            device.ParamSet.Learn([.. _readOrder], new(_readRaw));
+            ParamSetLearned?.Invoke();
+        }
+        // Diff the device's values against the app's CURRENT config BEFORE we overwrite them,
+        // so we can explain exactly what didn't match (value diffs + params each side is missing).
+        var diff = new List<ConfigDiffEntry>();
+        foreach (var param in _params)
+        {
+            var paramKey = (param.Index, param.SubIndex);
+            if (param.WriteOnly) continue;   // reads 0 whatever it holds
+            if (!_readReceived.Contains(paramKey) && _readModifiedOnly)
+            {
+                // Not sent in a modified-only read = the device holds the default.
+                if (!ValuesEqual(param.GetValue(), param.DefaultValue))
+                    diff.Add(new ConfigDiffEntry(param.Name, param.Index, param.SubIndex, "value", FormatVal(param.GetValue()), FormatVal(param.DefaultValue)));
+            }
+            else if (!_readReceived.Contains(paramKey))
+            {
+                // App has this param but the device never sent it — device firmware older than the app.
+                diff.Add(new ConfigDiffEntry(param.Name, param.Index, param.SubIndex, "appOnly", FormatVal(param.GetValue()), null));
+            }
+            else if (_tempParamValues.TryGetValue(paramKey, out var dv) && !ValuesEqual(param.GetValue(), dv))
+            {
+                diff.Add(new ConfigDiffEntry(param.Name, param.Index, param.SubIndex, "value", FormatVal(param.GetValue()), FormatVal(dv)));
+            }
+        }
+        diff.AddRange(_deviceOnly);
+        device.LastConfigDiff = diff;
+
+        // After a 5.7 migration the project is what counts: learn the list (above), keep the values, Apply them next.
+        if (device.KeepValuesOnRead && Upstream && !_readModifiedOnly)
+        {
+            device.KeepValuesOnRead = false;
+            _tempParamValues.Clear();
+            device.ConfigMismatch = diff.Any(d => d.Kind == "value");
+            _logger.LogInformation("{Name} ID: {BaseId}, Read learned the param list and kept the migrated project ({n} difference(s) to Apply)", name, baseId, diff.Count);
+            NotifySuccess?.Invoke($"{name}: Read the module's settings list and kept the migrated project. Apply to car, then Store.");
+        }
+        else
+        {
+            // End of params, apply all temporary values to actual properties
+            foreach (var param in _params)
+            {
+                var paramKey = (param.Index, param.SubIndex);
+                if (_tempParamValues.TryGetValue(paramKey, out var value))
+                {
+                    param.SetValue(value);
+                }
+            }
+
+            _tempParamValues.Clear();
+            // The app now holds the device's config — they're in sync. Remaining entries are
+            // param-set/version differences, kept for display but no longer a content mismatch.
+            device.ConfigMismatch = false;
+            if (diff.Count == 0)
+                _logger.LogInformation("{Name} ID: {BaseId}, Read complete — config matches ({readAllCount} params)", name, baseId, readAllCount);
+            else
+            {
+                var v = diff.Count(d => d.Kind == "value"); var a = diff.Count(d => d.Kind == "appOnly"); var dz = diff.Count(d => d.Kind == "deviceOnly");
+                _logger.LogWarning("{Name} ID: {BaseId}, Read complete — {n} config difference(s): {v} value, {a} app-only, {d} device-only", name, baseId, diff.Count, v, a, dz);
+                foreach (var d in diff.Take(40))
+                    _logger.LogWarning("{Name}: config diff [{kind}] {param} (0x{idx:X4}:{sub}) app='{app}' device='{dev}'", name, d.Kind, d.Name, d.Index, d.SubIndex, d.AppValue ?? "—", d.DeviceValue ?? "—");
+            }
+            NotifySuccess?.Invoke(diff.Count == 0 ? $"{name}: Read Successful — config matches" : $"{name}: Read Successful — {diff.Count} difference(s), see Logs");
+        }
+    }
+
+    /// <summary>Upstream full Read short by a few replies: ask the missing ones (see _fill). False = cannot fill.</summary>
+    private bool StartFill(string name, int baseId, int txId, int readAllCount, uint readAllCrc, List<DeviceCanFrame> outgoing)
+    {
+        var order = device.ParamSet.Order;
+        if (!Upstream || _readModifiedOnly || order.Count != readAllCount || readAllCount - _readAllCount is < 1 or > MaxFill) return false;
+        // what arrived must be the saved list minus the gaps, in the same order
+        var got = _readOrder.ToHashSet();
+        if (!_readOrder.SequenceEqual(order.Where(got.Contains))) return false;
+        var missing = order.Where(k => !got.Contains(k)).ToHashSet();
+        _fill = ([.. order], missing, readAllCrc, readAllCount);
+        _writeBusyUntil = DateTime.Now.AddSeconds(10);
+        foreach (var (i, sub) in missing)
+            outgoing.Add(new DeviceCanFrame
+            {
+                DeviceBaseId = baseId,
+                Frame = new CanFrame(txId, 8, [(byte)MessageCommand.Read, (byte)(i & 0xFF), (byte)(i >> 8), (byte)sub, 0, 0, 0, 0]),
+                Name = $"Read gap {i:X}:{sub}"
+            });
+        _logger.LogInformation("{Name} ID: {BaseId}, Read All short by {n} of {count}: asking for them one by one", name, baseId, missing.Count, readAllCount);
+        return true;
+    }
+
+    /// <summary>A gap param arrived (single Read reply). The last one completes the read if the CRC over the list matches.</summary>
+    private void FillReply(string name, int baseId, int txId, int index, int subIndex, byte[] data, List<DeviceCanFrame> outgoing)
+    {
+        var f = _fill!.Value;
+        _readVal[(index, subIndex)] = (uint)(data[4] | data[5] << 8 | data[6] << 16 | data[7] << 24);
+        if (f.Missing.Count > 0) return;
+        _fill = null;
+        var crc = new CumulativeCrc32();
+        foreach (var k in f.Order) crc.Update(BitConverter.GetBytes(_readVal[k]));
+        if (crc.Final != f.Crc)
+        {
+            _tempParamValues.Clear();
+            _writeBusyUntil = default;
+            _logger.LogError("{Name} ID: {BaseId}, Read All Incomplete: the filled list does not match the module's CRC ({crc} != {mod})", name, baseId, crc.Final, f.Crc);
+        }
+        else
+        {
+            foreach (var k in f.Order.Where(k => !_readReceived.Contains(k)))
+            {
+                _readReceived.Add(k);
+                var p = ReadCandidates.FirstOrDefault(x => x.Index == k.Index && x.SubIndex == k.SubIndex);
+                var bytes = BitConverter.GetBytes(_readVal[k]);
+                if (p is null) _readRaw[k] = _readVal[k];
+                else _tempParamValues[k] = DecodeValue(p, [0, 0, 0, 0, bytes[0], bytes[1], bytes[2], bytes[3]]);
+            }
+            _readOrder.Clear(); _readOrder.AddRange(f.Order);
+            _readAllCount = f.Count;
+            _logger.LogInformation("{Name} ID: {BaseId}, Read All completed by asking for the missing params; CRC matches", name, baseId);
+            FinishRead(name, baseId, f.Count);
+        }
+        outgoing.Add(new DeviceCanFrame
+        {
+            DeviceBaseId = baseId,
+            SendOnly = true,
+            Frame = new CanFrame(Id: txId, Len: 8, Payload: [Convert.ToByte(MessageCommand.CheckCrc), 0, 0, 0, 0, 0, 0, 0]),
+            Name = "CheckCRC"
+        });
+    }
+
+    /// <summary>The module did not take the WriteAll: re-send it in full (true) or give up (false, CheckCrc follows).</summary>
+    private bool NotApplied(string name, int baseId, int txId, int writeAllCount, uint writeAllCrc, List<DeviceCanFrame> outgoing)
+    {
+        if (_writeAllRetries < MaxWriteAllRetries)
+        {
+            _writeAllRetries++;
+            _logger.LogWarning("{Name} ID: {BaseId}, Write All incomplete ({fromPdm} of {sent} params arrived), retry {Try}/{Max}",
+                name, baseId, writeAllCount, _writeAllCount, _writeAllRetries, MaxWriteAllRetries);
+            outgoing.Add(new DeviceCanFrame
+            {
+                DeviceBaseId = baseId,
+                Frame = new CanFrame(Id: txId, Len: 8, Payload: [Convert.ToByte(_writeAllCmd), 0, 0, 0, 0, 0, 0, 0]),
+                Name = "WriteAll (retry)"
+            });
+            return true;
+        }
+        else
+        {
+            _writeAllRetries = 0;
+            _writeBusyUntil = default;
+            _logger.LogError("{Name} ID: {BaseId}, Write All Failed {pdmCrc} != {thisCrc}, {fromPdm} vs {received}",
+                name, baseId, writeAllCrc, _writeCrc32.Final, writeAllCount, _writeAllCount);
+            if (_writeMissing.Count > 0)
+                _logger.LogError("{Name}: the module did not get {Params}", name,
+                    string.Join(", ", _writeMissing.Select(k => @params.FirstOrDefault(p => (p.Index, p.SubIndex) == k)?.Name ?? $"0x{k.Index:X4}:{k.SubIndex}")));
+            // The device keeps its old config when the count/CRC don't match: say so, don't let a
+            // following burn look like it stored the new one.
+            device.ConfigMismatch = true;
+            // upstream: no one-by-one fallback (3500 acknowledged writes flooded the bridge for minutes and applied the
+            // config piecemeal); the missed-param top-up above already had its rounds
+            if (Upstream || WriteAllFailed?.Invoke() != true)
+                NotifyError?.Invoke($"{name}: Write failed — device received {writeAllCount} of {_writeAllCount} params, config NOT applied");
+        }
+        
+        return false;
+    }
+
     private List<DeviceCanFrame> BuildWriteAllMsgs(int baseId, int txId, bool allParams)
     {
         List<DeviceCanFrame> msgs = [];
@@ -573,6 +731,10 @@ internal class ParamProtocol(IDeviceConfigurable device, List<DeviceParameter> @
                 });
         }
         _writeAllCount = msgs.Count;
+        _topUps = 0; _awaitMissing = false;
+        _writeBusyUntil = DateTime.Now.AddSeconds(10);
+        _lastWriteOrder = msgs.Select(m => m.Frame).ToList();
+        _lastWriteVals = msgs.GroupBy(m => (m.Frame.Payload[2] << 8 | m.Frame.Payload[1], (int)m.Frame.Payload[3])).ToDictionary(g => g.Key, g => g.First().Frame);
         foreach (var m in msgs)
             _writeCrc32.Update(m.Frame.Payload.Skip(4).Take(4).ToArray());
 
@@ -591,6 +753,7 @@ internal class ParamProtocol(IDeviceConfigurable device, List<DeviceParameter> @
                     0, .. (Upstream ? BitConverter.GetBytes(_writeCrc32.Final) : new byte[4])]),
             Name = "WriteAllComplete"
         });
+        _lastComplete = msgs[^1].Frame;
 
         return msgs;
     }

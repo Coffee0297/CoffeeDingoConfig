@@ -23,16 +23,24 @@ export function onTimeBeforeTrip(samples) {
  */
 export function tripReason(evt, out = {}) {
   const peakA = evt.peakA ?? evt.maxA ?? 0;
-  const steady = out.currentLimit ?? evt.limitA ?? evt.limit ?? 0;
+  // the module's own steady limit at the time (in the log): the project may have changed since (an old trip
+  // judged against today's settings read "31 A > inrush limit 60 A")
+  const steady = evt.limitA ?? evt.limit ?? out.currentLimit ?? 0;
   const onS = onTimeBeforeTrip(evt.samples);
   const inrushMs = out.inrushTime ?? 0;
-  const inInrush = inrushMs > 0 && out.inrushLimit != null && (onS === null ? false : onS * 1000 < inrushMs);
+  // an inrush trip needs the current above the inrush limit: below it, the module's window must have been over
+  const inInrush = inrushMs > 0 && out.inrushLimit != null && (onS === null ? false : onS * 1000 < inrushMs) && peakA > out.inrushLimit;
   const kind = inInrush ? 'inrush' : 'steady';
   const limitA = inInrush ? out.inrushLimit : steady;
+  // a steady trip: the current just before it, not the turn-on spike (the waveform's 40 ms points can hide it: then the peak)
+  const lastA = Math.max(0, ...(evt.samples ?? []).filter((s) => s.dt <= 0 && s.dt > -0.2).map((s) => s.i ?? 0));
+  const shownA = inInrush || !(lastA > steady) ? peakA : lastA;
   const when = onS === null ? '' : onS < 0.05 ? ' at turn-on' : ` ${onS.toFixed(onS < 1 ? 2 : 1)} s after turn-on`;
   const label = inInrush ? `inrush limit ${limitA} A (first ${inrushMs} ms)` : `limit ${limitA} A`;
-  const text = `Overcurrent${when}: ${peakA.toFixed(1)} A peak > ${label}`;
-  return { kind, limitA, label, onS, peakA, text, clears: clearsText(evt.state, out) };
+  const text = `Overcurrent${when}: ${shownA.toFixed(1)} A ${shownA === peakA ? 'peak ' : ''}> ${label}`;
+  const note = !inInrush && out.currentLimit != null && evt.limitA != null && out.currentLimit !== evt.limitA
+    ? `The module had a ${evt.limitA} A limit then; the project now has ${out.currentLimit} A.` : '';
+  return { kind, limitA, label, onS, peakA: shownA, text, note, clears: clearsText(evt.state, out) };
 }
 
 /** What clears a latched Fault: a power cycle, and (upstream fault clear) the output's input going off and on

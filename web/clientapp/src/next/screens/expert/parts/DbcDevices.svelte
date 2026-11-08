@@ -4,7 +4,7 @@
   import { onMount } from 'svelte'
   import { Card, Button, Chip, Banner, Dialog, Empty, Field, Segmented, Select, Checkbox } from '../../../ui/index.js'
   import { live, api, toast, project, isPdm, isCanboard, hex } from '../../../lib/live.svelte.js'
-  import { buildDbc } from './dbcexport.js'
+  import { buildDbc, moduleTxFrames } from './dbcexport.js'
   import { ECU_TEMPLATES, ROLES } from '../../../../lib/ecutemplates.js'
   import { addCanInputFromFrame } from '../../../../lib/apply.js'
   const ECU_DBC = import.meta.glob('../../../../lib/ecu-dbc/*.dbc', { query: '?raw', import: 'default', eager: true })
@@ -206,10 +206,11 @@
       for (const m of mods) {
         const sigs = (await api.broadcastSignals(m.guid)) ?? []
         for (const s of sigs) frames.push({ node: m.name, id: m.baseId + s.offset, ide: false, msg: `${m.name}_${hex(m.baseId + s.offset).slice(2)}`, sig: { name: s.label || s.name, startBit: s.startBit, length: s.bitLength, byteOrder: s.byteOrder, isSigned: s.signed, isFloat: s.isFloat, factor: s.factor, offset: s.valueOffset, unit: s.unit } })
+        frames.push(...moduleTxFrames(m.name, await api.functions(m.guid)))   // its own CAN outputs and CAN messages
       }
       let capped = false
       if (inc.ecu) for (const d of devs) {
-        const r = await api.dbcSignals(d.guid, 2000)
+        const r = await api.dbcSignals(d.guid, 20000)
         if ((r?.count ?? 0) > (r?.items?.length ?? 0)) capped = true
         for (const s of r?.items ?? []) frames.push({ node: d.name, id: s.id, ide: !!s.ide, msg: s.messageName || `${d.name}_${hex(s.id).slice(2)}`, sig: { name: s.name, startBit: s.startBit, length: s.length, byteOrder: s.byteOrder, isSigned: s.isSigned, isFloat: false, factor: s.factor, offset: s.offset, unit: s.unit, min: s.min, max: s.max } })
       }
@@ -218,7 +219,7 @@
       const a = document.createElement('a')
       a.href = URL.createObjectURL(blob); a.download = 'dingo-combined.dbc'; document.body.appendChild(a); a.click(); a.remove()
       setTimeout(() => URL.revokeObjectURL(a.href), 2000)
-      exNote = `Saved dingo-combined.dbc with ${frames.length} signals.` + (capped ? ' ECU devices with more than 2 000 signals were cut at 2 000 (the backend caps the list).' : '')
+      exNote = `Saved dingo-combined.dbc with ${frames.length} signals.` + (capped ? ' ECU devices with more than 20 000 signals were cut at 20 000 (the backend caps the list).' : '')
     } catch (e) { exNote = 'Export failed: ' + e.message } finally { exBusy = false }
   }
   const fmtV = (v) => (v == null ? '—' : Number.isInteger(v) ? String(v) : Number(v).toFixed(3))
@@ -247,7 +248,7 @@
 
     <div class="exp">
       <h3>Export one combined DBC</h3>
-      <Checkbox bind:checked={inc.mod} label="dingo modules" hint="Their broadcast frames, built from the live project" />
+      <Checkbox bind:checked={inc.mod} label="dingo modules" hint="Their status frames and their own CAN outputs and messages, from the live project" />
       <Checkbox bind:checked={inc.ecu} label="ECU devices" hint="{devs.length} imported {devs.length === 1 ? 'device' : 'devices'}" />
       <Button onclick={doExport} busy={exBusy} data-testid="dbc-export">Export .dbc</Button>
       {#if exNote}<p class="muted" role="status" data-testid="dbc-export-note">{exNote}</p>{/if}

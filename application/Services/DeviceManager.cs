@@ -35,7 +35,7 @@ public class DeviceManager(ILogger<DeviceManager> logger, ILoggerFactory loggerF
 
     public int QueueCount => _requestQueue.Count;
 
-    private const int MaxRetries = 2;
+    private const int MaxRetries = 3;   // 2 lost a WriteAll start twice in a row on a busy bridged bus
     private const int TimeoutMs = 3000;
 
     public event EventHandler<DeviceEventArgs>? DeviceAdded;
@@ -56,38 +56,58 @@ public class DeviceManager(ILogger<DeviceManager> logger, ILoggerFactory loggerF
     /// id starves the status frames and the UI flickers the device "not found". Re-armed by every config
     /// frame, so a chunked read/write holds it until the burst ends.
     /// </summary>
-    private void ArmConfigFilter(int baseId)
+    private void ArmConfigFilter(int baseId, bool bulk = false)
     {
         if (_setReceiveFilter is null) return;
         lock (_filterLock)
         {
             if (_filterOwned) return;
-            // Only on a flooded bus: narrowed, the bridge drops every other module's frames, and on a normal bus that
-            // cost more than it saved (a module's wake announcement, sent while the app talked to another, was lost).
-            if (!BusFlooded) return;
-            // The filter passes ONE module's block. When exchanges with two modules overlap (opening a project asks
-            // every module for its version and CRC while a write is still running), narrowing to the newer one hid
-            // the older one's reply: its write was never confirmed. Overlapping: open the filter until it is quiet.
-            var other = (_filterBase is { } b && b != baseId) || _confirms.Keys.Any(k => k.BaseId != baseId);
-            if (other || _filterBase == -1)
+            // Unfiltered, the USB bridge on a busy bus loses config replies (with the ECU on the bus, many of a 3500-frame
+            // transfer and often the one WriteAllComplete answer). So the module with an exchange running keeps the filter
+            // until it is done; another module's request (the app's background checks) does not take it away: that reply
+            // may be lost and is asked again later. A full read/write always narrows; a small request only on a flooded bus.
+            var cur = _filterBase ?? -1;
+            if (cur >= 0 && cur != baseId && ExchangeRunning(cur)) return;
+            if (bulk || BusFlooded)
             {
-                _filterBase = -1;
-                _setReceiveFilter(null, null);
-                domain.Devices.RxFilterWindow.Lift();
-            }
-            else
-            {
+                if (cur != baseId) logger.LogInformation("RX filter: only 0x{Base:X} ({Why})", baseId, bulk ? "full read/write" : "busy bus");
                 _filterBase = baseId;
                 _setReceiveFilter(baseId, baseId + 15);   // config reply (base+0), status (base+2..) and XCP (base+12/13)
                 domain.Devices.RxFilterWindow.Narrow(baseId, baseId + 15);   // the other modules aren't gone, just hidden
             }
-            _filterIdleTimer ??= new System.Threading.Timer(_ =>
+            else if (cur >= 0 && cur != baseId)
             {
-                lock (_filterLock) { _filterBase = null; _setReceiveFilter?.Invoke(null, null); domain.Devices.RxFilterWindow.Lift(); }
-            });
+                // a small exchange on a normal bus wants no filter, but one left narrowed to the module before hides its reply
+                logger.LogInformation("RX filter: lifted for 0x{Base:X} (was 0x{Old:X})", baseId, cur);
+                _filterBase = null;
+                _setReceiveFilter(null, null);
+                domain.Devices.RxFilterWindow.Lift();
+                return;
+            }
+            else if (cur != baseId) return;
+            _filterIdleTimer ??= new System.Threading.Timer(_ => LiftWhenQuiet());
             _filterIdleTimer.Change(FilterIdleMs, Timeout.Infinite);
         }
     }
+
+    // Lift the filter once its module's exchange is over; while it still awaits answers, look again later.
+    private void LiftWhenQuiet()
+    {
+        lock (_filterLock)
+        {
+            if (_filterOwned) return;   // a CAN flash aimed the adapter at its bootloader: only it lifts the filter
+            if (_filterBase is { } b && b >= 0 && ExchangeRunning(b)) { _filterIdleTimer?.Change(FilterIdleMs, Timeout.Infinite); return; }
+            if (_filterBase != null) logger.LogInformation("RX filter: lifted (quiet)");
+            _filterBase = null; _setReceiveFilter?.Invoke(null, null); domain.Devices.RxFilterWindow.Lift();
+        }
+    }
+
+    // A request to the module still awaits its answer, a write/burn waits for its confirmation, or it is in a Write All /
+    // Read All (sending no status meanwhile)
+    private bool ExchangeRunning(int baseId) =>
+        // both time-bound (the confirmation's own timeout, 10 s after the last transfer activity); not the request queue,
+        // where a background check left behind held the filter on a finished module and shut the next one out
+        _confirms.Keys.Any(k => k.BaseId == baseId) || (GetDeviceByBaseId(baseId) is IDeviceConfigurable { WriteAllBusy: true });
     private int? _filterBase;   // module the filter passes now; -1 = open because exchanges overlap; null = lifted
     // Bus load, measured while the filter is open (narrowed, it hides most frames): frames per second.
     private long _rxWindowStart = Environment.TickCount64, _rxInWindow, _rxRate;
@@ -371,7 +391,12 @@ public class DeviceManager(ILogger<DeviceManager> logger, ILoggerFactory loggerF
                 device.Read(frame.Id, frame.Payload, ref _requestQueue, outgoing);
                 if (device is IDeviceConfigurable { Migrate57Pending: true } mc) MigrateTo57([mc]);
                 if (outgoing.Count > 0)
+                {
+                    // replies that expect an answer (WriteAllComplete, a full WriteAll retry, the Read gap-fill) are tracked
+                    // like any queued request: untracked, one lost answer hung the write until its 30 s timeout
+                    foreach (var f in outgoing) if (!f.SendOnly) Track(f);
                     _batchTransmitCallback?.Invoke(outgoing);
+                }
                 if (frame.Id == device.BaseId) RecordConfirm(device, frame, outgoing);
                 else NoteAwake(device);
             }
@@ -401,9 +426,13 @@ public class DeviceManager(ILogger<DeviceManager> logger, ILoggerFactory loggerF
             CheckConfig(device.Guid);
             return;
         }
-        if (cmd == domain.Enums.MessageCommand.WriteAllComplete)
+        // a short WriteAll is completed by re-sending what the module listed as missed (ParamProtocol): the verdict
+        // is the WriteAllComplete after that, or the missed list when it gives up
+        if (cmd is domain.Enums.MessageCommand.WriteAllComplete or domain.Enums.MessageCommand.WriteAllMissingDone)
         {
-            if (outgoing.Any(f => f.Name == "WriteAll (retry)")) return;   // CRC short, ParamProtocol re-sends: not final
+            if (outgoing.Any(f => f.Name is "WriteAll (retry)" or "WriteAllComplete")) return;   // re-sent: not final
+            if (device is IDeviceConfigurable { WriteAllPending: true }) return;   // the missed list follows
+            cmd = domain.Enums.MessageCommand.WriteAllComplete;
             ok = device is IDeviceConfigurable { ConfigMismatch: false };    // ParamProtocol cleared it on a CRC match
         }
         else if (cmd == domain.Enums.MessageCommand.BurnParams) ok = frame.Payload[4] == 1;
@@ -486,8 +515,14 @@ public class DeviceManager(ILogger<DeviceManager> logger, ILoggerFactory loggerF
         if (!ParamsKnown(d) && d is IDeviceConfigurable { KeepValuesOnRead: true } kd && !OlderLine(d))
         {
             logger.LogInformation("{Name}: learning its list of settings (Read, the project's values are kept) before writing", d.Name);
-            ReadDeviceConfig(deviceId);
-            for (var t = 0; t < 600 && !kd.ParamSet.FromModule; t++) await Task.Delay(100);   // ~1 s on a module, longer on a busy bus
+            // a 3500-param read through the USB bridge can lose a reply (Read All Incomplete): read again, up to 4 times
+            for (var attempt = 0; attempt < 4 && !kd.ParamSet.FromModule; attempt++)
+            {
+                ReadDeviceConfig(deviceId);
+                // ~1 s on a module, longer on a busy bus; a short read still asking for its gaps gets up to 20 s (a new Read
+                // would throw that away and start over)
+                for (var t = 0; t < 200 && !kd.ParamSet.FromModule && (t < 80 || kd.ReadFillPending); t++) await Task.Delay(100);
+            }
         }
         if (!ParamsKnown(d)) { logger.LogWarning("{Name}: upstream firmware, its param list is not read yet: not writing", d.Name); return false; }
         return await Confirmed(d, domain.Enums.MessageCommand.WriteAllComplete, () => all ? WriteAllDeviceConfig(deviceId) : WriteDeviceConfig(deviceId), 30000);
@@ -784,23 +819,26 @@ public class DeviceManager(ILogger<DeviceManager> logger, ILoggerFactory loggerF
         if (frame.Frame.Payload.Length > 0 &&
             frame.Frame.Id == frame.DeviceBaseId + PdmDevice.ConfigTxOffset &&
             (domain.Enums.MessageCommand)frame.Frame.Payload[0] != domain.Enums.MessageCommand.Bootloader)
-            ArmConfigFilter(frame.DeviceBaseId);
+            ArmConfigFilter(frame.DeviceBaseId, (domain.Enums.MessageCommand)frame.Frame.Payload[0] is domain.Enums.MessageCommand.ReadAll
+                or domain.Enums.MessageCommand.ReadAllModified or domain.Enums.MessageCommand.WriteAll or domain.Enums.MessageCommand.WriteAllModified);
 
         //Some messages have no response, don't queue
         if (frame.SendOnly) return;
+        Track(frame);
+    }
 
+    // Retried (OnFrameTransmitted starts the timer) until its answer removes it from the queue.
+    private void Track(DeviceCanFrame frame)
+    {
         int index = frame.Frame.Payload[2] << 8 | frame.Frame.Payload[1];
         int subIndex = frame.Frame.Payload[3];
 
         //Unique message key, used to find message in transmit queue later
         var key = (frame.DeviceBaseId, index, subIndex);
 
-        if (!_requestQueue.TryAdd(key, frame))
-        {
-            logger.LogWarning("Message already in queue: BaseId={BaseId}, Prefix={Prefix:X}, Index={Index}",
-                key.Item1, key.Item2, key.Item3);
-            return;
-        }
+        // a newer request with the same key (Version, ReadAll and WriteAll all use 0:0) replaces a leftover one, which
+        // otherwise kept the new one untracked: no retry, and its answer cleared nothing
+        _requestQueue.AddOrUpdate(key, frame, (_, old) => { old.TimeSentTimer?.Dispose(); return frame; });
 
         // NOTE: Timer starts after transmission in OnFrameTransmitted
     }
@@ -914,6 +952,8 @@ public class DeviceManager(ILogger<DeviceManager> logger, ILoggerFactory loggerF
     /// </summary>
     public void OnFrameTransmitted(DeviceCanFrame frame)
     {
+        // not while a CAN flash owns the filter: restarted, the idle timer lifted the flash's filter mid-programming
+        if (!_filterOwned && _filterBase is { } fb && fb >= 0 && frame.DeviceBaseId == fb) _filterIdleTimer?.Change(FilterIdleMs, Timeout.Infinite);
         if (frame.SendOnly) return;
 
         int index = frame.Frame.Payload[2] << 8 | frame.Frame.Payload[1];
@@ -1442,6 +1482,7 @@ public class DeviceManager(ILogger<DeviceManager> logger, ILoggerFactory loggerF
 
         return Task.Run(async () =>
         {
+            await _luaGate.WaitAsync();
             try
             {
                 for (int off = 0; off < bytes.Length; off += 5)
@@ -1457,7 +1498,7 @@ public class DeviceManager(ILogger<DeviceManager> logger, ILoggerFactory loggerF
                 var bad = new List<int>();
                 for (int round = 0; round < 3; round++)
                 {
-                    var back = System.Text.Encoding.ASCII.GetBytes(await ReadLua(deviceId));
+                    var back = System.Text.Encoding.ASCII.GetBytes(await ReadLuaCore(deviceId));
                     bad.Clear();
                     for (int off = 0; off < bytes.Length; off += 5)
                         for (int i = off; i < Math.Min(off + 5, bytes.Length); i++)
@@ -1496,7 +1537,19 @@ public class DeviceManager(ILogger<DeviceManager> logger, ILoggerFactory loggerF
                 logger.LogError(ex, "UploadLua failed for {Name}", device.Name);
                 return false;
             }
+            finally { _luaGate.Release(); }
         });
+    }
+
+    // One Lua upload or read at a time: they share the module's read-back buffer (each read clears it), so a write's
+    // upload overlapping another (UI + write, two writes) read back nothing, failed every round and never committed.
+    private readonly SemaphoreSlim _luaGate = new(1, 1);
+
+    public async Task<string> ReadLua(Guid deviceId)
+    {
+        await _luaGate.WaitAsync();
+        try { return await ReadLuaCore(deviceId); }
+        finally { _luaGate.Release(); }
     }
 
     /// <summary>
@@ -1504,7 +1557,7 @@ public class DeviceManager(ILogger<DeviceManager> logger, ILoggerFactory loggerF
     /// (5 bytes/reply) from offset 0 and accumulates until the null terminator.
     /// Uses a 0xFF sentinel so "not yet received" is distinct from a real '\0'.
     /// </summary>
-    public async Task<string> ReadLua(Guid deviceId)
+    private async Task<string> ReadLuaCore(Guid deviceId)
     {
         var p = GetDevice<PdmDevice>(deviceId);
         if (p == null) return "";

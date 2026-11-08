@@ -23,6 +23,13 @@ assert.equal(tripReason({ state: 'Fault', peakA: 20, limitA: 12, samples: wave(-
 
 // 0.5 s after turn-on, inside a 1000 ms window: inrush
 assert.equal(tripReason({ state: 'Fault', peakA: 63, samples: wave(-0.5) }, out).kind, 'inrush');
+// PDM-04 fuel pump: tripped 1.0 s after turn-on at ~14.5 A under the module's old 1 s window / 14 A limit; the project
+// now says 60 A inrush for 2 s and 18 A. Not "31 A peak > inrush limit 60 A": the module's 14 A limit, the current at the trip.
+const pump = Array.from({ length: 60 }, (_, k) => { const dt = -1.5 + k * 0.04; return { dt, i: dt < -1.0 ? 0 : dt < -0.92 ? 31 : dt <= 0 ? 14.5 : 0 }; });
+r = tripReason({ state: 'Overcurrent', peakA: 31, limitA: 14, samples: pump }, { currentLimit: 18, inrushLimit: 60, inrushTime: 2000, resetMode: 2, resetTime: 1000 });
+assert.equal(r.kind, 'steady'); assert.equal(r.limitA, 14);
+assert.match(r.text, /14\.5 A > limit 14 A/);
+assert.match(r.note, /14 A limit then; the project now has 18 A/);
 // upstream fault clear: re-assert and / or retry-all clear a latched Fault too
 assert.equal(clearsText('Fault', { clearOnReassert: true }), 'Latched — clears when its input switches off and on again or the module is power-cycled.');
 assert.equal(latchClears({ clearOnReassert: true }, true), 'its input switches off and on again, the retry-all signal turns on or the module is power-cycled');

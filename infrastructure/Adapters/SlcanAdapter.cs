@@ -45,8 +45,15 @@ public class SlcanAdapter : ICommsAdapter
     // batch write (or two queued writes from concurrent Read/Write/Flash requests) could
     // interleave bytes on the wire and corrupt CAN frames.
     private readonly object _writeLock = new();
-    // Batch pacing (WriteBatchAsync): frames per millisecond the module's param thread keeps up with
-    private const int BatchFramesPerMs = 1;
+    // Batch pacing (WriteBatchAsync): at most ~1000 frames/s (a module's param thread on its own USB link), and on a busy
+    // bus about half of what the other modules leave free: through a USB bridge a Write All at 1000 frames/s on top of
+    // ~2300 frames/s of traffic (an ECU on the bus) overflowed the bridge's CAN TX queue — the module missed params and
+    // the WriteAllComplete, sent last, was lost. Bus load is measured while nothing is filtered.
+    private const double BusFramesPerSecond = 3600;   // 500 kbit/s, 8-byte frames with stuffing
+    private volatile int _busRate;
+    private long _rateWindowStart = Environment.TickCount64;
+    private int _rateCount;
+    public static double PaceFor(int busRate) => Math.Clamp((BusFramesPerSecond - busRate) / 2, 500, 1000);
 
     // The transport must actually be open to be "connected" — without this, a failed Init (port
     // closed, RxTimeDelta still at its default Zero) reported IsConnected=true with no link.
@@ -407,16 +414,16 @@ public class SlcanAdapter : ICommsAdapter
             lock (_writeLock)
             {
                 var sent = 0;
+                var perMs = PaceFor(_busRate) / 1000.0;
                 var clock = System.Diagnostics.Stopwatch.StartNew();
                 foreach (var frame in frames)
                 {
                     if (frame.Payload.Length != 8) continue;
                     var len = EncodeFrame(frame, frameBuffer, 0);
                     WriteIo(frameBuffer, len);
-                    // A module's own USB link has no bus to pace it: a 3500-frame Write All overran the module's
-                    // 256-frame param queue even at ~2700 frames/s (the WriteAllComplete, sent last, was dropped and
-                    // nothing landed). Hold the batch to ~1000 frames/s by the clock, not by Sleep's 15 ms ticks.
-                    if (++sent > clock.ElapsedMilliseconds * BatchFramesPerMs) Thread.Sleep(1);
+                    // Paced by the clock, not by Sleep's 15 ms ticks (see PaceFor)
+                    sent++;
+                    while (sent > clock.ElapsedMilliseconds * perMs + 1) Thread.Sleep(1);
                 }
             }
         }
@@ -572,6 +579,12 @@ public class SlcanAdapter : ICommsAdapter
         try
         {
             if (RxStopwatch != null) { RxTimeDelta = new TimeSpan(RxStopwatch.ElapsedMilliseconds); RxStopwatch.Restart(); }
+            if (_acceptLo < 0 && _bridgeFilterId < 0)
+            {
+                _rateCount++;
+                var now = Environment.TickCount64;
+                if (now - _rateWindowStart >= 1000) { _busRate = (int)(_rateCount * 1000 / (now - _rateWindowStart)); _rateCount = 0; _rateWindowStart = now; }
+            }
             int id = 0;
             for (int k = 0; k < idLen; k++) id = (id << 4) | HexByteToInt(buf[off + 1 + k]);
             var payload = new byte[dlc > 0 ? dlc : 8];

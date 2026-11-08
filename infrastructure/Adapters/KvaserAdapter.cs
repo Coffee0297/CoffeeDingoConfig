@@ -105,15 +105,31 @@ public class KvaserAdapter : ICommsAdapter
         var data = new byte[8];
         Array.Copy(frame.Payload, data, 8);
         int status;
-        lock (_writeLock) status = canWrite(_handle, frame.Id, data, (uint)frame.Len, canMSG_STD);
+        // A full transmit buffer is not a lost device: an 836-frame Write All filled it, the adapter "disconnected" in
+        // the middle and the write was lost. Wait for room (up to ~1 s), and only a real error drops the link.
+        for (int tries = 0; ; tries++)
+        {
+            lock (_writeLock) status = canWrite(_handle, frame.Id, data, (uint)frame.Len, canMSG_STD);
+            if (status != canERR_TXBUFOFL || tries >= 50) break;
+            canWriteSync(_handle, 20);
+        }
         if (status != canOK) { HandleDisconnection(); return Task.FromResult(false); }
         return Task.FromResult(true);
     }
 
     public Task<bool> WriteBatchAsync(IReadOnlyList<CanFrame> frames, CancellationToken ct)
     {
+        // Paced like the USB adapter's batches: ~1 frame per ms, what a module's param queue keeps up with
         var ok = true;
-        foreach (var f in frames) ok &= WriteAsync(f, ct).Result;
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        var sent = 0;
+        foreach (var f in frames)
+        {
+            ok &= WriteAsync(f, ct).Result;
+            if (!ok) break;
+            sent++;
+            while (sent > clock.ElapsedMilliseconds + 1) Thread.Sleep(1);
+        }
         return Task.FromResult(ok);
     }
 
@@ -158,6 +174,7 @@ public class KvaserAdapter : ICommsAdapter
     // --- Kvaser CANlib P/Invoke (canlib32.dll ships with the Kvaser drivers) -----------------------------
     private const int canOK = 0;
     private const int canERR_NOMSG = -2;
+    private const int canERR_TXBUFOFL = -13;   // transmit buffer full
     private const uint canMSG_RTR = 0x0001;
     private const uint canMSG_STD = 0x0002;
     private const uint canMSG_EXT = 0x0004;
@@ -191,6 +208,8 @@ public class KvaserAdapter : ICommsAdapter
     private static extern int canClose(int hnd);
     [DllImport("canlib32", CallingConvention = CallingConvention.StdCall)]
     private static extern int canWrite(int hnd, long id, byte[] msg, uint dlc, uint flag);
+    [DllImport("canlib32", CallingConvention = CallingConvention.StdCall)]
+    private static extern int canWriteSync(int hnd, uint timeout);
     [DllImport("canlib32", CallingConvention = CallingConvention.StdCall)]
     private static extern int canReadWait(int hnd, out long id, byte[] msg, out uint dlc, out uint flag, out ulong time, long timeout);
 }

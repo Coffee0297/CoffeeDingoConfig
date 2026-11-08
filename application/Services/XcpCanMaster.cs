@@ -20,6 +20,7 @@ public sealed class XcpCanMaster(ICommsAdapterManager adapters, int baseId) : ID
     private const byte CmdProgramStart = 0xD2, CmdProgramClear = 0xD1, CmdProgram = 0xD0;
     private const byte CmdProgramReset = 0xCF, CmdProgramMax = 0xC9;
     private const byte PidRes = 0xFF;                 // positive response
+    private const int LateReplyDrainMs = 200;         // after a timeout: a late reply lands with nothing pending
 
     private readonly int _cmdId = baseId + 12;        // tool → bootloader
     private readonly int _respId = baseId + 13;       // bootloader → tool
@@ -83,6 +84,10 @@ public sealed class XcpCanMaster(ICommsAdapterManager adapters, int baseId) : ID
         if (done != tcs.Task)
         {
             lock (_gate) { if (_pending == tcs) _pending = null; }
+            // A reply can still come (a bootloader back from bus-off sends what it had queued). XCP has no sequence
+            // number, so it would answer the next command and every reply after it would be one behind: PDM-04's
+            // verify compared the wrong chunks (2026-10-28). With nothing pending it is dropped.
+            await Task.Delay(LateReplyDrainMs, ct).ConfigureAwait(false);
             return null;                              // timeout
         }
         return await tcs.Task.ConfigureAwait(false);
@@ -124,6 +129,16 @@ public sealed class XcpCanMaster(ICommsAdapterManager adapters, int baseId) : ID
         return false;
     }
 
+    /// <summary>Round trips to the bootloader before anything is erased: how many of <paramref name="rounds"/> replies
+    /// were lost. An update over a link that loses replies left modules erased, without firmware.</summary>
+    public async Task<int> LinkCheckAsync(int rounds, CancellationToken ct)
+    {
+        int lost = 0;
+        for (int i = 0; i < rounds && !ct.IsCancellationRequested; i++)
+            if (!Ok(await SendAsync([CmdGetStatus], 1, 500, ct).ConfigureAwait(false))) lost++;
+        return lost;
+    }
+
     public async Task<bool> GetStatusAsync(CancellationToken ct) => Ok(await SendAsync([CmdGetStatus], 1, 1000, ct).ConfigureAwait(false));
 
     public async Task<bool> ProgramStartAsync(CancellationToken ct)
@@ -163,21 +178,17 @@ public sealed class XcpCanMaster(ICommsAdapterManager adapters, int baseId) : ID
         while (offset < data.Length)
         {
             int n = Math.Min(chunk, data.Length - offset);
-            bool ok;
-            if (n == chunk)
-            {
-                var p = new byte[8];
-                p[0] = CmdProgramMax;
-                Array.Copy(data, offset, p, 1, n);
-                ok = Ok(await SendAsync(p, n + 1, 5000, ct).ConfigureAwait(false));
-            }
-            else
-            {
-                var p = new byte[8];
-                p[0] = CmdProgram; p[1] = (byte)n;
-                Array.Copy(data, offset, p, 2, n);
-                ok = Ok(await SendAsync(p, n + 2, 5000, ct).ConfigureAwait(false));
-            }
+            var p = new byte[8];
+            int len;
+            if (n == chunk) { p[0] = CmdProgramMax; Array.Copy(data, offset, p, 1, n); len = n + 1; }
+            else { p[0] = CmdProgram; p[1] = (byte)n; Array.Copy(data, offset, p, 2, n); len = n + 2; }
+            bool ok = Ok(await SendAsync(p, len, 2000, ct).ConfigureAwait(false));
+            // A lost reply ended the whole update, and the module was left erased. The bootloader may have written
+            // the chunk already: point MTA back at it and send it again (same bytes at the same address, into the
+            // block OpenBLT buffers in RAM), up to 3 times.
+            for (int retry = 0; !ok && retry < 3 && !ct.IsCancellationRequested; retry++)
+                ok = await ResyncAsync(address + (uint)offset, ct).ConfigureAwait(false)
+                     && Ok(await SendAsync(p, len, 2000, ct).ConfigureAwait(false));
             if (!ok) return false;
             offset += n;
             onBytes?.Invoke(offset);
@@ -185,19 +196,37 @@ public sealed class XcpCanMaster(ICommsAdapterManager adapters, int baseId) : ID
         return true;
     }
 
-    /// <summary>Read back a range via XCP UPLOAD (SET_MTA then chunked UPLOAD), for verify-after-program.</summary>
-    public async Task<byte[]?> ReadDataAsync(uint address, int length, Action<int>? onBytes, CancellationToken ct)
+    /// <summary>Wait out late or doubled replies (nothing pending: they are dropped), then point MTA at the address.</summary>
+    private async Task<bool> ResyncAsync(uint address, CancellationToken ct)
     {
-        if (!await SetMtaAsync(address, ct).ConfigureAwait(false)) return null;
+        await Task.Delay(LateReplyDrainMs, ct).ConfigureAwait(false);
+        return await SetMtaAsync(address, ct).ConfigureAwait(false);
+    }
+
+    /// <summary>Read back a range via XCP UPLOAD (SET_MTA then chunked UPLOAD), for verify-after-program. With
+    /// <paramref name="expected"/>, a chunk that differs is read again after a resync before it counts.</summary>
+    public async Task<byte[]?> ReadDataAsync(uint address, int length, Action<int>? onBytes, CancellationToken ct,
+        byte[]? expected = null)
+    {
         var result = new byte[length];
         int chunk = MaxDto - 1;
         if (chunk < 1) chunk = 1;
         int offset = 0;
+        bool mtaOk = await SetMtaAsync(address, ct).ConfigureAwait(false);
         while (offset < length)
         {
             int n = Math.Min(chunk, length - offset);
-            var r = await SendAsync([CmdUpload, (byte)n], 2, 2000, ct).ConfigureAwait(false);
+            bool Good(byte[]? x) => Ok(x) && x!.Length >= n + 1 &&
+                (expected is null || x.AsSpan(1, n).SequenceEqual(expected.AsSpan(offset, n)));
+            var r = mtaOk ? await SendAsync([CmdUpload, (byte)n], 2, 2000, ct).ConfigureAwait(false) : null;
+            // A lost reply, or one received twice (an error in a frame's last bit makes CAN send it again after some
+            // nodes took it), left every later reply one behind: PDM-04 and PDM-01 failed verify after good writes
+            // (2026-10-28). Drain, point MTA back at this chunk and read it again, up to 3 times.
+            for (int retry = 0; !Good(r) && retry < 3 && !ct.IsCancellationRequested; retry++)
+                r = await ResyncAsync(address + (uint)offset, ct).ConfigureAwait(false)
+                    ? await SendAsync([CmdUpload, (byte)n], 2, 2000, ct).ConfigureAwait(false) : null;
             if (!Ok(r) || r!.Length < n + 1) return null;
+            mtaOk = true;
             Array.Copy(r, 1, result, offset, n);
             offset += n;
             onBytes?.Invoke(offset);

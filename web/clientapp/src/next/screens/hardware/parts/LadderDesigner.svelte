@@ -2,29 +2,43 @@
   // Multi-position switch on an analog input: design a resistor ladder (H19) and teach the real switch (H07).
   // The form owns `rot` = { n, tolAuto, tol, invert, rows: [{ name, mv, r }] }; the page saves it.
   import { Card, Button, Segmented, Stepper, Field, Checkbox, Banner } from '../../../ui/index.js'
-  import { nodeVoltageMv, resistorForMv, nearestStandard, recommendResistors, recommendPullup, supplyCurrentMa, decodePoints, autoTolerance, NO_POS, R_IN } from '../../../../lib/ladder.js'
+  import { nearestStandard, recommendPullup, circuitFor, decodePoints, autoTolerance, neighbours, distinct, NO_POS } from '../../../../lib/ladder.js'
+  import LadderCircuit from './LadderCircuit.svelte'
 
-  let { rot = $bindable(), liveMv = null, online = false, steady = false, capture = true, maxPos = 10 } = $props()
+  // anyOrder: the module's firmware (5.7.10+) takes the voltages in any position order; older needs them ascending
+  let { rot = $bindable(), liveMv = null, online = false, steady = false, capture = true, maxPos = 10, anyOrder = false } = $props()
 
   const VSUP = 5000
   const RPU = recommendPullup({ vsupMv: VSUP })     // fixed on the board: 470 ohm
-  const opts = { vsupMv: VSUP, rpu: RPU }
+
+  // Which circuit the resistors are calculated for. The module only stores the voltages, so this is a
+  // per-viewer drawing aid: remembered in the browser, never saved to the module or the project.
+  const CIRCUITS = [{ value: 'ground', label: 'To ground', sub: 'pull-up, a resistor to ground per position' },
+                    { value: 'inline', label: 'Inline', sub: 'series resistor, a resistor per leg' }]
+  const load = (k, d) => { try { return localStorage.getItem(k) ?? d } catch { return d } }
+  let kind = $state(load('ladder.circuit', 'ground') === 'inline' ? 'inline' : 'ground')
+  let rs = $state(Number(load('ladder.rs', 1000)) || 1000)
+  $effect(() => { try { localStorage.setItem('ladder.circuit', kind); localStorage.setItem('ladder.rs', String(rs)) } catch { /* private mode: keep in memory */ } })
+  const c = $derived(circuitFor(kind, { vsupMv: VSUP, rpu: RPU, rs: Math.max(1, Number(rs) || 1000) }))
 
   const DEFAULT_NAMES = ['Off', 'Park', 'Low', 'High', 'Show']
   const PRESETS = [{ value: 'headlight', label: 'Headlight, 5 positions' }, { value: 'even', label: 'Evenly spaced, 5' }, { value: 'three', label: '3 positions' }]
   let preset = $state('')
 
-  const mkRow = (name, r) => ({ name, r, mv: Math.round(nodeVoltageMv(r, opts)) })
+  const mkRow = (name, r) => ({ name, r, mv: Math.round(c.voltage(r)) })
   function applyPreset(id) {
-    if (id === 'headlight') rot.rows = ['Off', 'Park', 'Low', 'High', 'Show'].map((nm, i) => mkRow(nm, [220, 470, 1000, 2200, 4700][i]))
+    if (id === 'headlight' && kind === 'ground') rot.rows = ['Off', 'Park', 'Low', 'High', 'Show'].map((nm, i) => mkRow(nm, [220, 470, 1000, 2200, 4700][i]))
     else {
       const n = id === 'three' ? 3 : 5
       const names = n === 3 ? ['Off', 'Low', 'High'] : DEFAULT_NAMES
-      rot.rows = recommendResistors(n, opts).map((x, i) => ({ name: names[i], r: x.r, mv: Math.round(x.mv) }))
+      rot.rows = c.recommend(n).map((x, i) => ({ name: names[i], r: x.r, mv: Math.round(x.mv) }))
     }
     rot.n = rot.rows.length
     cal = 0
   }
+  // The resistor shown for a position in the chosen circuit: the one typed, while it still gives this
+  // voltage, else the nearest standard value that does (switching circuits keeps the voltages).
+  const rFor = (row) => (Math.abs(c.voltage(row.r) - row.mv) < 5 ? row.r : nearestStandard(c.resistorFor(row.mv)))
   function setCount(n) {
     n = Math.max(2, Math.min(maxPos, Math.round(Number(n) || 2)))
     const rows = rot.rows.slice(0, n)
@@ -36,28 +50,32 @@
     const t = String(text).trim().toLowerCase()
     const r = t === '' || t === 'open' || t === 'inf' ? Infinity : Number(t)
     if (!Number.isFinite(r) && r !== Infinity) return
-    rot.rows[i] = { ...rot.rows[i], r, mv: Math.round(nodeVoltageMv(r > 0 ? r : Infinity, opts)) }
+    rot.rows[i] = { ...rot.rows[i], r, mv: Math.round(c.voltage(kind === 'ground' && !(r > 0) ? Infinity : r)) }
   }
   function setV(i, volts) {
     const mv = Math.round((Number(volts) || 0) * 1000)
-    rot.rows[i] = { ...rot.rows[i], mv, r: nearestStandard(resistorForMv(mv, opts)) }
+    rot.rows[i] = { ...rot.rows[i], mv, r: nearestStandard(c.resistorFor(mv)) }
   }
   const rText = (r) => (r === Infinity ? 'open' : String(r))
 
   const mvs = $derived(rot.rows.map((r) => r.mv))
   const tol = $derived(rot.tolAuto ? autoTolerance(mvs) : Number(rot.tol) || 200)
+  // Gaps to the nearest voltage below and above, whatever the position order (firmware 5.7.10 decodes it that way).
+  const nbs = $derived(neighbours(mvs))
   const checks = $derived(rot.rows.map((r, i) => {
-    const gN = i < mvs.length - 1 ? mvs[i + 1] - mvs[i] : null
-    const gP = i > 0 ? mvs[i] - mvs[i - 1] : null
-    const worst = Math.min(gN ?? 1e9, gP ?? 1e9)
-    const lvl = worst < 0 ? 'fault' : worst < 2 * tol ? 'fault' : worst < 2 * tol + 300 ? 'warn' : 'ok'
-    const nb = gN !== null && gN === worst ? rot.rows[i + 1]?.name : gP !== null ? rot.rows[i - 1]?.name : ''
-    return { lvl, gap: gN, text: worst < 0 ? `Out of order with ${nb}` : lvl === 'fault' ? `Overlaps ${nb}` : lvl === 'warn' ? `Too close to ${nb}` : 'Clear' }
+    const same = mvs.findIndex((v, j) => j !== i && v === mvs[i])
+    const { lo, hi } = nbs[i]
+    const gN = hi === null ? null : mvs[hi] - mvs[i], gP = lo === null ? null : mvs[i] - mvs[lo]
+    const worst = same >= 0 ? 0 : Math.min(gN ?? 1e9, gP ?? 1e9)
+    const lvl = worst < 2 * tol ? 'fault' : worst < 2 * tol + 300 ? 'warn' : 'ok'
+    const nb = rot.rows[same >= 0 ? same : gN !== null && gN === worst ? hi : lo]?.name ?? ''
+    return { lvl, gap: gN, text: same >= 0 ? `Same voltage as ${nb}` : lvl === 'fault' ? `Overlaps ${nb}` : lvl === 'warn' ? `Too close to ${nb}` : 'Clear' }
   }))
   const ascending = $derived(mvs.every((v, i) => i === 0 || v > mvs[i - 1]))
-  const tight = $derived(mvs.length > 1 ? Math.min(...mvs.slice(1).map((v, i) => v - mvs[i])) : 0)
-  const worstMa = $derived(Math.max(...rot.rows.map((r) => supplyCurrentMa(r.r, opts))))
-  const livePos = $derived(liveMv != null && ascending ? decodePoints(liveMv, mvs, tol) : NO_POS)
+  const ordered = $derived(anyOrder ? distinct(mvs) : ascending)
+  const tight = $derived(distinct(mvs) ? Math.min(...checks.map((x) => x.gap ?? Infinity)) : 0)
+  const worstMa = $derived(Math.max(...rot.rows.map((r) => c.current(rFor(r)))))
+  const livePos = $derived(liveMv != null && ordered ? decodePoints(liveMv, mvs, tol) : NO_POS)
 
   // ---- calibrate from the real switch ----
   let cal = $state(0)
@@ -69,7 +87,14 @@
   }
 </script>
 
-<Card title="Positions" subtitle={`pull-up ${RPU} Ω to 5 V · each position switches one resistor to ground · the last one is open`} aria-label="Resistor ladder designer">
+<Card title="Positions" subtitle={kind === 'inline' ? `5 V through ${rs} Ω into the switch · each position its own resistor to the input · between positions reads 0 V` : `pull-up ${RPU} Ω to 5 V · each position switches one resistor to ground · the last one is open`} aria-label="Resistor ladder designer">
+  <div class="circ">
+    <div class="pre"><span class="nx-label">Circuit</span>
+      <Segmented label="Circuit" items={CIRCUITS} bind:value={kind} data-testid="ladder-circuit" />
+    </div>
+    {#if kind === 'inline'}<Stepper label="Series resistor" bind:value={rs} min={100} max={100000} step={100} unit="Ω" data-testid="ladder-rs" />{/if}
+  </div>
+  <LadderCircuit {kind} rpu={RPU} rs={Number(rs) || 1000} />
   <div class="top">
     <Stepper label="Number of positions" bind:value={rot.n} min={2} max={maxPos} step={1} onchange={setCount} data-testid="numpos" />
     <div class="pre"><span class="nx-label">Start from</span>
@@ -77,8 +102,10 @@
     </div>
   </div>
 
-  {#if !ascending}
-    <Banner tone="fault" title="The voltages must go up with the position number">Fix the resistor of the position that is lower than the one before it. Saving is blocked until then.</Banner>
+  {#if !distinct(mvs)}
+    <Banner tone="fault" title="Two positions have the same voltage">The module cannot tell them apart. Change the resistor of one of them. Saving is blocked until then.</Banner>
+  {:else if !ordered}
+    <Banner tone="fault" title="The voltages must go up with the position number">This module's firmware needs them in order. Update it to 5.7.10 or newer to use any order, or fix the resistor of the position that is lower than the one before it. Saving is blocked until then.</Banner>
   {:else if tight < 2 * tol}
     <Banner tone="fault" title="Two positions overlap">The windows (± {tol} mV) touch, so the module cannot tell them apart. Change a resistor until the gap is at least {2 * tol + 300} mV.</Banner>
   {:else if tight < 2 * tol + 300}
@@ -87,13 +114,13 @@
 
   <div class="tbl nx-scroll">
     <table class="nx-table" data-testid="ladder-table">
-      <thead><tr><th>Pos.</th><th>Name</th><th>Resistor to ground</th><th>Voltage</th><th>Gap to next</th><th>Check</th>{#if capture}<th>Teach</th>{/if}</tr></thead>
+      <thead><tr><th>Pos.</th><th>Name</th><th>{kind === 'inline' ? 'Resistor in the leg' : 'Resistor to ground'}</th><th>Voltage</th><th>Gap to next higher</th><th>Check</th>{#if capture}<th>Teach</th>{/if}</tr></thead>
       <tbody>
         {#each rot.rows as r, i (i)}
           <tr class:now={livePos === i} class:cal={capture && cal === i}>
             <td class="mono">{i}</td>
             <td><input class="nx-input" aria-label={`Name of position ${i}`} bind:value={r.name} maxlength="16" /></td>
-            <td><div class="u"><input class="nx-input mono" aria-label={`Resistor for position ${i} in ohms`} value={rText(r.r)} onchange={(e) => setR(i, e.currentTarget.value)} inputmode="numeric" /><span class="mono">Ω</span></div></td>
+            <td><div class="u"><input class="nx-input mono" aria-label={`Resistor for position ${i} in ohms`} value={rText(rFor(r))} onchange={(e) => setR(i, e.currentTarget.value)} inputmode="numeric" /><span class="mono">Ω</span></div></td>
             <td><div class="u"><input class="nx-input mono" type="number" step="0.01" min="0" max="5" aria-label={`Voltage of position ${i} in volts`} value={(r.mv / 1000).toFixed(2)} onchange={(e) => setV(i, e.currentTarget.value)} /><span class="mono">V</span></div></td>
             <td class="mono">{checks[i].gap == null ? '—' : '+' + (checks[i].gap / 1000).toFixed(2) + ' V'}</td>
             <td class="chk" data-lvl={checks[i].lvl}><span aria-hidden="true">{checks[i].lvl === 'ok' ? '●' : checks[i].lvl === 'warn' ? '▲' : '■'}</span> {checks[i].text}{#if r.captured} · captured ✓{/if}</td>
@@ -115,7 +142,8 @@
   </div>
 
   <div class="set">
-    <div><span class="nx-label">Pull-up to 5 V</span><strong class="mono">{RPU} Ω (fixed on the board)</strong></div>
+    {#if kind === 'inline'}<div><span class="nx-label">Series resistor from 5 V</span><strong class="mono">{rs} Ω</strong></div>
+    {:else}<div><span class="nx-label">Pull-up to 5 V</span><strong class="mono">{RPU} Ω (fixed on the board)</strong></div>{/if}
     <div><span class="nx-label">Window ±</span><strong class="mono">{tol} mV{rot.tolAuto ? ' (auto)' : ''}</strong></div>
     <div><span class="nx-label">Tightest gap</span><strong class="mono" data-lvl={tight < 2 * tol ? 'fault' : tight < 2 * tol + 300 ? 'warn' : 'ok'}>{(tight / 1000).toFixed(2)} V · {tight < 2 * tol ? 'overlap' : tight < 2 * tol + 300 ? 'tight' : 'good'}</strong></div>
     <div><span class="nx-label">Worst-case draw</span><strong class="mono">{worstMa.toFixed(1)} mA</strong></div>
@@ -144,7 +172,7 @@
 {/if}
 
 <style>
-  .top { display: flex; gap: var(--space-4); flex-wrap: wrap; align-items: flex-end; }
+  .top, .circ { display: flex; gap: var(--space-4); flex-wrap: wrap; align-items: flex-end; }
   .pre { display: flex; flex-direction: column; gap: 4px; }
   .tbl { padding: 0; }
   tr.now td { background: var(--color-on-soft); }

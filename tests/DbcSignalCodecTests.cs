@@ -119,4 +119,13 @@ public class DbcSignalCodecTests
         DbcSignalCodec.InsertSignal(data, v, 32, 32, isFloat: true);
         Assert.Equal(v, DbcSignalCodec.ExtractSignal(data, startBit: 32, length: 32, isFloat: true));
     }
+
+    [Fact]
+    public void BigEndianSignalPastAShortFrame_ReadsZeroInsteadOfThrowing()
+    {
+        // GM 0x1DF arrives with 3 bytes; its DBC signals reach byte 7
+        byte[] data = [0x12, 0x34, 0x56];
+        Assert.Equal(0, DbcSignalCodec.ExtractSignal(data, startBit: 39, length: 16, ByteOrder.BigEndian));
+        Assert.Equal(0x5600, DbcSignalCodec.ExtractSignal(data, startBit: 23, length: 16, ByteOrder.BigEndian));
+    }
 }

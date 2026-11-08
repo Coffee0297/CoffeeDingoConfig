@@ -122,7 +122,8 @@ public class CommsDataPipeline(
     
     private async Task TransmitBatchAsync(List<DeviceCanFrame> batch, CancellationToken ct)
     {
-        logger.LogInformation("TX batch: {Count} frame(s), adapter={Adapter}", batch.Count, adapterManager.ActiveAdapter?.Name ?? "NULL");
+        // Debug: at Information every batch pushed the 2000-line log window out within seconds during a write
+        logger.LogDebug("TX batch: {Count} frame(s), adapter={Adapter}", batch.Count, adapterManager.ActiveAdapter?.Name ?? "NULL");
         if (adapterManager.ActiveAdapter == null) return;
 
         try
@@ -132,7 +133,7 @@ public class CommsDataPipeline(
             {
                 var success = await adapterManager.ActiveAdapter.WriteBatchAsync(
                     chunk.Select(df => df.Frame).ToList(), ct);
-                logger.LogInformation("TX WriteBatch success={Success} ids={Ids}", success,
+                logger.Log(success ? Microsoft.Extensions.Logging.LogLevel.Debug : Microsoft.Extensions.Logging.LogLevel.Warning, "TX WriteBatch success={Success} ids={Ids}", success,
                     string.Join(",", chunk.Select(df => "0x" + df.Frame.Id.ToString("X3"))));
                 if (!success) return;
 

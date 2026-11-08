@@ -43,6 +43,20 @@ const r = checkModule({ dev, funcs, vmap, def, claimed })
 const has = (level, node, re) => r.some((i) => i.level === level && i.node === node && re.test(i.why))
 
 assert.ok(has('error', 'output:1', /more than the 14 A/), 'limit above the pin rating is an error')
+// a short-term maximum above the continuous rating: up to it is a warning, above it an error
+{
+  const rr = checkModule({ dev, funcs, vmap, def: { outputCurrentRatings: [14, 14, 8], outputPeakRatings: [14, 14, 12] }, claimed })
+  const o2 = rr.filter((i) => i.node === 'output:1').map((i) => i.level + ' ' + i.why).join(' | ')
+  assert.match(o2, /error .*more than the 14 A/, o2)
+}
+{
+  const d2 = { ...dev, outputs: dev.outputs.map((o) => o.number === 2 ? { ...o, currentLimit: 11 } : o) }
+  const rr = checkModule({ dev: d2, funcs, vmap, def: { outputCurrentRatings: [14, 8, 8], outputPeakRatings: [14, 12, 12] }, claimed })
+  assert.ok(rr.some((i) => i.level === 'warn' && i.node === 'output:2' && /over the 8 A continuous rating \(up to 12 A/.test(i.why)), 'between rating and peak: a warning')
+  const d3 = { ...dev, outputs: dev.outputs.map((o) => o.number === 2 ? { ...o, currentLimit: 13 } : o) }
+  assert.ok(checkModule({ dev: d3, funcs, vmap, def: { outputCurrentRatings: [14, 8, 8], outputPeakRatings: [14, 12, 12] }, claimed })
+    .some((i) => i.level === 'error' && i.node === 'output:2' && /more than the 12 A/.test(i.why)), 'above the peak: an error')
+}
 assert.ok(!r.some((i) => i.node === 'output:2' && /rated/.test(i.why)), 'limit within the rating is fine')
 assert.ok(!r.some((i) => i.node === 'output:3'), 'a switched-off output is not checked')
 assert.ok(has('warn', 'output:2', /trips at less during the first 200 ms/), 'inrush below the trip current')

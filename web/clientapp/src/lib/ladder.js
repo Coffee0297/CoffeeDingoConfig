@@ -99,6 +99,52 @@ export function supplyCurrentMa(rk, { vsupMv, rpu, rin = R_IN }) {
   return vsupMv / (rpu + p)
 }
 
+// ---- Inline (series) circuit ------------------------------------------------------------------
+// Supply → one series resistor Rs (e.g. 1k at the plug) → the switch's common → at each position its
+// own resistor Rk → all legs joined on one wire to the input. The board's R_IN to ground is the only
+// pull-down: V = Vsup·Rin/(Rs+Rk+Rin). Between detents nothing connects, so the input reads 0 V
+// ("no position"), and a broken wire reads the same.
+export const seriesMaxMv = ({ vsupMv, rs, rin = R_IN }) => vsupMv * rin / (rs + rin)
+
+export function seriesVoltageMv(rk, { vsupMv, rs, rin = R_IN }) {
+  return isFinite(rk) ? vsupMv * rin / (rs + Math.max(0, rk) + rin) : 0
+}
+
+// Leg resistor for a target voltage: 0 (a plain wire) at/above the top the circuit can reach,
+// Infinity (open) at/below 0 V.
+export function seriesResistorForMv(mv, { vsupMv, rs, rin = R_IN }) {
+  if (mv <= 0) return Infinity
+  const r = vsupMv * rin / mv - rs - rin
+  return r <= 0 ? 0 : r
+}
+
+// N positions evenly spaced below the top, leaving half a step of headroom so the top leg still has
+// a resistor: V_k = top·(k+1)/(n+0.5). Rs 1k, 4 positions → 56k/20k/8.2k/2k ≈ 1.0/2.1/3.1/4.2 V.
+export function recommendSeries(n, { vsupMv, rs, rin = R_IN, series = 'E24' }) {
+  const top = Math.min(seriesMaxMv({ vsupMv, rs, rin }), V_ADC_MAX_MV)
+  return Array.from({ length: n }, (_, k) => {
+    const target = top * (k + 1) / (n + 0.5)
+    const r = nearestStandard(seriesResistorForMv(target, { vsupMv, rs, rin }), series)
+    return { r, mv: seriesVoltageMv(r, { vsupMv, rs, rin }), target }
+  })
+}
+
+export const seriesCurrentMa = (rk, { vsupMv, rs, rin = R_IN }) =>
+  isFinite(rk) ? vsupMv / (rs + Math.max(0, rk) + rin) : 0
+
+// One interface over both circuits for the designer: 'ground' = pull-up + a resistor to ground per
+// position (the original), 'inline' = series resistor + a resistor per leg.
+export function circuitFor(kind, { vsupMv, rpu, rs, rin = R_IN }) {
+  if (kind === 'inline') {
+    const o = { vsupMv, rs, rin }
+    return { voltage: (r) => seriesVoltageMv(r, o), resistorFor: (mv) => seriesResistorForMv(mv, o),
+             recommend: (n) => recommendSeries(n, o), current: (r) => seriesCurrentMa(r, o) }
+  }
+  const o = { vsupMv, rpu, rin }
+  return { voltage: (r) => nodeVoltageMv(r, o), resistorFor: (mv) => resistorForMv(mv, o),
+           recommend: (n) => recommendResistors(n, o), current: (r) => supplyCurrentMa(r, o) }
+}
+
 export const NO_POS = 15   // firmware ROTARY_NO_POS — reading is in a dead zone / fault
 
 // Auto sensing tolerance (half-window, mV) for the calibrated-points decode: a fraction of the
@@ -106,22 +152,36 @@ export const NO_POS = 15   // firmware ROTARY_NO_POS — reading is in a dead zo
 // band. This is the cap; the firmware further clamps each side at the midpoint to its neighbour.
 export function autoTolerance(mvs, { min = 75, max = 300 } = {}) {
   if (mvs.length < 2) return max
+  const s = [...mvs].sort((a, b) => a - b)
   let gap = Infinity
-  for (let i = 1; i < mvs.length; i++) gap = Math.min(gap, Math.abs(mvs[i] - mvs[i - 1]))
+  for (let i = 1; i < s.length; i++) gap = Math.min(gap, s[i] - s[i - 1])
   return Math.round(Math.max(min, Math.min(max, 0.4 * gap)))
 }
 
+// For each point, the index of the nearest point below and above it by voltage (null at the ends), in any
+// position order. Equal voltages count as neither: check `distinct` separately.
+export function neighbours(points) {
+  return points.map((c) => {
+    let lo = null, hi = null
+    points.forEach((p, j) => {
+      if (p < c && (lo === null || p > points[lo])) lo = j
+      if (p > c && (hi === null || p < points[hi])) hi = j
+    })
+    return { lo, hi }
+  })
+}
+export const distinct = (points) => new Set(points).size === points.length
+
 // Calibrated-points decode, mirrored EXACTLY from firmware analog_input.cpp RotaryUpdate (points
 // mode): the position whose window contains mv, else NO_POS. Half-width each side = min(tol,
-// gap-to-neighbour/2); the ends are capped at tol. `points` must be ascending. invert handled by caller.
+// gap to the nearest voltage that side / 2); the ends are capped at tol. Firmware 5.7.10+ takes the points in any
+// order (older firmware compared index neighbours, so it needs them ascending). invert handled by caller.
 export function decodePoints(mv, points, tol) {
-  const n = points.length
-  for (let k = 0; k < n; k++) {
-    const c = points[k]
-    const gapLo = (k === 0) ? tol * 2 : c - points[k - 1]
-    const gapHi = (k === n - 1) ? tol * 2 : points[k + 1] - c
-    const halfLo = Math.min(tol, Math.floor(gapLo / 2))
-    const halfHi = Math.min(tol, Math.floor(gapHi / 2))
+  const nb = neighbours(points)
+  for (let k = 0; k < points.length; k++) {
+    const c = points[k], { lo, hi } = nb[k]
+    const halfLo = lo === null ? tol : Math.min(tol, Math.trunc((c - points[lo]) / 2))
+    const halfHi = hi === null ? tol : Math.min(tol, Math.trunc((points[hi] - c) / 2))
     if (mv >= c - halfLo && mv <= c + halfHi) return k
   }
   return NO_POS

@@ -99,7 +99,26 @@ public sealed class CanFlashService(
             dm.SuspendConfigFilter();
             adapters.ActiveAdapter?.SetReceiveFilter(baseId + 13);
 
-            using var xcp = new XcpCanMaster(adapters, baseId);
+            // A bootloader started by a power-up without firmware (an update that failed, then a power cycle) can't know
+            // the module's address: it listens on the firmware's default (PDM 0x0DE: XCP 0x0EA/0x0EB, CANBoard 0x640).
+            // PDM-02 sat there and the update said "no XCP response" on its own id.
+            int xcpBase = baseId;
+            using (var own = new XcpCanMaster(adapters, baseId))
+                if (!await own.ConnectAsync(retries: 25, token))
+                {
+                    var def = FlashBaseIdRestore.DefaultBaseIdFor(dev);
+                    adapters.ActiveAdapter?.SetReceiveFilter(def + 13);
+                    using var atDefault = new XcpCanMaster(adapters, def);
+                    if (def != baseId && await atDefault.ConnectAsync(retries: 5, token))
+                    {
+                        xcpBase = def;
+                        log.AppendLine($"No answer on 0x{baseId + 13:X3}; a bootloader answered on its default address 0x{def + 13:X3} (it was powered up "
+                            + "without firmware). Only one module may wait there during the update: power any other one in its bootloader off.");
+                    }
+                    else adapters.ActiveAdapter?.SetReceiveFilter(baseId + 13);
+                }
+
+            using var xcp = new XcpCanMaster(adapters, xcpBase);
 
             // 4. Connect (retry while the bootloader comes up). IDs derived from the base ID.
             Set("Connecting", 5);
@@ -120,6 +139,14 @@ public sealed class CanFlashService(
             //    per segment wiped what an earlier segment had already written into a sector the two share (the 5.7.4
             //    PDM image has a 4-byte gap at 0x0805B80C inside sector 6: its read-back then mismatched on every module).
             int total = image.TotalBytes, written = 0;
+            // Nothing is erased until the link has proved itself: on a bus with error frames the bootloader lost
+            // replies or went bus-off mid-write, and PDM-02 and PDM-05 were left without firmware.
+            Set("Checking the link", 7);
+            var lost = await xcp.LinkCheckAsync(100, token);
+            if (lost > 0)
+                return Fail(log, $"The link to the bootloader lost {lost} of 100 replies, so nothing was erased: the module keeps its firmware. "
+                    + "Fix the bus errors first, or update through a direct CAN adapter.");
+            log.AppendLine("Link check: 100 of 100 replies.");
             Set("Erasing", 8);
             if (!await xcp.ClearMemoryAsync(image.MinAddress, image.EndAddress - image.MinAddress, token))
                 return Fail(log, $"Erase failed at 0x{image.MinAddress:X8}." + (newCbLoader ? " This CANBoard probably still has the old 16 KB bootloader: program the 8 KB one over SWD once."
@@ -130,7 +157,9 @@ public sealed class CanFlashService(
             {
                 if (!await xcp.WriteDataAsync(seg.Address, seg.Data, n =>
                         Set("Writing", 10 + (int)(55L * (written + n) / Math.Max(total, 1))), token))
-                    return Fail(log, $"Programming failed in segment at 0x{seg.Address:X8}.");
+                    return Fail(log, $"Programming failed in segment at 0x{seg.Address:X8}: the bootloader stopped answering even after retries "
+                        + "(on a bus with error frames an older bootloader goes bus-off and stays off). Power-cycle the module: it comes back in its "
+                        + "bootloader, and the update can be started again over CAN. No need to open it.");
                 written += seg.Data.Length;
             }
             log.AppendLine($"Programmed {written} bytes.");
@@ -149,11 +178,14 @@ public sealed class CanFlashService(
             {
                 Set("Verifying", 70);
                 var read = await xcp.ReadDataAsync(seg.Address, seg.Data.Length, n =>
-                        Set("Verifying", 70 + (int)(24L * (verified + n) / Math.Max(total, 1))), token);
+                        Set("Verifying", 70 + (int)(24L * (verified + n) / Math.Max(total, 1))), token, seg.Data);
                 if (read is null)
                     return Fail(log, $"Read-back failed at 0x{seg.Address:X8} (left in bootloader — safe to retry).");
                 if (!read.AsSpan().SequenceEqual(seg.Data))
-                    return Fail(log, $"Verify mismatch at 0x{seg.Address:X8} — NOT starting the app (left in bootloader — retry).");
+                {
+                    int at = read.AsSpan().CommonPrefixLength(seg.Data);
+                    return Fail(log, $"Verify mismatch at 0x{seg.Address + (uint)at:X8} (segment 0x{seg.Address:X8}, read {read[at]:X2}, image {seg.Data[at]:X2}) — NOT starting the app (left in bootloader — retry).");
+                }
                 verified += seg.Data.Length;
             }
             log.AppendLine("Read-back verify OK.");

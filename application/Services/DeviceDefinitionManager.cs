@@ -32,7 +32,8 @@ public class DeviceDefinitionManager
         MinMajorVersion: 5,
         MinMinorVersion: 5,
         MinBuildVersion: 107,
-        OutputCurrentRatings: [14, 14, 8, 8, 8, 8, 8, 8]);
+        OutputCurrentRatings: [21, 21, 8, 8, 8, 8, 8, 8],
+        OutputPeakRatings: [21, 21, 12, 12, 12, 12, 12, 12]);   // BTS7008 channels carry 12 A for a while
 
     public static readonly CanboardDeviceDefinition DefaultCanboard = new(
         CanboardType: 0,
