@@ -5,6 +5,14 @@ All notable changes to **dingoConfig** are recorded here. Versions follow [SemVe
 
 ## [Unreleased]
 
+## [0.13.1] — 2026-11-08
+
+### Fixed
+- **Write all after opening a project no longer undoes unapplied edits**: the Read that learns a 5.7 module's
+  settings first could start a second Read when the first took over 8 s (the Sim, a busy bus); the second ran after
+  the first had kept the project, copied the module's old values over it and wrote them back. A read still
+  streaming in is now waited for.
+
 ## [0.13.0] — 2026-11-08
 
 ### Added
