@@ -519,9 +519,9 @@ public class DeviceManager(ILogger<DeviceManager> logger, ILoggerFactory loggerF
             for (var attempt = 0; attempt < 4 && !kd.ParamSet.FromModule; attempt++)
             {
                 ReadDeviceConfig(deviceId);
-                // ~1 s on a module, longer on a busy bus; a short read still asking for its gaps gets up to 20 s (a new Read
-                // would throw that away and start over)
-                for (var t = 0; t < 200 && !kd.ParamSet.FromModule && (t < 80 || kd.ReadFillPending); t++) await Task.Delay(100);
+                // ~1 s on a module, longer on a busy bus; a read still streaming in or asking for its gaps gets up to 20 s:
+                // a second Read started meanwhile ran after the first had kept the project, and copied the module's values over it
+                for (var t = 0; t < 200 && !kd.ParamSet.FromModule && (t < 80 || kd.ReadFillPending || kd.ReadStreaming); t++) await Task.Delay(100);
             }
         }
         if (!ParamsKnown(d)) { logger.LogWarning("{Name}: upstream firmware, its param list is not read yet: not writing", d.Name); return false; }

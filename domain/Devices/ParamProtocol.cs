@@ -77,6 +77,9 @@ internal class ParamProtocol(IDeviceConfigurable device, List<DeviceParameter> @
     public bool WriteAllPending => _awaitMissing;
     /// <summary>A Read All is being completed by asking for its missing params one by one.</summary>
     public bool ReadFillPending => _fill != null;
+    /// <summary>A Read All reply arrived in the last 2 s: the read is still streaming in, not lost.</summary>
+    public bool ReadStreaming => DateTime.Now - _lastReadRsp < TimeSpan.FromSeconds(2);
+    private DateTime _lastReadRsp;
     // The module sends no status while it takes a WriteAll (4-5 s through the USB bridge): not "gone" until this passes.
     private DateTime _writeBusyUntil;
     public bool WriteAllBusy => DateTime.Now < _writeBusyUntil;
@@ -245,6 +248,7 @@ internal class ParamProtocol(IDeviceConfigurable device, List<DeviceParameter> @
                 _readOrder.Add((index, subIndex));
                 _readCrc32.Update(data.Skip(4).Take(4).ToArray());
                 _readAllCount++;
+                _lastReadRsp = DateTime.Now;
                 _readVal[(index, subIndex)] = (uint)(data[4] | data[5] << 8 | data[6] << 16 | data[7] << 24);
 
                 matchingParam = ReadCandidates.FirstOrDefault(p => p.Index == index && p.SubIndex == subIndex);

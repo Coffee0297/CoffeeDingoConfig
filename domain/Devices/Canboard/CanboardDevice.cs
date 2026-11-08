@@ -151,6 +151,7 @@ public class CanboardDevice : IDeviceConfigurable
     [JsonIgnore] private ParamProtocol _paramProtocol = null!;
     [JsonIgnore] public bool WriteAllPending => _paramProtocol?.WriteAllPending ?? false;
     [JsonIgnore] public bool ReadFillPending => _paramProtocol?.ReadFillPending ?? false;
+    [JsonIgnore] public bool ReadStreaming => _paramProtocol?.ReadStreaming ?? false;
     [JsonIgnore] public bool WriteAllBusy => _paramProtocol?.WriteAllBusy ?? false;
     
     [JsonConstructor]
