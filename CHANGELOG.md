@@ -5,6 +5,25 @@ All notable changes to **dingoConfig** are recorded here. Versions follow [SemVe
 
 ## [Unreleased]
 
+## [0.13.0] — 2026-11-08
+
+### Added
+- **Combined DBC export** also holds each module's CAN outputs and CAN message blocks (counter nibble, checksum
+  byte), takes a whole OEM DBC (up to 20000 signals), and shortens names over 32 characters, all in plain ASCII.
+- **Multi-position switch designer**: a circuit choice with a drawing (To ground or Inline), and on firmware
+  5.7.10+ position voltages in any order.
+- **dingoPDM 8 A outputs** (BTS7008) may trip up to 12 A, flagged above 8 A; OUT1/OUT2 (BTS7002) are rated 21 A.
+
+### Fixed
+- **Update over CAN** can't leave a module erased on a flaky link, finds a bootloader on its default address,
+  retries lost write and read-back replies, survives a reply received twice, and keeps the bridge filter on the
+  bootloader while flashing.
+- **Writes and reads through the USB bridge** complete on a busy bus: paced Write All, missing params read one by
+  one with the CRC checked, and Apply to car across modules; the Kvaser adapter waits on a full transmit buffer.
+- **Duplicate CAN id check** counts CAN message blocks as senders.
+- **Deploy to USB module** works when the project module is not on the bus, and no longer shows it twice.
+- A DBC big-endian signal reaching past a short frame reads as 0 instead of throwing.
+
 ## [0.12.0] — 2026-10-27
 
 Supports modules on upstream dingoFW (0.x) and the 5.7 line next to the fork firmware. Needs firmware 5.7.4 for the
